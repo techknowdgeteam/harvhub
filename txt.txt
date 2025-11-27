@@ -1,0 +1,563 @@
+.checkbox-container input {
+
+        margin-right: 10px;
+
+        width: 18px;
+
+        height: 18px;
+
+    }    
+.btn-paid {
+
+        background: var(--success-color) !important;
+
+        color: #000 !important;
+
+        font-size: 1.1rem !important;
+
+        margin-top: 20px !important;
+
+        padding: 12px 20px !important;
+
+        transition: opacity 0.3s;
+
+    }
+
+    .btn-paid:disabled {
+
+        opacity: 0.4;
+
+        cursor: not-allowed !important;
+
+    }
+.disclaimer { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; color: var(--error-color); }
+    .modal-actions {
+
+        margin-top: 2rem;
+
+        display: flex;
+
+        justify-content: center;
+
+        gap: 20px;
+
+    }
+.modal-actions form button {
+        flex-grow: 1;
+        max-width: 200px;
+        padding: 12px 20px;
+        border-radius: 50px;
+        font-size: 1rem;
+        transition: transform 0.2s, background 0.2s;
+    }
+    .modal-actions button:hover,
+    .modal-actions form button:hover { transform: translateY(-2px); }
+
+    input[type="password"] {
+        width: 100%;
+        padding: 16px;
+        margin: 20px 0;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 12px;
+        font-size: 1.1rem;
+        text-align: center;
+    }
+    .btn-full {
+        width: 100%;
+        padding: 16px;
+        background: var(--accent);
+        color: #000;
+        border: none;
+        border-radius: 12px;
+        font-weight: bold;
+        font-size: 1.1rem;
+        cursor: pointer;
+    }
+
+    /* Styles for history-section items */
+    .history-section {
+        margin-top: 10px;
+        max-height: 200px;
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
+        background: rgba(0,0,0,0.03);
+    }
+    .history-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-bottom: 1px dashed rgba(255,255,255,0.1);
+        font-size: 0.95rem;
+    }
+    .history-item:last-child {
+        border-bottom: none;
+    }
+    .history-symbol {
+        font-weight: bold;
+    }
+    .history-amount-won {
+        color: var(--success-color);
+    }
+    .history-amount-lost {
+        color: var(--error-color);
+    }
+</style>
+</head>
+<body>
+
+    <?php if ($show_passkey_form): ?>
+        <div class="passkey-overlay">
+            <div class="passkey-screen">
+                <h2>Create Your Passkey</h2>
+                <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
+                <form method="POST">
+                    <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
+                    <button type="submit" name="create_passkey" class="btn-full">Save & Continue</button>
+                </form>
+            </div>
+        </div>
+    <?php elseif (!$passkey_verified): ?>
+        <div class="passkey-overlay">
+            <div class="passkey-screen">
+                <h2>Welcome Back</h2>
+                <p style="margin:1.5rem 0; opacity:0.9;">Enter your passkey to access dashboard</p>
+                <form method="POST">
+                    <input type="password" name="passkey" placeholder="Your passkey" required autofocus>
+                    <?php if ($passkey_error): ?>
+                        <p class="error-message"><?= htmlspecialchars($passkey_error) ?></p>
+                    <?php endif; ?>
+                    <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
+                </form>
+                <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
+                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
+        <h1>Your HarvHub Dashboard</h1>
+        <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
+
+        <?php if (!empty($dashboard_disclaimer)): ?>
+            <p class="dashboard-disclaimer">
+                <?= htmlspecialchars($dashboard_disclaimer) ?>
+            </p>
+        <?php endif; ?>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <form method="POST" style="margin:0;">
+                    <input type="hidden" name="toggle_balance_display" value="1">
+                    <button type="submit" title="<?= $balanceDisplay === 'show' ? 'Hide Balance' : 'Show Balance' ?>" class="balance-toggle-btn">
+                        <?php if ($balanceDisplay === 'show'): ?>
+                            👁️
+                        <?php else: ?>
+                            🔒 
+                        <?php endif; ?>
+                    </button>
+                </form>
+                
+                <h3>Deposit Balance</h3>
+                
+                <div class="stat-details-info">
+                    <?= htmlspecialchars($login) ?><br>
+                    <?= htmlspecialchars($server) ?>
+                </div>
+                <h2>$<?= number_format($brokerBalance, 2) ?></h2>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Profit & Loss</h3>
+                <h2 class="<?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                    $<?= number_format($profitAndLoss, 2) ?>
+                </h2>
+            </div>
+
+            <div class="stat-card">
+                <h3>Current Balance</h3>
+                <h2 class="<?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                    $<?= number_format($currentBalance, 2) ?>
+                </h2>
+            </div>
+            
+            <div class="stat-card trades-card" style="grid-column: 1 / -1;"> 
+                <h3>Trade Summary</h3>
+                <div class="trades-layout-container">
+                    <div class="trades-count">
+                        <?= $tradesCountDisplay ?>
+                        <span>Trades</span>
+                    </div>
+                    
+                    <div class="trades-won-lost">
+                        <div class="trades-detail-item left">
+                            Won: 
+                            <strong style="color:var(--success-color);"><?= $wonCountDisplay ?></strong>
+                        </div>
+                        
+                        <div class="trades-detail-item right">
+                            Lost: 
+                            <strong style="color:var(--error-color);"><?= $lostCountDisplay ?></strong>
+                        </div>
+                    </div>
+                    <button class="btn-view-history" onclick="document.getElementById('tradeHistoryModal').classList.add('active')">
+                        Markets 
+                    </button>
+                    </div>
+            </div>
+            <div class="stat-card loyalty-card">
+                <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
+                <p><?= htmlspecialchars($loyalty_text) ?></p>
+
+                <?php if ($show_contract_days): ?>
+                    <span class="contract-days-left">
+                        <?= $contractDaysLeft ?> days left
+                    </span>
+                <?php endif; ?>
+                
+                <button 
+                    <?= $loyalty_btn_action ?>
+                    class="<?= htmlspecialchars($loyalty_btn_class) ?>"
+                >
+                    <?= htmlspecialchars($loyalty_btn_text) ?>
+                </button>
+            </div>
+            </div>
+
+        <p class="note">
+            Your PnL is updated every 24 hours.<br>
+            Automated execution runs 24/7 on your connected account.
+        </p>
+
+        <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
+            Disconnect My Account
+        </button>
+        
+        <a href="?logout=1" class="logout-link">Logout</a>
+
+    </div>
+
+    <div id="disconnectModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:#ff6b6b;">Disconnect Account?</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                This action will disconnect your account from trading activities permanently.
+            </p>
+            <div class="modal-actions"> 
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+                <form method="POST" style="display:inline;">
+                    <button type="submit" name="confirm_disconnect"
+                        style="background:#e74c3c; color:white; border:none;">
+                        Yes, Disconnect
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div id="profitSplitModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:var(--info-color);">Profit Split Required</h2>
+            
+            <p style="margin-bottom: 2rem; opacity: 0.8;">
+                Your contract requires a profit split to continue trading eligibility.
+            </p>
+            <p class="split-total">
+                $<?= number_format($profitToSplit, 2) ?> profit
+            </p>
+
+            <div class="split-container">
+                <div class="split-item">
+                    <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
+                    <p>Your Share</p>
+                    <h4 style="color:var(--success-color);">$<?= number_format($userShare, 2) ?></h4>
+                    <small style="display:block; margin-top:10px; opacity:0.6;">Withdraw your $<?= number_format($userShare, 2) ?> profit share</small>
+                </div>
+                <div class="split-item">
+                    <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
+                    <p>Pay server%</p>
+                    <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
+                    <button class="btn-pay" onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');">
+                        Pay server
+                    </button>
+                    <small style="display:block; margin-top:10px; opacity:0.6;">Pay to remain eligible</small>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="paymentModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:var(--accent);">Server Payment</h2>
+            <p style="margin:1rem 0; opacity:0.8;">
+                Send $<?= number_format($serverShare, 2) ?> worth of the selected address
+            </p>
+            
+            <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
+
+            <div class="coin-selector">
+                <input type="radio" id="coin_btc" name="coin" value="btc" checked onchange="updatePaymentDetails('btc')">
+                <label for="coin_btc">BTC</label>
+                
+                <input type="radio" id="coin_eth" name="coin" value="eth" onchange="updatePaymentDetails('eth')">
+                <label for="coin_eth">ETH</label>
+
+                <input type="radio" id="coin_usdt" name="coin" value="usdt" onchange="updatePaymentDetails('usdt')">
+                <label for="coin_usdt">USDT</label>
+            </div>
+
+            <div class="crypto-details">
+                <p>Network: <strong id="paymentNetwork">N/A</strong></p>
+                <p>Address:</p>
+                <span class="btc-address" id="paymentAddress">N/A</span>
+            </div>
+            
+            <button class="btn-full btn-paid" id="copyAddressBtn">
+                Copy Address
+            </button>
+
+            <label class="checkbox-container">
+                <input type="checkbox" id="paymentConfirmationCheck" onchange="togglePaidButton()">
+                I have made the payment
+            </label>
+
+            <button class="btn-full btn-paid" id="confirmPaidBtn" disabled onclick="triggerFinalConfirmation()">
+                Paid
+            </button>
+            
+
+            <p class="disclaimer">Click paid only after payment has been successfully sent.</p>
+            
+            <div class="modal-actions">
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="finalConfirmationModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:var(--success-color);">Final Confirmation</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the 
+                <strong id="finalConfirmCoin">N/A</strong> address.
+            </p>
+            
+            <div class="modal-actions"> 
+                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="final_confirm_payment" value="1">
+                    <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="">
+                    <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
+                    <button type="submit"
+                        style="background:var(--success-color); color:#000; border:none;">
+                        Yes, Paid
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <div id="reenrollModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:var(--info-color);">Re-enrollment Option</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                <?php if ($loyaltiesStatus === 'paymentconfirmed'): ?>
+                    There will be trading activities in your account for the next <?= $NEW_CONTRACT_DAYS ?> days and within these period you mustn't perform trading or withdrawal activity on your broker account.
+                <?php else: ?>
+                    Your contract is ending and your $<?= number_format($profitAndLoss, 2) ?> profit is below the minimum $<?= $MIN_PROFIT_FOR_SPLIT ?> profit requirement.
+                    You can re-enroll for a new contract period of <?= $NEW_CONTRACT_DAYS ?> days. 
+                <?php endif; ?>
+            </p>
+            <div class="modal-actions"> 
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+                <form method="POST" style="display:inline;">
+                    <button type="submit" name="confirm_reenroll"
+                        style="background:var(--success-color); color:#000; border:none;">
+                        Re-enroll
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <div id="tradeHistoryModal" class="modal">
+        <div class="modal-content">
+            <h2>Trade History Summary</h2>
+            <p style="margin:1rem 0; opacity:0.8;">Currency pairs that won/lost</p>
+
+            <h3 style="color:var(--success-color); margin-top:2rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?> Symbols)</h3>
+            <div class="history-section">
+                <?php if (!empty($tradesData['symbolsthatwon'])): ?>
+                    <?php foreach ($tradesData['symbolsthatwon'] as $trade): ?>
+                        <div class="history-item">
+                            <span class="history-symbol"><?= $trade['symbol'] ?></span>
+                            <span class="history-amount-won">+<?= ltrim($trade['amount'], '+-') ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <p style="text-align: center; opacity: 0.7;">No winning symbol data available.</p>
+                <?php endif; ?>
+            </div>
+            
+            <h3 style="color:var(--error-color); margin-top:2rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?> Symbols)</h3>
+            <div class="history-section">
+                <?php if (!empty($tradesData['symbolsthatlost'])): ?>
+                    <?php foreach ($tradesData['symbolsthatlost'] as $trade): ?>
+                        <div class="history-item">
+                            <span class="history-symbol"><?= $trade['symbol'] ?></span>
+                            <span class="history-amount-lost"><?= $trade['amount'] ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <p style="text-align: center; opacity: 0.7;">No losing symbol data available.</p>
+                <?php endif; ?>
+            </div>
+
+            <div class="modal-actions">
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+    <script>
+    // 1. Cleans the URL of query parameters after a redirect (PRG pattern cleanup)
+    if (window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.href.split("?")[0]);
+    }
+
+    // 2. Dynamic Payment Selector Logic
+    
+    // PHP variables passed to JavaScript
+    const serverAccounts = {
+        btc: { 
+            address: "<?= htmlspecialchars($serverAccount['btc_address']) ?>", 
+            network: "Bitcoin" 
+        },
+        eth: { 
+            address: "<?= htmlspecialchars($serverAccount['eth_address']) ?>", 
+            network: "<?= htmlspecialchars($serverAccount['eth_network']) ?>" 
+        },
+        usdt: { 
+            address: "<?= htmlspecialchars($serverAccount['usdt_address']) ?>", 
+            network: "<?= htmlspecialchars($serverAccount['usdt_network']) ?>" 
+        }
+    };
+    
+    // Elements from Payment Modal
+    const paymentAddressElement = document.getElementById('paymentAddress');
+    const paymentNetworkElement = document.getElementById('paymentNetwork');
+    const copyAddressBtn = document.getElementById('copyAddressBtn');
+    const confirmPaidBtn = document.getElementById('confirmPaidBtn');
+    const paymentConfirmationCheck = document.getElementById('paymentConfirmationCheck');
+    const serverShareAmountHidden = document.getElementById('serverShareAmountHidden');
+    
+    // Elements from Final Confirmation Modal
+    const finalConfirmationModal = document.getElementById('finalConfirmationModal');
+    const finalConfirmAmount = document.getElementById('finalConfirmAmount');
+    const finalConfirmCoin = document.getElementById('finalConfirmCoin');
+    const formServerShareAmount = document.getElementById('formServerShareAmount');
+    const formPaymentCoin = document.getElementById('formPaymentCoin');
+
+
+    // Function to get the currently selected coin
+    function getSelectedCoin() {
+        return document.querySelector('input[name="coin"]:checked').value;
+    }
+
+    // Function to update the displayed address and network
+    function updatePaymentDetails(coin) {
+        const data = serverAccounts[coin];
+        if (data) {
+            paymentAddressElement.textContent = data.address;
+            paymentNetworkElement.textContent = data.network;
+            paymentAddressElement.dataset.address = data.address;
+        }
+    }
+
+    // Function to toggle the Paid button's disabled state
+    function togglePaidButton() {
+        confirmPaidBtn.disabled = !paymentConfirmationCheck.checked;
+    }
+    
+    // Function to trigger the final confirmation modal
+    function triggerFinalConfirmation() {
+        const selectedCoin = getSelectedCoin();
+        const amount = serverShareAmountHidden.value;
+        
+        // 1. Update confirmation modal text
+        finalConfirmAmount.textContent = '$' + amount;
+        finalConfirmCoin.textContent = selectedCoin.toUpperCase();
+        
+        // 2. Populate hidden form fields for submission
+        formServerShareAmount.value = amount;
+        formPaymentCoin.value = selectedCoin;
+        
+        // 3. Close current modal and open confirmation modal
+        document.getElementById('paymentModal').classList.remove('active');
+        finalConfirmationModal.classList.add('active');
+    }
+
+
+    // Function to copy the address
+    copyAddressBtn.addEventListener('click', function() {
+        const address = paymentAddressElement.textContent;
+        if (navigator.clipboard && address && address !== 'N/A') {
+            navigator.clipboard.writeText(address).then(() => {
+                alert('Payment address copied to clipboard!');
+            }).catch(err => {
+                console.error('Could not copy text: ', err);
+            });
+        } else {
+             alert('Address not available or clipboard access denied.');
+        }
+    });
+
+    // Initialize the payment details on load (default to BTC)
+    document.addEventListener('DOMContentLoaded', function() {
+        // Ensure the default selected coin is set on page load
+        updatePaymentDetails(getSelectedCoin());
+        togglePaidButton(); // Set initial state of the Paid button
+        
+        // Add event listeners to radio buttons to update details
+        document.querySelectorAll('input[name="coin"]').forEach(radio => {
+            radio.addEventListener('change', (event) => updatePaymentDetails(event.target.value));
+        });
+    });
+
+    // Attach event listeners to address element for tap/click copy
+    paymentAddressElement.addEventListener('click', function() {
+          copyAddressBtn.click();
+    });
+
+    </script>
+</body>
+</html>
+Query Results
+brokers	brokers_link
+insiders: exness,insiders: bybit,insiders_server: bybit,insiders_server: exness,insiders_server: deriv	insiders_server: deriv.com
+
+now i want you to fetch broker from the server account, it is record in the brokers column in the server account table like "insiders_server: broker1, insiders_server: broker2 and so on... so now the withdraw your share button, the pay server button, the deposit button should fetch brokers eg use insiders_server as the subject although it is in the column record , how i insert value to it so eg "insiders_server: bybit"(record in server_account brokers column) then check the insiders_server table itself to know the user broker and then match it, lastly let it check the server_account brokers_link column to now attach the broker link, it is also recorded same way "insiders_server: bybitlink, insiders_server: exnesslink", so if a user registered exness let it fetch exness link, if bybit or any other let it fetch it accordingly by checking if they are similar value so it can give it its link. full script
