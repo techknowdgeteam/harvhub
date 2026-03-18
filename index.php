@@ -277,6 +277,20 @@
         min-height: 120px; 
     }
     h1 { font-size: 4rem; color: var(--accent); margin-bottom: 0.5rem; }
+    
+    /* Welcome message styling */
+    .welcome-message {
+        font-size: 1.2rem;
+        margin: 0.5rem 0 0;
+        color: var(--text);
+        opacity: 0.9;
+        font-weight: 400;
+    }
+    .welcome-message strong {
+        color: var(--accent);
+        font-weight: 600;
+    }
+    
     h2 { margin: 2rem 0 1rem; color: var(--accent); }
     .section { 
         background: var(--section-bg); 
@@ -285,6 +299,12 @@
         margin-bottom: 2rem; 
         box-shadow: var(--section-shadow);
     }
+    
+    /* Hide sections when logged in */
+    .logged-in .section:not(.always-show) {
+        display: none;
+    }
+    
     .btn { padding: 1rem 2.5rem; background: var(--accent); color: #000; font-weight: bold; border: none; border-radius: 50px; cursor: pointer; display: inline-block; transition: all 0.3s; }
     .btn:hover { opacity: 0.9; transform: scale(1.05); }
     .btn.blacklisted {
@@ -347,7 +367,6 @@
         color: var(--accent);
         margin-right: 5px;
     }
-    /* Removed .logout-link styles here as the link is moved */
 
     /* --- MOBILE PROFILE STYLES (Always visible below header) --- */
     #mobileProfileStatus {
@@ -407,7 +426,7 @@
     }
     /* --- END RESPONSIVE STYLES --- */
 
-    /* MODAL STYLES (unchanged) */
+    /* MODAL STYLES */
     .modal { 
         display: none; position: fixed; inset: 0; 
         background: rgba(0,0,0,0.01); 
@@ -425,9 +444,44 @@
     .error-text { color: #ff6b6b; margin-top: 8px; text-align: center; }
     .checkbox-container { display: flex; align-items: center; gap: 12px; margin: 28px 0; font-size: 1rem; cursor: pointer; }
     .checkbox-container input[type="checkbox"] { width: 22px; height: 22px; margin: 0; }
+    
+    /* Terms box styling */
+    .terms-box {
+        background: var(--input-bg);
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 20px 0;
+        border: 1px solid var(--profile-details-border);
+    }
+    .terms-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--profile-details-border);
+    }
+    .terms-item:last-child {
+        border-bottom: none;
+    }
+    .terms-label {
+        font-weight: bold;
+        color: var(--accent);
+    }
+    .terms-value {
+        font-size: 1.2rem;
+        font-weight: 600;
+    }
+    .info-message {
+        background: rgba(46, 139, 87, 0.1);
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 20px 0;
+        text-align: center;
+        border-left: 4px solid var(--accent);
+    }
 </style>
 </head>
-<body>
+<body class="<?php echo ($logged_in_email !== '') ? 'logged-in' : ''; ?>">
     <div class="container">
         <header>
             <?php if ($logged_in_email !== ''): ?>
@@ -442,13 +496,23 @@
                             <p><strong>Login:</strong> <?= htmlspecialchars($user_login) ?></p>
                             <p><strong>Server:</strong> <?= htmlspecialchars($user_server) ?></p>
                         <?php endif; ?>
-                        </div>
+                    </div>
                 </div>
             <?php endif; ?>
             
             <h1>HarvHub</h1>
-            <p style="font-size:1.6rem; margin:1rem 0;">Public Launch: <strong>April 30, 2026</strong></p>
-            <p>Join the waiting list now and become an Insider</p>
+            
+            <?php if ($logged_in_email !== ''): ?>
+                <div class="welcome-message">
+                    Welcome, <strong><?= htmlspecialchars($logged_in_email) ?></strong>
+                </div>
+            <?php endif; ?>
+            
+            <p style="font-size:1.6rem; margin:1rem 0;">Our official website is coming soon</p>
+            
+            <?php if ($logged_in_email === ''): ?>
+                <p>Join the waiting list now and become an Insider</p>
+            <?php endif; ?>
 
             <?php if ($logged_in_email !== ''): ?>
                 <div id="mobileProfileStatus" class="profile-details">
@@ -460,36 +524,40 @@
                         <p><strong>Login:</strong> <?= htmlspecialchars($user_login) ?></p>
                         <p><strong>Server:</strong> <?= htmlspecialchars($user_server) ?></p>
                     <?php endif; ?>
-                    </div>
+                </div>
             <?php endif; ?>
         </header>
         
-        <div class="section">
+        <!-- Investor Section - Always Visible -->
+        <div class="section always-show">
             <h2>Investing and Harvesting</h2>
-            <p>Minimum of $50 deposit to your chosen broker MT5 broker.<br>
-                Choose a professional trader by ratings & statistics.<br>
+            <p>Deposit to your chosen broker MT5 broker.<br>
+                Invest with a professional trader based on ratings and statistics.<br>
                 Your capital is protected - no over-leverage risk.<br>
-                Expect minimum profit of at least the double of your deposit in 30 days (70% to you, 30% to developer).</p>
+                Expect a minimum profit of at least double your deposit within the agreed management period.</p>
         </div>
+        
+        <!-- Hidden sections when logged in -->
         <div class="section">
             <h2>Developer</h2>
-            <p>Build your strategy with simple drag-and-drop options in the Developer Dashboard.<br>
-                HarvHub executes it 24/7 for you and your investors.</p>
+            <p>Build your strategy by submitting your technical analysis in the Developer Dashboard, then submit it for automated analysis on your chosen markets.<br>
+                HarvHub analyzes your chosen markets with your strategy and executes trades.</p>
         </div>
         <div class="section">
             <h2>Account Manager</h2>
             <p>Build or purchase a proven strategy (minimum 45% win rate), place ads, and attract investors. <br>
-                You deposit to your own MT5 so as to execute along with your investors and earn 20% of investors' profit.<br>
-                HarvHub executes everything automatically and manages risk thus charges the remaining 10%.</p>
+                Deposit to your own MT5 account to execute trades alongside your investors and set a percentage to charge on your investors' profit.<br>
+                HarvHub executes everything automatically and manages risk.</p>
         </div>
         <div class="section">
             <h2>Requirements & Profit Share</h2>
             <ul>
                 <li>Investors: minimum of $50 to broker + same deposit amount as collateral.</li>
-                <li>Profit split: 70% investor, 20% manager, 10% fee charged by HarvHub services</li>
-                <li>Minimum expected profit of at least your deposit amount in 30 days</li>
+                <li>Profit split: As an investor, you choose your preferred profit split percentage with your account manager. As an account manager or trader, you set the desired percentage you wish to charge your investors.</li>
+                <li>Expect a minimum profit of at least your deposit amount after the management period.</li>
             </ul>
         </div>
+        
         <div style="text-align:center; margin:3rem 0;">
             <?php
             $button_text = 'Join insiders Now';
@@ -518,7 +586,7 @@
                 }
             }
             ?>
-        <div style="margin-bottom: 100px;">
+            <div style="margin-bottom: 100px;">
                 <button class="<?= $button_class ?>" id="<?= $button_id ?>" <?= $button_onclick ? "onclick=\"$button_onclick\"" : "" ?>>
                     <?= $button_text ?>
                 </button>
@@ -530,6 +598,8 @@
             </div>
         </div>
     </div>
+    
+    <!-- Modal sections -->
     <div id="emailModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal('emailModal')">×</span>
@@ -540,6 +610,7 @@
             </form>
         </div>
     </div>
+    
     <div id="brokerModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal('brokerModal')">×</span>
@@ -562,22 +633,94 @@
             <button class="btn" onclick="openExistingModal()" style="width:80%; max-width:350px; display:block; margin: 0 auto;">I already have an account</button>
         </div>
     </div>
+    
     <div id="existingModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal('existingModal')">×</span>
             <h2>Important Instructions</h2>
             <p><strong>1.</strong> Deposit minimum $50 USD to your MT5 account.</p>
-            <p><strong>2.</strong> Your capital will certainly double in 30 days.</p>
-            <p><strong>3.</strong> Do NOT withdraw during this 30-day period.</p>
-            <p><strong>4.</strong> After 30 days, pay 30% of profit to remain eligible.</p>
+            <p><strong>2.</strong> Your capital will most likely be doubled in the specified period by management (though it is also unlikely).</p>
+            <p><strong>3.</strong> Do NOT withdraw or take unverified actions during the management period.</p>
+            <p><strong>4.</strong> After the management period, pay the profit percentage to the account manager to remain eligible.</p>
             <div class="checkbox-container">
                 <input type="checkbox" id="agree">
                 <label for="agree">I understand and agree to the terms above</label>
             </div>
             <div id="agreeError" class="error-text" style="display:none;">Please agree to continue</div>
-            <button class="btn" style="width:100%; margin-top:20px;" onclick="checkAgreement()">Continue to Registration</button>
+            <button class="btn" style="width:100%; margin-top:20px;" onclick="checkAgreement()">Continue</button>
         </div>
     </div>
+    
+    <!-- NEW: No Developer/Trader Available Modal -->
+    <div id="noDeveloperModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('noDeveloperModal')">×</span>
+            <h2 style="text-align:center; color:var(--accent);">Notice</h2>
+            
+            <div class="info-message">
+                <p style="font-size:1.2rem;">⚠️ No Developer or Trader is currently available</p>
+            </div>
+            
+            <p style="text-align:center; font-size:1.1rem; margin:20px 0;">
+                Would you like to join HarvHub Management instead?
+            </p>
+            
+            <div class="terms-box">
+                <div class="terms-item">
+                    <span class="terms-label">Management Period:</span>
+                    <span class="terms-value">30 Days</span>
+                </div>
+                <div class="terms-item">
+                    <span class="terms-label">Profit Split:</span>
+                    <span class="terms-value">30%</span>
+                </div>
+            </div>
+            
+            <div class="checkbox-container" style="justify-content: center;">
+                <input type="checkbox" id="agreeManagement">
+                <label for="agreeManagement">I agree to the management terms</label>
+            </div>
+            <div id="managementAgreeError" class="error-text" style="display:none;">Please agree to the terms to continue</div>
+            
+            <button class="btn" style="width:100%; margin-top:20px;" onclick="proceedToHarvHubManagement()">Agree & Join</button>
+        </div>
+    </div>
+    
+    <!-- NEW: HarvHub Management Confirmation Modal -->
+    <div id="managementConfirmModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('managementConfirmModal')">×</span>
+            <h2 style="text-align:center; color:var(--accent);">Join HarvHub Management</h2>
+            
+            <div style="text-align:center; margin:20px 0;">
+                <p style="font-size:1.2rem;">You're about to join HarvHub Management with:</p>
+            </div>
+            
+            <div class="terms-box">
+                <div class="terms-item">
+                    <span class="terms-label">Duration:</span>
+                    <span class="terms-value">30 Days</span>
+                </div>
+                <div class="terms-item">
+                    <span class="terms-label">Profit Share:</span>
+                    <span class="terms-value">30% to Management</span>
+                </div>
+                <div class="terms-item">
+                    <span class="terms-label">Your Share:</span>
+                    <span class="terms-value">70%</span>
+                </div>
+            </div>
+            
+            <div class="checkbox-container" style="justify-content: center;">
+                <input type="checkbox" id="agreeFinal">
+                <label for="agreeFinal">I confirm and wish to proceed</label>
+            </div>
+            <div id="finalAgreeError" class="error-text" style="display:none;">Please confirm to continue</div>
+            
+            <button class="btn" style="width:100%; margin-top:20px;" onclick="proceedToRegistration()">Continue to Registration</button>
+        </div>
+    </div>
+    
     <div id="insiderModal" class="modal <?php echo ($just_submitted || ($logged_in_email !== '' && !$already_submitted && $error)) ? 'active' : ''; ?>">
         <div class="modal-content">
             <span class="close" onclick="closeModal('insiderModal')">×</span>
@@ -645,6 +788,7 @@
             <?php endif; ?>
         </div>
     </div>
+    
     <div id="declinedModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal('declinedModal')">×</span>
@@ -659,6 +803,7 @@
             </div>
         </div>
     </div>
+    
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const joinBtn = document.getElementById('joinBtn');
@@ -722,41 +867,77 @@
                 });
             }
 
-
             // Automatically show status modal if just submitted (via PRG flash message)
             <?php if ($just_submitted || ($logged_in_email !== '' && $application_status === 'blacklisted' && $already_submitted)): ?>
                 document.getElementById('insiderModal').classList.add('active');
             <?php endif; ?>
 
         });
+        
         function openEmailModal() { document.getElementById('emailModal').classList.add('active'); }
         function openBrokerModal() { document.getElementById('brokerModal').classList.add('active'); }
-        function openExistingModal() { closeModal('brokerModal'); document.getElementById('existingModal').classList.add('active'); }
+        function openExistingModal() { 
+            closeModal('brokerModal'); 
+            document.getElementById('existingModal').classList.add('active'); 
+        }
+        
         function checkAgreement() {
             if (document.getElementById('agree').checked) {
                 closeModal('existingModal');
-                // This leads to the final registration form (insiderModal)
-                document.getElementById('insiderModal').classList.add('active');
+                // Show the No Developer modal instead of going directly to registration
+                document.getElementById('noDeveloperModal').classList.add('active');
             } else {
                 document.getElementById('agreeError').style.display = 'block';
             }
         }
-        function closeModal(id) { 
-            document.getElementById(id).classList.remove('active'); 
-            // Clear agreement error when modal closes
-            if(id === 'existingModal') {
-                document.getElementById('agree').checked = false; // Reset checkbox
-                document.getElementById('agreeError').style.display = 'none';
+        
+        // New function for HarvHub Management flow
+        function proceedToHarvHubManagement() {
+            if (document.getElementById('agreeManagement').checked) {
+                closeModal('noDeveloperModal');
+                document.getElementById('managementConfirmModal').classList.add('active');
+                document.getElementById('managementAgreeError').style.display = 'none';
+            } else {
+                document.getElementById('managementAgreeError').style.display = 'block';
             }
         }
+        
+        function proceedToRegistration() {
+            if (document.getElementById('agreeFinal').checked) {
+                closeModal('managementConfirmModal');
+                document.getElementById('insiderModal').classList.add('active');
+                document.getElementById('finalAgreeError').style.display = 'none';
+            } else {
+                document.getElementById('finalAgreeError').style.display = 'block';
+            }
+        }
+        
+        function closeModal(id) { 
+            document.getElementById(id).classList.remove('active'); 
+            // Clear agreement errors when modal closes
+            if(id === 'existingModal') {
+                document.getElementById('agree').checked = false;
+                document.getElementById('agreeError').style.display = 'none';
+            }
+            if(id === 'noDeveloperModal') {
+                document.getElementById('agreeManagement').checked = false;
+                document.getElementById('managementAgreeError').style.display = 'none';
+            }
+            if(id === 'managementConfirmModal') {
+                document.getElementById('agreeFinal').checked = false;
+                document.getElementById('finalAgreeError').style.display = 'none';
+            }
+        }
+        
         function togglePass() {
             const p = document.getElementById('pass');
             const t = document.querySelector('.password-toggle');
             if (p.type === 'password') { p.type = 'text'; t.textContent = 'Hide'; }
             else { p.type = 'password'; t.textContent = 'Show'; }
         }
+        
         window.onclick = function(e) {
-            // This handles general modal closing for emailModal, brokerModal, etc.
+            // This handles general modal closing for all modals
             if (e.target.classList.contains('modal')) e.target.classList.remove('active');
         };
     </script>

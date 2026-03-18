@@ -14,7 +14,7 @@
         } else {
             // Standard GET request/Reload: Unset verification flag to force re-prompt.
             unset($_SESSION['passkey_verified']);
-            unset($_SESSION['passkey_error']); // Clear error on standard GET
+            unset($_SESSION['passkey_error']);
         }
     }
 
@@ -26,24 +26,13 @@
 
     $email = strtolower($_SESSION['user_email']);
 
-    // Database credentials (You should move these to a secure configuration file)
+    // Database credentials
     $host = "sql312.infinityfree.com";
     $dbname = "if0_40473107_harvhub";
     $user = "if0_40473107";
     $pass = "InDQmdl53FZ85";
     $tableName = "insiders";
-    $serverAccountTable = "server_account"; // Table for server configurations
-
-    // --- Fixed Configuration (These remain hardcoded) ---
-    $SERVER_SHARE_PERCENT = 30; // 30% for the server/loyalty payment
-    $USER_SHARE_PERCENT = 70;    // 70% for the user withdrawal
-    $MIN_BROKER_BALANCE = 30;
-    $MAX_CONTRACT_DAYS = 5;
-    $MIN_PROFIT_FOR_SPLIT = 30; // Constant for minimum profit check
-    // $CONTRACT_DURATION will be fetched from DB
-    // $MIN_INITIAL_DEPOSIT will be fetched from DB
-    // --- End Fixed Configuration ---
-
+    $serverAccountTable = "server_account";
 
     try {
         $pdo = new PDO(
@@ -53,18 +42,15 @@
             [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
         );
     } catch (Exception $e) {
-        // In a real application, you would log this error, not die()
         die("Database connection failed.");
     }
 
-    // 3. Fetch user data 
-    // Fetch all necessary columns
+    // 3. Fetch user data
     $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
     $stmt->execute([$email]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC); // Use FETCH_ASSOC for clarity
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$user) {
-        // User no longer approved or doesn't exist, log out
         session_unset();
         session_destroy();
         header("Location: index.php");
@@ -77,7 +63,6 @@
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$serverAccount) {
-        // Fallback if no server account is configured - Setting all minimums to 0 to prevent errors
         $serverAccount = [
             'btc_address' => 'N/A', 
             'eth_address' => 'N/A', 
@@ -86,245 +71,262 @@
             'usdt_network' => 'TRC20',
             'minimum_deposit' => 0.00, 
             'brokers_link' => '',
-            'contract_duration' => 10, // Fallback for contract duration set to 10 as per request
+            'contract_duration' => 30,
+            'server_share_percent' => 30,
+            'user_share_percent' => 70,
+            'min_broker_balance' => 30,
+            'min_profit_for_split' => 30,
         ];
     }
     
-    // 🛑 MODIFICATION START: Set dynamic minimum deposit and contract duration
+    // Set dynamic values from DB
     $MIN_INITIAL_DEPOSIT = (float)($serverAccount['minimum_deposit'] ?? 0.00); 
-    // Use 10 days as hard default if DB value is missing or invalid, matching the request
-    $CONTRACT_DURATION = (int)($serverAccount['contract_duration'] ?? 10); 
-    // 🛑 MODIFICATION END
+    $CONTRACT_DURATION = (int)($serverAccount['contract_duration'] ?? 30);
+    $SERVER_SHARE_PERCENT = (int)($serverAccount['server_share_percent'] ?? 30);
+    $USER_SHARE_PERCENT = (int)($serverAccount['user_share_percent'] ?? 70);
+    $MIN_BROKER_BALANCE = (float)($serverAccount['min_broker_balance'] ?? 30);
+    $MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
     
-    // Extract Data needed for early checks
+    // Extract user data
     $brokerBalance = (float)($user['broker_balance'] ?? 0);
-    $profitAndLoss = (float)($user['profitandloss'] ?? 0); // Initialize P&L here
-    $contractDaysLeft = (int)($user['contract_days_left'] ?? 99); // Initialize contract days here
-
-    // 3b. Initial Balance Check 🛑
+    $profitAndLoss = (float)($user['profitandloss'] ?? 0);
+    $executionStartDate = $user['execution_start_date'] ?? null;
+    $loyaltiesStatus = $user['loyalties'] ?? null;
+    
+    // Calculate contract details
+    $contractEndDate = null;
+    $contractDaysLeft = 0;
+    $formatted_start_date = "Not started";
+    $formatted_end_date = "Not started";
+    $is_contract_active = false;
+    $contract_completed = false;
+    
+    // Calculate contract details if execution_start_date exists
+    if ($executionStartDate && $executionStartDate !== '0000-00-00' && $executionStartDate !== null) {
+        $start = new DateTime($executionStartDate);
+        $formatted_start_date = $start->format('M d, Y');
+        
+        $end = clone $start;
+        $end->modify("+{$CONTRACT_DURATION} days");
+        $formatted_end_date = $end->format('M d, Y');
+        
+        $today = new DateTime();
+        $today->setTime(0, 0, 0);
+        $end_clone = clone $end;
+        $end_clone->setTime(0, 0, 0);
+        
+        $interval = $today->diff($end_clone);
+        $contractDaysLeft = (int)$interval->format('%r%a');
+        
+        // Check if contract is completed (days left <= 0)
+        if ($contractDaysLeft <= 0) {
+            $contract_completed = true;
+            $is_contract_active = false;
+        } else {
+            $is_contract_active = true;
+        }
+    }
+    
+    // Initial Balance Check
     $balance_check_failed = false;
-    // NOTE: This check should logically use the brokerBalance (the *total* balance), 
-    // but the code uses it to check against MIN_INITIAL_DEPOSIT. 
-    // We keep this check as is based on existing logic.
     if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
         $balance_check_failed = true;
     }
 
-
-    // Extract remaining Data
+    // Extract remaining user data
     $fullName = $user['fullname'] ?? $email;
     $login = $user['login'] ?? 'N/A';
     $server = $user['server'] ?? 'N/A';
     $balanceDisplay = $user['balance_display'] ?? 'show'; 
-    $broker = strtolower($user['broker'] ?? 'unknown'); // Get user's broker name
-    // $profitAndLoss is already set above
+    $broker = strtolower($user['broker'] ?? 'unknown');
     $tradesString = $user['trades'] ?? ''; 
-    $loyaltiesStatus = $user['loyalties'] ?? null; // Fetch loyalties status
-    // $contractDaysLeft is already set above
 
-    // Calculate Current Balance and Profit Split
-    // 🛑 START OF MODIFIED LOGIC BLOCK
+    // --- BALANCE CALCULATIONS (UPDATED AS REQUESTED) ---
+    // Deposit Balance is always the broker_balance value (the initial deposit)
+    $depositBalance = $brokerBalance;
     
-    // The actual total balance in the broker account (renamed to currentBalance for display)
-    $currentBalance = $brokerBalance; 
-    
-    // Calculate the Deposit Balance (Net Deposit)
-    // Deposit Balance = Total Broker Value - ProfitAndLoss
-    $depositBalance = $brokerBalance - $profitAndLoss;
-    
-    // 🛑 END OF MODIFIED LOGIC BLOCK
+    // Current Balance = broker_balance + profitandloss (profitandloss can be negative or positive)
+    // If profitandloss is negative, it will automatically subtract from broker_balance
+    // If profitandloss is positive, it will automatically add to broker_balance
+    $currentBalance = $brokerBalance + $profitAndLoss;
     
     // Calculate Profit Split values
-    $profitToSplit = max(0, $profitAndLoss); // Only split positive profit
+    $profitToSplit = max(0, $profitAndLoss);
     $serverShare = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
     $userShare = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
     
-    // --- New: Determine Deposit Link (based on user's broker) ---
+    // --- Determine Deposit Link ---
     $brokerLink = '';
-    // Parse the brokers_link field (e.g., "insiders: deriv.com")
     $brokerLinks = [];
-    $linkParts = explode(',', $serverAccount['brokers_link'] ?? '');
     
-    // --- FIX START ---
-    // Change parsing logic to use a simple map key => link
-    foreach ($linkParts as $part) {
-        $part = trim($part);
-        if (strpos($part, ':') !== false) {
-            // Split by the first colon only
-            list($keyRaw, $link) = explode(':', $part, 2);
-            // We need to normalize the key, e.g., 'insiders' or 'insiders'
-            // We'll use a combined key of "source:broker" for specific links, and just "source" for general ones.
-            $key = trim(strtolower($keyRaw));
-            
-            // Assuming your links are consistently stored as:
-            // "insiders: deriv.com"
-            // "insiders: exness.com"
-            // We can check if the link part contains a known broker name to try and map it.
-            
-            $linkName = strtolower(basename(parse_url('http://' . trim($link), PHP_URL_HOST) ?? ''));
-            $linkName = str_replace(array('.com', '.co', '.net'), '', $linkName);
-            
-            // Map the link to the key, but override if it's a specific broker link
-            if (!empty($linkName)) {
-                 // Store specific links as 'deriv' => 'deriv.com'
-                 $brokerLinks[$linkName] = trim($link);
+    if (!empty($serverAccount['brokers_link'])) {
+        $linkParts = explode(',', $serverAccount['brokers_link']);
+        
+        foreach ($linkParts as $part) {
+            $part = trim($part);
+            if (strpos($part, ':') !== false) {
+                list($keyRaw, $link) = explode(':', $part, 2);
+                $key = trim(strtolower($keyRaw));
+                
+                $linkName = strtolower(basename(parse_url('http://' . trim($link), PHP_URL_HOST) ?? ''));
+                $linkName = str_replace(array('.com', '.co', '.net'), '', $linkName);
+                
+                if (!empty($linkName)) {
+                     $brokerLinks[$linkName] = trim($link);
+                }
+                
+                $brokerLinks[$key] = trim($link);
             }
-            
-            // Also store general links for fallback: 'insiders' => 'exness.com' (last one wins)
-            $brokerLinks[$key] = trim($link);
-
         }
     }
     
-    $userBrokerNormalized = strtolower($broker); // e.g., 'bybit'
+    $userBrokerNormalized = strtolower($broker);
 
-    // 1. PRIORITIZE: Look for the link matching the user's specific broker name
     if (!empty($userBrokerNormalized) && isset($brokerLinks[$userBrokerNormalized])) {
         $brokerLink = $brokerLinks[$userBrokerNormalized];
-    } 
-    // 2. FALLBACK: Use the general 'insiders' link (last one parsed)
-    elseif (isset($brokerLinks['insiders'])) {
+    } elseif (isset($brokerLinks['insiders'])) {
         $brokerLink = $brokerLinks['insiders'];
     }
-    // 3. FALLBACK: Use the generic 'insiders' link (last one parsed)
-    elseif (isset($brokerLinks['insiders'])) {
-        $brokerLink = $brokerLinks['insiders'];
-    }
-
-    // --- FIX END ---
     
-    // Final check to ensure it's a valid URL format for opening in a new window
     $brokerLink = (strpos($brokerLink, '://') === false && !empty($brokerLink)) ? 'https://' . $brokerLink : $brokerLink;
+    $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
 
-
-    // --- LOYALTIES LOGIC (State Machine) ---
+    // --- NEW LOYALTY LOGIC BASED ON REQUIREMENTS (IN EXACT ORDER) ---
     $showProfitSplit = false;
+    $showWithdrawButtons = false;
     $loyalty_text = "";
     $loyalty_status_message = "";
     $dashboard_disclaimer = "";
-    $show_contract_days = true;
-    $show_reenroll_button = false; // Flag for re-enrollment
-
-    // Helper to update loyalty and contract days
-    function updateLoyaltyAndDays($pdo, $tableName, $email, $newLoyalty, $newDays) {
-        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = ?, contract_days_left = ? WHERE email = ?");
-        $upd->execute([$newLoyalty, $newDays, $email]);
-        return $newLoyalty;
-    }
-
-    // --- Group of states that lead to a running contract ---
-    $running_statuses = ['justjoined', 're-enrolled'];
-    
-    $loyalty_btn_action = "disabled"; // Default action
-    $loyalty_btn_text = "Not yet";
-    $loyalty_btn_class = "";
     $show_reenroll_button = false;
+    $show_payment_note = false;
     
-    // Convert deposit link for JS/HTML usage
-    $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
+    $loyalty_btn_action = "disabled";
+    $loyalty_btn_text = "Not available";
+    $loyalty_btn_class = "";
+    
+    $is_execution_empty = ($executionStartDate === null || $executionStartDate === '0000-00-00');
 
-
+    // CASE 1: Balance check failed - minimum deposit not met (Keep this as top priority)
     if ($balance_check_failed) {
-        // NEW CONDITION: Balance is too low
         $dashboard_disclaimer = "You need to deposit minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " to participate.";
         $loyalty_text = "Your account is not yet eligible. Please fund your broker account with a minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
         $loyalty_status_message = "Minimum Deposit Required";
-        $show_contract_days = false;
         
-        // --- MODIFIED: DEPOSIT LINK ACTION ---
         $loyalty_btn_text = "Deposit $" . number_format($MIN_INITIAL_DEPOSIT, 2);
         $loyalty_btn_class = "btn-loyalty-action";
         $loyalty_btn_action = "onclick=\"window.open('{$brokerTarget}', '_blank')\"";
-        
-    } elseif (in_array($loyaltiesStatus, $running_statuses) && $contractDaysLeft > $MAX_CONTRACT_DAYS) {
-        // Condition 1: Contract running normally (> 5 days left)
-        $dashboard_disclaimer = "Trading is active.";
-        
-        if ($loyaltiesStatus === 'justjoined') {
-            $loyalty_text = "You are welcome to our board.";
-            $loyalty_status_message = "Eligible for next contract period";
-        } elseif ($loyaltiesStatus === 're-enrolled') {
-            $loyalty_text = "We go again for better turnup.";
-            $loyalty_status_message = "Contract Active";
-        }
-        $loyalty_btn_text = "Eligible";
-        $loyalty_btn_class = "btn-loyalty-confirmed";
     
-    } elseif (in_array($loyaltiesStatus, $running_statuses) && $contractDaysLeft <= $MAX_CONTRACT_DAYS) {
-        // Condition 2: Contract expiring soon (<= 5 days left) - Trigger point for renewal
-        $show_contract_days = false;
-
-        if ($profitAndLoss >= $MIN_PROFIT_FOR_SPLIT) {
-            // High enough profit: Trigger profit split flow
-            if ($brokerBalance >= $MIN_BROKER_BALANCE) {
-                $showProfitSplit = true;
-                $loyalty_text = "Contract end reached. Profit split is required to continue.";
-                $loyalty_status_message = "Contract Ended / Profit Split Required";
-                $loyalty_btn_text = "View Profit Split";
-                $loyalty_btn_class = "btn-loyalty-action";
-                $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
-                
-                // Set loyalty status to pending in DB
-                $loyaltiesStatus = updateLoyaltyAndDays($pdo, $tableName, $email, 'pending', $contractDaysLeft);
-            } else {
-                // High profit, but balance is too low.
-                $loyalty_text = "Contract ended. Insufficient broker balance to proceed with split. Please review funds.";
-                $loyalty_status_message = "Contract Ended / Balance Too Low";
-                $dashboard_disclaimer = "Trading is paused.";
-            }
-
-        } else {
-            // Low Profit (profitandloss < 30): User must re-enroll or disconnect
-            $loyalty_text = "Your profit is yet to meet the minimum requirement. You can decide to re-enroll or disconnect your account.";
-            $loyalty_status_message = "Minimum Profit Not Met";
-            $dashboard_disclaimer = "Trading is paused.";
-            $show_reenroll_button = true; // <-- Flag for re-enrollment button
-            $loyalty_btn_text = "Re-enroll"; // <-- Change text for re-enrollment prompt
-            $loyalty_btn_class = "btn-loyalty-action"; // Use the action class
-            $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\""; // <-- New action handler
-        }
-
-    } elseif ($loyaltiesStatus === 'paymentconfirmed') {
-        // Condition 3: Payment is confirmed, but user needs to manually re-enroll to start the new contract
-        // 🛑 MODIFICATION: Use $CONTRACT_DURATION in text
-        $loyalty_text = "You have maintained your eligibility. Click Re-enroll to activate your new contract period ({$CONTRACT_DURATION} days).";
-        $loyalty_status_message = "Eligibility Confirmed / Awaiting Re-enrollment";
-        $dashboard_disclaimer = "Trading is paused until you re-enroll.";
-        $show_contract_days = false;
-        $show_reenroll_button = true; // <-- Flag for re-enrollment button
-        $loyalty_btn_text = "Re-enroll"; // <-- Change text for re-enrollment prompt
-        $loyalty_btn_class = "btn-loyalty-action"; // Use the action class
-        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\""; // <-- New action handler
-
-    } elseif ($loyaltiesStatus === 'pending') {
-        // Condition 4: Currently in the split payment flow (pending)
+    // CASE 2: loyalties is 'justjoined' - New member welcome
+    } elseif ($loyaltiesStatus === 'justjoined') {
+        $dashboard_disclaimer = "Welcome to HarvHub!";
+        $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
+        $loyalty_status_message = "Welcome New Member!";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Re-enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+    
+    // CASE 3: loyalties is null AND execution start date is empty AND profit is positive
+    } elseif ($loyaltiesStatus === null && $is_execution_empty && $profitAndLoss > 0) {
+        $dashboard_disclaimer = "Profit earned - Split required";
+        $loyalty_text = "You have earned a profit of $" . number_format($profitAndLoss, 2) . "! Please complete the profit split to continue.";
+        $loyalty_status_message = "Profit Split Required";
+        $showWithdrawButtons = true;
         $showProfitSplit = true;
-        $loyalty_text = "Action required: Complete profit split to remain eligible.";
-        $loyalty_status_message = "Profit split pending payment.";
-        $show_contract_days = false;
         $loyalty_btn_text = "View Profit Split";
         $loyalty_btn_class = "btn-loyalty-action";
         $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
-
-    } elseif ($loyaltiesStatus === 'paid') {
-        // Condition 5: Payment confirmed by user, awaiting admin confirmation
-        $loyalty_text = "Your payment will be confirmed within 24 hours.";
-        $loyalty_status_message = "Payment Received, Awaiting Confirmation";
-        $dashboard_disclaimer = "Your account will resume trading activities once payment is confirmed.";
-        $show_contract_days = false;
+    
+    // CASE 4: loyalties is null AND execution start date is empty AND profit is negative
+    } elseif ($loyaltiesStatus === null && $is_execution_empty && $profitAndLoss < 0) {
+        $dashboard_disclaimer = "Loss incurred - Keep going!";
+        $loyalty_text = "Don't give up! Every loss is a learning opportunity. You can re-enroll for a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
+        $loyalty_status_message = "Ready for Another Attempt";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Re-enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+    
+    // CASE 5: loyalties is 'payment-made' - Payment pending
+    } elseif ($loyaltiesStatus === 'payment-made') {
+        $dashboard_disclaimer = "Payment submitted for verification.";
+        $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to re-enroll for a new contract.";
+        $loyalty_status_message = "Payment Pending Confirmation";
+        $show_payment_note = true;
         $loyalty_btn_text = "Awaiting Confirmation";
         $loyalty_btn_class = "btn-loyalty-paid";
-
+    
+    // CASE 6: loyalties is 'payment-confirmed' - Reset and ready
+    } elseif ($loyaltiesStatus === 'payment-confirmed') {
+        // Reset execution_start_date to NULL and profitandloss to 0
+        $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
+        $upd->execute([$email]);
+        
+        // Refresh user data after reset
+        $executionStartDate = null;
+        $profitAndLoss = 0;
+        $loyaltiesStatus = null;
+        
+        $dashboard_disclaimer = "Ready to start a new contract.";
+        $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
+        $loyalty_status_message = "Ready to Re-enroll";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Re-enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+    
+    // CASE 7: Contract completed (execution date met/expired) - Keep this for backward compatibility
+    } elseif ($contract_completed) {
+        if ($profitAndLoss > 0) {
+            // Contract completed with PROFIT - show withdraw/pay buttons
+            $dashboard_disclaimer = "Contract completed with profit.";
+            $loyalty_text = "Your contract period has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to continue.";
+            $loyalty_status_message = "Contract Ended - Profit Split Required";
+            $showWithdrawButtons = true;
+            $showProfitSplit = true;
+            $loyalty_btn_text = "View Profit Split";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
+            
+        } elseif ($profitAndLoss < 0) {
+            // Contract completed with LOSS - show encouragement and re-enroll
+            $dashboard_disclaimer = "Contract completed with loss.";
+            $loyalty_text = "Don't give up! Every loss is a learning opportunity. You can re-enroll for a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
+            $loyalty_status_message = "Contract Ended - Ready for New Start";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Re-enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+            
+        } else {
+            // Contract completed with zero profit
+            $dashboard_disclaimer = "Contract completed.";
+            $loyalty_text = "Your contract period has ended. You can re-enroll for a new {$CONTRACT_DURATION}-day contract.";
+            $loyalty_status_message = "Contract Ended";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Re-enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+        }
+    
+    // CASE 8: Active contract running
+    } elseif ($is_contract_active) {
+        $dashboard_disclaimer = "Trading is active.";
+        $loyalty_text = "Your contract is running normally. {$contractDaysLeft} days remaining.";
+        $loyalty_status_message = "Contract Active";
+        $loyalty_btn_text = "Active";
+        $loyalty_btn_class = "btn-loyalty-confirmed";
+    
+    // CASE 9: Default - no active contract, no special status
     } else {
-        // Fallback
-            $loyalty_text = "Your contract is currently active.";
-            $loyalty_status_message = "Will be updated when contract ends";
-            $loyalty_btn_text = "Eligible";
-            $loyalty_btn_class = "btn-loyalty-confirmed";
+        $dashboard_disclaimer = "No active contract.";
+        $loyalty_text = "You don't have an active contract. Click Re-enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
+        $loyalty_status_message = "Ready to Start";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Re-enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
     }
-
-    // --- End LOYALTIES LOGIC ---
-
 
     // Parse Trades Data
     $tradesData = [
@@ -334,7 +336,7 @@
         'symbolsthatwon' => [],
         'symbolsthatlost' => []
     ];
-    // Check if the trades string is not empty or 'none'
+    
     if (!empty($tradesString) && strtolower($tradesString) !== 'none') {
         $sections = preg_split('/,(?![^()]*\))/', $tradesString);
         foreach ($sections as $section) {
@@ -377,9 +379,9 @@
     $wonCountDisplay = number_format($tradesData['won']);
     $lostCountDisplay = number_format($tradesData['lost']);
 
-    // --- POST Handling (Using PRG Pattern) ---
+    // --- POST Handling ---
 
-    // 4. Create Passkey
+    // Create Passkey
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_passkey'])) {
         if (!empty($_POST['new_passkey'])) {
             $passkey = password_hash($_POST['new_passkey'], PASSWORD_DEFAULT);
@@ -388,11 +390,11 @@
             $_SESSION['passkey_verified'] = true;
             $_SESSION['prg_redirect_safe'] = true;
         }
-        header("Location: mydashboard.php"); // Use correct file name
+        header("Location: mydashboard.php");
         exit;
     }
 
-    // 5. Verify Passkey
+    // Verify Passkey
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['verify_passkey'])) {
         if (password_verify($_POST['passkey'], $user['passkey'] ?? '')) {
             $_SESSION['passkey_verified'] = true;
@@ -406,7 +408,7 @@
         exit;
     }
 
-    // 6. TOGGLE BALANCE DISPLAY
+    // Toggle Balance Display
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_balance_display'])) {
         $currentStatus = $user['balance_display'];
         $newStatus = ($currentStatus === 'show') ? 'hide' : 'show';
@@ -425,19 +427,16 @@
         exit;
     }
     
-    // 7. HANDLE LOYALTY PAYMENT CONFIRMATION (FINAL SUBMISSION)
+    // Handle Server Payment (User clicked "Pay server" and confirmed)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['final_confirm_payment'])) {
         $coin = $_POST['payment_coin'] ?? 'N/A';
         $amount = $_POST['server_share_amount'] ?? 0.00;
-        
-        // 🚨 MODIFICATION: Include current date and time
         $datetime = date('Y-m-d H:i:s');
         
-        // Format payment details string to be saved
         $paymentDetails = "Amount: $" . number_format($amount, 2) . ", Coin: " . htmlspecialchars($coin) . ", Confirmed_at: " . $datetime;
         
-        // Update DB: Set loyalty status to 'paid', reset P&L, and save payment details
-        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 'paid', profitandloss = 0, paymentdetails = ? WHERE email = ?");
+        // Set loyalties to 'payment-made', keep profitandloss as is for record, save payment details
+        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 'payment-made', paymentdetails = ? WHERE email = ?");
         $upd->execute([$paymentDetails, $email]);
         
         $_SESSION['prg_redirect_safe'] = true;
@@ -445,21 +444,20 @@
         exit;
     }
 
-    // 7b. HANDLE RE-ENROLL BUTTON
+    // Handle Re-enrollment - Resets everything for new contract
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reenroll'])) {
-        // Reset profit and set status to re-enrolled with new contract days
-        // Updates loyalties to 're-enrolled', resets P&L to 0, and sets days left to $CONTRACT_DURATION.
-        // 🛑 MODIFICATION: Use $CONTRACT_DURATION instead of $NEW_CONTRACT_DAYS
-        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 're-enrolled', contract_days_left = ?, profitandloss = 0 WHERE email = ?");
-        $upd->execute([$CONTRACT_DURATION, $email]);
+        $today = date('Y-m-d');
+        
+        // Reset: loyalties to NULL, profitandloss to 0, set new execution_start_date
+        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ? WHERE email = ?");
+        $upd->execute([$today, $email]);
         
         $_SESSION['prg_redirect_safe'] = true;
         header("Location: mydashboard.php"); 
         exit;
     }
 
-
-    // 8. Disconnect Account (Blacklist and Logout)
+    // Disconnect Account
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_disconnect'])) {
         $pdo->prepare("UPDATE $tableName SET application_status = 'blacklisted' WHERE email = ?")
              ->execute([$email]);
@@ -470,7 +468,7 @@
         exit;
     }
 
-    // 9. Logout
+    // Logout
     if (isset($_GET['logout'])) {
         session_unset();
         session_destroy();
@@ -478,101 +476,107 @@
         exit;
     }
 
-    // --- Final State Check for Rendering ---
-    // Note: If a user first joins, $user['contract_days_left'] will likely be NULL (or 0) in DB.
-    // The previous script had no logic for a new user joining. Assuming 'justjoined' logic handles this.
-    // If $user['loyalties'] is NULL (newly approved but not "justjoined"), the fallback case is used, 
-    // which results in $loyalty_text = "Your contract is currently active."
-    // For a brand new user, the admin must set loyalties to 'justjoined' and contract_days_left to $CONTRACT_DURATION 
-    // for them to be in the active loop (Condition 1).
-
     $show_passkey_form = empty($user['passkey']);
     $passkey_verified = $_SESSION['passkey_verified'] ?? false;
     $passkey_error = $_SESSION['passkey_error'] ?? null; 
-
-    // --- Loyalty Card Logic Setup (for rendering) ---
-    // If the split condition is met and it's not confirmed/paid yet, force modal
-    $loyalty_trigger_modal = $showProfitSplit; 
-    
-    // Re-check button action to ensure it matches the final state determined in the main logic
-    if ($balance_check_failed) {
-        // Action is already set to open the deposit link
-    } elseif ($show_reenroll_button) {
-        // Action is already set to open the re-enroll modal
-    } elseif ($loyaltiesStatus === 'paid') {
-        // Action is already set to disabled
-    } elseif ($loyalty_trigger_modal) {
-        // Action is already set to open the profit split modal
-    } elseif (in_array($loyaltiesStatus, ['justjoined', 're-enrolled']) && $contractDaysLeft > $MAX_CONTRACT_DAYS) {
-        // Normal running contract states - Action is already set to disabled
-    } 
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HarvHub Dashboard</title>
+<title>HarvHub | Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" rel="stylesheet">
 <style>
-        :root {
-        --bg: #f0f2f5;
-        --text: #1c1e21;
-        --accent: #2e8b57;
-        --card-light: rgba(255,255,255,0.9);
-        --card-dark: rgba(30,30,30,0.85);
-        --passkey-bg: rgba(255, 255, 255, 0.95);
-        --passkey-text: #1c1e21;
-        --modal-bg: var(--card-light);
-        --modal-text: var(--text);
-        --error-color: #ff6b6b;
-        --success-color: #2ecc71;
-        --info-color: #3498db;
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
     }
+
+    :root {
+        /* Light mode - Modern professional palette with green accent */
+        --bg-primary: #f8fafc;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --text-primary: #0f172a;
+        --text-secondary: #475569;
+        --text-tertiary: #64748b;
+        --accent-primary: #2e8b57;
+        --accent-secondary: #3cb371;
+        --accent-light: #d1fae5;
+        --success: #10b981;
+        --success-light: #d1fae5;
+        --warning: #f59e0b;
+        --warning-light: #fef3c7;
+        --danger: #ef4444;
+        --danger-light: #fee2e2;
+        --info: #6366f1;
+        --info-light: #e0e7ff;
+        --border: #e2e8f0;
+        --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
+        --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+        --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+        --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+    }
+
     @media (prefers-color-scheme: dark) {
         :root {
-            --bg: #000;
-            --text: #e4e6eb;
-            --accent: #2e8b57;
-            --card-light: rgba(255,255,255,0.12);
-            --card-dark: rgba(40,40,40,0.9);
-            --passkey-bg: var(--card-dark);
-            --passkey-text: #e4e6eb;
-            --modal-bg: var(--card-dark);
-            --modal-text: var(--text);
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #1e293b;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-tertiary: #94a3b8;
+            --accent-primary: #2e8b57;
+            --accent-secondary: #3cb371;
+            --accent-light: #1e3a5f;
+            --success: #10b981;
+            --success-light: #064e3b;
+            --warning: #f59e0b;
+            --warning-light: #92400e;
+            --danger: #ef4444;
+            --danger-light: #7f1d1d;
+            --info: #6366f1;
+            --info-light: #312e81;
+            --border: #334155;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.4);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.4);
+            --shadow-xl: 0 20px 25px rgba(0,0,0,0.5);
         }
     }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body {
-        height: 100%;
-        font-family: 'Segoe UI', sans-serif;
-        background: var(--bg);
-        color: var(--text);
+
+    body {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        line-height: 1.5;
+        min-height: 100vh;
+        overflow: hidden; /* Disable body scrolling */
+    }
+
+    /* Main scrollable container */
+    .app-container {
+        height: 100vh;
+        overflow-y: auto;
         overflow-x: hidden;
-    }
-    body { overflow-y: hidden; }
-
-    /* Starry Background for Light Mode ONLY */
-    @media (prefers-color-scheme: light) {
-        body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            background:
-                radial-gradient(circle at 20% 80%, #1a0033 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, #000033 0%, transparent 50%),
-                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="white"/><circle cx="30" cy="70" r="1.5" fill="white"/><circle cx="70" cy="30" r="1" fill="white"/><circle cx="90" cy="80" r="1.2" fill="white"/><circle cx="50" cy="50" r="1.8" fill="white"/></svg>') repeat;
-            background-size: cover, cover, 120px 120px;
-            opacity: 0.6;
-            pointer-events: none;
-            z-index: -1;
-        }
+        position: relative;
+        scroll-behavior: smooth;
     }
 
-    /* Passkey Overlays */
+    /* Disable scrolling when modal is active */
+    body.modal-open {
+        overflow: hidden;
+    }
+
+    /* Passkey Overlay */
     .passkey-overlay {
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.5);
+        background: rgba(0, 0, 0, 0.7);
         backdrop-filter: blur(8px);
         display: flex;
         align-items: center;
@@ -580,405 +584,803 @@
         z-index: 1000;
         padding: 1rem;
     }
+
     .passkey-screen {
-        background: var(--passkey-bg);
-        color: var(--passkey-text);
-        backdrop-filter: blur(12px);
-        padding: 3rem 2.5rem;
-        border-radius: 20px;
+        background: var(--bg-card);
+        padding: 2.5rem;
+        border-radius: 1.5rem;
         width: 100%;
-        max-width: 480px;
-        text-align: center;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.1);
+        max-width: 420px;
+        box-shadow: var(--shadow-xl);
+        border: 1px solid var(--border);
+        animation: slideUp 0.3s ease;
     }
-    .passkey-screen input[type="password"] {
-        background: rgba(0,0,0,0.05);
-        color: var(--passkey-text);
-    }
-    @media (prefers-color-scheme: dark) {
-        .passkey-screen input[type="password"] { background: rgba(255,255,255,0.1); }
-    }
-    .error-message { color: var(--error-color); margin: -10px 0 10px; font-weight: bold; }
 
-    /* Dashboard Wrapper */
-    .dashboard-wrapper {
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .passkey-screen h2 {
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        color: var(--text-primary);
+    }
+
+    .passkey-screen p {
+        color: var(--text-secondary);
+        margin-bottom: 2rem;
+    }
+
+    .passkey-screen input {
         width: 100%;
-        max-width: 1100px;
-        height: 100vh;
-        margin: 0 auto;
-        padding: 4rem 2.5rem;
-        overflow-y: auto;
-        -ms-overflow-style: none;
-        scrollbar-width: none;
-    }
-    .dashboard-wrapper::-webkit-scrollbar { display: none; }
-
-    h1 { font-size: 3.8rem; color: var(--accent); text-align: center; margin-bottom: 0.5rem; }
-    .welcome { text-align: center; font-size: 1.3rem; margin-bottom: 1rem; opacity: 0.9; }
-    .dashboard-disclaimer {
-        text-align: center;
-        margin: 1.5rem 0;
         padding: 1rem;
-        background: rgba(0, 150, 199, 0.15);
-        color: var(--info-color);
-        border-radius: 10px;
-        font-weight: bold;
+        background: var(--bg-secondary);
+        border: 2px solid var(--border);
+        border-radius: 1rem;
+        font-size: 1rem;
+        color: var(--text-primary);
+        margin-bottom: 1.5rem;
+        transition: all 0.2s;
     }
 
+    .passkey-screen input:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 3px var(--accent-light);
+    }
+
+    .btn-full {
+        width: 100%;
+        padding: 1rem;
+        background: var(--accent-primary);
+        color: white;
+        border: none;
+        border-radius: 1rem;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .btn-full:hover {
+        background: var(--accent-secondary);
+        transform: translateY(-2px);
+    }
+
+    .error-message {
+        color: var(--danger);
+        font-size: 0.875rem;
+        margin-top: -1rem;
+        margin-bottom: 1rem;
+        font-weight: 500;
+    }
+
+    /* Dashboard Layout */
+    .dashboard {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem;
+        position: relative;
+    }
+
+    /* Header */
+    .dashboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .harvest-sticker {
+        background: linear-gradient(135deg, #2e8b57, #3cb371);
+        color: white;
+        padding: 0.5rem 1.5rem;
+        border-radius: 2rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        box-shadow: var(--shadow-md);
+    }
+
+    .harvest-sticker span {
+        font-size: 1.2rem;
+    }
+
+    .header-left h1 {
+        font-size: 2rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .header-left p {
+        color: var(--text-secondary);
+        font-size: 1rem;
+    }
+
+    .header-right {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .user-menu {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: var(--bg-card);
+        padding: 0.5rem 1rem;
+        border-radius: 2rem;
+        border: 1px solid var(--border);
+    }
+
+    .user-avatar {
+        width: 2.5rem;
+        height: 2.5rem;
+        background: var(--accent-light);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent-primary);
+        font-weight: 600;
+        font-size: 1.2rem;
+    }
+
+    .user-name {
+        font-weight: 500;
+        color: var(--text-primary);
+    }
+
+    .logout-link {
+        color: var(--text-secondary);
+        text-decoration: none;
+        font-size: 0.875rem;
+        transition: color 0.2s;
+    }
+
+    .logout-link:hover {
+        color: var(--danger);
+    }
+
+    /* Disclaimer */
+    .dashboard-disclaimer {
+        background: var(--info-light);
+        border: 1px solid var(--info);
+        color: var(--info);
+        padding: 1rem 1.5rem;
+        border-radius: 1rem;
+        margin-bottom: 2rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .encouragement-note {
+        background: var(--warning-light);
+        border: 1px solid var(--warning);
+        color: var(--warning);
+        padding: 1rem 1.5rem;
+        border-radius: 1rem;
+        margin-bottom: 2rem;
+        font-style: italic;
+    }
+
+    /* Stats Grid */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 2rem;
-        margin: 3rem 0;
-    }
-    @media (orientation: portrait) or (max-width: 900px) {
-        .stats-grid { grid-template-columns: 1fr; }
-        h1 { font-size: 3rem; }
-        .dashboard-wrapper { padding: 2rem 1rem; }
-        .logout-link { margin-bottom: 120px; }
+        gap: 1.5rem;
+        margin-bottom: 1.5rem;
     }
 
-    /* Cards */
     .stat-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 1.5rem;
+        padding: 1.5rem;
+        transition: all 0.3s;
         position: relative;
-        background: var(--card-light);
-        backdrop-filter: blur(12px);
-        padding: 2.5rem;
-        border-radius: 18px;
-        text-align: center;
-        border: 1px solid rgba(255,255,255,0.15);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-        transition: all 0.3s ease;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
+        overflow: hidden;
     }
-    .stat-card:hover {
-        transform: translateY(-8px);
-        box-shadow: 0 15px 40px rgba(0,0,0,0.3);
-        border-color: var(--accent);
-    }
-    .stat-card h3 { font-size: 1.3rem; opacity: 0.8; margin-bottom: 0.5rem; letter-spacing: 0.5px; }
-    .stat-card h2 { font-size: 3.2rem; color: var(--text); font-weight: bold; transition: filter 0.5s ease; }
-    .stat-details-info { font-size: 0.85rem; opacity: 0.7; margin-bottom: 1.5rem; line-height: 1.4; }
 
-    /* Trade Summary */
-    .stat-card.trades-card { padding: 1.5rem 2.5rem; }
-    .trades-layout-container { display: flex; flex-direction: column; align-items: center; margin-top: 1rem; }
-    .trades-count { font-size: 4rem; font-weight: 900; color: var(--accent); line-height: 1.1; margin-bottom: 0.5rem; }
-    .trades-count span { display: block; font-size: 0.35em; font-weight: normal; opacity: 0.7; color: var(--text); margin-top: -0.5rem; }
-    .trades-won-lost { display: flex; justify-content: space-between; width: 100%; max-width: 400px; margin-top: 1rem; }
-    .trades-detail-item { font-size: 1rem; opacity: 0.9; font-weight: bold; }
-    .trades-detail-item strong { font-size: 1.2rem; margin-top: 5px; }
-    .trades-detail-item.right { text-align: right; }
-    .btn-view-history { margin-top: 1.5rem; padding: 10px 20px; background: var(--accent); color: #000; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; transition: all 0.3s; }
-    .btn-view-history:hover { opacity: 0.8; transform: scale(1.05); }
+    .stat-card:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-lg);
+        border-color: var(--accent-light);
+    }
+
+    .stat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .stat-header h3 {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .balance-toggle-btn {
+        background: none;
+        border: none;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        font-size: 1.2rem;
+        padding: 0.25rem;
+        border-radius: 0.5rem;
+        transition: all 0.2s;
+    }
+
+    .balance-toggle-btn:hover {
+        color: var(--accent-primary);
+        background: var(--accent-light);
+    }
+
+    .stat-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1.2;
+        margin-bottom: 0.5rem;
+    }
+
+    .stat-label {
+        color: var(--text-tertiary);
+        font-size: 0.875rem;
+    }
+
+    .stat-details {
+        font-size: 0.75rem;
+        color: var(--text-tertiary);
+        margin-top: 0.5rem;
+    }
+
+    .profit-positive {
+        color: var(--success) !important;
+    }
+
+    .profit-negative {
+        color: var(--danger) !important;
+    }
+
+    /* Trade Summary Card */
+    .stat-card.trades-card {
+        grid-column: 1 / -1;
+    }
+
+    .trades-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .trades-count-large {
+        font-size: 3rem;
+        font-weight: 700;
+        color: var(--accent-primary);
+        line-height: 1;
+    }
+
+    .trades-count-label {
+        color: var(--text-tertiary);
+        font-size: 0.875rem;
+    }
+
+    .trades-stats {
+        display: flex;
+        gap: 2rem;
+    }
+
+    .trades-stat {
+        text-align: right;
+    }
+
+    .trades-stat .label {
+        color: var(--text-tertiary);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .trades-stat .value {
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+
+    .value.won {
+        color: var(--success);
+    }
+
+    .value.lost {
+        color: var(--danger);
+    }
+
+    .btn-view-history {
+        background: var(--accent-light);
+        color: var(--accent-primary);
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 2rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .btn-view-history:hover {
+        background: var(--accent-primary);
+        color: white;
+    }
 
     /* Loyalty Card */
     .stat-card.loyalty-card {
-        padding: 2rem 1.5rem;
-        justify-content: space-between;
         grid-column: 1 / -1;
-        max-width: 600px;
-        margin: 0 auto;
+        background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
     }
-    @media (orientation: portrait) or (max-width: 900px) {
-        .stat-card.loyalty-card { max-width: 100%; }
+
+    .loyalty-status {
+        display: inline-block;
+        padding: 0.25rem 1rem;
+        background: var(--accent-light);
+        color: var(--accent-primary);
+        border-radius: 2rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-bottom: 1rem;
     }
-    .loyalty-card p { font-size: 1.1rem; margin-top: 1rem; opacity: 0.8; }
-    .loyalty-card button {
-        margin-top: 1.5rem;
-        padding: 10px 20px;
-        background: rgba(128, 128, 128, 0.4);
-        color: var(--text);
-        border: 1px solid rgba(128, 128, 128, 0.5);
-        border-radius: 50px;
-        font-weight: bold;
+
+    .loyalty-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+    }
+
+    .loyalty-text {
+        flex: 1;
+        min-width: 300px;
+    }
+
+    .loyalty-text p {
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+    }
+
+    .contract-info {
+        display: flex;
+        gap: 1rem;
+        font-size: 0.875rem;
+        color: var(--text-tertiary);
+        margin-top: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .contract-dates {
+        background: var(--bg-primary);
+        padding: 0.25rem 0.75rem;
+        border-radius: 2rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .contract-days-left {
+        background: var(--success-light);
+        color: var(--success);
+        padding: 0.25rem 0.75rem;
+        border-radius: 2rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .loyalty-actions {
+        display: flex;
+        gap: 1rem;
+    }
+
+    .btn-loyalty {
+        padding: 0.75rem 2rem;
+        border-radius: 2rem;
+        font-weight: 600;
+        font-size: 0.875rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+    }
+
+    .btn-loyalty-action {
+        background: var(--accent-primary);
+        color: white;
+    }
+
+    .btn-loyalty-action:hover {
+        background: var(--accent-secondary);
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
+    }
+
+    .btn-loyalty-paid {
+        background: var(--warning);
+        color: white;
+        opacity: 0.8;
         cursor: not-allowed;
     }
-    .loyalty-card .btn-loyalty-blurred { filter: blur(4px) brightness(0.8); user-select: none; pointer-events: none; }
-    .loyalty-card .btn-loyalty-action { background: var(--success-color); color: #000; cursor: pointer; border: none; }
-    .loyalty-card .btn-loyalty-paid { background: var(--info-color); color: white; cursor: default; border: none; }
-    .loyalty-card .btn-loyalty-confirmed { background: var(--success-color); color: white; cursor: default; border: none; }
-    .loyalty-status-msg { font-weight: bold; font-size: 1.3rem; margin-bottom: 0.5rem; color: var(--accent); }
-    .contract-days-left { font-size: 0.9rem; opacity: 0.6; margin-top: 5px; }
 
-    .profit-positive { color: var(--success-color) !important; }
-    .profit-negative { color: var(--error-color) !important; }
+    .btn-loyalty-confirmed {
+        background: var(--success);
+        color: white;
+        cursor: default;
+    }
+
+    /* Danger Button */
+    .btn-danger {
+        width: 100%;
+        padding: 1rem;
+        background: var(--danger-light);
+        color: var(--danger);
+        border: 1px solid var(--danger);
+        border-radius: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-top: 1.5rem;
+    }
+
+    .btn-danger:hover {
+        background: var(--danger);
+        color: white;
+    }
 
     /* Blur Mode */
-    .dashboard-wrapper.blur-mode .stat-card h2 {
-        filter: blur(8px) brightness(0.9);
+    .dashboard.blur-mode .stat-value,
+    .dashboard.blur-mode .stat-details,
+    .dashboard.blur-mode .trades-count-large,
+    .dashboard.blur-mode .trades-stat .value {
+        filter: blur(15px);
         user-select: none;
-        pointer-events: none;
-        color: var(--text);
     }
 
-    /* Toggle Button */
-    .balance-toggle-btn {
-        position: absolute;
-        top: 15px;
-        right: 15px;
-        background: none;
-        border: none;
-        color: var(--text);
-        font-size: 1.5rem;
-        cursor: pointer;
-        padding: 5px;
-        opacity: 0.6;
-        transition: opacity 0.3s;
-    }
-    .balance-toggle-btn:hover { opacity: 1; color: var(--accent); }
-
-    .note { text-align: center; opacity: 0.8; font-style: italic; margin: 1rem 0; font-size: 1.1rem; }
-    .btn-danger {
-        display: block;
-        margin: 1rem auto 0;
-        padding: 1.2rem 3rem;
-        background: #c0392b;
-        color: white;
-        border: none;
-        border-radius: 50px;
-        font-weight: bold;
-        font-size: 1.1rem;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    .btn-danger:hover { background: #e74c3c; transform: scale(1.05); }
-    .logout-link {
-        display: block;
-        text-align: center;
-        margin-top: 10px;
-        font-size: 0.95rem;
-        color: var(--text);
-        opacity: 0.7;
-        text-decoration: underline;
-    }
-    .logout-link:hover { opacity: 1; color: var(--error-color); }
-
-    /* Modal Base + Invisible Scrollbars */
+    /* Modals */
     .modal {
         display: none;
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.7);
+        background: rgba(0, 0, 0, 0.7);
         backdrop-filter: blur(8px);
         align-items: center;
         justify-content: center;
-        z-index: 999;
+        z-index: 1000;
         padding: 1rem;
     }
-    .modal.active { display: flex; }
+
+    .modal.active {
+        display: flex;
+    }
+
     .modal-content {
-        background: var(--modal-bg);
-        color: var(--modal-text);
-        padding: 3rem;
-        border-radius: 20px;
+        background: var(--bg-card);
+        border-radius: 2rem;
+        padding: 2.5rem;
         max-width: 500px;
-        width: 90%;
-        text-align: center;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-        border: 1px solid rgba(255,255,255,0.1);
+        width: 100%;
         max-height: 90vh;
         overflow-y: auto;
-        -ms-overflow-style: none;  /* IE and Edge */
-        scrollbar-width: none;     /* Firefox */
-    }
-    .modal-content::-webkit-scrollbar {
-        display: none; /* Chrome, Safari, newer Edge */
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow-xl);
+        animation: slideUp 0.3s ease;
     }
 
-    /* Profit Split Modal – Vertical Layout */
-    #profitSplitModal .modal-content {
-        max-width: 500px;
-    }
-    .split-total {
-        font-size: 1.5rem;
-        font-weight: bold;
+    .modal-content h2 {
+        font-size: 1.8rem;
+        font-weight: 600;
         margin-bottom: 1rem;
-        color: var(--success-color);
+        color: var(--text-primary);
     }
-    .split-container {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-        margin-top: 2rem;
-    }
-    .split-item {
-        background: rgba(0,0,0,0.05);
-        padding: 2rem 1.5rem;
-        border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.1);
-        text-align: center;
-    }
-    .split-item h4 {
-        font-size: 2.2rem;
-        margin-bottom: 8px;
-        font-weight: 900;
-    }
-    .split-item p { font-size: 0.95rem; opacity: 0.7; margin-bottom: 12px; }
-    .split-item .btn-pay,
-    .split-item .btn-withdraw {
-        padding: 10px 20px;
-        border-radius: 50px;
-        border: none;
-        font-weight: bold;
-        margin-top: 15px;
-        cursor: pointer;
-    }
-    .split-item .btn-pay { background: var(--info-color); color: white; }
-    .split-item .btn-withdraw { background: var(--success-color); color: #000; opacity: 0.7; cursor: default; }
 
-    /* Payment Modal */
-    #paymentModal .modal-content { max-width: 420px; } /* Renamed from btcPaymentModal */
-    
-    .coin-selector {
-        display: flex;
-        justify-content: space-between;
-        gap: 10px;
+    .modal-content p {
+        color: var(--text-secondary);
         margin-bottom: 1.5rem;
     }
-    .coin-selector label {
-        flex: 1;
-        padding: 10px 0;
-        border-radius: 8px;
-        background: rgba(0,0,0,0.1);
+
+    /* Profit Split */
+    .split-total {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--success);
+        margin-bottom: 2rem;
+        text-align: center;
+    }
+
+    .split-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-bottom: 2rem;
+    }
+
+    .split-item {
+        background: var(--bg-primary);
+        padding: 1.5rem;
+        border-radius: 1.5rem;
+        border: 1px solid var(--border);
+        text-align: center;
+    }
+
+    .split-item h4 {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 0.5rem;
+    }
+
+    .split-item p {
+        color: var(--text-tertiary);
+        margin-bottom: 1rem;
+    }
+
+    .split-item .btn-withdraw,
+    .split-item .btn-pay {
+        width: 100%;
+        padding: 0.75rem;
+        border: none;
+        border-radius: 2rem;
+        font-weight: 600;
         cursor: pointer;
-        font-weight: bold;
-        opacity: 0.7;
         transition: all 0.2s;
-        border: 2px solid transparent;
-        color: var(--text);
+        margin-bottom: 0.5rem;
     }
-    .coin-selector input[type="radio"]:checked + label {
-        opacity: 1;
-        background: var(--accent);
-        color: #000;
-        border-color: var(--accent);
+
+    .split-item .btn-withdraw {
+        background: var(--success);
+        color: white;
     }
-    .coin-selector input[type="radio"] { display: none; }
-    
-    .crypto-details {
-        background: rgba(0,0,0,0.05);
-        padding: 15px;
-        border-radius: 10px;
-        margin: 15px 0;
-        text-align: left;
-        border: 1px solid rgba(255,255,255,0.1);
+
+    .split-item .btn-pay {
+        background: var(--info);
+        color: white;
     }
-    .crypto-details p { margin-bottom: 5px; font-size: 0.95rem; }
-    .btc-address {
-        background: rgba(0,0,0,0.1);
-        padding: 10px;
-        border-radius: 8px;
-        font-size: 0.85rem;
-        word-break: break-all;
-        font-family: monospace;
-        color: var(--accent);
-        margin-top: 8px;
-        display: block;
+
+    .split-item small {
+        color: var(--text-tertiary);
+        font-size: 0.75rem;
+    }
+
+    /* Payment Modal */
+    .coin-selector {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .coin-selector input[type="radio"] {
+        display: none;
+    }
+
+    .coin-selector label {
+        padding: 0.75rem;
+        background: var(--bg-primary);
+        border: 2px solid var(--border);
+        border-radius: 1rem;
+        text-align: center;
+        font-weight: 600;
         cursor: pointer;
+        transition: all 0.2s;
     }
-    
+
+    .coin-selector input[type="radio"]:checked + label {
+        background: var(--accent-primary);
+        color: white;
+        border-color: var(--accent-primary);
+    }
+
+    .crypto-details {
+        background: var(--bg-primary);
+        padding: 1.5rem;
+        border-radius: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .crypto-details p {
+        margin-bottom: 0.5rem;
+    }
+
+    .btc-address {
+        display: block;
+        background: var(--bg-card);
+        padding: 1rem;
+        border-radius: 0.75rem;
+        font-family: monospace;
+        font-size: 0.875rem;
+        color: var(--accent-primary);
+        word-break: break-all;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        margin-top: 0.5rem;
+    }
+
     .checkbox-container {
         display: flex;
         align-items: center;
-        justify-content: center;
-        margin: 15px 0;
-        font-size: 1rem;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
         cursor: pointer;
     }
+
     .checkbox-container input {
-        margin-right: 10px;
-        width: 18px;
-        height: 18px;
+        width: 1.2rem;
+        height: 1.2rem;
+        cursor: pointer;
     }
 
     .btn-paid {
-        background: var(--success-color) !important;
-        color: #000 !important;
-        font-size: 1.1rem !important;
-        margin-top: 20px !important;
-        padding: 12px 20px !important;
-        transition: opacity 0.3s;
+        background: var(--accent-primary) !important;
+        color: white !important;
+        opacity: 1 !important;
     }
+
     .btn-paid:disabled {
-        opacity: 0.4;
+        opacity: 0.5 !important;
         cursor: not-allowed !important;
     }
-    .disclaimer { margin-top: 15px; font-size: 0.8rem; opacity: 0.7; color: var(--error-color); }
 
-    /* Trade History Modal (styles omitted for brevity, assumed unchanged) */
+    .disclaimer {
+        color: var(--text-tertiary);
+        font-size: 0.75rem;
+        margin-top: 1rem;
+    }
 
+    /* Modal Actions */
     .modal-actions {
-        margin-top: 2rem;
         display: flex;
-        justify-content: center;
-        gap: 20px;
+        gap: 1rem;
+        margin-top: 2rem;
     }
-    .modal-actions button,
-    .modal-actions form button {
-        flex-grow: 1;
-        max-width: 200px;
-        padding: 12px 20px;
-        border-radius: 50px;
-        font-size: 1rem;
-        transition: transform 0.2s, background 0.2s;
-    }
-    .modal-actions button:hover,
-    .modal-actions form button:hover { transform: translateY(-2px); }
 
-    input[type="password"] {
-        width: 100%;
-        padding: 16px;
-        margin: 20px 0;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 12px;
-        font-size: 1.1rem;
-        text-align: center;
-    }
-    .btn-full {
-        width: 100%;
-        padding: 16px;
-        background: var(--accent);
-        color: #000;
+    .modal-actions button {
+        flex: 1;
+        padding: 1rem;
         border: none;
-        border-radius: 12px;
-        font-weight: bold;
-        font-size: 1.1rem;
+        border-radius: 2rem;
+        font-weight: 600;
         cursor: pointer;
+        transition: all 0.2s;
     }
 
-    /* Styles for history-section items */
-    .history-section {
-        margin-top: 10px;
-        max-height: 200px;
-        overflow-y: auto;
-        padding: 10px;
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        background: rgba(0,0,0,0.03);
+    .modal-actions button:first-child {
+        background: var(--bg-primary);
+        color: var(--text-primary);
     }
+
+    .modal-actions button:last-child {
+        background: var(--danger);
+        color: white;
+    }
+
+    .modal-actions form {
+        flex: 1;
+    }
+
+    .modal-actions form button {
+        width: 100%;
+        background: var(--success);
+        color: white;
+    }
+
+    /* Trade History */
+    .history-section {
+        max-height: 300px;
+        overflow-y: auto;
+        margin-bottom: 1.5rem;
+        border: 1px solid var(--border);
+        border-radius: 1rem;
+        background: var(--bg-primary);
+    }
+
     .history-item {
         display: flex;
         justify-content: space-between;
-        padding: 8px 12px;
-        border-bottom: 1px dashed rgba(255,255,255,0.1);
-        font-size: 0.95rem;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
     }
+
     .history-item:last-child {
         border-bottom: none;
     }
+
     .history-symbol {
-        font-weight: bold;
+        font-weight: 600;
     }
+
     .history-amount-won {
-        color: var(--success-color);
+        color: var(--success);
+        font-weight: 500;
     }
+
     .history-amount-lost {
-        color: var(--error-color);
+        color: var(--danger);
+        font-weight: 500;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+        .dashboard {
+            padding: 1.5rem;
+        }
+        
+        .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .dashboard-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .trades-header {
+            flex-direction: column;
+            gap: 1rem;
+            align-items: flex-start;
+        }
+
+        .trades-stats {
+            width: 100%;
+            justify-content: space-between;
+        }
+
+        .loyalty-content {
+            flex-direction: column;
+        }
+
+        .loyalty-actions {
+            width: 100%;
+        }
+
+        .btn-loyalty {
+            flex: 1;
+            text-align: center;
+        }
+
+        .split-container {
+            grid-template-columns: 1fr;
+        }
+
+        .contract-info {
+            flex-direction: column;
+            gap: 0.5rem;
+        }
     }
 </style>
 </head>
@@ -987,8 +1389,8 @@
     <?php if ($show_passkey_form): ?>
         <div class="passkey-overlay">
             <div class="passkey-screen">
-                <h2>Create Your Passkey</h2>
-                <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
+                <h2>🔐 Create Passkey</h2>
+                <p>Secure your HarvHub dashboard access</p>
                 <form method="POST">
                     <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
                     <button type="submit" name="create_passkey" class="btn-full">Save & Continue</button>
@@ -998,8 +1400,8 @@
     <?php elseif (!$passkey_verified): ?>
         <div class="passkey-overlay">
             <div class="passkey-screen">
-                <h2>Welcome Back</h2>
-                <p style="margin:1.5rem 0; opacity:0.9;">Enter your passkey to access dashboard</p>
+                <h2>👋 Welcome Back</h2>
+                <p>Enter your passkey to access dashboard</p>
                 <form method="POST">
                     <input type="password" name="passkey" placeholder="Your passkey" required autofocus>
                     <?php if ($passkey_error): ?>
@@ -1007,191 +1409,219 @@
                     <?php endif; ?>
                     <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
                 </form>
-                <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
-                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a>
+                <a href="mailto:support@harvhub.com" style="display:block; text-align:center; margin-top:1.5rem; color:var(--accent-primary); font-size:0.875rem;">Forgot passkey?</a>
             </div>
         </div>
-    <?php endif; ?>
-
-    <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
-        <h1>HarvHub Dashboard</h1>
-        <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
-
-        <?php if (!empty($dashboard_disclaimer)): ?>
-            <p class="dashboard-disclaimer">
-                <?= htmlspecialchars($dashboard_disclaimer) ?>
-            </p>
-        <?php endif; ?>
-
-        <div class="stats-grid">
-            <div class="stat-card">
-                <form method="POST" style="margin:0;">
-                    <input type="hidden" name="toggle_balance_display" value="1">
-                    <button type="submit" title="<?= $balanceDisplay === 'show' ? 'Hide Balance' : 'Show Balance' ?>" class="balance-toggle-btn">
-                        <?php if ($balanceDisplay === 'show'): ?>
-                            👁️
-                        <?php else: ?>
-                            🔒 
-                        <?php endif; ?>
-                    </button>
-                </form>
-                
-                <h3>Deposit Balance</h3>
-                
-                <div class="stat-details-info">
-                    <?= htmlspecialchars($login) ?><br>
-                    <?= htmlspecialchars($server) ?>
-                </div>
-                <h2>$<?= number_format($depositBalance, 2) ?></h2> </div>
-            
-            <div class="stat-card">
-                <h3>Profit & Loss</h3>
-                <h2 class="<?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                    $<?= number_format($profitAndLoss, 2) ?>
-                </h2>
-            </div>
-
-            <div class="stat-card">
-                <h3>Current Balance</h3>
-                <h2 class="<?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                    $<?= number_format($currentBalance, 2) ?> </h2>
-            </div>
-            
-            <div class="stat-card trades-card" style="grid-column: 1 / -1;"> 
-                <h3>Trade Summary</h3>
-                <div class="trades-layout-container">
-                    <div class="trades-count">
-                        <?= $tradesCountDisplay ?>
-                        <span>Trades</span>
+    <?php else: ?>
+    <div class="app-container" id="appContainer">
+        <div class="dashboard <?= $balanceDisplay === 'hide' ? 'blur-mode' : '' ?>">
+            <div class="dashboard-header">
+                <div class="header-left">
+                    <div>
+                        <h1><span>🌾</span> HarvHub Dashboard</h1>
+                        <p>Monitor your trading performance</p>
                     </div>
-                    
-                    <div class="trades-won-lost">
-                        <div class="trades-detail-item left">
-                            Won: 
-                            <strong style="color:var(--success-color);"><?= $wonCountDisplay ?></strong>
+                </div>
+                <div class="header-right">
+                    <div class="user-menu">
+                        <div class="user-avatar">
+                            <?= strtoupper(substr($fullName, 0, 1)) ?>
                         </div>
-                        
-                        <div class="trades-detail-item right">
-                            Lost: 
-                            <strong style="color:var(--error-color);"><?= $lostCountDisplay ?></strong>
+                        <span class="user-name"><?= htmlspecialchars($fullName) ?></span>
+                    </div>
+                    <a href="?logout=1" class="logout-link">Logout →</a>
+                </div>
+            </div>
+
+            <?php if (!empty($dashboard_disclaimer)): ?>
+                <div class="dashboard-disclaimer">
+                    <span>📊</span>
+                    <?= htmlspecialchars($dashboard_disclaimer) ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($profitAndLoss < 0 && ($loyaltiesStatus === null && $is_execution_empty)): ?>
+                <div class="encouragement-note">
+                    🌟 Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
+                </div>
+            <?php endif; ?>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Deposit Balance</h3>
+                        <form method="POST" style="margin:0;">
+                            <input type="hidden" name="toggle_balance_display" value="1">
+                            <button type="submit" class="balance-toggle-btn">
+                                <?= $balanceDisplay === 'show' ? '👁️' : '🔒' ?>
+                            </button>
+                        </form>
+                    </div>
+                    <div class="stat-value">$<?= number_format($depositBalance, 2) ?></div>
+                    <div class="stat-details">
+                        <?= htmlspecialchars($login) ?> · <?= htmlspecialchars($server) ?>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Profit & Loss</h3>
+                    </div>
+                    <div class="stat-value <?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                        $<?= number_format($profitAndLoss, 2) ?>
+                    </div>
+                    <div class="stat-details">
+                        Since contract start
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Current Balance</h3>
+                    </div>
+                    <div class="stat-value <?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                        $<?= number_format($currentBalance, 2) ?>
+                    </div>
+                    <div class="stat-details">
+                        Deposit + P&L
+                    </div>
+                </div>
+
+                <div class="stat-card trades-card">
+                    <div class="trades-header">
+                        <div>
+                            <div class="trades-count-large"><?= $tradesCountDisplay ?></div>
+                            <div class="trades-count-label">Total Trades</div>
+                        </div>
+                        <div class="trades-stats">
+                            <div class="trades-stat">
+                                <div class="label">Won</div>
+                                <div class="value won"><?= $wonCountDisplay ?></div>
+                            </div>
+                            <div class="trades-stat">
+                                <div class="label">Lost</div>
+                                <div class="value lost"><?= $lostCountDisplay ?></div>
+                            </div>
                         </div>
                     </div>
                     <button class="btn-view-history" onclick="document.getElementById('tradeHistoryModal').classList.add('active')">
-                        Markets 
+                        View Trade History →
                     </button>
+                </div>
+
+                <div class="stat-card loyalty-card">
+                    <span class="loyalty-status"><?= htmlspecialchars($loyalty_status_message) ?></span>
+                    
+                    <div class="loyalty-content">
+                        <div class="loyalty-text">
+                            <p><?= htmlspecialchars($loyalty_text) ?></p>
+                            
+                            <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
+                                <div class="contract-info">
+                                    <span class="contract-dates">
+                                        📅 <?= htmlspecialchars($formatted_start_date) ?> → <?= htmlspecialchars($formatted_end_date) ?>
+                                    </span>
+                                    <?php if ($contractDaysLeft > 0): ?>
+                                        <span class="contract-days-left">
+                                            ⏳ <?= $contractDaysLeft ?> days left
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+
+                            <div style="margin-top: 0.5rem; color: var(--text-tertiary); font-size: 0.875rem;">
+                                ⏱️ <?= $CONTRACT_DURATION ?> day contract
+                            </div>
+                        </div>
+
+                        <?php if ($show_payment_note): ?>
+                            <p style="color: var(--warning); font-style: italic;">
+                                ⏳ Your payment is being reviewed. Once confirmed, you'll be able to re-enroll.
+                            </p>
+                        <?php endif; ?>
+
+                        <?php if (!$show_payment_note): ?>
+                            <div class="loyalty-actions">
+                                <button 
+                                    <?= $loyalty_btn_action ?>
+                                    class="btn-loyalty <?= htmlspecialchars($loyalty_btn_class) ?>"
+                                >
+                                    <?= htmlspecialchars($loyalty_btn_text) ?>
+                                </button>
+                            </div>
+                        <?php endif; ?>
                     </div>
-            </div>
-            <div class="stat-card loyalty-card">
-                <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
-                <p><?= htmlspecialchars($loyalty_text) ?></p>
-
-                <?php 
-                    // 🛑 START OF REQUESTED MODIFICATION
-                    if ($show_contract_days) {
-                        echo "<p><strong>{$CONTRACT_DURATION} days contract duration</strong></p>";
-                    }
-                    // 🛑 END OF REQUESTED MODIFICATION
-                ?>
-
-                <?php if ($show_contract_days): ?>
-                    <span class="contract-days-left">
-                        <?= $contractDaysLeft ?> days left
-                    </span>
-                <?php endif; ?>
-                
-                <button 
-                    <?= $loyalty_btn_action ?>
-                    class="<?= htmlspecialchars($loyalty_btn_class) ?>"
-                >
-                    <?= htmlspecialchars($loyalty_btn_text) ?>
-                </button>
-            </div>
+                </div>
             </div>
 
-        <p class="note">
-            Your PnL is updated every 24 hours.<br>
-            Automated execution runs 24/7 on your connected account.
-        </p>
+            <p style="color: var(--text-tertiary); font-size: 0.875rem; text-align: center; margin: 1rem 0;">
+                PnL updates every 24 hours · Automated execution runs 24/7
+            </p>
 
-        <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
-            Disconnect My Account
-        </button>
-        
-        <a href="?logout=1" class="logout-link">Logout</a>
-
+            <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
+                Disconnect My Account
+            </button>
+        </div>
     </div>
+    <?php endif; ?>
 
+    <!-- Disconnect Modal -->
     <div id="disconnectModal" class="modal">
         <div class="modal-content">
-            <h2 style="color:#ff6b6b;">Disconnect Account?</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                This action will disconnect your account from trading activities permanently.
-            </p>
-            <div class="modal-actions"> 
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
-                <form method="POST" style="display:inline;">
-                    <button type="submit" name="confirm_disconnect"
-                        style="background:#e74c3c; color:white; border:none;">
-                        Yes, Disconnect
-                    </button>
+            <h2 style="color: var(--danger);">⚠️ Disconnect Account?</h2>
+            <p>This action will permanently disconnect your account from trading activities.</p>
+            <div class="modal-actions">
+                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
+                <form method="POST">
+                    <button type="submit" name="confirm_disconnect">Yes, Disconnect</button>
                 </form>
             </div>
         </div>
     </div>
 
+    <!-- Profit Split Modal -->
     <div id="profitSplitModal" class="modal">
         <div class="modal-content">
-            <h2 style="color:var(--info-color);">Profit Split Required</h2>
+            <h2 style="color: var(--info);">💰 Profit Split Required</h2>
+            <p>Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.</p>
             
-            <p style="margin-bottom: 2rem; opacity: 0.8;">
-                Your contract requires a profit split to continue trading eligibility.
-            </p>
-            <p class="split-total">
-                $<?= number_format($profitToSplit, 2) ?> profit
-            </p>
+            <div class="split-total">$<?= number_format($profitToSplit, 2) ?></div>
 
             <div class="split-container">
                 <div class="split-item">
-                    <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
+                    <h4 style="color: var(--success);"><?= $USER_SHARE_PERCENT ?>%</h4>
                     <p>Your Share</p>
-                    <h4 style="color:var(--success-color);">$<?= number_format($userShare, 2) ?></h4>
+                    <h4 style="color: var(--success);">$<?= number_format($userShare, 2) ?></h4>
                     <button class="btn-withdraw" 
-                            onclick="window.open('<?= $brokerTarget ?>', '_blank')"
-                            style="background:#2ecc71; color:white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
-                        Withdraw Profit
+                            onclick="window.open('<?= $brokerTarget ?>', '_blank')">
+                        Withdraw
                     </button>
-                    <small style="display:block; margin-top:10px; opacity:0.6;">Withdraw your $<?= number_format($userShare, 2) ?> profit share</small>
+                    <small>Withdraw your share</small>
                 </div>
+                
                 <div class="split-item">
-                    <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
-                    <p>Pay server%</p>
-                    <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
-                    <button class="btn-pay" onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');"
-                            style="padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
-                        Pay server
+                    <h4 style="color: var(--info);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
+                    <p>Server Share</p>
+                    <h4 style="color: var(--info);">$<?= number_format($serverShare, 2) ?></h4>
+                    <button class="btn-pay" 
+                            onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');">
+                        Pay Server
                     </button>
-                    <small style="display:block; margin-top:10px; opacity:0.6;">Pay to remain eligible</small>
+                    <small>Pay to continue</small>
                 </div>
             </div>
 
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Close
-                </button>
+                <button onclick="this.closest('.modal').classList.remove('active')">Close</button>
             </div>
         </div>
     </div>
 
+    <!-- Payment Modal -->
     <div id="paymentModal" class="modal">
         <div class="modal-content">
-            <h2 style="color:var(--accent);">Server Payment</h2>
-            <p style="margin:1rem 0; opacity:0.8;">
-                Send $<?= number_format($serverShare, 2) ?> worth of the selected address
-            </p>
+            <h2 style="color: var(--accent-primary);">💳 Pay Server Share</h2>
+            <p>Send $<?= number_format($serverShare, 2) ?> worth of cryptocurrency</p>
             
             <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
 
@@ -1218,84 +1648,65 @@
 
             <label class="checkbox-container">
                 <input type="checkbox" id="paymentConfirmationCheck" onchange="togglePaidButton()">
-                I have made the payment
+                <span>I have made the payment</span>
             </label>
 
             <button class="btn-full btn-paid" id="confirmPaidBtn" disabled onclick="triggerFinalConfirmation()">
-                Paid
+                Confirm Payment
             </button>
             
-            <p class="disclaimer">Click paid only after payment has been successfully sent.</p>
+            <p class="disclaimer">Click only after payment has been successfully sent. Your payment will be verified by the server.</p>
             
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
+                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
             </div>
         </div>
     </div>
 
+    <!-- Final Confirmation Modal -->
     <div id="finalConfirmationModal" class="modal">
         <div class="modal-content">
-            <h2 style="color:var(--success-color);">Final Confirmation</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the 
-                <strong id="finalConfirmCoin">N/A</strong> address.
-            </p>
+            <h2 style="color: var(--success);">✅ Final Confirmation</h2>
+            <p>Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the <strong id="finalConfirmCoin">N/A</strong> address.</p>
             
-            <div class="modal-actions"> 
-                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
+            <div class="modal-actions">
+                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')">Cancel</button>
                 <form method="POST" style="display:inline;">
                     <input type="hidden" name="final_confirm_payment" value="1">
                     <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="">
                     <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
-                    <button type="submit"
-                        style="background:var(--success-color); color:#000; border:none;">
-                        Yes, Paid
-                    </button>
+                    <button type="submit">Yes, I've Paid</button>
                 </form>
             </div>
         </div>
     </div>
 
-
+    <!-- Re-enroll Modal -->
     <div id="reenrollModal" class="modal">
         <div class="modal-content">
-            <h2 style="color:var(--info-color);">Re-enrollment Option</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                <?php if ($loyaltiesStatus === 'paymentconfirmed'): ?>
-                    There will be trading activities in your account for the next <?= $CONTRACT_DURATION ?> days and within these period you mustn't perform trading or withdrawal activity on your broker account.
-                <?php else: ?>
-                    Your profit is below the minimum $<?= $MIN_PROFIT_FOR_SPLIT ?> profit requirement.
-                    You can re-enroll for a new contract period of <?= $CONTRACT_DURATION ?> days. 
-                <?php endif; ?>
-            </p>
-            <div class="modal-actions"> 
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
-                <form method="POST" style="display:inline;">
-                    <button type="submit" name="confirm_reenroll"
-                        style="background:var(--success-color); color:#000; border:none;">
-                        Re-enroll
-                    </button>
+            <h2 style="color: var(--info);">🔄 Start New Contract</h2>
+            <p>Start a new <?= $CONTRACT_DURATION ?>-day trading contract from today.</p>
+            <?php if ($profitAndLoss < 0): ?>
+                <p style="color: var(--warning); font-style: italic; margin-top: 0.5rem;">
+                    🌟 Remember: Every successful trader faced losses. This is your chance for a fresh start!
+                </p>
+            <?php endif; ?>
+            <div class="modal-actions">
+                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
+                <form method="POST">
+                    <button type="submit" name="confirm_reenroll">Start New Contract</button>
                 </form>
             </div>
         </div>
     </div>
 
-
+    <!-- Trade History Modal -->
     <div id="tradeHistoryModal" class="modal">
         <div class="modal-content">
-            <h2>Trade History Summary</h2>
-            <p style="margin:1rem 0; opacity:0.8;">Currency pairs that won/lost</p>
+            <h2>📊 Trade History</h2>
+            <p>Currency pairs performance</p>
 
-            <h3 style="color:var(--success-color); margin-top:2rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?> Symbols)</h3>
+            <h3 style="color: var(--success); margin: 1.5rem 0 1rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?>)</h3>
             <div class="history-section">
                 <?php if (!empty($tradesData['symbolsthatwon'])): ?>
                     <?php foreach ($tradesData['symbolsthatwon'] as $trade): ?>
@@ -1305,11 +1716,11 @@
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <p style="text-align: center; opacity: 0.7;">No winning symbol data available.</p>
+                    <p style="text-align: center; padding: 1rem; color: var(--text-tertiary);">No winning symbol data available.</p>
                 <?php endif; ?>
             </div>
             
-            <h3 style="color:var(--error-color); margin-top:2rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?> Symbols)</h3>
+            <h3 style="color: var(--danger); margin: 1.5rem 0 1rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?>)</h3>
             <div class="history-section">
                 <?php if (!empty($tradesData['symbolsthatlost'])): ?>
                     <?php foreach ($tradesData['symbolsthatlost'] as $trade): ?>
@@ -1319,43 +1730,38 @@
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <p style="text-align: center; opacity: 0.7;">No losing symbol data available.</p>
+                    <p style="text-align: center; padding: 1rem; color: var(--text-tertiary);">No losing symbol data available.</p>
                 <?php endif; ?>
             </div>
 
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Close
-                </button>
+                <button onclick="this.closest('.modal').classList.remove('active')">Close</button>
             </div>
         </div>
     </div>
+
     <script>
-    // 1. Cleans the URL of query parameters after a redirect (PRG pattern cleanup)
+    // Clean URL
     if (window.history.replaceState) {
         window.history.replaceState(null, null, window.location.href.split("?")[0]);
     }
 
-    // 2. Dynamic Payment Selector Logic
-    
-    // PHP variables passed to JavaScript
+    // Payment selector logic
     const serverAccounts = {
         btc: { 
-            address: "<?= htmlspecialchars($serverAccount['btc_address']) ?>", 
+            address: "<?= htmlspecialchars($serverAccount['btc_address'] ?? 'N/A') ?>", 
             network: "Bitcoin" 
         },
         eth: { 
-            address: "<?= htmlspecialchars($serverAccount['eth_address']) ?>", 
-            network: "<?= htmlspecialchars($serverAccount['eth_network']) ?>" 
+            address: "<?= htmlspecialchars($serverAccount['eth_address'] ?? 'N/A') ?>", 
+            network: "<?= htmlspecialchars($serverAccount['eth_network'] ?? 'ERC20') ?>" 
         },
         usdt: { 
-            address: "<?= htmlspecialchars($serverAccount['usdt_address']) ?>", 
-            network: "<?= htmlspecialchars($serverAccount['usdt_network']) ?>" 
+            address: "<?= htmlspecialchars($serverAccount['usdt_address'] ?? 'N/A') ?>", 
+            network: "<?= htmlspecialchars($serverAccount['usdt_network'] ?? 'TRC20') ?>" 
         }
     };
     
-    // Elements from Payment Modal
     const paymentAddressElement = document.getElementById('paymentAddress');
     const paymentNetworkElement = document.getElementById('paymentNetwork');
     const copyAddressBtn = document.getElementById('copyAddressBtn');
@@ -1363,20 +1769,56 @@
     const paymentConfirmationCheck = document.getElementById('paymentConfirmationCheck');
     const serverShareAmountHidden = document.getElementById('serverShareAmountHidden');
     
-    // Elements from Final Confirmation Modal
     const finalConfirmationModal = document.getElementById('finalConfirmationModal');
     const finalConfirmAmount = document.getElementById('finalConfirmAmount');
     const finalConfirmCoin = document.getElementById('finalConfirmCoin');
     const formServerShareAmount = document.getElementById('formServerShareAmount');
     const formPaymentCoin = document.getElementById('formPaymentCoin');
 
+    // Function to handle body scroll when modal opens/closes
+    function handleModalOpen(modalId) {
+        document.body.classList.add('modal-open');
+        document.getElementById(modalId).classList.add('active');
+    }
 
-    // Function to get the currently selected coin
+    function handleModalClose(modalElement) {
+        document.body.classList.remove('modal-open');
+        modalElement.classList.remove('active');
+    }
+
+    // Update all modal open/close handlers
+    document.querySelectorAll('[onclick*=".classList.add(\'active\')"]').forEach(button => {
+        const originalOnclick = button.getAttribute('onclick');
+        if (originalOnclick && originalOnclick.includes('document.getElementById')) {
+            const modalId = originalOnclick.match(/'([^']+)'/)[1];
+            button.setAttribute('onclick', `handleModalOpen('${modalId}')`);
+        }
+    });
+
+    // Update modal close buttons
+    document.querySelectorAll('.modal-actions button, .modal-actions form button').forEach(button => {
+        if (button.getAttribute('onclick')?.includes('closest')) {
+            button.setAttribute('onclick', button.getAttribute('onclick').replace(
+                'this.closest(\'.modal\').classList.remove(\'active\')',
+                'handleModalClose(this.closest(\'.modal\'))'
+            ));
+        }
+    });
+
+    // Add escape key handler
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            const activeModal = document.querySelector('.modal.active');
+            if (activeModal) {
+                handleModalClose(activeModal);
+            }
+        }
+    });
+
     function getSelectedCoin() {
         return document.querySelector('input[name="coin"]:checked').value;
     }
 
-    // Function to update the displayed address and network
     function updatePaymentDetails(coin) {
         const data = serverAccounts[coin];
         if (data) {
@@ -1386,31 +1828,24 @@
         }
     }
 
-    // Function to toggle the Paid button's disabled state
     function togglePaidButton() {
         confirmPaidBtn.disabled = !paymentConfirmationCheck.checked;
     }
     
-    // Function to trigger the final confirmation modal
     function triggerFinalConfirmation() {
         const selectedCoin = getSelectedCoin();
         const amount = serverShareAmountHidden.value;
         
-        // 1. Update confirmation modal text
         finalConfirmAmount.textContent = '$' + amount;
         finalConfirmCoin.textContent = selectedCoin.toUpperCase();
         
-        // 2. Populate hidden form fields for submission
         formServerShareAmount.value = amount;
         formPaymentCoin.value = selectedCoin;
         
-        // 3. Close current modal and open confirmation modal
-        document.getElementById('paymentModal').classList.remove('active');
-        finalConfirmationModal.classList.add('active');
+        handleModalClose(document.getElementById('paymentModal'));
+        handleModalOpen('finalConfirmationModal');
     }
 
-
-    // Function to copy the address
     copyAddressBtn.addEventListener('click', function() {
         const address = paymentAddressElement.textContent;
         if (navigator.clipboard && address && address !== 'N/A') {
@@ -1424,23 +1859,18 @@
         }
     });
 
-    // Initialize the payment details on load (default to BTC)
     document.addEventListener('DOMContentLoaded', function() {
-        // Ensure the default selected coin is set on page load
         updatePaymentDetails(getSelectedCoin());
-        togglePaidButton(); // Set initial state of the Paid button
+        togglePaidButton();
         
-        // Add event listeners to radio buttons to update details
         document.querySelectorAll('input[name="coin"]').forEach(radio => {
             radio.addEventListener('change', (event) => updatePaymentDetails(event.target.value));
         });
     });
 
-    // Attach event listeners to address element for tap/click copy
     paymentAddressElement.addEventListener('click', function() {
         copyAddressBtn.click();
     });
-
     </script>
 </body>
 </html>
