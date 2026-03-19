@@ -484,99 +484,89 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HarvHub | Dashboard</title>
+<title>HarvHub Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" rel="stylesheet">
 <style>
-    * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-    }
-
     :root {
-        /* Light mode - Modern professional palette with green accent */
-        --bg-primary: #f8fafc;
-        --bg-secondary: #ffffff;
-        --bg-card: #ffffff;
-        --text-primary: #0f172a;
-        --text-secondary: #475569;
-        --text-tertiary: #64748b;
-        --accent-primary: #2e8b57;
-        --accent-secondary: #3cb371;
-        --accent-light: #d1fae5;
-        --success: #10b981;
-        --success-light: #d1fae5;
-        --warning: #f59e0b;
-        --warning-light: #fef3c7;
+        --bg-light: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --bg-dark: linear-gradient(135deg, #141e30 0%, #243b55 100%);
+        --text-light: #1e293b;
+        --text-dark: #f1f5f9;
+        --card-light: rgba(255, 255, 255, 0.95);
+        --card-dark: rgba(30, 41, 59, 0.95);
+        --accent: #10b981;
+        --accent-hover: #059669;
         --danger: #ef4444;
-        --danger-light: #fee2e2;
-        --info: #6366f1;
-        --info-light: #e0e7ff;
-        --border: #e2e8f0;
-        --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
-        --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-        --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
-        --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+        --warning: #f59e0b;
+        --info: #3b82f6;
+        --success: #10b981;
+        --glass-border: rgba(255, 255, 255, 0.2);
+        --shadow-sm: 0 10px 40px rgba(0, 0, 0, 0.1);
+        --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.15);
+        --shadow-hover: 0 30px 70px rgba(16, 185, 129, 0.2);
+        
+        /* Passkey modal original colors */
+        --passkey-bg: rgba(255, 255, 255, 0.95);
+        --passkey-text: #1c1e21;
+        --error-color: #ff6b6b;
     }
 
     @media (prefers-color-scheme: dark) {
         :root {
-            --bg-primary: #0f172a;
-            --bg-secondary: #1e293b;
-            --bg-card: #1e293b;
-            --text-primary: #f1f5f9;
-            --text-secondary: #cbd5e1;
-            --text-tertiary: #94a3b8;
-            --accent-primary: #2e8b57;
-            --accent-secondary: #3cb371;
-            --accent-light: #1e3a5f;
-            --success: #10b981;
-            --success-light: #064e3b;
-            --warning: #f59e0b;
-            --warning-light: #92400e;
-            --danger: #ef4444;
-            --danger-light: #7f1d1d;
-            --info: #6366f1;
-            --info-light: #312e81;
-            --border: #334155;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.4);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.5);
+            --bg-light: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            --text-light: #f1f5f9;
+            --card-light: rgba(30, 41, 59, 0.95);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            /* Preserve passkey dark mode colors */
+            --passkey-bg: rgba(40, 40, 40, 0.9);
+            --passkey-text: #e4e6eb;
         }
     }
 
-    body {
-        font-family: "Inter", -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        background: var(--bg-primary);
-        color: var(--text-primary);
-        line-height: 1.5;
-        min-height: 100vh;
-        overflow: hidden; /* Disable body scrolling */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
     }
 
-    /* Main scrollable container */
-    .app-container {
-        height: 100vh;
-        overflow-y: auto;
+    html, body {
+        height: 100%;
+        background: var(--bg-light);
+        color: var(--text-light);
         overflow-x: hidden;
+        transition: background 0.3s ease;
+    }
+
+    body {
+        overflow-y: hidden;
         position: relative;
-        scroll-behavior: smooth;
     }
 
-    /* Disable scrolling when modal is active */
-    body.modal-open {
-        overflow: hidden;
+    /* Animated background particles (only for dashboard, not passkey) */
+    body:not(.passkey-active)::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: 
+            radial-gradient(circle at 20% 30%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+            radial-gradient(circle at 80% 70%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
+            repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 2px, transparent 2px, transparent 8px);
+        pointer-events: none;
+        z-index: -1;
+        animation: gradientShift 15s ease infinite;
     }
 
-    /* Passkey Overlay */
+    @keyframes gradientShift {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 0.8; }
+    }
+
+    /* ===== PASSKEY MODAL - PRESERVED ORIGINAL STYLES ===== */
     .passkey-overlay {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(0,0,0,0.5);
         backdrop-filter: blur(8px);
         display: flex;
         align-items: center;
@@ -586,497 +576,584 @@
     }
 
     .passkey-screen {
-        background: var(--bg-card);
-        padding: 2.5rem;
-        border-radius: 1.5rem;
+        background: var(--passkey-bg);
+        color: var(--passkey-text);
+        backdrop-filter: blur(12px);
+        padding: 3rem 2.5rem;
+        border-radius: 20px;
         width: 100%;
-        max-width: 420px;
-        box-shadow: var(--shadow-xl);
-        border: 1px solid var(--border);
-        animation: slideUp 0.3s ease;
-    }
-
-    @keyframes slideUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        max-width: 480px;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
     }
 
     .passkey-screen h2 {
-        font-size: 1.8rem;
-        font-weight: 600;
-        margin-bottom: 0.5rem;
-        color: var(--text-primary);
+        font-size: 2rem;
+        margin-bottom: 1rem;
+        color: var(--passkey-text);
+        background: none;
+        -webkit-text-fill-color: var(--passkey-text);
     }
 
     .passkey-screen p {
-        color: var(--text-secondary);
-        margin-bottom: 2rem;
-    }
-
-    .passkey-screen input {
-        width: 100%;
-        padding: 1rem;
-        background: var(--bg-secondary);
-        border: 2px solid var(--border);
-        border-radius: 1rem;
+        margin: 1.5rem 0;
+        opacity: 0.9;
         font-size: 1rem;
-        color: var(--text-primary);
-        margin-bottom: 1.5rem;
-        transition: all 0.2s;
     }
 
-    .passkey-screen input:focus {
-        outline: none;
-        border-color: var(--accent-primary);
-        box-shadow: 0 0 0 3px var(--accent-light);
-    }
-
-    .btn-full {
+    .passkey-screen input[type="password"] {
         width: 100%;
-        padding: 1rem;
-        background: var(--accent-primary);
-        color: white;
+        padding: 16px;
+        margin: 20px 0;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 12px;
+        font-size: 1.1rem;
+        text-align: center;
+        background: rgba(0,0,0,0.05);
+        color: var(--passkey-text);
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .passkey-screen input[type="password"] { 
+            background: rgba(255,255,255,0.1); 
+        }
+    }
+
+    .passkey-screen .error-message { 
+        color: var(--error-color); 
+        margin: -10px 0 10px; 
+        font-weight: bold; 
+    }
+
+    .passkey-screen .btn-full {
+        width: 100%;
+        padding: 16px;
+        background: var(--accent);
+        color: #000;
         border: none;
-        border-radius: 1rem;
-        font-size: 1rem;
-        font-weight: 600;
+        border-radius: 12px;
+        font-weight: bold;
+        font-size: 1.1rem;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: opacity 0.3s;
     }
 
-    .btn-full:hover {
-        background: var(--accent-secondary);
-        transform: translateY(-2px);
+    .passkey-screen .btn-full:hover {
+        opacity: 0.9;
     }
 
-    .error-message {
-        color: var(--danger);
-        font-size: 0.875rem;
-        margin-top: -1rem;
-        margin-bottom: 1rem;
-        font-weight: 500;
+    .passkey-screen a {
+        display: block;
+        margin: 20px 0;
+        color: var(--accent);
+        font-size: 0.95rem;
+        text-decoration: none;
     }
 
-    /* Dashboard Layout */
-    .dashboard {
-        max-width: 1400px;
+    .passkey-screen a:hover {
+        text-decoration: underline;
+    }
+
+    .passkey-screen a[href*="logout"] {
+        color: #ff6b6b;
+    }
+    /* ===== END PASSKEY MODAL STYLES ===== */
+
+    .dashboard-wrapper {
+        width: 100%;
+        max-width: 1300px;
+        height: 100vh;
         margin: 0 auto;
         padding: 2rem;
+        overflow-y: auto;
+        scroll-behavior: smooth;
+        -ms-overflow-style: none;
+        scrollbar-width: none;
         position: relative;
     }
 
-    /* Header */
-    .dashboard-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+    .dashboard-wrapper::-webkit-scrollbar {
+        display: none;
+    }
+
+    h1 {
+        font-size: 3.5rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, var(--accent) 0%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-align: center;
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
+        animation: fadeInDown 0.6s ease;
+    }
+
+    .welcome {
+        text-align: center;
+        font-size: 1.25rem;
         margin-bottom: 2rem;
-        flex-wrap: wrap;
-        gap: 1rem;
+        opacity: 0.9;
+        animation: fadeInUp 0.6s ease 0.2s both;
     }
 
-    .header-left {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
+    .welcome strong {
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 700;
     }
 
-    .harvest-sticker {
-        background: linear-gradient(135deg, #2e8b57, #3cb371);
-        color: white;
-        padding: 0.5rem 1.5rem;
-        border-radius: 2rem;
-        font-size: 0.875rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        box-shadow: var(--shadow-md);
-    }
-
-    .harvest-sticker span {
-        font-size: 1.2rem;
-    }
-
-    .header-left h1 {
-        font-size: 2rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-
-    .header-left p {
-        color: var(--text-secondary);
-        font-size: 1rem;
-    }
-
-    .header-right {
-        display: flex;
-        gap: 1rem;
-        align-items: center;
-    }
-
-    .user-menu {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-        background: var(--bg-card);
-        padding: 0.5rem 1rem;
-        border-radius: 2rem;
-        border: 1px solid var(--border);
-    }
-
-    .user-avatar {
-        width: 2.5rem;
-        height: 2.5rem;
-        background: var(--accent-light);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--accent-primary);
-        font-weight: 600;
-        font-size: 1.2rem;
-    }
-
-    .user-name {
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-
-    .logout-link {
-        color: var(--text-secondary);
-        text-decoration: none;
-        font-size: 0.875rem;
-        transition: color 0.2s;
-    }
-
-    .logout-link:hover {
-        color: var(--danger);
-    }
-
-    /* Disclaimer */
-    .dashboard-disclaimer {
-        background: var(--info-light);
-        border: 1px solid var(--info);
-        color: var(--info);
-        padding: 1rem 1.5rem;
-        border-radius: 1rem;
-        margin-bottom: 2rem;
-        font-weight: 500;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .encouragement-note {
-        background: var(--warning-light);
-        border: 1px solid var(--warning);
-        color: var(--warning);
-        padding: 1rem 1.5rem;
-        border-radius: 1rem;
-        margin-bottom: 2rem;
-        font-style: italic;
-    }
-
-    /* Stats Grid */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 1.5rem;
-        margin-bottom: 1.5rem;
+        margin: 2rem 0;
+        animation: fadeInUp 0.6s ease 0.4s both;
     }
 
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+        }
+        
+        .dashboard-wrapper {
+            padding: 1rem;
+        }
+    }
+
+    /* Enhanced Stat Cards */
     .stat-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 1.5rem;
-        padding: 1.5rem;
-        transition: all 0.3s;
         position: relative;
+        background: var(--card-light);
+        backdrop-filter: blur(20px);
+        padding: 1.75rem;
+        border-radius: 24px;
+        text-align: center;
+        border: 1px solid var(--glass-border);
+        box-shadow: var(--shadow-sm);
+        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         overflow: hidden;
+        animation: cardAppear 0.5s ease;
+    }
+
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--accent), var(--info), var(--accent));
+        transform: translateX(-100%);
+        transition: transform 0.5s ease;
     }
 
     .stat-card:hover {
-        transform: translateY(-4px);
-        box-shadow: var(--shadow-lg);
-        border-color: var(--accent-light);
+        transform: translateY(-10px) scale(1.02);
+        box-shadow: var(--shadow-hover);
+        border-color: var(--accent);
     }
 
-    .stat-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+    .stat-card:hover::before {
+        transform: translateX(0);
+    }
+
+    .stat-card h3 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        opacity: 0.7;
         margin-bottom: 1rem;
     }
 
-    .stat-header h3 {
-        color: var(--text-secondary);
-        font-size: 0.875rem;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+    .stat-card h2 {
+        font-size: 2.8rem;
+        font-weight: 800;
+        line-height: 1.2;
+        margin: 0.5rem 0;
+        transition: all 0.3s ease;
+        position: relative;
+        display: inline-block;
     }
 
+    .stat-card h2::after {
+        content: '';
+        position: absolute;
+        bottom: -5px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--accent), var(--info));
+        transition: width 0.3s ease;
+        border-radius: 2px;
+    }
+
+    .stat-card:hover h2::after {
+        width: 50%;
+    }
+
+    /* Balance Toggle Button */
     .balance-toggle-btn {
-        background: none;
-        border: none;
-        color: var(--text-tertiary);
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid var(--glass-border);
+        color: var(--text-light);
+        font-size: 1.25rem;
         cursor: pointer;
-        font-size: 1.2rem;
-        padding: 0.25rem;
-        border-radius: 0.5rem;
-        transition: all 0.2s;
+        padding: 8px;
+        border-radius: 12px;
+        opacity: 0.6;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(10px);
+        z-index: 10;
     }
 
     .balance-toggle-btn:hover {
-        color: var(--accent-primary);
-        background: var(--accent-light);
+        opacity: 1;
+        background: var(--accent);
+        color: white;
+        transform: rotate(15deg);
     }
 
-    .stat-value {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.2;
-        margin-bottom: 0.5rem;
-    }
-
-    .stat-label {
-        color: var(--text-tertiary);
-        font-size: 0.875rem;
-    }
-
-    .stat-details {
-        font-size: 0.75rem;
-        color: var(--text-tertiary);
-        margin-top: 0.5rem;
-    }
-
+    /* Profit/Loss Colors with Animation */
     .profit-positive {
         color: var(--success) !important;
+        text-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
     }
 
     .profit-negative {
         color: var(--danger) !important;
+        text-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
     }
 
-    /* Trade Summary Card */
+    /* Stat Details */
+    .stat-details-info {
+        font-size: 0.9rem;
+        opacity: 0.6;
+        margin-top: 1rem;
+        padding: 0.5rem;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        transition: all 0.3s ease;
+    }
+
+    .stat-card:hover .stat-details-info {
+        opacity: 0.9;
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    /* Trades Card Special Styling */
     .stat-card.trades-card {
         grid-column: 1 / -1;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(59, 130, 246, 0.1));
+        border: 2px solid transparent;
+        background-clip: padding-box;
+        position: relative;
     }
 
-    .trades-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1.5rem;
+    .stat-card.trades-card::before {
+        content: '';
+        position: absolute;
+        inset: -2px;
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        border-radius: 26px;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        z-index: -1;
     }
 
-    .trades-count-large {
-        font-size: 3rem;
-        font-weight: 700;
-        color: var(--accent-primary);
+    .stat-card.trades-card:hover::before {
+        opacity: 0.3;
+    }
+
+    .trades-count {
+        font-size: 4.5rem;
+        font-weight: 900;
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         line-height: 1;
+        margin-bottom: 0.5rem;
+        animation: pulse 2s infinite;
     }
 
-    .trades-count-label {
-        color: var(--text-tertiary);
-        font-size: 0.875rem;
+    .trades-count span {
+        font-size: 1rem;
+        font-weight: 500;
+        opacity: 0.7;
+        color: var(--text-light);
+        background: none;
+        -webkit-text-fill-color: var(--text-light);
+        margin-top: 0.5rem;
     }
 
-    .trades-stats {
+    .trades-won-lost {
         display: flex;
-        gap: 2rem;
+        justify-content: space-around;
+        margin: 1.5rem 0;
+        padding: 1rem;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
     }
 
-    .trades-stat {
-        text-align: right;
-    }
-
-    .trades-stat .label {
-        color: var(--text-tertiary);
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .trades-stat .value {
-        font-size: 1.5rem;
+    .trades-detail-item {
+        font-size: 1rem;
         font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
 
-    .value.won {
-        color: var(--success);
-    }
-
-    .value.lost {
-        color: var(--danger);
+    .trades-detail-item strong {
+        font-size: 1.5rem;
+        display: block;
+        margin-top: 0.25rem;
     }
 
     .btn-view-history {
-        background: var(--accent-light);
-        color: var(--accent-primary);
+        margin-top: 1rem;
+        padding: 0.75rem 2rem;
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        color: white;
         border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 2rem;
-        font-weight: 500;
+        border-radius: 50px;
+        font-weight: 600;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-size: 0.9rem;
+        box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
     }
 
     .btn-view-history:hover {
-        background: var(--accent-primary);
-        color: white;
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(16, 185, 129, 0.5);
     }
 
     /* Loyalty Card */
     .stat-card.loyalty-card {
         grid-column: 1 / -1;
-        background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
+        max-width: 800px;
+        margin: 2rem auto;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15));
+        border: 2px solid rgba(16, 185, 129, 0.3);
     }
 
-    .loyalty-status {
-        display: inline-block;
-        padding: 0.25rem 1rem;
-        background: var(--accent-light);
-        color: var(--accent-primary);
-        border-radius: 2rem;
-        font-size: 0.875rem;
-        font-weight: 500;
+    .loyalty-status-msg {
+        font-size: 1.5rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         margin-bottom: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
     }
 
-    .loyalty-content {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 1.5rem;
-    }
-
-    .loyalty-text {
-        flex: 1;
-        min-width: 300px;
-    }
-
-    .loyalty-text p {
-        color: var(--text-secondary);
-        margin-bottom: 0.5rem;
-    }
-
-    .contract-info {
-        display: flex;
-        gap: 1rem;
-        font-size: 0.875rem;
-        color: var(--text-tertiary);
-        margin-top: 0.5rem;
-        flex-wrap: wrap;
+    .loyalty-card p {
+        font-size: 1.1rem;
+        line-height: 1.6;
+        opacity: 0.9;
+        max-width: 600px;
+        margin: 0 auto 1rem;
     }
 
     .contract-dates {
-        background: var(--bg-primary);
-        padding: 0.25rem 0.75rem;
-        border-radius: 2rem;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.25rem;
+        display: inline-block;
+        padding: 0.5rem 1.5rem;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 50px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        margin: 0.5rem;
+        backdrop-filter: blur(10px);
     }
 
     .contract-days-left {
-        background: var(--success-light);
-        color: var(--success);
-        padding: 0.25rem 0.75rem;
-        border-radius: 2rem;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.25rem;
-    }
-
-    .loyalty-actions {
-        display: flex;
-        gap: 1rem;
-    }
-
-    .btn-loyalty {
-        padding: 0.75rem 2rem;
-        border-radius: 2rem;
+        display: inline-block;
+        padding: 0.25rem 1rem;
+        background: var(--accent);
+        color: white;
+        border-radius: 50px;
+        font-size: 0.9rem;
         font-weight: 600;
-        font-size: 0.875rem;
+        margin-left: 0.5rem;
+    }
+
+    /* Loyalty Buttons */
+    .loyalty-card button {
+        margin: 1.5rem auto 0;
+        padding: 1rem 3rem;
+        font-size: 1.1rem;
+        font-weight: 700;
         border: none;
+        border-radius: 50px;
         cursor: pointer;
-        transition: all 0.2s;
-        white-space: nowrap;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     }
 
     .btn-loyalty-action {
-        background: var(--accent-primary);
-        color: white;
+        background: linear-gradient(135deg, var(--accent), var(--info)) !important;
+        color: white !important;
     }
 
     .btn-loyalty-action:hover {
-        background: var(--accent-secondary);
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
+        transform: translateY(-3px) scale(1.05);
+        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.5) !important;
     }
 
     .btn-loyalty-paid {
-        background: var(--warning);
-        color: white;
-        opacity: 0.8;
-        cursor: not-allowed;
+        background: linear-gradient(135deg, #6b7280, #4b5563) !important;
+        color: white !important;
+        cursor: not-allowed !important;
+        opacity: 0.7;
     }
 
     .btn-loyalty-confirmed {
-        background: var(--success);
-        color: white;
-        cursor: default;
+        background: linear-gradient(135deg, var(--success), #059669) !important;
+        color: white !important;
+        cursor: default !important;
+    }
+
+    /* Dashboard Disclaimer */
+    .dashboard-disclaimer {
+        text-align: center;
+        margin: 1.5rem auto;
+        padding: 1rem 2rem;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.2));
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        border-radius: 50px;
+        font-weight: 600;
+        font-size: 1.1rem;
+        max-width: 600px;
+        backdrop-filter: blur(10px);
+        animation: slideIn 0.5s ease;
+    }
+
+    /* Encouragement Note */
+    /* Replace these existing styles */
+    .note-btndanger{
+        display: flex;
+        justify-content: center
+        width: 100%;
+    }
+    .note-btndanger-block{
+        width: auto;
+    }
+
+    /* With these updated styles */
+    .note-btndanger {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        margin: 20px 0;
+    }
+
+    .note-btndanger-block {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        max-width: 600px;
+        width: 100%;
+    }
+
+    .note {
+        margin-bottom: 15px;
+        opacity: 0.8;
+        line-height: 1.6;
+    }
+    .encouragement-note {
+        text-align: center;
+        margin: 1rem auto;
+        padding: 1rem;
+        background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(239, 68, 68, 0.2));
+        border: 1px solid var(--warning);
+        border-radius: 16px;
+        font-style: italic;
+        font-size: 1.1rem;
+        max-width: 800px;
+        animation: pulse 2s infinite;
     }
 
     /* Danger Button */
     .btn-danger {
-        width: 100%;
-        padding: 1rem;
-        background: var(--danger-light);
-        color: var(--danger);
-        border: 1px solid var(--danger);
-        border-radius: 1rem;
-        font-weight: 600;
+        display: block;
+        margin-bottom: 60px;
+        margin-top: 10px;
+        padding: 1rem 1rem;
+        background: linear-gradient(135deg, var(--danger), #dc2626);
+        color: white;
+        border: none;
+        border-radius: 20px;
+        font-size: 12px;
         cursor: pointer;
-        transition: all 0.2s;
-        margin-top: 1.5rem;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
     }
 
     .btn-danger:hover {
-        background: var(--danger);
-        color: white;
+        transform: translateY(-3px) scale(1.05);
+        box-shadow: 0 10px 30px rgba(239, 68, 68, 0.5);
     }
 
-    /* Blur Mode */
-    .dashboard.blur-mode .stat-value,
-    .dashboard.blur-mode .stat-details,
-    .dashboard.blur-mode .trades-count-large,
-    .dashboard.blur-mode .trades-stat .value {
-        filter: blur(15px);
+    /* Logout Link */
+    .logout-link {
+        display: block;
+        text-align: center;
+        margin-top: 1rem;
+        padding: 0.5rem;
+        color: var(--text-light);
+        text-decoration: none;
+        opacity: 0.6;
+        transition: all 0.3s ease;
+        font-size: 0.95rem;
+    }
+
+    .logout-link:hover {
+        opacity: 1;
+        color: var(--danger);
+        transform: translateY(-2px);
+    }
+
+    /* Blur Mode Effect */
+    .dashboard-wrapper.blur-mode .stat-card h2 {
+        filter: blur(8px);
+        transition: filter 0.3s ease;
         user-select: none;
     }
 
-    /* Modals */
+    .dashboard-wrapper.blur-mode .stat-card:hover h2 {
+        filter: blur(6px);
+    }
+
+    /* Modal Styles (for non-passkey modals) */
     .modal {
         display: none;
         position: fixed;
         inset: 0;
         background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(8px);
+        backdrop-filter: blur(10px);
         align-items: center;
         justify-content: center;
-        z-index: 1000;
+        z-index: 999;
         padding: 1rem;
+        animation: fadeIn 0.3s ease;
     }
 
     .modal.active {
@@ -1084,176 +1161,136 @@
     }
 
     .modal-content {
-        background: var(--bg-card);
-        border-radius: 2rem;
+        background: var(--card-light);
+        backdrop-filter: blur(20px);
         padding: 2.5rem;
+        border-radius: 24px;
         max-width: 500px;
-        width: 100%;
+        width: 90%;
         max-height: 90vh;
         overflow-y: auto;
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow-xl);
-        animation: slideUp 0.3s ease;
+        border: 1px solid var(--glass-border);
+        box-shadow: var(--shadow-lg);
+        animation: modalSlideUp 0.4s ease;
     }
 
     .modal-content h2 {
-        font-size: 1.8rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-        color: var(--text-primary);
-    }
-
-    .modal-content p {
-        color: var(--text-secondary);
-        margin-bottom: 1.5rem;
-    }
-
-    /* Profit Split */
-    .split-total {
         font-size: 2rem;
         font-weight: 700;
-        color: var(--success);
-        margin-bottom: 2rem;
-        text-align: center;
+        margin-bottom: 1rem;
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
 
-    .split-container {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1rem;
-        margin-bottom: 2rem;
-    }
-
+    /* Split Items in Modal */
     .split-item {
-        background: var(--bg-primary);
+        background: rgba(255, 255, 255, 0.05);
         padding: 1.5rem;
-        border-radius: 1.5rem;
-        border: 1px solid var(--border);
-        text-align: center;
+        border-radius: 16px;
+        margin: 1rem 0;
+        border: 1px solid var(--glass-border);
+        transition: all 0.3s ease;
+    }
+
+    .split-item:hover {
+        transform: translateY(-3px);
+        border-color: var(--accent);
+        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.2);
     }
 
     .split-item h4 {
         font-size: 2rem;
-        font-weight: 700;
-        color: var(--text-primary);
+        font-weight: 800;
         margin-bottom: 0.5rem;
     }
 
-    .split-item p {
-        color: var(--text-tertiary);
-        margin-bottom: 1rem;
-    }
-
-    .split-item .btn-withdraw,
-    .split-item .btn-pay {
-        width: 100%;
-        padding: 0.75rem;
-        border: none;
-        border-radius: 2rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.2s;
-        margin-bottom: 0.5rem;
-    }
-
-    .split-item .btn-withdraw {
-        background: var(--success);
-        color: white;
-    }
-
-    .split-item .btn-pay {
-        background: var(--info);
-        color: white;
-    }
-
-    .split-item small {
-        color: var(--text-tertiary);
-        font-size: 0.75rem;
-    }
-
-    /* Payment Modal */
+    /* Coin Selector */
     .coin-selector {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 0.5rem;
-        margin-bottom: 1.5rem;
+        display: flex;
+        gap: 1rem;
+        margin: 2rem 0;
+    }
+
+    .coin-selector label {
+        flex: 1;
+        padding: 1rem;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px solid transparent;
+        border-radius: 12px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .coin-selector input[type="radio"]:checked + label {
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        color: white;
+        border-color: var(--accent);
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(16, 185, 129, 0.3);
     }
 
     .coin-selector input[type="radio"] {
         display: none;
     }
 
-    .coin-selector label {
-        padding: 0.75rem;
-        background: var(--bg-primary);
-        border: 2px solid var(--border);
-        border-radius: 1rem;
-        text-align: center;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-
-    .coin-selector input[type="radio"]:checked + label {
-        background: var(--accent-primary);
-        color: white;
-        border-color: var(--accent-primary);
-    }
-
-    .crypto-details {
-        background: var(--bg-primary);
-        padding: 1.5rem;
-        border-radius: 1rem;
-        margin-bottom: 1.5rem;
-    }
-
-    .crypto-details p {
-        margin-bottom: 0.5rem;
-    }
-
+    /* Crypto Address Display */
     .btc-address {
         display: block;
-        background: var(--bg-card);
         padding: 1rem;
-        border-radius: 0.75rem;
-        font-family: monospace;
-        font-size: 0.875rem;
-        color: var(--accent-primary);
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 12px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 0.9rem;
         word-break: break-all;
+        border: 1px dashed var(--accent);
         cursor: pointer;
-        border: 1px solid var(--border);
-        margin-top: 0.5rem;
+        transition: all 0.3s ease;
     }
 
-    .checkbox-container {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 1rem;
-        cursor: pointer;
+    .btc-address:hover {
+        background: rgba(16, 185, 129, 0.1);
+        transform: scale(1.02);
     }
 
-    .checkbox-container input {
-        width: 1.2rem;
-        height: 1.2rem;
-        cursor: pointer;
-    }
-
-    .btn-paid {
-        background: var(--accent-primary) !important;
-        color: white !important;
-        opacity: 1 !important;
-    }
-
-    .btn-paid:disabled {
-        opacity: 0.5 !important;
-        cursor: not-allowed !important;
-    }
-
-    .disclaimer {
-        color: var(--text-tertiary);
-        font-size: 0.75rem;
+    /* History Section */
+    .history-section {
         margin-top: 1rem;
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.05);
+        border-radius: 12px;
+    }
+
+    .history-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        transition: all 0.3s ease;
+        border-radius: 8px;
+    }
+
+    .history-item:hover {
+        background: rgba(16, 185, 129, 0.1);
+        transform: translateX(5px);
+    }
+
+    .history-symbol {
+        font-weight: 600;
+    }
+
+    .history-amount-won {
+        color: var(--success);
+        font-weight: 700;
+    }
+
+    .history-amount-lost {
+        color: var(--danger);
+        font-weight: 700;
     }
 
     /* Modal Actions */
@@ -1265,122 +1302,158 @@
 
     .modal-actions button {
         flex: 1;
-        padding: 1rem;
+        padding: 0.75rem 1.5rem;
         border: none;
-        border-radius: 2rem;
+        border-radius: 12px;
         font-weight: 600;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.3s ease;
     }
 
-    .modal-actions button:first-child {
-        background: var(--bg-primary);
-        color: var(--text-primary);
+    .modal-actions button:hover {
+        transform: translateY(-2px);
     }
 
-    .modal-actions button:last-child {
-        background: var(--danger);
-        color: white;
+    /* Animations */
+    @keyframes fadeInDown {
+        from {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
 
-    .modal-actions form {
-        flex: 1;
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
 
-    .modal-actions form button {
-        width: 100%;
-        background: var(--success);
-        color: white;
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
     }
 
-    /* Trade History */
-    .history-section {
-        max-height: 300px;
-        overflow-y: auto;
-        margin-bottom: 1.5rem;
-        border: 1px solid var(--border);
-        border-radius: 1rem;
-        background: var(--bg-primary);
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateX(-20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
     }
 
-    .history-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid var(--border);
+    @keyframes cardAppear {
+        from {
+            opacity: 0;
+            transform: scale(0.9);
+        }
+        to {
+            opacity: 1;
+            transform: scale(1);
+        }
     }
 
-    .history-item:last-child {
-        border-bottom: none;
+    @keyframes modalSlideUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
 
-    .history-symbol {
-        font-weight: 600;
+    @keyframes pulse {
+        0%, 100% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.02);
+        }
     }
 
-    .history-amount-won {
-        color: var(--success);
-        font-weight: 500;
-    }
-
-    .history-amount-lost {
-        color: var(--danger);
-        font-weight: 500;
-    }
-
-    /* Responsive */
-    @media (max-width: 1024px) {
-        .dashboard {
+    /* Responsive Adjustments */
+    @media (max-width: 768px) {
+        .stat-card h2 {
+            font-size: 2rem;
+        }
+        
+        .trades-count {
+            font-size: 3rem;
+        }
+        
+        .loyalty-status-msg {
+            font-size: 1.2rem;
+        }
+        
+        .modal-content {
             padding: 1.5rem;
         }
         
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
+        .coin-selector {
+            flex-direction: column;
         }
     }
 
-    @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
+    /* Loading States */
+    .loading {
+        position: relative;
+        overflow: hidden;
+    }
 
-        .dashboard-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
+    .loading::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+        animation: loading 1.5s infinite;
+    }
 
-        .trades-header {
-            flex-direction: column;
-            gap: 1rem;
-            align-items: flex-start;
+    @keyframes loading {
+        0% {
+            transform: translateX(-100%);
         }
+        100% {
+            transform: translateX(100%);
+        }
+    }
 
-        .trades-stats {
-            width: 100%;
-            justify-content: space-between;
-        }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
 
-        .loyalty-content {
-            flex-direction: column;
-        }
+    ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.05);
+        border-radius: 10px;
+    }
 
-        .loyalty-actions {
-            width: 100%;
-        }
+    ::-webkit-scrollbar-thumb {
+        background: linear-gradient(135deg, var(--accent), var(--info));
+        border-radius: 10px;
+    }
 
-        .btn-loyalty {
-            flex: 1;
-            text-align: center;
-        }
-
-        .split-container {
-            grid-template-columns: 1fr;
-        }
-
-        .contract-info {
-            flex-direction: column;
-            gap: 0.5rem;
-        }
+    ::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(135deg, var(--accent-hover), #2563eb);
     }
 </style>
 </head>
@@ -1389,8 +1462,8 @@
     <?php if ($show_passkey_form): ?>
         <div class="passkey-overlay">
             <div class="passkey-screen">
-                <h2>🔐 Create Passkey</h2>
-                <p>Secure your HarvHub dashboard access</p>
+                <h2>Create Your Passkey</h2>
+                <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
                 <form method="POST">
                     <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
                     <button type="submit" name="create_passkey" class="btn-full">Save & Continue</button>
@@ -1400,8 +1473,8 @@
     <?php elseif (!$passkey_verified): ?>
         <div class="passkey-overlay">
             <div class="passkey-screen">
-                <h2>👋 Welcome Back</h2>
-                <p>Enter your passkey to access dashboard</p>
+                <h2>Welcome Back</h2>
+                <p style="margin:1.5rem 0; opacity:0.9;">Enter your passkey to access dashboard</p>
                 <form method="POST">
                     <input type="password" name="passkey" placeholder="Your passkey" required autofocus>
                     <?php if ($passkey_error): ?>
@@ -1409,219 +1482,215 @@
                     <?php endif; ?>
                     <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
                 </form>
-                <a href="mailto:support@harvhub.com" style="display:block; text-align:center; margin-top:1.5rem; color:var(--accent-primary); font-size:0.875rem;">Forgot passkey?</a>
+                <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
+                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a>
             </div>
         </div>
-    <?php else: ?>
-    <div class="app-container" id="appContainer">
-        <div class="dashboard <?= $balanceDisplay === 'hide' ? 'blur-mode' : '' ?>">
-            <div class="dashboard-header">
-                <div class="header-left">
-                    <div>
-                        <h1><span>🌾</span> HarvHub Dashboard</h1>
-                        <p>Monitor your trading performance</p>
-                    </div>
+    <?php endif; ?>
+
+    <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
+        <h1>🌾HarvHub Dashboard</h1>
+        <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
+
+        <?php if (!empty($dashboard_disclaimer)): ?>
+            <p class="dashboard-disclaimer">
+                <?= htmlspecialchars($dashboard_disclaimer) ?>
+            </p>
+        <?php endif; ?>
+
+        <?php if ($profitAndLoss < 0 && ($loyaltiesStatus === null && $is_execution_empty)): ?>
+            <p class="encouragement-note">
+                🌟 Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
+            </p>
+        <?php endif; ?>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <form method="POST" style="margin:0;">
+                    <input type="hidden" name="toggle_balance_display" value="1">
+                    <button type="submit" title="<?= $balanceDisplay === 'show' ? 'Hide Balance' : 'Show Balance' ?>" class="balance-toggle-btn">
+                        <?php if ($balanceDisplay === 'show'): ?>
+                            👁️
+                        <?php else: ?>
+                            🔒 
+                        <?php endif; ?>
+                    </button>
+                </form>
+                
+                <h3> Deposit Balance</h3>
+                <div class="stat-details-info">
+                    <?= htmlspecialchars($login) ?>
+                    <?= htmlspecialchars($server) ?> 🌱 Seed
                 </div>
-                <div class="header-right">
-                    <div class="user-menu">
-                        <div class="user-avatar">
-                            <?= strtoupper(substr($fullName, 0, 1)) ?>
-                        </div>
-                        <span class="user-name"><?= htmlspecialchars($fullName) ?></span>
-                    </div>
-                    <a href="?logout=1" class="logout-link">Logout →</a>
+                <h2>$<?= number_format($depositBalance, 2) ?></h2>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Profit & Loss</h3>
+                <h2 class="<?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                    $<?= number_format($profitAndLoss, 2) ?>
+                </h2>
+                <div class="stat-details-info">
+                    🌶️🥕 Crop Yield
                 </div>
             </div>
 
-            <?php if (!empty($dashboard_disclaimer)): ?>
-                <div class="dashboard-disclaimer">
-                    <span>📊</span>
-                    <?= htmlspecialchars($dashboard_disclaimer) ?>
+            <div class="stat-card">
+                <h3>Current Balance</h3>
+                <h2 class="<?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                    $<?= number_format($currentBalance, 2) ?>
+                </h2>
+                <div class="stat-details-info">
+                    🌾🚜 Harvest
                 </div>
-            <?php endif; ?>
-
-            <?php if ($profitAndLoss < 0 && ($loyaltiesStatus === null && $is_execution_empty)): ?>
-                <div class="encouragement-note">
-                    🌟 Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
-                </div>
-            <?php endif; ?>
-
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Deposit Balance</h3>
-                        <form method="POST" style="margin:0;">
-                            <input type="hidden" name="toggle_balance_display" value="1">
-                            <button type="submit" class="balance-toggle-btn">
-                                <?= $balanceDisplay === 'show' ? '👁️' : '🔒' ?>
-                            </button>
-                        </form>
+            </div>
+            
+            <div class="stat-card trades-card" style="grid-column: 1 / -1;"> 
+                <h3>Trade Summary</h3>
+                <div class="trades-layout-container">
+                    <div class="trades-count">
+                        <?= $tradesCountDisplay ?>
+                        <span>Trades</span>
                     </div>
-                    <div class="stat-value">$<?= number_format($depositBalance, 2) ?></div>
-                    <div class="stat-details">
-                        <?= htmlspecialchars($login) ?> · <?= htmlspecialchars($server) ?>
-                    </div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Profit & Loss</h3>
-                    </div>
-                    <div class="stat-value <?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                        $<?= number_format($profitAndLoss, 2) ?>
-                    </div>
-                    <div class="stat-details">
-                        Since contract start
-                    </div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Current Balance</h3>
-                    </div>
-                    <div class="stat-value <?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                        $<?= number_format($currentBalance, 2) ?>
-                    </div>
-                    <div class="stat-details">
-                        Deposit + P&L
-                    </div>
-                </div>
-
-                <div class="stat-card trades-card">
-                    <div class="trades-header">
-                        <div>
-                            <div class="trades-count-large"><?= $tradesCountDisplay ?></div>
-                            <div class="trades-count-label">Total Trades</div>
+                    
+                    <div class="trades-won-lost">
+                        <div class="trades-detail-item left">
+                            Won: 
+                            <strong style="color:var(--success-color);"><?= $wonCountDisplay ?></strong>
                         </div>
-                        <div class="trades-stats">
-                            <div class="trades-stat">
-                                <div class="label">Won</div>
-                                <div class="value won"><?= $wonCountDisplay ?></div>
-                            </div>
-                            <div class="trades-stat">
-                                <div class="label">Lost</div>
-                                <div class="value lost"><?= $lostCountDisplay ?></div>
-                            </div>
+                        
+                        <div class="trades-detail-item right">
+                            Lost: 
+                            <strong style="color:var(--error-color);"><?= $lostCountDisplay ?></strong>
                         </div>
                     </div>
                     <button class="btn-view-history" onclick="document.getElementById('tradeHistoryModal').classList.add('active')">
-                        View Trade History →
+                        Markets 
                     </button>
                 </div>
-
-                <div class="stat-card loyalty-card">
-                    <span class="loyalty-status"><?= htmlspecialchars($loyalty_status_message) ?></span>
-                    
-                    <div class="loyalty-content">
-                        <div class="loyalty-text">
-                            <p><?= htmlspecialchars($loyalty_text) ?></p>
-                            
-                            <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
-                                <div class="contract-info">
-                                    <span class="contract-dates">
-                                        📅 <?= htmlspecialchars($formatted_start_date) ?> → <?= htmlspecialchars($formatted_end_date) ?>
-                                    </span>
-                                    <?php if ($contractDaysLeft > 0): ?>
-                                        <span class="contract-days-left">
-                                            ⏳ <?= $contractDaysLeft ?> days left
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-                            <?php endif; ?>
-
-                            <div style="margin-top: 0.5rem; color: var(--text-tertiary); font-size: 0.875rem;">
-                                ⏱️ <?= $CONTRACT_DURATION ?> day contract
-                            </div>
-                        </div>
-
-                        <?php if ($show_payment_note): ?>
-                            <p style="color: var(--warning); font-style: italic;">
-                                ⏳ Your payment is being reviewed. Once confirmed, you'll be able to re-enroll.
-                            </p>
-                        <?php endif; ?>
-
-                        <?php if (!$show_payment_note): ?>
-                            <div class="loyalty-actions">
-                                <button 
-                                    <?= $loyalty_btn_action ?>
-                                    class="btn-loyalty <?= htmlspecialchars($loyalty_btn_class) ?>"
-                                >
-                                    <?= htmlspecialchars($loyalty_btn_text) ?>
-                                </button>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
             </div>
+            
+            <div class="stat-card loyalty-card">
+                <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
+                <p><?= htmlspecialchars($loyalty_text) ?></p>
 
-            <p style="color: var(--text-tertiary); font-size: 0.875rem; text-align: center; margin: 1rem 0;">
-                PnL updates every 24 hours · Automated execution runs 24/7
-            </p>
+                <p><strong><?= $CONTRACT_DURATION ?> days contract duration</strong></p>
 
-            <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
-                Disconnect My Account
-            </button>
+                <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
+                    <span class="contract-dates">
+                        Started: <?= htmlspecialchars($formatted_start_date) ?> | Ends: <?= htmlspecialchars($formatted_end_date) ?>
+                    </span>
+                    <?php if ($contractDaysLeft > 0): ?>
+                        <span class="contract-days-left">
+                            <?= $contractDaysLeft ?> days left
+                        </span>
+                    <?php endif; ?>
+                <?php endif; ?>
+
+                <?php if ($show_payment_note): ?>
+                    <p style="color: var(--info-color); margin-top: 10px; font-style: italic;">
+                        ⏳ Your payment is on review. Once confirmed by the server, you'll be able to re-enroll.
+                    </p>
+                <?php endif; ?>
+                
+                <?php if (!$show_payment_note): ?>
+                    <button 
+                        <?= $loyalty_btn_action ?>
+                        class="<?= htmlspecialchars($loyalty_btn_class) ?>"
+                    >
+                        <?= htmlspecialchars($loyalty_btn_text) ?>
+                    </button>
+                <?php endif; ?>
+            </div>
         </div>
-    </div>
-    <?php endif; ?>
+       <div class="note-btndanger">
+            <div class="note-btndanger-block">
+                <p class="note">
+                    Your PnL is updated every 24 hours.<br>
+                    Automated execution runs 24/7 on your connected account.
+                </p>
 
-    <!-- Disconnect Modal -->
+                <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
+                    Disconnect My Account
+                </button>
+            </div>
+        </div>
+        
+        <a href="?logout=1" class="logout-link">Logout</a>
+    </div>
+
+    <!-- Modals -->
     <div id="disconnectModal" class="modal">
         <div class="modal-content">
-            <h2 style="color: var(--danger);">⚠️ Disconnect Account?</h2>
-            <p>This action will permanently disconnect your account from trading activities.</p>
-            <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
-                <form method="POST">
-                    <button type="submit" name="confirm_disconnect">Yes, Disconnect</button>
+            <h2 style="color:#ff6b6b;">Disconnect Account?</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                This action will disconnect your account from trading activities permanently.
+            </p>
+            <div class="modal-actions"> 
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+                <form method="POST" style="display:inline;">
+                    <button type="submit" name="confirm_disconnect"
+                        style="background:#e74c3c; color:white; border:none;">
+                        Yes, Disconnect
+                    </button>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- Profit Split Modal -->
     <div id="profitSplitModal" class="modal">
         <div class="modal-content">
-            <h2 style="color: var(--info);">💰 Profit Split Required</h2>
-            <p>Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.</p>
+            <h2 style="color:var(--info-color);">Profit Split Required</h2>
             
-            <div class="split-total">$<?= number_format($profitToSplit, 2) ?></div>
+            <p style="margin-bottom: 2rem; opacity: 0.8;">
+                Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.
+            </p>
+            <p class="split-total">
+                Total Profit: $<?= number_format($profitToSplit, 2) ?>
+            </p>
 
             <div class="split-container">
                 <div class="split-item">
-                    <h4 style="color: var(--success);"><?= $USER_SHARE_PERCENT ?>%</h4>
+                    <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
                     <p>Your Share</p>
-                    <h4 style="color: var(--success);">$<?= number_format($userShare, 2) ?></h4>
+                    <h4 style="color:var(--success-color);">$<?= number_format($userShare, 2) ?></h4>
                     <button class="btn-withdraw" 
-                            onclick="window.open('<?= $brokerTarget ?>', '_blank')">
-                        Withdraw
+                            onclick="window.open('<?= $brokerTarget ?>', '_blank')"
+                            style="background:#2ecc71; color:white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
+                        Withdraw Your Share
                     </button>
-                    <small>Withdraw your share</small>
+                    <small style="display:block; margin-top:10px; opacity:0.6;">Withdraw your $<?= number_format($userShare, 2) ?> profit share</small>
                 </div>
-                
                 <div class="split-item">
-                    <h4 style="color: var(--info);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
+                    <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
                     <p>Server Share</p>
-                    <h4 style="color: var(--info);">$<?= number_format($serverShare, 2) ?></h4>
-                    <button class="btn-pay" 
-                            onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');">
-                        Pay Server
+                    <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
+                    <button class="btn-pay" onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');"
+                            style="padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
+                        Pay Server Share
                     </button>
-                    <small>Pay to continue</small>
+                    <small style="display:block; margin-top:10px; opacity:0.6;">Pay $<?= number_format($serverShare, 2) ?> to remain eligible</small>
                 </div>
             </div>
 
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')">Close</button>
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Close
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- Payment Modal -->
     <div id="paymentModal" class="modal">
         <div class="modal-content">
-            <h2 style="color: var(--accent-primary);">💳 Pay Server Share</h2>
-            <p>Send $<?= number_format($serverShare, 2) ?> worth of cryptocurrency</p>
+            <h2 style="color:var(--accent);">Pay Server Share</h2>
+            <p style="margin:1rem 0; opacity:0.8;">
+                Send $<?= number_format($serverShare, 2) ?> worth of the selected cryptocurrency
+            </p>
             
             <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
 
@@ -1648,7 +1717,7 @@
 
             <label class="checkbox-container">
                 <input type="checkbox" id="paymentConfirmationCheck" onchange="togglePaidButton()">
-                <span>I have made the payment</span>
+                I have made the payment
             </label>
 
             <button class="btn-full btn-paid" id="confirmPaidBtn" disabled onclick="triggerFinalConfirmation()">
@@ -1658,55 +1727,70 @@
             <p class="disclaimer">Click only after payment has been successfully sent. Your payment will be verified by the server.</p>
             
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- Final Confirmation Modal -->
     <div id="finalConfirmationModal" class="modal">
         <div class="modal-content">
-            <h2 style="color: var(--success);">✅ Final Confirmation</h2>
-            <p>Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the <strong id="finalConfirmCoin">N/A</strong> address.</p>
+            <h2 style="color:var(--success-color);">Final Confirmation</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the 
+                <strong id="finalConfirmCoin">N/A</strong> address.
+            </p>
             
-            <div class="modal-actions">
-                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')">Cancel</button>
+            <div class="modal-actions"> 
+                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
                 <form method="POST" style="display:inline;">
                     <input type="hidden" name="final_confirm_payment" value="1">
                     <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="">
                     <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
-                    <button type="submit">Yes, I've Paid</button>
+                    <button type="submit"
+                        style="background:var(--success-color); color:#000; border:none;">
+                        Yes, I've Paid
+                    </button>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- Re-enroll Modal -->
     <div id="reenrollModal" class="modal">
         <div class="modal-content">
-            <h2 style="color: var(--info);">🔄 Start New Contract</h2>
-            <p>Start a new <?= $CONTRACT_DURATION ?>-day trading contract from today.</p>
-            <?php if ($profitAndLoss < 0): ?>
-                <p style="color: var(--warning); font-style: italic; margin-top: 0.5rem;">
-                    🌟 Remember: Every successful trader faced losses. This is your chance for a fresh start!
-                </p>
-            <?php endif; ?>
-            <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')">Cancel</button>
-                <form method="POST">
-                    <button type="submit" name="confirm_reenroll">Start New Contract</button>
+            <h2 style="color:var(--info-color);">Start New Contract</h2>
+            <p style="margin:1.5rem 0; line-height:1.6;">
+                Start a new <?= $CONTRACT_DURATION ?>-day trading contract from today.
+                <?php if ($profitAndLoss < 0): ?>
+                    <br><br>🌟 Remember: Every successful trader faced losses. This is your chance for a fresh start!
+                <?php endif; ?>
+            </p>
+            <div class="modal-actions"> 
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Cancel
+                </button>
+                <form method="POST" style="display:inline;">
+                    <button type="submit" name="confirm_reenroll"
+                        style="background:var(--success-color); color:#000; border:none;">
+                        Start New Contract
+                    </button>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- Trade History Modal -->
     <div id="tradeHistoryModal" class="modal">
         <div class="modal-content">
-            <h2>📊 Trade History</h2>
-            <p>Currency pairs performance</p>
+            <h2>Trade History Summary</h2>
+            <p style="margin:1rem 0; opacity:0.8;">Currency pairs that won/lost</p>
 
-            <h3 style="color: var(--success); margin: 1.5rem 0 1rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?>)</h3>
+            <h3 style="color:var(--success-color); margin-top:2rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?> Symbols)</h3>
             <div class="history-section">
                 <?php if (!empty($tradesData['symbolsthatwon'])): ?>
                     <?php foreach ($tradesData['symbolsthatwon'] as $trade): ?>
@@ -1716,11 +1800,11 @@
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <p style="text-align: center; padding: 1rem; color: var(--text-tertiary);">No winning symbol data available.</p>
+                    <p style="text-align: center; opacity: 0.7;">No winning symbol data available.</p>
                 <?php endif; ?>
             </div>
             
-            <h3 style="color: var(--danger); margin: 1.5rem 0 1rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?>)</h3>
+            <h3 style="color:var(--error-color); margin-top:2rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?> Symbols)</h3>
             <div class="history-section">
                 <?php if (!empty($tradesData['symbolsthatlost'])): ?>
                     <?php foreach ($tradesData['symbolsthatlost'] as $trade): ?>
@@ -1730,12 +1814,15 @@
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <p style="text-align: center; padding: 1rem; color: var(--text-tertiary);">No losing symbol data available.</p>
+                    <p style="text-align: center; opacity: 0.7;">No losing symbol data available.</p>
                 <?php endif; ?>
             </div>
 
             <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')">Close</button>
+                <button onclick="this.closest('.modal').classList.remove('active')"
+                    style="background:#555; color:white; border:none;">
+                    Close
+                </button>
             </div>
         </div>
     </div>
@@ -1775,46 +1862,6 @@
     const formServerShareAmount = document.getElementById('formServerShareAmount');
     const formPaymentCoin = document.getElementById('formPaymentCoin');
 
-    // Function to handle body scroll when modal opens/closes
-    function handleModalOpen(modalId) {
-        document.body.classList.add('modal-open');
-        document.getElementById(modalId).classList.add('active');
-    }
-
-    function handleModalClose(modalElement) {
-        document.body.classList.remove('modal-open');
-        modalElement.classList.remove('active');
-    }
-
-    // Update all modal open/close handlers
-    document.querySelectorAll('[onclick*=".classList.add(\'active\')"]').forEach(button => {
-        const originalOnclick = button.getAttribute('onclick');
-        if (originalOnclick && originalOnclick.includes('document.getElementById')) {
-            const modalId = originalOnclick.match(/'([^']+)'/)[1];
-            button.setAttribute('onclick', `handleModalOpen('${modalId}')`);
-        }
-    });
-
-    // Update modal close buttons
-    document.querySelectorAll('.modal-actions button, .modal-actions form button').forEach(button => {
-        if (button.getAttribute('onclick')?.includes('closest')) {
-            button.setAttribute('onclick', button.getAttribute('onclick').replace(
-                'this.closest(\'.modal\').classList.remove(\'active\')',
-                'handleModalClose(this.closest(\'.modal\'))'
-            ));
-        }
-    });
-
-    // Add escape key handler
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            const activeModal = document.querySelector('.modal.active');
-            if (activeModal) {
-                handleModalClose(activeModal);
-            }
-        }
-    });
-
     function getSelectedCoin() {
         return document.querySelector('input[name="coin"]:checked').value;
     }
@@ -1842,8 +1889,8 @@
         formServerShareAmount.value = amount;
         formPaymentCoin.value = selectedCoin;
         
-        handleModalClose(document.getElementById('paymentModal'));
-        handleModalOpen('finalConfirmationModal');
+        document.getElementById('paymentModal').classList.remove('active');
+        finalConfirmationModal.classList.add('active');
     }
 
     copyAddressBtn.addEventListener('click', function() {
