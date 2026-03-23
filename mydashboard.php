@@ -312,7 +312,7 @@
     // CASE 8: Active contract running
     } elseif ($is_contract_active) {
         $dashboard_disclaimer = "Trading is active.";
-        $loyalty_text = "Your contract is running normally. {$contractDaysLeft} days remaining.";
+        $loyalty_text = "{$contractDaysLeft} days left.";
         $loyalty_status_message = "Contract Active";
         $loyalty_btn_text = "Active";
         $loyalty_btn_class = "btn-loyalty-confirmed";
@@ -1092,7 +1092,7 @@
     /* Danger Button */
     .btn-danger {
         display: block;
-        margin-bottom: 60px;
+        margin-bottom: 10px;
         margin-top: 10px;
         padding: 1rem 1rem;
         background: linear-gradient(135deg, var(--danger), #dc2626);
@@ -1113,6 +1113,9 @@
     }
 
     /* Logout Link */
+    .logout-link-p{
+        margin-bottom: 60px;
+    }
     .logout-link {
         display: block;
         text-align: center;
@@ -1483,7 +1486,6 @@
                     <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
                 </form>
                 <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
-                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a>
             </div>
         </div>
     <?php endif; ?>
@@ -1520,9 +1522,12 @@
                 <h3> Deposit Balance</h3>
                 <div class="stat-details-info">
                     <?= htmlspecialchars($login) ?>
-                    <?= htmlspecialchars($server) ?> 🌱 Seed
+                    <?= htmlspecialchars($server) ?>
                 </div>
                 <h2>$<?= number_format($depositBalance, 2) ?></h2>
+                <div class="stat-details-info">
+                    🌱 Seed
+                </div>
             </div>
             
             <div class="stat-card">
@@ -1531,7 +1536,7 @@
                     $<?= number_format($profitAndLoss, 2) ?>
                 </h2>
                 <div class="stat-details-info">
-                    🌶️🥕 Crop Yield
+                    🌶️🥕Yield
                 </div>
             </div>
 
@@ -1541,7 +1546,7 @@
                     $<?= number_format($currentBalance, 2) ?>
                 </h2>
                 <div class="stat-details-info">
-                    🌾🚜 Harvest
+                    🚜 Harvest
                 </div>
             </div>
             
@@ -1581,9 +1586,6 @@
                         Started: <?= htmlspecialchars($formatted_start_date) ?> | Ends: <?= htmlspecialchars($formatted_end_date) ?>
                     </span>
                     <?php if ($contractDaysLeft > 0): ?>
-                        <span class="contract-days-left">
-                            <?= $contractDaysLeft ?> days left
-                        </span>
                     <?php endif; ?>
                 <?php endif; ?>
 
@@ -1613,6 +1615,8 @@
                 <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
                     Disconnect My Account
                 </button>
+                <p class="logout-link-p">
+                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a></p>
             </div>
         </div>
         
