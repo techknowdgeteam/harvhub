@@ -15,6 +15,8 @@
             // Standard GET request/Reload: Unset verification flag to force re-prompt.
             unset($_SESSION['passkey_verified']);
             unset($_SESSION['passkey_error']);
+            unset($_SESSION['reenroll_passkey_verified']);
+            unset($_SESSION['reenroll_passkey_error']);
         }
     }
 
@@ -45,6 +47,120 @@
         die("Database connection failed.");
     }
 
+    // Function to record revenue history with deduplication
+    function recordRevenueHistory($pdo, $email, $user, $startDate, $startingBalance, $profit, $serverShare, $userShare, $status) {
+        $tableName = "insiders";
+        
+        // Calculate end date (start date + CONTRACT_DURATION from server_account)
+        $stmt = $pdo->prepare("SELECT contract_duration FROM server_account LIMIT 1");
+        $stmt->execute();
+        $serverConfig = $stmt->fetch(PDO::FETCH_ASSOC);
+        $contractDuration = $serverConfig ? (int)$serverConfig['contract_duration'] : 30;
+        
+        $start = new DateTime($startDate);
+        $end = clone $start;
+        $end->modify("+{$contractDuration} days");
+        $endDate = $end->format('Y-m-d');
+        
+        // Get current revenue history
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $history = [];
+        $hasDuplicate = false;
+        $duplicateIndex = -1;
+        
+        if (!empty($result['revenue_history'])) {
+            $history = json_decode($result['revenue_history'], true);
+            if (!is_array($history)) $history = [];
+            
+            // Create signature for the new record (without id and recorded_at)
+            $newRecordSignature = [
+                'execution_start_date' => $startDate,
+                'execution_end_date' => $endDate,
+                'starting_balance' => (float)$startingBalance,
+                'current_balance' => (float)$startingBalance + (float)$profit,
+                'profit' => (float)$profit,
+                'server_share' => (float)$serverShare,
+                'user_share' => (float)$userShare,
+                'loyalty_status' => $status
+            ];
+            $newSignatureJson = json_encode($newRecordSignature);
+            
+            // Check for duplicate using signature comparison
+            foreach ($history as $index => $record) {
+                $existingSignature = [
+                    'execution_start_date' => $record['execution_start_date'] ?? '',
+                    'execution_end_date' => $record['execution_end_date'] ?? '',
+                    'starting_balance' => (float)($record['starting_balance'] ?? 0),
+                    'current_balance' => (float)($record['current_balance'] ?? 0),
+                    'profit' => (float)($record['profit'] ?? 0),
+                    'server_share' => (float)($record['server_share'] ?? 0),
+                    'user_share' => (float)($record['user_share'] ?? 0),
+                    'loyalty_status' => $record['loyalty_status'] ?? ''
+                ];
+                
+                if (json_encode($existingSignature) === $newSignatureJson) {
+                    $hasDuplicate = true;
+                    $duplicateIndex = $index;
+                    break;
+                }
+            }
+        }
+        
+        // If duplicate found, update the existing record's timestamp instead of adding new
+        if ($hasDuplicate && $duplicateIndex >= 0) {
+            $history[$duplicateIndex]['recorded_at'] = date('Y-m-d H:i:s');
+            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+            $upd->execute([json_encode($history), $email]);
+            return true;
+        }
+        
+        // No duplicate - create new record
+        $newRecord = [
+            'id' => uniqid(),
+            'execution_start_date' => $startDate,
+            'execution_end_date' => $endDate,
+            'starting_balance' => (float)$startingBalance,
+            'current_balance' => (float)$startingBalance + (float)$profit,
+            'profit' => (float)$profit,
+            'server_share' => (float)$serverShare,
+            'user_share' => (float)$userShare,
+            'loyalty_status' => $status,
+            'recorded_at' => date('Y-m-d H:i:s')
+        ];
+        
+        // Add to beginning of array (newest first)
+        array_unshift($history, $newRecord);
+        
+        // Save back to database
+        $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+        $upd->execute([json_encode($history), $email]);
+        
+        return true;
+    }
+
+    // Function to update revenue history status
+    function updateRevenueHistoryStatus($pdo, $email, $newStatus) {
+        $tableName = "insiders";
+        
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!empty($result['revenue_history'])) {
+            $history = json_decode($result['revenue_history'], true);
+            if (is_array($history) && !empty($history)) {
+                // Update the most recent record (index 0)
+                if (isset($history[0])) {
+                    $history[0]['loyalty_status'] = $newStatus;
+                    $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+                    $upd->execute([json_encode($history), $email]);
+                }
+            }
+        }
+    }
     // 3. Fetch user data
     $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
     $stmt->execute([$email]);
@@ -63,29 +179,16 @@
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$serverAccount) {
-        $serverAccount = [
-            'btc_address' => 'N/A', 
-            'eth_address' => 'N/A', 
-            'eth_network' => 'ERC20', 
-            'usdt_address' => 'N/A', 
-            'usdt_network' => 'TRC20',
-            'minimum_deposit' => 0.00, 
-            'brokers_link' => '',
-            'contract_duration' => 30,
-            'server_share_percent' => 30,
-            'user_share_percent' => 70,
-            'min_broker_balance' => 30,
-            'min_profit_for_split' => 30,
-        ];
+        die("Server configuration not found. Please contact administrator.");
     }
     
     // Set dynamic values from DB
-    $MIN_INITIAL_DEPOSIT = (float)($serverAccount['minimum_deposit'] ?? 0.00); 
-    $CONTRACT_DURATION = (int)($serverAccount['contract_duration'] ?? 30);
-    $SERVER_SHARE_PERCENT = (int)($serverAccount['server_share_percent'] ?? 30);
-    $USER_SHARE_PERCENT = (int)($serverAccount['user_share_percent'] ?? 70);
-    $MIN_BROKER_BALANCE = (float)($serverAccount['min_broker_balance'] ?? 30);
-    $MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
+    $MIN_INITIAL_DEPOSIT = (float)$serverAccount['minimum_deposit']; 
+    $CONTRACT_DURATION = (int)$serverAccount['contract_duration'];
+    $SERVER_SHARE_PERCENT = (int)$serverAccount['server_share_percent'];
+    $USER_SHARE_PERCENT = (int)$serverAccount['user_share_percent'];
+    $MIN_BROKER_BALANCE = (float)$serverAccount['min_broker_balance'];
+    $MIN_PROFIT_FOR_SPLIT = (float)$serverAccount['min_profit_for_split'];
     
     // Extract user data
     $brokerBalance = (float)($user['broker_balance'] ?? 0);
@@ -100,6 +203,7 @@
     $formatted_end_date = "Not started";
     $is_contract_active = false;
     $contract_completed = false;
+    $is_contract_valid = false; // Track if contract has valid start date
     
     // Calculate contract details if execution_start_date exists
     if ($executionStartDate && $executionStartDate !== '0000-00-00' && $executionStartDate !== null) {
@@ -125,6 +229,7 @@
         } else {
             $is_contract_active = true;
         }
+        $is_contract_valid = true;
     }
     
     // Initial Balance Check
@@ -134,20 +239,18 @@
     }
 
     // Extract remaining user data
-    $fullName = $user['fullname'] ?? $email;
+    $fullName = $user['fullname'];
     $login = $user['login'] ?? 'N/A';
     $server = $user['server'] ?? 'N/A';
     $balanceDisplay = $user['balance_display'] ?? 'show'; 
     $broker = strtolower($user['broker'] ?? 'unknown');
     $tradesString = $user['trades'] ?? ''; 
 
-    // --- BALANCE CALCULATIONS (UPDATED AS REQUESTED) ---
-    // Deposit Balance is always the broker_balance value (the initial deposit)
+    // --- BALANCE CALCULATIONS ---
+    // STARTING BALANCE is always the broker_balance value (the initial deposit)
     $depositBalance = $brokerBalance;
     
     // Current Balance = broker_balance + profitandloss (profitandloss can be negative or positive)
-    // If profitandloss is negative, it will automatically subtract from broker_balance
-    // If profitandloss is positive, it will automatically add to broker_balance
     $currentBalance = $brokerBalance + $profitAndLoss;
     
     // Calculate Profit Split values
@@ -191,7 +294,10 @@
     $brokerLink = (strpos($brokerLink, '://') === false && !empty($brokerLink)) ? 'https://' . $brokerLink : $brokerLink;
     $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
 
-    // --- NEW LOYALTY LOGIC BASED ON REQUIREMENTS (IN EXACT ORDER) ---
+    // =========================================================================
+    // LOYALTY LOGIC WITH HIERARCHICAL CONDITIONS
+    // =========================================================================
+    
     $showProfitSplit = false;
     $showWithdrawButtons = false;
     $loyalty_text = "";
@@ -205,8 +311,21 @@
     $loyalty_btn_class = "";
     
     $is_execution_empty = ($executionStartDate === null || $executionStartDate === '0000-00-00');
-
-    // CASE 1: Balance check failed - minimum deposit not met (Keep this as top priority)
+    
+    // Flag to track if we need to update the database
+    $needs_db_update = false;
+    $new_loyalties_status = null;
+    $needs_pnl_reset = false;
+    
+    // ===== CRITICAL: If execution_start_date is empty, ensure profitAndLoss is 0 =====
+    if ($is_execution_empty && $profitAndLoss != 0) {
+        $needs_pnl_reset = true;
+        $profitAndLoss = 0;
+    }
+    
+    // ===== HIERARCHICAL DECISION TREE =====
+    
+    // PRIORITY 1: Balance check failed - minimum deposit not met
     if ($balance_check_failed) {
         $dashboard_disclaimer = "You need to deposit minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " to participate.";
         $loyalty_text = "Your account is not yet eligible. Please fund your broker account with a minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
@@ -215,117 +334,229 @@
         $loyalty_btn_text = "Deposit $" . number_format($MIN_INITIAL_DEPOSIT, 2);
         $loyalty_btn_class = "btn-loyalty-action";
         $loyalty_btn_action = "onclick=\"window.open('{$brokerTarget}', '_blank')\"";
-    
-    // CASE 2: loyalties is 'justjoined' - New member welcome
-    } elseif ($loyaltiesStatus === 'justjoined') {
-        $dashboard_disclaimer = "Welcome to HarvHub!";
-        $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
-        $loyalty_status_message = "Welcome New Member!";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Re-enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
-    
-    // CASE 3: loyalties is null AND execution start date is empty AND profit is positive
-    } elseif ($loyaltiesStatus === null && $is_execution_empty && $profitAndLoss > 0) {
-        $dashboard_disclaimer = "Profit earned - Split required";
-        $loyalty_text = "You have earned a profit of $" . number_format($profitAndLoss, 2) . "! Please complete the profit split to continue.";
-        $loyalty_status_message = "Profit Split Required";
-        $showWithdrawButtons = true;
-        $showProfitSplit = true;
-        $loyalty_btn_text = "View Profit Split";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
-    
-    // CASE 4: loyalties is null AND execution start date is empty AND profit is negative
-    } elseif ($loyaltiesStatus === null && $is_execution_empty && $profitAndLoss < 0) {
-        $dashboard_disclaimer = "Loss incurred - Keep going!";
-        $loyalty_text = "Don't give up! Every loss is a learning opportunity. You can re-enroll for a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
-        $loyalty_status_message = "Ready for Another Attempt";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Re-enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
-    
-    // CASE 5: loyalties is 'payment-made' - Payment pending
-    } elseif ($loyaltiesStatus === 'payment-made') {
-        $dashboard_disclaimer = "Payment submitted for verification.";
-        $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to re-enroll for a new contract.";
-        $loyalty_status_message = "Payment Pending Confirmation";
-        $show_payment_note = true;
-        $loyalty_btn_text = "Awaiting Confirmation";
-        $loyalty_btn_class = "btn-loyalty-paid";
-    
-    // CASE 6: loyalties is 'payment-confirmed' - Reset and ready
-    } elseif ($loyaltiesStatus === 'payment-confirmed') {
-        // Reset execution_start_date to NULL and profitandloss to 0
-        $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
-        $upd->execute([$email]);
         
-        // Refresh user data after reset
-        $executionStartDate = null;
-        $profitAndLoss = 0;
-        $loyaltiesStatus = null;
-        
-        $dashboard_disclaimer = "Ready to start a new contract.";
-        $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
-        $loyalty_status_message = "Ready to Re-enroll";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Re-enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
-    
-    // CASE 7: Contract completed (execution date met/expired) - Keep this for backward compatibility
-    } elseif ($contract_completed) {
-        if ($profitAndLoss > 0) {
-            // Contract completed with PROFIT - show withdraw/pay buttons
-            $dashboard_disclaimer = "Contract completed with profit.";
-            $loyalty_text = "Your contract period has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to continue.";
-            $loyalty_status_message = "Contract Ended - Profit Split Required";
-            $showWithdrawButtons = true;
-            $showProfitSplit = true;
-            $loyalty_btn_text = "View Profit Split";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
-            
-        } elseif ($profitAndLoss < 0) {
-            // Contract completed with LOSS - show encouragement and re-enroll
-            $dashboard_disclaimer = "Contract completed with loss.";
-            $loyalty_text = "Don't give up! Every loss is a learning opportunity. You can re-enroll for a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
-            $loyalty_status_message = "Contract Ended - Ready for New Start";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Re-enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
-            
-        } else {
-            // Contract completed with zero profit
-            $dashboard_disclaimer = "Contract completed.";
-            $loyalty_text = "Your contract period has ended. You can re-enroll for a new {$CONTRACT_DURATION}-day contract.";
-            $loyalty_status_message = "Contract Ended";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Re-enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+            $needs_db_update = true;
+            $new_loyalties_status = null;
         }
-    
-    // CASE 8: Active contract running
-    } elseif ($is_contract_active) {
+    }
+    // PRIORITY 2: No execution start date OR execution date is invalid
+    elseif ($is_execution_empty) {
+        if ($loyaltiesStatus === 'payment-made') {
+            $dashboard_disclaimer = "Payment submitted for verification.";
+            $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
+            $loyalty_status_message = "Payment Pending Confirmation";
+            $show_payment_note = true;
+            $loyalty_btn_text = "Awaiting Confirmation";
+            $loyalty_btn_class = "btn-loyalty-paid";
+        } elseif ($loyaltiesStatus === 'payment-confirmed') {
+            if ($profitAndLoss != 0 || $executionStartDate !== null) {
+                // UPDATE revenue history status from 'pending_payment' to 'completed'
+                updateRevenueHistoryStatus($pdo, $email, 'completed');
+                
+                $needs_pnl_reset = true;
+                $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
+                $upd->execute([$email]);
+                
+                $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+                $stmt->execute([$email]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $profitAndLoss = 0;
+                $executionStartDate = null;
+                $loyaltiesStatus = null;
+            }
+            
+            $dashboard_disclaimer = "Ready to start a new contract.";
+            $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
+            $loyalty_status_message = "Ready to enroll";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+        } elseif ($loyaltiesStatus === 'justjoined') {
+            $dashboard_disclaimer = "Welcome to HarvHub!";
+            $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
+            $loyalty_status_message = "Welcome New Member!";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+        } else {
+            $dashboard_disclaimer = "No active contract.";
+            $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
+            $loyalty_status_message = "Ready to Start";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = null;
+            }
+        }
+    }
+    // PRIORITY 3: Contract is currently active (not ended yet)
+    elseif ($is_contract_active) {
         $dashboard_disclaimer = "Trading is active.";
         $loyalty_text = "{$contractDaysLeft} days left.";
         $loyalty_status_message = "Contract Active";
         $loyalty_btn_text = "Active";
         $loyalty_btn_class = "btn-loyalty-confirmed";
-    
-    // CASE 9: Default - no active contract, no special status
-    } else {
+        
+        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+            $needs_db_update = true;
+            $new_loyalties_status = null;
+        }
+    }
+    // PRIORITY 4: Contract has ended (execution_start_date exists AND contract_completed = true)
+    elseif ($contract_completed && $is_contract_valid) {
+        if ($loyaltiesStatus === 'payment-made') {
+            $dashboard_disclaimer = "Payment submitted for verification.";
+            $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
+            $loyalty_status_message = "Payment Pending Confirmation";
+            $show_payment_note = true;
+            $loyalty_btn_text = "Awaiting Confirmation";
+            $loyalty_btn_class = "btn-loyalty-paid";
+            $showProfitSplit = false;
+            $showWithdrawButtons = false;
+        }
+        elseif ($loyaltiesStatus === 'payment-confirmed') {
+            if ($profitAndLoss != 0 || $executionStartDate !== null) {
+                $needs_pnl_reset = true;
+                $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
+                $upd->execute([$email]);
+                
+                $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+                $stmt->execute([$email]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $profitAndLoss = 0;
+                $executionStartDate = null;
+                $loyaltiesStatus = null;
+            }
+            
+            $dashboard_disclaimer = "Ready to start a new contract.";
+            $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
+            $loyalty_status_message = "Ready to enroll";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            $showProfitSplit = false;
+            $showWithdrawButtons = false;
+        }
+        elseif ($profitAndLoss < 0) {
+            $dashboard_disclaimer = "Contract completed with loss.";
+            // RECORD REVENUE HISTORY FOR LOSS
+            $serverShare = 0;
+            $userShare = 0;
+            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, 0, 0, 'loss_completed');
+            $loyalty_text = "Don't give up! Every loss is a learning opportunity. You can enroll for a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
+            $loyalty_status_message = "Contract Ended - Ready for New Start";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            $showProfitSplit = false;
+            $showWithdrawButtons = false;
+            
+            $needs_pnl_reset = true;
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = null;
+            }
+        }
+        elseif ($profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
+            // RECORD REVENUE HISTORY FOR BELOW THRESHOLD
+            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, 0, 0, 'below_threshold');
+            $dashboard_disclaimer = "Contract completed. Profit of $" . number_format($profitAndLoss, 2) . " is below the minimum split threshold of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . ".";
+            $loyalty_text = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Since this is below the minimum requirement of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . " for profit split, you can enroll for a new {$CONTRACT_DURATION}-day contract.";
+            $loyalty_status_message = "Profit Below Split Threshold";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            $showProfitSplit = false;
+            $showWithdrawButtons = false;
+            
+            $needs_pnl_reset = true;
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = null;
+            }
+        }
+        elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
+            // RECORD REVENUE HISTORY BEFORE UPDATING
+            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, $serverShare, $userShare, 'pending_payment');
+            
+            $needs_db_update = true;
+            $new_loyalties_status = 'unpaid-payment';
+            
+            $show_profit_split_ui = true;
+            $showProfitSplit = true;
+            $showWithdrawButtons = true;
+            $dashboard_disclaimer = "Contract completed - Profit split required!";
+            $loyalty_text = "Your {$CONTRACT_DURATION} days contract period has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to remain eligible.";
+            $loyalty_status_message = "Contract Ended - Payment Required";
+            $loyalty_btn_text = "View Profit Split";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
+        }
+        else {
+            $dashboard_disclaimer = "Contract completed with no profit.";
+            $loyalty_text = "Your contract period has ended with no profit. You can enroll for a new {$CONTRACT_DURATION}-day contract.";
+            $loyalty_status_message = "Contract Ended";
+            $show_reenroll_button = true;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            $showProfitSplit = false;
+            $showWithdrawButtons = false;
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = null;
+            }
+        }
+    }
+    // PRIORITY 5: Fallback - no active contract, no special status
+    else {
         $dashboard_disclaimer = "No active contract.";
-        $loyalty_text = "You don't have an active contract. Click Re-enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
+        $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
         $loyalty_status_message = "Ready to Start";
         $show_reenroll_button = true;
-        $loyalty_btn_text = "Re-enroll";
+        $loyalty_btn_text = "Enroll";
         $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"document.getElementById('reenrollModal').classList.add('active')\"";
+        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+        
+        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+            $needs_db_update = true;
+            $new_loyalties_status = null;
+        }
+    }
+    
+    // Apply database updates if needed
+    if ($needs_pnl_reset && $profitAndLoss == 0 && $profitAndLoss != ($user['profitandloss'] ?? 0)) {
+        $upd = $pdo->prepare("UPDATE $tableName SET profitandloss = 0 WHERE email = ?");
+        $upd->execute([$email]);
+        
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    
+    if ($needs_db_update && $new_loyalties_status !== $loyaltiesStatus) {
+        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = ? WHERE email = ?");
+        $upd->execute([$new_loyalties_status, $email]);
+        
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $loyaltiesStatus = $new_loyalties_status;
     }
 
     // Parse Trades Data
@@ -381,15 +612,30 @@
 
     // --- POST Handling ---
 
-    // Create Passkey
+    // Create Passkey (with confirmation)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_passkey'])) {
-        if (!empty($_POST['new_passkey'])) {
-            $passkey = password_hash($_POST['new_passkey'], PASSWORD_DEFAULT);
+        $passkey_error_msg = null;
+        $new_passkey = $_POST['new_passkey'] ?? '';
+        $confirm_passkey = $_POST['confirm_passkey'] ?? '';
+        
+        if (empty($new_passkey)) {
+            $_SESSION['passkey_error_msg'] = "Passkey cannot be empty.";
+        } elseif ($new_passkey !== $confirm_passkey) {
+            $_SESSION['passkey_error_msg'] = "Passkeys do not match. Please try again.";
+        } elseif (strlen($new_passkey) < 4) {
+            $_SESSION['passkey_error_msg'] = "Passkey must be at least 4 characters long.";
+        } else {
+            $passkey = password_hash($new_passkey, PASSWORD_DEFAULT);
             $upd = $pdo->prepare("UPDATE $tableName SET passkey = ? WHERE email = ?");
             $upd->execute([$passkey, $email]);
             $_SESSION['passkey_verified'] = true;
             $_SESSION['prg_redirect_safe'] = true;
+            unset($_SESSION['passkey_error_msg']);
+            header("Location: mydashboard.php");
+            exit;
         }
+        
+        $_SESSION['prg_redirect_safe'] = true;
         header("Location: mydashboard.php");
         exit;
     }
@@ -405,6 +651,34 @@
         }
         $_SESSION['prg_redirect_safe'] = true;
         header("Location: mydashboard.php"); 
+        exit;
+    }
+    
+    // Refresh user data after passkey verification to ensure notifications are loaded
+    if (isset($_SESSION['passkey_verified']) && $_SESSION['passkey_verified'] === true) {
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $refreshedUser = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($refreshedUser) {
+            $user = $refreshedUser;
+        }
+    }
+
+    // Verify Passkey for enrollment (AJAX endpoint)
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['verify_reenroll_passkey'])) {
+        header('Content-Type: application/json');
+        
+        $entered_passkey = $_POST['passkey'] ?? '';
+        $stored_hash = $user['passkey'] ?? '';
+        
+        if (password_verify($entered_passkey, $stored_hash)) {
+            $_SESSION['reenroll_passkey_verified'] = true;
+            $_SESSION['reenroll_passkey_verified_time'] = time();
+            
+            echo json_encode(['success' => true, 'message' => 'Passkey verified successfully.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Incorrect passkey. Please try again.']);
+        }
         exit;
     }
 
@@ -435,7 +709,6 @@
         
         $paymentDetails = "Amount: $" . number_format($amount, 2) . ", Coin: " . htmlspecialchars($coin) . ", Confirmed_at: " . $datetime;
         
-        // Set loyalties to 'payment-made', keep profitandloss as is for record, save payment details
         $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 'payment-made', paymentdetails = ? WHERE email = ?");
         $upd->execute([$paymentDetails, $email]);
         
@@ -444,28 +717,71 @@
         exit;
     }
 
-    // Handle Re-enrollment - Resets everything for new contract
+    // Handle enrollment - Requires passkey verification first
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reenroll'])) {
-        $today = date('Y-m-d');
-        
-        // Reset: loyalties to NULL, profitandloss to 0, set new execution_start_date
-        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ? WHERE email = ?");
-        $upd->execute([$today, $email]);
-        
-        $_SESSION['prg_redirect_safe'] = true;
-        header("Location: mydashboard.php"); 
-        exit;
+        if (isset($_SESSION['reenroll_passkey_verified']) && $_SESSION['reenroll_passkey_verified'] === true 
+            && isset($_SESSION['reenroll_passkey_verified_time']) 
+            && (time() - $_SESSION['reenroll_passkey_verified_time']) < 300) {
+            
+            $today = date('Y-m-d');
+            
+            $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ? WHERE email = ?");
+            $upd->execute([$today, $email]);
+            
+            unset($_SESSION['reenroll_passkey_verified']);
+            unset($_SESSION['reenroll_passkey_verified_time']);
+            
+            $_SESSION['prg_redirect_safe'] = true;
+            header("Location: mydashboard.php"); 
+            exit;
+        } else {
+            $_SESSION['prg_redirect_safe'] = true;
+            header("Location: mydashboard.php"); 
+            exit;
+        }
     }
 
-    // Disconnect Account
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_disconnect'])) {
-        $pdo->prepare("UPDATE $tableName SET application_status = 'blacklisted' WHERE email = ?")
-             ->execute([$email]);
+    // Enhanced Disconnect Account with Verification
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['final_disconnect_confirm'])) {
+        $entered_server = trim($_POST['verify_server'] ?? '');
+        $entered_login = trim($_POST['verify_login'] ?? '');
+        $entered_password = trim($_POST['verify_password'] ?? '');
+        $entered_passkey = trim($_POST['verify_passkey'] ?? '');
+        
+        $validation_errors = [];
+        
+        if ($entered_server !== ($user['server'] ?? '')) {
+            $validation_errors[] = "Server name does not match our records.";
+        }
+        
+        if ($entered_login !== ($user['login'] ?? '')) {
+            $validation_errors[] = "Login ID does not match our records.";
+        }
+        
+        if ($entered_password !== ($user['password'] ?? '')) {
+            $validation_errors[] = "Password does not match our records.";
+        }
+        
+        $stored_passkey_hash = $user['passkey'] ?? '';
+        if (empty($stored_passkey_hash) || !password_verify($entered_passkey, $stored_passkey_hash)) {
+            $validation_errors[] = "Passkey is incorrect.";
+        }
+        
+        if (empty($validation_errors)) {
+            $pdo->prepare("UPDATE $tableName SET application_status = 'blacklisted' WHERE email = ?")
+                 ->execute([$email]);
             
-        session_unset();
-        session_destroy();
-        header("Location: index.php");
-        exit;
+            session_unset();
+            session_destroy();
+            
+            header("Location: index.php?disconnected=1");
+            exit;
+        } else {
+            $_SESSION['disconnect_errors'] = $validation_errors;
+            $_SESSION['prg_redirect_safe'] = true;
+            header("Location: mydashboard.php");
+            exit;
+        }
     }
 
     // Logout
@@ -476,9 +792,355 @@
         exit;
     }
 
+    // Get disconnect errors from session if any
+    $disconnect_errors = $_SESSION['disconnect_errors'] ?? null;
+    unset($_SESSION['disconnect_errors']);
+
     $show_passkey_form = empty($user['passkey']);
     $passkey_verified = $_SESSION['passkey_verified'] ?? false;
     $passkey_error = $_SESSION['passkey_error'] ?? null; 
+    $passkey_error_msg = $_SESSION['passkey_error_msg'] ?? null;
+
+    // =========================================================================
+    // NOTIFICATION SYSTEM - MUST COME BEFORE GENERIC AJAX HANDLER
+    // =========================================================================
+
+    // Fetch notifications from user data for initial display
+    $notifications = [];
+    $unreadCount = 0;
+
+    if (!empty($user['notifications'])) {
+        $notificationsData = json_decode($user['notifications'], true);
+        
+        if (is_array($notificationsData)) {
+            foreach ($notificationsData as $id => $notification) {
+                if (isset($notification['update']) && $notification['update'] === 'new') {
+                    $unreadCount++;
+                }
+                
+                // Sanitize message - remove special characters like ?, ??, ?, etc.
+                $message = $notification['message'] ?? '';
+                // Remove special emoji/icon characters at the beginning of messages
+                $message = preg_replace('/^[\?\?]+\s*/', '', $message);
+                // Also remove any standalone special characters anywhere in the message
+                $message = preg_replace('/[\?\?]/', '', $message);
+                
+                $notifications[] = [
+                    'id' => $id,
+                    'section' => $notification['section'] ?? 'General',
+                    'message' => $message,
+                    'time' => $notification['time'] ?? date('Y-m-d H:i:s'),
+                    'type' => $notification['type'] ?? 'info',
+                    'update' => $notification['update'] ?? 'read'
+                ];
+            }
+            
+            usort($notifications, function($a, $b) {
+                return strtotime($b['time']) - strtotime($a['time']);
+            });
+        }
+    }
+    
+    // Mark notifications as read
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_notifications_read'])) {
+        header('Content-Type: application/json');
+        
+        if (!isset($_SESSION['user_email'])) {
+            echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+            exit;
+        }
+        
+        $email = strtolower($_SESSION['user_email']);
+        
+        $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $currentNotifications = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($currentNotifications && !empty($currentNotifications['notifications'])) {
+            $notificationsData = json_decode($currentNotifications['notifications'], true);
+            
+            if (is_array($notificationsData)) {
+                foreach ($notificationsData as $id => &$notification) {
+                    if ($notification['update'] === 'new') {
+                        $notification['update'] = 'read';
+                    }
+                }
+                
+                $updatedNotifications = json_encode($notificationsData);
+                $upd = $pdo->prepare("UPDATE $tableName SET notifications = ? WHERE email = ?");
+                $upd->execute([$updatedNotifications, $email]);
+                
+                echo json_encode(['success' => true, 'message' => 'Notifications marked as read']);
+                exit;
+            }
+        }
+        
+        echo json_encode(['success' => false, 'message' => 'No notifications to mark']);
+        exit;
+    }
+    
+    // Check for new notifications (for polling)
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_new_notifications'])) {
+        header('Content-Type: application/json');
+        
+        if (!isset($_SESSION['user_email'])) {
+            echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+            exit;
+        }
+        
+        $email = strtolower($_SESSION['user_email']);
+        
+        $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $currentNotifications = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $unreadCount = 0;
+        if ($currentNotifications && !empty($currentNotifications['notifications'])) {
+            $notificationsData = json_decode($currentNotifications['notifications'], true);
+            if (is_array($notificationsData)) {
+                foreach ($notificationsData as $notification) {
+                    if (isset($notification['update']) && $notification['update'] === 'new') {
+                        $unreadCount++;
+                    }
+                }
+            }
+        }
+        
+        echo json_encode(['success' => true, 'unread_count' => $unreadCount]);
+        exit;
+    }
+
+    // =========================================================================
+    // AJAX endpoint for revenue history
+    // =========================================================================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_revenue_history') {
+        header('Content-Type: application/json');
+        
+        if (!isset($_SESSION['user_email']) || !isset($_SESSION['passkey_verified']) || !$_SESSION['passkey_verified']) {
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            exit;
+        }
+        
+        $email = strtolower($_SESSION['user_email']);
+        
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $history = [];
+        if (!empty($result['revenue_history'])) {
+            $history = json_decode($result['revenue_history'], true);
+            if (!is_array($history)) {
+                $history = [];
+            }
+        }
+        
+        echo json_encode(['success' => true, 'history' => $history]);
+        exit;
+    }
+
+    // Get notifications list (for AJAX refresh) - THIS MUST BE BEFORE THE GENERIC AJAX HANDLER
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_notifications_list'])) {
+        header('Content-Type: application/json');
+        
+        if (!isset($_SESSION['user_email'])) {
+            echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+            exit;
+        }
+        
+        $email = strtolower($_SESSION['user_email']);
+        
+        $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $notifications = [];
+        $unreadCount = 0;
+        
+        if (!empty($result['notifications'])) {
+            $notificationsData = json_decode($result['notifications'], true);
+            
+            if (is_array($notificationsData)) {
+                foreach ($notificationsData as $id => $notification) {
+                    if (isset($notification['update']) && $notification['update'] === 'new') {
+                        $unreadCount++;
+                    }
+                    
+                    // Sanitize message - remove special characters
+                    $message = $notification['message'] ?? '';
+                    $message = preg_replace('/^[\?\?]+\s*/', '', $message);
+                    $message = preg_replace('/[\?\?]/', '', $message);
+                    $message = preg_replace('/[\x{1F300}-\x{1F6FF}]/u', '', $message);
+                    
+                    $notifications[] = [
+                        'id' => $id,
+                        'section' => $notification['section'] ?? 'General',
+                        'message' => trim($message),
+                        'time' => $notification['time'] ?? date('Y-m-d H:i:s'),
+                        'type' => $notification['type'] ?? 'info',
+                        'update' => $notification['update'] ?? 'read'
+                    ];
+                }
+                
+                usort($notifications, function($a, $b) {
+                    return strtotime($b['time']) - strtotime($a['time']);
+                });
+            }
+        }
+        
+        echo json_encode([
+            'success' => true,
+            'notifications' => $notifications,
+            'unread_count' => $unreadCount
+        ]);
+        exit;
+    }
+
+    // =========================================================================
+    // AJAX endpoint for live balance updates - MUST BE LAST
+    // =========================================================================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+        header('Content-Type: application/json');
+        
+        if (!isset($_SESSION['user_email']) || !isset($_SESSION['passkey_verified']) || !$_SESSION['passkey_verified']) {
+            echo json_encode(['error' => 'Unauthorized']);
+            exit;
+        }
+        
+        $email = strtolower($_SESSION['user_email']);
+        
+        $stmt = $pdo->prepare("SELECT broker_balance, profitandloss, loyalties, execution_start_date, broker, application_status FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($liveUser) {
+            $brokerBalance = (float)($liveUser['broker_balance'] ?? 0);
+            $profitAndLoss = (float)($liveUser['profitandloss'] ?? 0);
+            $currentBalance = $brokerBalance + $profitAndLoss;
+            $loyaltiesStatus = $liveUser['loyalties'] ?? null;
+            $broker = strtolower($liveUser['broker'] ?? 'unknown');
+            
+            $executionStartDate = $liveUser['execution_start_date'] ?? null;
+            $contractDaysLeft = 0;
+            $is_contract_active = false;
+            $contract_completed = false;
+            $formatted_start_date = null;
+            $formatted_end_date = null;
+            
+            if ($executionStartDate && $executionStartDate !== '0000-00-00' && $executionStartDate !== null) {
+                $start = new DateTime($executionStartDate);
+                $formatted_start_date = $start->format('M d, Y');
+                
+                $end = clone $start;
+                $end->modify("+{$CONTRACT_DURATION} days");
+                $formatted_end_date = $end->format('M d, Y');
+                
+                $today = new DateTime();
+                $today->setTime(0, 0, 0);
+                $end_clone = clone $end;
+                $end_clone->setTime(0, 0, 0);
+                
+                $interval = $today->diff($end_clone);
+                $contractDaysLeft = (int)$interval->format('%r%a');
+                
+                if ($contractDaysLeft <= 0) {
+                    $contract_completed = true;
+                    $is_contract_active = false;
+                } else {
+                    $is_contract_active = true;
+                }
+            }
+            
+            $loyalty_status_message = "";
+            $show_reenroll_button = false;
+            $show_payment_note = false;
+            $loyalty_btn_text = "";
+            $loyalty_btn_class = "";
+            $dashboard_disclaimer = "";
+            
+            if ($loyaltiesStatus === 'payment-made') {
+                $loyalty_status_message = "Payment Pending Confirmation";
+                $show_payment_note = true;
+                $loyalty_btn_text = "Awaiting Confirmation";
+                $loyalty_btn_class = "btn-loyalty-paid";
+                $dashboard_disclaimer = "Payment submitted for verification.";
+            } elseif ($loyaltiesStatus === 'payment-confirmed') {
+                $loyalty_status_message = "Ready to enroll";
+                $show_reenroll_button = true;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $dashboard_disclaimer = "Ready to start a new contract.";
+            } elseif ($loyaltiesStatus === 'justjoined') {
+                $loyalty_status_message = "Welcome New Member!";
+                $show_reenroll_button = true;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $dashboard_disclaimer = "Welcome to HarvHub!";
+            } elseif ($is_contract_active) {
+                $loyalty_status_message = "Contract Active";
+                $loyalty_btn_text = "Active";
+                $loyalty_btn_class = "btn-loyalty-confirmed";
+                $dashboard_disclaimer = "Trading is active.";
+            } elseif ($contract_completed) {
+                if ($profitAndLoss < 0) {
+                    $loyalty_status_message = "Contract Ended - Ready for New Start";
+                    $show_reenroll_button = true;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $dashboard_disclaimer = "Contract completed with loss.";
+                } elseif ($profitAndLoss <= 0) {
+                    $loyalty_status_message = "Contract Ended";
+                    $show_reenroll_button = true;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $dashboard_disclaimer = "Contract completed with no profit.";
+                } elseif ($loyaltiesStatus === 'unpaid-payment') {
+                    $loyalty_status_message = "Contract Ended - Payment Required";
+                    $loyalty_btn_text = "View Profit Split";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $dashboard_disclaimer = "Contract completed - Profit split required!";
+                } else {
+                    $loyalty_status_message = "Ready to Start";
+                    $show_reenroll_button = true;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $dashboard_disclaimer = "No active contract.";
+                }
+            } else {
+                $loyalty_status_message = "Ready to Start";
+                $show_reenroll_button = true;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $dashboard_disclaimer = "No active contract.";
+            }
+            
+            echo json_encode([
+                'success' => true,
+                'deposit_balance' => number_format($brokerBalance, 2),
+                'profit_loss' => number_format($profitAndLoss, 2),
+                'current_balance' => number_format($currentBalance, 2),
+                'profit_loss_class' => $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative',
+                'current_balance_class' => $currentBalance >= 0 ? 'profit-positive' : 'profit-negative',
+                'contract_days_left' => $is_contract_active ? $contractDaysLeft : 0,
+                'is_contract_active' => $is_contract_active,
+                'contract_completed' => $contract_completed,
+                'formatted_start_date' => $formatted_start_date,
+                'formatted_end_date' => $formatted_end_date,
+                'loyalties_status' => $loyaltiesStatus,
+                'loyalty_status_message' => $loyalty_status_message,
+                'show_reenroll_button' => $show_reenroll_button,
+                'show_payment_note' => $show_payment_note,
+                'loyalty_btn_text' => $loyalty_btn_text,
+                'loyalty_btn_class' => $loyalty_btn_class,
+                'dashboard_disclaimer' => $dashboard_disclaimer,
+                'broker' => $broker,
+                'profit_to_split' => number_format(max(0, $profitAndLoss), 2)
+            ]);
+        } else {
+            echo json_encode(['error' => 'User not found']);
+        }
+        exit;
+    }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -486,1358 +1148,1024 @@
 <meta charset="UTF-8">
 <title>HarvHub Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php include 'style.php'; ?>
+
 <style>
-    :root {
-        --bg-light: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        --bg-dark: linear-gradient(135deg, #141e30 0%, #243b55 100%);
-        --text-light: #1e293b;
-        --text-dark: #f1f5f9;
-        --card-light: rgba(255, 255, 255, 0.95);
-        --card-dark: rgba(30, 41, 59, 0.95);
-        --accent: #10b981;
-        --accent-hover: #059669;
-        --danger: #ef4444;
-        --warning: #f59e0b;
-        --info: #3b82f6;
-        --success: #10b981;
-        --glass-border: rgba(255, 255, 255, 0.2);
-        --shadow-sm: 0 10px 40px rgba(0, 0, 0, 0.1);
-        --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.15);
-        --shadow-hover: 0 30px 70px rgba(16, 185, 129, 0.2);
-        
-        /* Passkey modal original colors */
-        --passkey-bg: rgba(255, 255, 255, 0.95);
-        --passkey-text: #1c1e21;
-        --error-color: #ff6b6b;
-    }
-
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --bg-light: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            --text-light: #f1f5f9;
-            --card-light: rgba(30, 41, 59, 0.95);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            /* Preserve passkey dark mode colors */
-            --passkey-bg: rgba(40, 40, 40, 0.9);
-            --passkey-text: #e4e6eb;
-        }
-    }
-
-    * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-    }
-
-    html, body {
-        height: 100%;
-        background: var(--bg-light);
-        color: var(--text-light);
-        overflow-x: hidden;
-        transition: background 0.3s ease;
-    }
-
-    body {
-        overflow-y: hidden;
-        position: relative;
-    }
-
-    /* Animated background particles (only for dashboard, not passkey) */
-    body:not(.passkey-active)::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        background: 
-            radial-gradient(circle at 20% 30%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
-            radial-gradient(circle at 80% 70%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
-            repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 2px, transparent 2px, transparent 8px);
-        pointer-events: none;
-        z-index: -1;
-        animation: gradientShift 15s ease infinite;
-    }
-
-    @keyframes gradientShift {
-        0%, 100% { opacity: 0.5; }
-        50% { opacity: 0.8; }
-    }
-
-    /* ===== PASSKEY MODAL - PRESERVED ORIGINAL STYLES ===== */
-    .passkey-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.5);
-        backdrop-filter: blur(8px);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-        padding: 1rem;
-    }
-
-    .passkey-screen {
-        background: var(--passkey-bg);
-        color: var(--passkey-text);
-        backdrop-filter: blur(12px);
-        padding: 3rem 2.5rem;
-        border-radius: 20px;
-        width: 100%;
-        max-width: 480px;
-        text-align: center;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-
-    .passkey-screen h2 {
-        font-size: 2rem;
-        margin-bottom: 1rem;
-        color: var(--passkey-text);
+    /* Revenue History Button */
+    .btn-revenue-history {
         background: none;
-        -webkit-text-fill-color: var(--passkey-text);
-    }
-
-    .passkey-screen p {
-        margin: 1.5rem 0;
-        opacity: 0.9;
-        font-size: 1rem;
-    }
-
-    .passkey-screen input[type="password"] {
-        width: 100%;
-        padding: 16px;
-        margin: 20px 0;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 12px;
-        font-size: 1.1rem;
-        text-align: center;
-        background: rgba(0,0,0,0.05);
-        color: var(--passkey-text);
-    }
-
-    @media (prefers-color-scheme: dark) {
-        .passkey-screen input[type="password"] { 
-            background: rgba(255,255,255,0.1); 
-        }
-    }
-
-    .passkey-screen .error-message { 
-        color: var(--error-color); 
-        margin: -10px 0 10px; 
-        font-weight: bold; 
-    }
-
-    .passkey-screen .btn-full {
-        width: 100%;
-        padding: 16px;
-        background: var(--accent);
-        color: #000;
+        color: white;
         border: none;
         border-radius: 12px;
-        font-weight: bold;
-        font-size: 1.1rem;
-        cursor: pointer;
-        transition: opacity 0.3s;
-    }
-
-    .passkey-screen .btn-full:hover {
-        opacity: 0.9;
-    }
-
-    .passkey-screen a {
-        display: block;
-        margin: 20px 0;
-        color: var(--accent);
-        font-size: 0.95rem;
-        text-decoration: none;
-    }
-
-    .passkey-screen a:hover {
-        text-decoration: underline;
-    }
-
-    .passkey-screen a[href*="logout"] {
-        color: #ff6b6b;
-    }
-    /* ===== END PASSKEY MODAL STYLES ===== */
-
-    .dashboard-wrapper {
-        width: 100%;
-        max-width: 1300px;
-        height: 100vh;
-        margin: 0 auto;
-        padding: 2rem;
-        overflow-y: auto;
-        scroll-behavior: smooth;
-        -ms-overflow-style: none;
-        scrollbar-width: none;
-        position: relative;
-    }
-
-    .dashboard-wrapper::-webkit-scrollbar {
-        display: none;
-    }
-
-    h1 {
-        font-size: 3.5rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, var(--accent) 0%, #3b82f6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        text-align: center;
-        margin-bottom: 0.5rem;
-        letter-spacing: -0.02em;
-        animation: fadeInDown 0.6s ease;
-    }
-
-    .welcome {
-        text-align: center;
-        font-size: 1.25rem;
-        margin-bottom: 2rem;
-        opacity: 0.9;
-        animation: fadeInUp 0.6s ease 0.2s both;
-    }
-
-    .welcome strong {
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 700;
-    }
-
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1.5rem;
-        margin: 2rem 0;
-        animation: fadeInUp 0.6s ease 0.4s both;
-    }
-
-    @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
-        
-        h1 {
-            font-size: 2.5rem;
-        }
-        
-        .dashboard-wrapper {
-            padding: 1rem;
-        }
-    }
-
-    /* Enhanced Stat Cards */
-    .stat-card {
-        position: relative;
-        background: var(--card-light);
-        backdrop-filter: blur(20px);
-        padding: 1.75rem;
-        border-radius: 24px;
-        text-align: center;
-        border: 1px solid var(--glass-border);
-        box-shadow: var(--shadow-sm);
-        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        overflow: hidden;
-        animation: cardAppear 0.5s ease;
-    }
-
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-        background: linear-gradient(90deg, var(--accent), var(--info), var(--accent));
-        transform: translateX(-100%);
-        transition: transform 0.5s ease;
-    }
-
-    .stat-card:hover {
-        transform: translateY(-10px) scale(1.02);
-        box-shadow: var(--shadow-hover);
-        border-color: var(--accent);
-    }
-
-    .stat-card:hover::before {
-        transform: translateX(0);
-    }
-
-    .stat-card h3 {
-        font-size: 1.1rem;
+        font-size: 0.85rem;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        opacity: 0.7;
-        margin-bottom: 1rem;
-    }
-
-    .stat-card h2 {
-        font-size: 2.8rem;
-        font-weight: 800;
-        line-height: 1.2;
-        margin: 0.5rem 0;
-        transition: all 0.3s ease;
-        position: relative;
-        display: inline-block;
-    }
-
-    .stat-card h2::after {
-        content: '';
-        position: absolute;
-        bottom: -5px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 0;
-        height: 3px;
-        background: linear-gradient(90deg, var(--accent), var(--info));
-        transition: width 0.3s ease;
-        border-radius: 2px;
-    }
-
-    .stat-card:hover h2::after {
-        width: 50%;
-    }
-
-    /* Balance Toggle Button */
-    .balance-toggle-btn {
-        position: absolute;
-        top: 15px;
-        right: 15px;
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid var(--glass-border);
-        color: var(--text-light);
-        font-size: 1.25rem;
         cursor: pointer;
-        padding: 8px;
-        border-radius: 12px;
-        opacity: 0.6;
-        transition: all 0.3s ease;
-        backdrop-filter: blur(10px);
-        z-index: 10;
-    }
-
-    .balance-toggle-btn:hover {
-        opacity: 1;
-        background: var(--accent);
-        color: white;
-        transform: rotate(15deg);
-    }
-
-    /* Profit/Loss Colors with Animation */
-    .profit-positive {
-        color: var(--success) !important;
-        text-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
-    }
-
-    .profit-negative {
-        color: var(--danger) !important;
-        text-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
-    }
-
-    /* Stat Details */
-    .stat-details-info {
-        font-size: 0.9rem;
-        opacity: 0.6;
-        margin-top: 1rem;
-        padding: 0.5rem;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
         transition: all 0.3s ease;
     }
 
-    .stat-card:hover .stat-details-info {
-        opacity: 0.9;
-        background: rgba(16, 185, 129, 0.1);
-    }
+    /* Revenue History Modal */
+#revenueHistoryModal.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(20px);
+    z-index: 10000;
+    padding: 0;
+}
 
-    /* Trades Card Special Styling */
-    .stat-card.trades-card {
-        grid-column: 1 / -1;
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(59, 130, 246, 0.1));
-        border: 2px solid transparent;
-        background-clip: padding-box;
-        position: relative;
-    }
+#revenueHistoryModal .modal-content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    background: var(--card-light);
+    margin: 0;
+    overflow: hidden;
+}
 
-    .stat-card.trades-card::before {
-        content: '';
-        position: absolute;
-        inset: -2px;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        border-radius: 26px;
+#revenueHistoryModal h2 {
+    margin-bottom: 1rem;
+    flex-shrink: 0;
+}
+
+/* Revenue History Container - Takes remaining space, no horizontal scroll */
+.revenue-history-container {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0;
+    margin: 1rem 0;
+    width: 100%;
+    -ms-overflow-style: none;
+    scrollbar-width: thin;
+}
+
+.revenue-history-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.revenue-history-container::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+}
+
+.revenue-history-container::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 10px;
+}
+
+/* Revenue Item - Fixed width container */
+.revenue-item {
+    background: none;
+    border-radius: 5px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    border: none;
+    width: 100%;
+    box-sizing: border-box;
+    display: block;
+}
+
+.revenue-item:hover {
+    border-color: var(--accent);
+}
+
+/* Revenue Header - Fixed width container */
+.revenue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.03);
+    transition: all 0.3s ease;
+    width: 100%;
+    box-sizing: border-box;
+    gap: 15px;
+}
+
+.revenue-header:hover {
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.revenue-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.revenue-date-range {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--accent);
+    opacity: 0.9;
+    word-break: break-word;
+}
+
+.revenue-user-share {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--success-color);
+}
+
+/* Status badge */
+.revenue-status {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.revenue-status.completed {
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+}
+
+.revenue-status.pending {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+}
+
+.revenue-status.loss {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+/* Revenue Details section - NO horizontal scroll, preserves layout */
+.revenue-details {
+    display: none;
+    padding: 16px 20px;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid var(--glass-border);
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+}
+
+.revenue-details.active {
+    display: block;
+    animation: slideDown 0.3s ease;
+}
+
+/* Each detail row - flex with proper wrapping */
+.revenue-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.revenue-detail-row:last-child {
+    border-bottom: none;
+}
+
+.revenue-detail-label {
+    font-weight: 500;
+    opacity: 0.7;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.revenue-detail-value {
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-align: right;
+    word-break: break-word;
+    flex-shrink: 0;
+}
+
+.revenue-detail-value.profit-positive {
+    color: var(--success);
+}
+
+.revenue-detail-value.profit-negative {
+    color: var(--danger);
+}
+
+.empty-revenue {
+    text-align: center;
+    padding: 60px 20px;
+    opacity: 0.7;
+    font-size: 1rem;
+}
+
+#revenueHistoryModal .modal-actions {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--glass-border);
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+#revenueHistoryModal .modal-actions button {
+    padding: 10px 24px;
+    font-size: 0.9rem;
+}
+
+@keyframes slideDown {
+    from {
         opacity: 0;
-        transition: opacity 0.3s ease;
-        z-index: -1;
+        transform: translateY(-5px);
     }
-
-    .stat-card.trades-card:hover::before {
-        opacity: 0.3;
-    }
-
-    .trades-count {
-        font-size: 4.5rem;
-        font-weight: 900;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        line-height: 1;
-        margin-bottom: 0.5rem;
-        animation: pulse 2s infinite;
-    }
-
-    .trades-count span {
-        font-size: 1rem;
-        font-weight: 500;
-        opacity: 0.7;
-        color: var(--text-light);
-        background: none;
-        -webkit-text-fill-color: var(--text-light);
-        margin-top: 0.5rem;
-    }
-
-    .trades-won-lost {
-        display: flex;
-        justify-content: space-around;
-        margin: 1.5rem 0;
-        padding: 1rem;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 16px;
-    }
-
-    .trades-detail-item {
-        font-size: 1rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    .trades-detail-item strong {
-        font-size: 1.5rem;
-        display: block;
-        margin-top: 0.25rem;
-    }
-
-    .btn-view-history {
-        margin-top: 1rem;
-        padding: 0.75rem 2rem;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        color: white;
-        border: none;
-        border-radius: 50px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-size: 0.9rem;
-        box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
-    }
-
-    .btn-view-history:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(16, 185, 129, 0.5);
-    }
-
-    /* Loyalty Card */
-    .stat-card.loyalty-card {
-        grid-column: 1 / -1;
-        max-width: 800px;
-        margin: 2rem auto;
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15));
-        border: 2px solid rgba(16, 185, 129, 0.3);
-    }
-
-    .loyalty-status-msg {
-        font-size: 1.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 1rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-
-    .loyalty-card p {
-        font-size: 1.1rem;
-        line-height: 1.6;
-        opacity: 0.9;
-        max-width: 600px;
-        margin: 0 auto 1rem;
-    }
-
-    .contract-dates {
-        display: inline-block;
-        padding: 0.5rem 1.5rem;
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 50px;
-        font-size: 0.9rem;
-        font-weight: 500;
-        margin: 0.5rem;
-        backdrop-filter: blur(10px);
-    }
-
-    .contract-days-left {
-        display: inline-block;
-        padding: 0.25rem 1rem;
-        background: var(--accent);
-        color: white;
-        border-radius: 50px;
-        font-size: 0.9rem;
-        font-weight: 600;
-        margin-left: 0.5rem;
-    }
-
-    /* Loyalty Buttons */
-    .loyalty-card button {
-        margin: 1.5rem auto 0;
-        padding: 1rem 3rem;
-        font-size: 1.1rem;
-        font-weight: 700;
-        border: none;
-        border-radius: 50px;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-    }
-
-    .btn-loyalty-action {
-        background: linear-gradient(135deg, var(--accent), var(--info)) !important;
-        color: white !important;
-    }
-
-    .btn-loyalty-action:hover {
-        transform: translateY(-3px) scale(1.05);
-        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.5) !important;
-    }
-
-    .btn-loyalty-paid {
-        background: linear-gradient(135deg, #6b7280, #4b5563) !important;
-        color: white !important;
-        cursor: not-allowed !important;
-        opacity: 0.7;
-    }
-
-    .btn-loyalty-confirmed {
-        background: linear-gradient(135deg, var(--success), #059669) !important;
-        color: white !important;
-        cursor: default !important;
-    }
-
-    /* Dashboard Disclaimer */
-    .dashboard-disclaimer {
-        text-align: center;
-        margin: 1.5rem auto;
-        padding: 1rem 2rem;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.2));
-        border: 1px solid rgba(16, 185, 129, 0.3);
-        border-radius: 50px;
-        font-weight: 600;
-        font-size: 1.1rem;
-        max-width: 600px;
-        backdrop-filter: blur(10px);
-        animation: slideIn 0.5s ease;
-    }
-
-    /* Encouragement Note */
-    /* Replace these existing styles */
-    .note-btndanger{
-        display: flex;
-        justify-content: center
-        width: 100%;
-    }
-    .note-btndanger-block{
-        width: auto;
-    }
-
-    /* With these updated styles */
-    .note-btndanger {
-        display: flex;
-        justify-content: center;
-        width: 100%;
-        margin: 20px 0;
-    }
-
-    .note-btndanger-block {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-        max-width: 600px;
-        width: 100%;
-    }
-
-    .note {
-        margin-bottom: 15px;
-        opacity: 0.8;
-        line-height: 1.6;
-    }
-    .encouragement-note {
-        text-align: center;
-        margin: 1rem auto;
-        padding: 1rem;
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(239, 68, 68, 0.2));
-        border: 1px solid var(--warning);
-        border-radius: 16px;
-        font-style: italic;
-        font-size: 1.1rem;
-        max-width: 800px;
-        animation: pulse 2s infinite;
-    }
-
-    /* Danger Button */
-    .btn-danger {
-        display: block;
-        margin-bottom: 10px;
-        margin-top: 10px;
-        padding: 1rem 1rem;
-        background: linear-gradient(135deg, var(--danger), #dc2626);
-        color: white;
-        border: none;
-        border-radius: 20px;
-        font-size: 12px;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
-    }
-
-    .btn-danger:hover {
-        transform: translateY(-3px) scale(1.05);
-        box-shadow: 0 10px 30px rgba(239, 68, 68, 0.5);
-    }
-
-    /* Logout Link */
-    .logout-link-p{
-        margin-bottom: 60px;
-    }
-    .logout-link {
-        display: block;
-        text-align: center;
-        margin-top: 1rem;
-        padding: 0.5rem;
-        color: var(--text-light);
-        text-decoration: none;
-        opacity: 0.6;
-        transition: all 0.3s ease;
-        font-size: 0.95rem;
-    }
-
-    .logout-link:hover {
+    to {
         opacity: 1;
-        color: var(--danger);
-        transform: translateY(-2px);
+        transform: translateY(0);
     }
+}
 
-    /* Blur Mode Effect */
-    .dashboard-wrapper.blur-mode .stat-card h2 {
-        filter: blur(8px);
-        transition: filter 0.3s ease;
-        user-select: none;
-    }
-
-    .dashboard-wrapper.blur-mode .stat-card:hover h2 {
-        filter: blur(6px);
-    }
-
-    /* Modal Styles (for non-passkey modals) */
-    .modal {
-        display: none;
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(10px);
-        align-items: center;
-        justify-content: center;
-        z-index: 999;
+/* Mobile responsive adjustments - no width changes on click */
+@media (max-width: 768px) {
+    #revenueHistoryModal .modal-content {
         padding: 1rem;
-        animation: fadeIn 0.3s ease;
     }
-
-    .modal.active {
-        display: flex;
+    
+    .revenue-header {
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
     }
-
-    .modal-content {
-        background: var(--card-light);
-        backdrop-filter: blur(20px);
-        padding: 2.5rem;
-        border-radius: 24px;
-        max-width: 500px;
-        width: 90%;
-        max-height: 90vh;
-        overflow-y: auto;
-        border: 1px solid var(--glass-border);
-        box-shadow: var(--shadow-lg);
-        animation: modalSlideUp 0.4s ease;
+    
+    .revenue-status {
+        align-self: flex-start;
     }
-
-    .modal-content h2 {
-        font-size: 2rem;
-        font-weight: 700;
-        margin-bottom: 1rem;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+    
+    .revenue-details {
+        padding: 12px 16px;
     }
-
-    /* Split Items in Modal */
-    .split-item {
-        background: rgba(255, 255, 255, 0.05);
-        padding: 1.5rem;
-        border-radius: 16px;
-        margin: 1rem 0;
-        border: 1px solid var(--glass-border);
-        transition: all 0.3s ease;
+    
+    .revenue-detail-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
     }
-
-    .split-item:hover {
-        transform: translateY(-3px);
-        border-color: var(--accent);
-        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.2);
+    
+    .revenue-detail-value {
+        text-align: left;
     }
-
-    .split-item h4 {
-        font-size: 2rem;
-        font-weight: 800;
-        margin-bottom: 0.5rem;
-    }
-
-    /* Coin Selector */
-    .coin-selector {
-        display: flex;
-        gap: 1rem;
-        margin: 2rem 0;
-    }
-
-    .coin-selector label {
-        flex: 1;
-        padding: 1rem;
-        text-align: center;
-        background: rgba(255, 255, 255, 0.05);
-        border: 2px solid transparent;
-        border-radius: 12px;
-        cursor: pointer;
-        font-weight: 600;
-        transition: all 0.3s ease;
-    }
-
-    .coin-selector input[type="radio"]:checked + label {
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        color: white;
-        border-color: var(--accent);
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(16, 185, 129, 0.3);
-    }
-
-    .coin-selector input[type="radio"] {
-        display: none;
-    }
-
-    /* Crypto Address Display */
-    .btc-address {
-        display: block;
-        padding: 1rem;
-        background: rgba(0, 0, 0, 0.1);
-        border-radius: 12px;
-        font-family: 'Monaco', 'Menlo', monospace;
-        font-size: 0.9rem;
-        word-break: break-all;
-        border: 1px dashed var(--accent);
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    .btc-address:hover {
-        background: rgba(16, 185, 129, 0.1);
-        transform: scale(1.02);
-    }
-
-    /* History Section */
-    .history-section {
-        margin-top: 1rem;
-        max-height: 300px;
-        overflow-y: auto;
-        padding: 1rem;
-        background: rgba(0, 0, 0, 0.05);
-        border-radius: 12px;
-    }
-
-    .history-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        transition: all 0.3s ease;
-        border-radius: 8px;
-    }
-
-    .history-item:hover {
-        background: rgba(16, 185, 129, 0.1);
-        transform: translateX(5px);
-    }
-
-    .history-symbol {
-        font-weight: 600;
-    }
-
-    .history-amount-won {
-        color: var(--success);
-        font-weight: 700;
-    }
-
-    .history-amount-lost {
-        color: var(--danger);
-        font-weight: 700;
-    }
-
-    /* Modal Actions */
-    .modal-actions {
-        display: flex;
-        gap: 1rem;
-        margin-top: 2rem;
-    }
-
-    .modal-actions button {
-        flex: 1;
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 12px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    .modal-actions button:hover {
-        transform: translateY(-2px);
-    }
-
-    /* Animations */
-    @keyframes fadeInDown {
-        from {
-            opacity: 0;
-            transform: translateY(-20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @keyframes fadeIn {
-        from {
-            opacity: 0;
-        }
-        to {
-            opacity: 1;
-        }
-    }
-
-    @keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateX(-20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-
-    @keyframes cardAppear {
-        from {
-            opacity: 0;
-            transform: scale(0.9);
-        }
-        to {
-            opacity: 1;
-            transform: scale(1);
-        }
-    }
-
-    @keyframes modalSlideUp {
-        from {
-            opacity: 0;
-            transform: translateY(30px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @keyframes pulse {
-        0%, 100% {
-            transform: scale(1);
-        }
-        50% {
-            transform: scale(1.02);
-        }
-    }
-
-    /* Responsive Adjustments */
-    @media (max-width: 768px) {
-        .stat-card h2 {
-            font-size: 2rem;
-        }
-        
-        .trades-count {
-            font-size: 3rem;
-        }
-        
-        .loyalty-status-msg {
-            font-size: 1.2rem;
-        }
-        
-        .modal-content {
-            padding: 1.5rem;
-        }
-        
-        .coin-selector {
-            flex-direction: column;
-        }
-    }
-
-    /* Loading States */
-    .loading {
-        position: relative;
-        overflow: hidden;
-    }
-
-    .loading::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-        animation: loading 1.5s infinite;
-    }
-
-    @keyframes loading {
-        0% {
-            transform: translateX(-100%);
-        }
-        100% {
-            transform: translateX(100%);
-        }
-    }
-
-    /* Custom Scrollbar */
-    ::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    ::-webkit-scrollbar-track {
-        background: rgba(0, 0, 0, 0.05);
-        border-radius: 10px;
-    }
-
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        border-radius: 10px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, var(--accent-hover), #2563eb);
-    }
+}
 </style>
+
 </head>
 <body>
+    <!-- Notification Bell -->
+    <div class="notification-container">
+        <div class="notification-bell" onclick="toggleNotifications()">
+            <i>🔔</i>
+            <?php 
+                // Calculate unread count from notifications
+                $initialUnreadCount = 0;
+                $allNotifications = [];
 
-    <?php if ($show_passkey_form): ?>
-        <div class="passkey-overlay">
-            <div class="passkey-screen">
-                <h2>Create Your Passkey</h2>
-                <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
-                <form method="POST">
-                    <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
-                    <button type="submit" name="create_passkey" class="btn-full">Save & Continue</button>
-                </form>
-            </div>
-        </div>
-    <?php elseif (!$passkey_verified): ?>
-        <div class="passkey-overlay">
-            <div class="passkey-screen">
-                <h2>Welcome Back</h2>
-                <p style="margin:1.5rem 0; opacity:0.9;">Enter your passkey to access dashboard</p>
-                <form method="POST">
-                    <input type="password" name="passkey" placeholder="Your passkey" required autofocus>
-                    <?php if ($passkey_error): ?>
-                        <p class="error-message"><?= htmlspecialchars($passkey_error) ?></p>
-                    <?php endif; ?>
-                    <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
-                </form>
-                <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
-            </div>
-        </div>
-    <?php endif; ?>
-
-    <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
-        <h1>🌾HarvHub Dashboard</h1>
-        <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
-
-        <?php if (!empty($dashboard_disclaimer)): ?>
-            <p class="dashboard-disclaimer">
-                <?= htmlspecialchars($dashboard_disclaimer) ?>
-            </p>
-        <?php endif; ?>
-
-        <?php if ($profitAndLoss < 0 && ($loyaltiesStatus === null && $is_execution_empty)): ?>
-            <p class="encouragement-note">
-                🌟 Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
-            </p>
-        <?php endif; ?>
-
-        <div class="stats-grid">
-            <div class="stat-card">
-                <form method="POST" style="margin:0;">
-                    <input type="hidden" name="toggle_balance_display" value="1">
-                    <button type="submit" title="<?= $balanceDisplay === 'show' ? 'Hide Balance' : 'Show Balance' ?>" class="balance-toggle-btn">
-                        <?php if ($balanceDisplay === 'show'): ?>
-                            👁️
-                        <?php else: ?>
-                            🔒 
-                        <?php endif; ?>
-                    </button>
-                </form>
-                
-                <h3> Deposit Balance</h3>
-                <div class="stat-details-info">
-                    <?= htmlspecialchars($login) ?>
-                    <?= htmlspecialchars($server) ?>
-                </div>
-                <h2>$<?= number_format($depositBalance, 2) ?></h2>
-                <div class="stat-details-info">
-                    🌱 Seed
-                </div>
-            </div>
-            
-            <div class="stat-card">
-                <h3>Profit & Loss</h3>
-                <h2 class="<?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                    $<?= number_format($profitAndLoss, 2) ?>
-                </h2>
-                <div class="stat-details-info">
-                    🌶️🥕Yield
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <h3>Current Balance</h3>
-                <h2 class="<?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                    $<?= number_format($currentBalance, 2) ?>
-                </h2>
-                <div class="stat-details-info">
-                    🚜 Harvest
-                </div>
-            </div>
-            
-            <div class="stat-card trades-card" style="grid-column: 1 / -1;"> 
-                <h3>Trade Summary</h3>
-                <div class="trades-layout-container">
-                    <div class="trades-count">
-                        <?= $tradesCountDisplay ?>
-                        <span>Trades</span>
-                    </div>
-                    
-                    <div class="trades-won-lost">
-                        <div class="trades-detail-item left">
-                            Won: 
-                            <strong style="color:var(--success-color);"><?= $wonCountDisplay ?></strong>
-                        </div>
+                if (!empty($user['notifications'])) {
+                    $notificationsData = json_decode($user['notifications'], true);
+                    if (is_array($notificationsData)) {
+                        foreach ($notificationsData as $id => $notification) {
+                            // Count unread (update == 'new')
+                            if (isset($notification['update']) && $notification['update'] === 'new') {
+                                $initialUnreadCount++;
+                            }
+                            
+                            // Sanitize message - remove special characters
+                            $message = $notification['message'] ?? '';
+                            $message = preg_replace('/^[\?\?]+\s*/', '', $message);
+                            $message = preg_replace('/[\?\?]/', '', $message);
+                            $message = preg_replace('/[\x{1F300}-\x{1F6FF}]/u', '', $message);
+                            
+                            // Store for display
+                            $allNotifications[] = [
+                                'id' => $id,
+                                'section' => $notification['section'] ?? 'General',
+                                'message' => trim($message),
+                                'time' => $notification['time'] ?? date('Y-m-d H:i:s'),
+                                'type' => $notification['type'] ?? 'info',
+                                'update' => $notification['update'] ?? 'read'
+                            ];
+                        }
                         
-                        <div class="trades-detail-item right">
-                            Lost: 
-                            <strong style="color:var(--error-color);"><?= $lostCountDisplay ?></strong>
-                        </div>
-                    </div>
-                    <button class="btn-view-history" onclick="document.getElementById('tradeHistoryModal').classList.add('active')">
-                        Markets 
-                    </button>
-                </div>
-            </div>
-            
-            <div class="stat-card loyalty-card">
-                <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
-                <p><?= htmlspecialchars($loyalty_text) ?></p>
-
-                <p><strong><?= $CONTRACT_DURATION ?> days contract duration</strong></p>
-
-                <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
-                    <span class="contract-dates">
-                        Started: <?= htmlspecialchars($formatted_start_date) ?> | Ends: <?= htmlspecialchars($formatted_end_date) ?>
-                    </span>
-                    <?php if ($contractDaysLeft > 0): ?>
-                    <?php endif; ?>
-                <?php endif; ?>
-
-                <?php if ($show_payment_note): ?>
-                    <p style="color: var(--info-color); margin-top: 10px; font-style: italic;">
-                        ⏳ Your payment is on review. Once confirmed by the server, you'll be able to re-enroll.
-                    </p>
-                <?php endif; ?>
-                
-                <?php if (!$show_payment_note): ?>
-                    <button 
-                        <?= $loyalty_btn_action ?>
-                        class="<?= htmlspecialchars($loyalty_btn_class) ?>"
-                    >
-                        <?= htmlspecialchars($loyalty_btn_text) ?>
-                    </button>
-                <?php endif; ?>
-            </div>
-        </div>
-       <div class="note-btndanger">
-            <div class="note-btndanger-block">
-                <p class="note">
-                    Your PnL is updated every 24 hours.<br>
-                    Automated execution runs 24/7 on your connected account.
-                </p>
-
-                <button class="btn-danger" onclick="document.getElementById('disconnectModal').classList.add('active')">
-                    Disconnect My Account
-                </button>
-                <p class="logout-link-p">
-                <a href="?logout=1" style="color:#ff6b6b;">← Logout</a></p>
-            </div>
+                        // Sort by time (newest first)
+                        usort($allNotifications, function($a, $b) {
+                            return strtotime($b['time']) - strtotime($a['time']);
+                        });
+                    }
+                }
+            ?>
+            <?php if ($initialUnreadCount > 0): ?>
+                <span class="notification-badge" id="notificationBadge"><?= $initialUnreadCount ?></span>
+            <?php else: ?>
+                <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
+            <?php endif; ?>
         </div>
         
-        <a href="?logout=1" class="logout-link">Logout</a>
-    </div>
-
-    <!-- Modals -->
-    <div id="disconnectModal" class="modal">
-        <div class="modal-content">
-            <h2 style="color:#ff6b6b;">Disconnect Account?</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                This action will disconnect your account from trading activities permanently.
-            </p>
-            <div class="modal-actions"> 
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
-                <form method="POST" style="display:inline;">
-                    <button type="submit" name="confirm_disconnect"
-                        style="background:#e74c3c; color:white; border:none;">
-                        Yes, Disconnect
-                    </button>
-                </form>
+        <div class="notification-panel" id="notificationPanel">
+            <div class="notification-header">
+                <h3>📬 Notifications</h3>
+                <button class="close-notifications" onclick="toggleNotifications()">✕</button>
+            </div>
+            <div class="notification-list" id="notificationList">
+                <?php if (count($allNotifications) > 0): ?>
+                    <?php foreach ($allNotifications as $notification): 
+                        // Sanitize message before display
+                        $cleanMessage = $notification['message'];
+                        // Remove special characters from the message
+                        $cleanMessage = preg_replace('/^[\?\?]+\s*/', '', $cleanMessage);
+                        $cleanMessage = preg_replace('/[\?\?]/', '', $cleanMessage);
+                        // Also remove any other special icon characters
+                        $cleanMessage = preg_replace('/[\x{1F300}-\x{1F6FF}]/u', '', $cleanMessage);
+                    ?>
+                        <div class="notification-item <?= ($notification['update'] === 'new') ? 'unread' : '' ?> <?= htmlspecialchars($notification['type']) ?>"
+                            data-id="<?= htmlspecialchars($notification['id']) ?>"
+                            data-update="<?= htmlspecialchars($notification['update']) ?>">
+                            <div class="notification-section"><?= htmlspecialchars($notification['section']) ?></div>
+                            <div class="notification-message"><?= htmlspecialchars(trim($cleanMessage)) ?></div>
+                            <div class="notification-time"><?= date('M d, H:i', strtotime($notification['time'])) ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="empty-notifications">No notifications</div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
-
-    <div id="profitSplitModal" class="modal">
-        <div class="modal-content">
-            <h2 style="color:var(--info-color);">Profit Split Required</h2>
-            
-            <p style="margin-bottom: 2rem; opacity: 0.8;">
-                Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.
-            </p>
-            <p class="split-total">
-                Total Profit: $<?= number_format($profitToSplit, 2) ?>
-            </p>
-
-            <div class="split-container">
-                <div class="split-item">
-                    <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
-                    <p>Your Share</p>
-                    <h4 style="color:var(--success-color);">$<?= number_format($userShare, 2) ?></h4>
-                    <button class="btn-withdraw" 
-                            onclick="window.open('<?= $brokerTarget ?>', '_blank')"
-                            style="background:#2ecc71; color:white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
-                        Withdraw Your Share
-                    </button>
-                    <small style="display:block; margin-top:10px; opacity:0.6;">Withdraw your $<?= number_format($userShare, 2) ?> profit share</small>
-                </div>
-                <div class="split-item">
-                    <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
-                    <p>Server Share</p>
-                    <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
-                    <button class="btn-pay" onclick="document.getElementById('profitSplitModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');"
-                            style="padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
-                        Pay Server Share
-                    </button>
-                    <small style="display:block; margin-top:10px; opacity:0.6;">Pay $<?= number_format($serverShare, 2) ?> to remain eligible</small>
+    <div class="custom-body">
+        <?php if ($show_passkey_form): ?>
+            <div class="passkey-overlay">
+                <div class="passkey-screen">
+                    <h2>Create Your Passkey</h2>
+                    <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
+                    <form method="POST">
+                        <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
+                        <input type="password" name="confirm_passkey" placeholder="Confirm passkey" required style="margin-top: 10px;">
+                        <?php if ($passkey_error_msg): ?>
+                            <p class="error-message" style="color: #ff6b6b; margin-top: 10px;"><?= htmlspecialchars($passkey_error_msg) ?></p>
+                        <?php endif; ?>
+                        <button type="submit" name="create_passkey" class="btn-full" style="margin-top: 20px;">Save & Continue</button>
+                    </form>
                 </div>
             </div>
-
-            <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Close
-                </button>
+        <?php elseif (!$passkey_verified): ?>
+            <div class="passkey-overlay">
+                <div class="passkey-screen">
+                    <h2>Welcome Back</h2>
+                    <p style="margin:1.5rem 0; opacity:0.9;">Enter your passkey to access dashboard</p>
+                    <form method="POST">
+                        <input type="password" name="passkey" placeholder="Your passkey" required autofocus>
+                        <?php if ($passkey_error): ?>
+                            <p class="error-message" style="color: #ff6b6b; margin-top: 10px;"><?= htmlspecialchars($passkey_error) ?></p>
+                        <?php endif; ?>
+                        <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
+                    </form>
+                    <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
+                </div>
             </div>
-        </div>
-    </div>
+        <?php endif; ?>
 
-    <div id="paymentModal" class="modal">
-        <div class="modal-content">
-            <h2 style="color:var(--accent);">Pay Server Share</h2>
-            <p style="margin:1rem 0; opacity:0.8;">
-                Send $<?= number_format($serverShare, 2) ?> worth of the selected cryptocurrency
-            </p>
+        <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
+            <h1>🌾HarvHub Dashboard</h1>
+            <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
+
+            <?php if (!empty($dashboard_disclaimer)): ?>
+                <p class="dashboard-disclaimer">
+                    <?= htmlspecialchars($dashboard_disclaimer) ?>
+                    <?php if ($loyaltiesStatus === 'unpaid-payment'): ?>
+                        <span class="payment-required-badge">Payment Required</span>
+                    <?php endif; ?>
+                </p>
+            <?php endif; ?>
             
-            <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
+            <?php if ($contract_completed && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT && $profitAndLoss > 0): ?>
+                <div class="threshold-warning">
+                    ⚠️ Your profit of $<?= number_format($profitAndLoss, 2) ?> is below the minimum split threshold of $<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?>. No profit split required - you can enroll directly.
+                </div>
+            <?php endif; ?>
 
-            <div class="coin-selector">
-                <input type="radio" id="coin_btc" name="coin" value="btc" checked onchange="updatePaymentDetails('btc')">
-                <label for="coin_btc">BTC</label>
+            <?php if ($profitAndLoss < 0 && $contract_completed): ?>
+                <p class="encouragement-note">
+                    Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
+                </p>
+            <?php endif; ?>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <form method="POST" style="margin:0;">
+                        <input type="hidden" name="toggle_balance_display" value="1">
+                        <button type="submit" title="<?= $balanceDisplay === 'show' ? 'Hide Balance' : 'Show Balance' ?>" class="balance-toggle-btn">
+                            <?php if ($balanceDisplay === 'show'): ?>
+                                👁️
+                            <?php else: ?>
+                                🔒 
+                            <?php endif; ?>
+                        </button>
+                    </form>
+                    
+                    <h3> STARTING BALANCE</h3>
+                    <div class="stat-details-info">
+                        <?= htmlspecialchars($login) ?>
+                        <?= htmlspecialchars($server) ?>
+                    </div>
+                    <h2>$<?= number_format($depositBalance, 2) ?></h2>
+                    <div class="stat-details-info">
+                        Seed
+                    </div>
+                    
+                    <!-- NEW: Revenue History Button -->
+                    <button type="button" class="btn-revenue-history" onclick="openRevenueHistoryModal()">
+                        View Revenue History
+                    </button>
+                </div>
                 
-                <input type="radio" id="coin_eth" name="coin" value="eth" onchange="updatePaymentDetails('eth')">
-                <label for="coin_eth">ETH</label>
+                <div class="stat-card">
+                    <h3>Profit & Loss</h3>
+                    <h2 class="<?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                        $<?= number_format($profitAndLoss, 2) ?>
+                    </h2>
+                    <div class="stat-details-info">
+                        Yield
+                    </div>
+                </div>
 
-                <input type="radio" id="coin_usdt" name="coin" value="usdt" onchange="updatePaymentDetails('usdt')">
-                <label for="coin_usdt">USDT</label>
+                <div class="stat-card">
+                    <h3>Current Balance</h3>
+                    <h2 class="<?= $currentBalance >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                        $<?= number_format($currentBalance, 2) ?>
+                    </h2>
+                    <div class="stat-details-info">
+                        Harvest
+                    </div>
+                </div>
+                
+                <div class="stat-card loyalty-card">
+                    <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
+                    <p><?= htmlspecialchars($loyalty_text) ?></p>
+
+                    <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
+                        <span class="contract-dates">
+                            Started: <?= htmlspecialchars($formatted_start_date) ?> | Ends: <?= htmlspecialchars($formatted_end_date) ?>
+                        </span>
+                    <?php endif; ?>
+                    <p><?= $CONTRACT_DURATION ?> days contract duration</p>
+                    <?php if ($MIN_PROFIT_FOR_SPLIT > 0): ?>
+                        <small style="opacity:0.6;">Min profit for split: $<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?></small>
+                    <?php endif; ?>
+
+                    <?php if ($show_payment_note): ?>
+                        <p style="color: var(--info-color); margin-top: 10px; font-style: italic;">
+                            Your payment is on review. Once confirmed by the server, you'll be able to enroll.
+                        </p>
+                    <?php endif; ?>
+                    
+                    <?php if (!$show_payment_note): ?>
+                        <button 
+                            <?= $loyalty_btn_action ?>
+                            class="<?= htmlspecialchars($loyalty_btn_class) ?>"
+                        >
+                            <?= htmlspecialchars($loyalty_btn_text) ?>
+                        </button>
+                    <?php endif; ?>
+                </div>
             </div>
+            <div class="note-btndanger">
+                <div class="note-btndanger-block">
+                    <p class="note">
+                        Your PnL is updated every 24 hours.<br>
+                        Automated execution runs 24/7 on your connected account.
+                    </p>
 
-            <div class="crypto-details">
-                <p>Network: <strong id="paymentNetwork">N/A</strong></p>
-                <p>Address:</p>
-                <span class="btc-address" id="paymentAddress">N/A</span>
+                    <button class="btn-danger" onclick="openDisconnectModal()">
+                        Disconnect My Account
+                    </button>
+                    <p class="logout-link-p">
+                    <a href="?logout=1" style="color:#ff6b6b;">← Logout</a></p>
+                </div>
             </div>
-            
-            <button class="btn-full btn-paid" id="copyAddressBtn">
-                Copy Address
-            </button>
+                        
+        </div>
 
-            <label class="checkbox-container">
-                <input type="checkbox" id="paymentConfirmationCheck" onchange="togglePaidButton()">
-                I have made the payment
-            </label>
-
-            <button class="btn-full btn-paid" id="confirmPaidBtn" disabled onclick="triggerFinalConfirmation()">
-                Confirm Payment
-            </button>
-            
-            <p class="disclaimer">Click only after payment has been successfully sent. Your payment will be verified by the server.</p>
-            
-            <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
+        <!-- First Disconnect Confirmation Modal -->
+        <div id="disconnectModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:#ff6b6b;">⚠ Disconnect Account?</h2>
+                <p style="margin:1.5rem 0; line-height:1.6;">
+                    This action will disconnect your account from trading activities permanently.
+                </p>
+                <div class="modal-actions"> 
+                    <button onclick="this.closest('.modal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Cancel
+                    </button>
+                    <button onclick="closeDisconnectModalAndOpenFinal()"
+                        style="background:#e74c3c; color:white; border:none;">
+                        Continue to Verification
+                    </button>
+                </div>
             </div>
         </div>
-    </div>
 
-    <div id="finalConfirmationModal" class="modal">
-        <div class="modal-content">
-            <h2 style="color:var(--success-color);">Final Confirmation</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the 
-                <strong id="finalConfirmCoin">N/A</strong> address.
-            </p>
-            
-            <div class="modal-actions"> 
-                <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Cancel
-                </button>
-                <form method="POST" style="display:inline;">
-                    <input type="hidden" name="final_confirm_payment" value="1">
-                    <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="">
-                    <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
-                    <button type="submit"
-                        style="background:var(--success-color); color:#000; border:none;">
-                        Yes, I've Paid
-                    </button>
+        <!-- Final Disconnect Verification Modal -->
+        <div id="finalDisconnectModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:#ff6b6b;"> Final Verification Required</h2>
+                <p style="margin:0.5rem 0 1rem 0; opacity:0.8; font-size:0.9rem;">
+                    Please confirm your broker credentials and passkey to proceed with disconnection.
+                </p>
+                
+                <?php if ($disconnect_errors): ?>
+                    <div class="disconnect-errors">
+                        <ul>
+                            <?php foreach ($disconnect_errors as $error): ?>
+                                <li><?= htmlspecialchars($error) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
+                
+                <form method="POST" id="finalDisconnectForm">
+                    <input type="hidden" name="final_disconnect_confirm" value="1">
+                    
+                    <div class="disconnect-verify-section">
+                        <label> Server</label>
+                        <input type="text" name="verify_server" placeholder="Enter your server name" required autocomplete="off">
+                        
+                        <label> Login ID</label>
+                        <input type="text" name="verify_login" placeholder="Enter your login ID" required autocomplete="off">
+                        
+                        <label> Password</label>
+                        <input type="password" name="verify_password" placeholder="Enter your broker password" required autocomplete="off">
+                        
+                        <label> Dashboard Passkey</label>
+                        <input type="password" name="verify_passkey" placeholder="Enter your dashboard passkey" required autocomplete="off">
+                    </div>
+                    
+                    <div class="disconnect-warning-note">
+                        <strong> Important Notice:</strong><br>
+                        Your broker credentials (Server, Login, Password) and dashboard passkey will be permanently deleted from our system upon confirmation.
+                    </div>
+                    
+                    <div class="modal-actions-vertical">
+                        <button type="submit" class="btn-danger-final" id="finalDisconnectBtn">
+                            Permanently Disconnect Account
+                        </button>
+                        <button type="button" class="btn-cancel-final" onclick="closeFinalDisconnectModal()">
+                            Cancel
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
-    </div>
 
-    <div id="reenrollModal" class="modal">
-        <div class="modal-content">
-            <h2 style="color:var(--info-color);">Start New Contract</h2>
-            <p style="margin:1.5rem 0; line-height:1.6;">
-                Start a new <?= $CONTRACT_DURATION ?>-day trading contract from today.
-                <?php if ($profitAndLoss < 0): ?>
-                    <br><br>🌟 Remember: Every successful trader faced losses. This is your chance for a fresh start!
+        <!-- Profit Split Modal -->
+        <div id="profitSplitModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:var(--info-color);">Profit Split Required</h2>
+                
+                <?php if ($loyaltiesStatus === 'unpaid-payment'): ?>
+                    <div class="unpaid-warning" style="margin-bottom: 1rem; background: rgba(255, 107, 107, 0.2);">
+                        <strong>Server %:</strong> You are expected to send payment of $<?= number_format($serverShare, 2) ?> to the server.
+                    </div>
                 <?php endif; ?>
-            </p>
-            <div class="modal-actions"> 
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
+                
+                <p style="margin-bottom: 2rem; opacity: 0.8;">
+                    Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.
+                </p>
+                <p class="split-total">
+                    Total Profit: $<?= number_format($profitToSplit, 2) ?>
+                </p>
+
+                <div class="split-container">
+                    <div class="split-item">
+                        <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
+                        <p>Your Share</p>
+                        <h4 style="color:var(--success-color);">$<?= number_format($userShare, 2) ?></h4>
+                        <button class="btn-withdraw" 
+                                onclick="window.open('<?= $brokerTarget ?>', '_blank')"
+                                style="background:#2ecc71; color:white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
+                            Withdraw Your Share
+                        </button>
+                        <small style="display:block; margin-top:10px; opacity:0.6;">Withdraw your $<?= number_format($userShare, 2) ?> profit share</small>
+                    </div>
+                    <div class="split-item">
+                        <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
+                        <p>Server Share</p>
+                        <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
+                        <button class="btn-pay" onclick="updateServerShareAmount(); document.getElementById('profitSplitModal').classList.remove('active');       document.getElementById('paymentModal').classList.add('active');"
+                                style="padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%;">
+                            Pay Server Share
+                        </button>
+                        <small style="display:block; margin-top:10px; opacity:0.6;">Pay $<?= number_format($serverShare, 2) ?> to remain eligible</small>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button onclick="this.closest('.modal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payment Modal -->
+        <div id="paymentModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:var(--accent);">Pay Server Share</h2>
+                <p style="margin:1rem 0; opacity:0.8;">
+                    Send <strong id="paymentAmountDisplay">$<?= number_format($serverShare, 2) ?></strong> worth of the selected cryptocurrency
+                </p>
+                
+                <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
+
+                <div class="coin-selector">
+                    <input type="radio" id="coin_btc" name="coin" value="btc" checked onchange="updatePaymentDetails('btc')">
+                    <label for="coin_btc">BTC</label>
+                    
+                    <input type="radio" id="coin_eth" name="coin" value="eth" onchange="updatePaymentDetails('eth')">
+                    <label for="coin_eth">ETH</label>
+
+                    <input type="radio" id="coin_usdt" name="coin" value="usdt" onchange="updatePaymentDetails('usdt')">
+                    <label for="coin_usdt">USDT</label>
+                </div>
+
+                <div class="crypto-details">
+                    <p>Network: <strong id="paymentNetwork">N/A</strong></p>
+                    <p>Address:</p>
+                    <span class="btc-address" id="paymentAddress">N/A</span>
+                </div>
+                
+                <button class="btn-full btn-paid" id="copyAddressBtn">
+                    Copy Address
+                </button>
+
+                <label class="checkbox-container">
+                    <input type="checkbox" id="paymentConfirmationCheck" onchange="togglePaidButton()">
+                    I have made the payment
+                </label>
+
+                <button class="btn-full btn-paid" id="confirmPaidBtn" disabled onclick="triggerFinalConfirmation()">
+                    Confirm Payment
+                </button>
+                
+                <p class="disclaimer">Click only after payment has been successfully sent. Your payment will be verified by the server.</p>
+                
+                <div class="modal-actions">
+                    <button onclick="this.closest('.modal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Final Confirmation Modal -->
+        <div id="finalConfirmationModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:var(--success-color);">Final Confirmation</h2>
+                <p style="margin:1.5rem 0; line-height:1.6;">
+                    Confirm that you have sent <strong id="finalConfirmAmount">$0.00</strong> to the 
+                    <strong id="finalConfirmCoin">N/A</strong> address.
+                </p>
+                
+                <div class="modal-actions"> 
+                    <button onclick="document.getElementById('finalConfirmationModal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Cancel
+                    </button>
+                    <form method="POST" style="display:inline;">
+                        <input type="hidden" name="final_confirm_payment" value="1">
+                        <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="">
+                        <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
+                        <button type="submit"
+                            style="background:rgba(0, 130, 18, 0.95); color:white; border:none;">
+                            Yes, I've Paid
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- enrollment Modal with Instructions -->
+        <div id="reenrollModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color:var(--info-color);">Contract enrollment Protocol</h2>
+                
+                <p style="margin:1rem 0; opacity:0.8; font-size:0.95rem;">
+                    You are about to commence a new <?= $CONTRACT_DURATION ?>-day trading contract. 
+                    Please carefully review the following stipulations before proceeding.
+                </p>
+                
+                <div class="reenroll-instructions">
+                    <h4>⚠ Enrollment Terms</h4>
+                    <ul>
+                        <li>
+                            <strong>No Manual Trading:</strong> Do not open, close, or modify any trades 
+                            manually during the automation period.
+                        </li>
+                        <li>
+                            <strong>No Withdrawals:</strong> Do not withdraw profits or balance from your 
+                            MT5 account until the contract expires.
+                        </li>
+                        <li>
+                            <strong>No Deposits:</strong> Do not deposit or transfer funds from external 
+                            wallets to your broker account during this period.
+                        </li>
+                    </ul>
+                    <div class="consequence-note">
+                        Violation of any of these terms will result in permanent disqualification from the programme.
+                    </div>
+                </div>
+                
+                <label class="checkbox-container-legal" id="reenrollCheckContainer">
+                    <input type="checkbox" id="reenrollConfirmCheck" onchange="toggleReenrollButton()">
+                    <label for="reenrollConfirmCheck">
+                        I understand the terms.
+                    </label>
+                </label>
+                
+                <div class="modal-actions" style="flex-direction: column; gap: 10px;">
+                    <button id="reenrollProceedBtn" 
+                            class="reenroll-confirm-btn" 
+                            disabled 
+                            onclick="proceedToPasskeyVerification()">
+                        Proceed to Verification
+                    </button>
+                    <button onclick="closeReenrollModal()"
+                        style="width: 100%; padding: 12px; background:#555; color:white; border:none; border-radius: 8px; cursor: pointer;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Passkey Verification Overlay for enrollment -->
+        <div id="reenrollPasskeyOverlay" class="passkey-verification-overlay">
+            <div class="passkey-verification-box">
+                <h3> Identity Verification Required</h3>
+                <p style="margin:1rem 0; opacity:0.8;">
+                    To finalize your enrollment, please enter your dashboard passkey to confirm your identity.
+                </p>
+                
+                <input type="password" id="reenrollPasskeyInput" placeholder="Enter your passkey" autocomplete="off">
+                
+                <p class="error-message" id="reenrollPasskeyError">
+                    Incorrect passkey. Please try again.
+                </p>
+                
+                <button id="verifyReenrollPasskeyBtn" class="btn-verify-passkey" onclick="verifyReenrollPasskey()">
+                    Verify & Confirm
+                </button>
+                
+                <button class="btn-cancel" onclick="closeReenrollPasskeyOverlay()">
                     Cancel
                 </button>
-                <form method="POST" style="display:inline;">
-                    <button type="submit" name="confirm_reenroll"
-                        style="background:var(--success-color); color:#000; border:none;">
-                        Start New Contract
+            </div>
+        </div>
+
+        <!-- Hidden enrollment Form -->
+        <form id="reenrollForm" method="POST" style="display:none;">
+            <input type="hidden" name="confirm_reenroll" value="1">
+        </form>
+
+        <!-- Trade History Modal -->
+        <div id="tradeHistoryModal" class="modal">
+            <div class="modal-content">
+                <h2>Trade History Summary</h2>
+                <p style="margin:1rem 0; opacity:0.8;">Currency pairs that won/lost</p>
+
+                <h3 style="color:var(--success-color); margin-top:2rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?> Symbols)</h3>
+                <div class="history-section">
+                    <?php if (!empty($tradesData['symbolsthatwon'])): ?>
+                        <?php foreach ($tradesData['symbolsthatwon'] as $trade): ?>
+                            <div class="history-item">
+                                <span class="history-symbol"><?= $trade['symbol'] ?></span>
+                                <span class="history-amount-won">+<?= ltrim($trade['amount'], '+-') ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <p style="text-align: center; opacity: 0.7;">No winning symbol data available.</p>
+                    <?php endif; ?>
+                </div>
+                
+                <h3 style="color:var(--error-color); margin-top:2rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?> Symbols)</h3>
+                <div class="history-section">
+                    <?php if (!empty($tradesData['symbolsthatlost'])): ?>
+                        <?php foreach ($tradesData['symbolsthatlost'] as $trade): ?>
+                            <div class="history-item">
+                                <span class="history-symbol"><?= $trade['symbol'] ?></span>
+                                <span class="history-amount-lost"><?= $trade['amount'] ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <p style="text-align: center; opacity: 0.7;">No losing symbol data available.</p>
+                    <?php endif; ?>
+                </div>
+
+                <div class="modal-actions">
+                    <button onclick="this.closest('.modal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Close
                     </button>
-                </form>
+                </div>
+            </div>
+        </div>
+        <!-- Revenue History Modal -->
+        <div id="revenueHistoryModal" class="modal">
+            <div class="modal-content">
+                <h2>Revenue History</h2>
+                <div id="revenueHistoryContainer" class="revenue-history-container">
+                    <div class="empty-revenue">Loading...</div>
+                </div>
+                <div class="modal-actions">
+                    <button onclick="closeRevenueHistoryModal()"
+                        style="background:#555; color:white; border:none;">
+                        Close
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
-    <div id="tradeHistoryModal" class="modal">
-        <div class="modal-content">
-            <h2>Trade History Summary</h2>
-            <p style="margin:1rem 0; opacity:0.8;">Currency pairs that won/lost</p>
-
-            <h3 style="color:var(--success-color); margin-top:2rem;">Won Trades (<?= count($tradesData['symbolsthatwon']) ?> Symbols)</h3>
-            <div class="history-section">
-                <?php if (!empty($tradesData['symbolsthatwon'])): ?>
-                    <?php foreach ($tradesData['symbolsthatwon'] as $trade): ?>
-                        <div class="history-item">
-                            <span class="history-symbol"><?= $trade['symbol'] ?></span>
-                            <span class="history-amount-won">+<?= ltrim($trade['amount'], '+-') ?></span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <p style="text-align: center; opacity: 0.7;">No winning symbol data available.</p>
-                <?php endif; ?>
-            </div>
-            
-            <h3 style="color:var(--error-color); margin-top:2rem;">Lost Trades (<?= count($tradesData['symbolsthatlost']) ?> Symbols)</h3>
-            <div class="history-section">
-                <?php if (!empty($tradesData['symbolsthatlost'])): ?>
-                    <?php foreach ($tradesData['symbolsthatlost'] as $trade): ?>
-                        <div class="history-item">
-                            <span class="history-symbol"><?= $trade['symbol'] ?></span>
-                            <span class="history-amount-lost"><?= $trade['amount'] ?></span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <p style="text-align: center; opacity: 0.7;">No losing symbol data available.</p>
-                <?php endif; ?>
-            </div>
-
-            <div class="modal-actions">
-                <button onclick="this.closest('.modal').classList.remove('active')"
-                    style="background:#555; color:white; border:none;">
-                    Close
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <script>
+<script>
     // Clean URL
     if (window.history.replaceState) {
         window.history.replaceState(null, null, window.location.href.split("?")[0]);
     }
 
-    // Payment selector logic
+    // ============== Disconnect Flow Functions ==============
+    
+    function openDisconnectModal() {
+        document.getElementById('disconnectModal').classList.add('active');
+    }
+    
+    function closeDisconnectModalAndOpenFinal() {
+        document.getElementById('disconnectModal').classList.remove('active');
+        document.getElementById('finalDisconnectModal').classList.add('active');
+        // Clear any previous input values
+        const form = document.getElementById('finalDisconnectForm');
+        if (form) {
+            form.reset();
+        }
+    }
+    
+    function closeFinalDisconnectModal() {
+        document.getElementById('finalDisconnectModal').classList.remove('active');
+    }
+    
+    // Optional: Add form validation before submit
+    document.getElementById('finalDisconnectForm')?.addEventListener('submit', function(e) {
+        const server = this.querySelector('[name="verify_server"]').value.trim();
+        const login = this.querySelector('[name="verify_login"]').value.trim();
+        const password = this.querySelector('[name="verify_password"]').value.trim();
+        const passkey = this.querySelector('[name="verify_passkey"]').value.trim();
+        
+        if (!server || !login || !password || !passkey) {
+            e.preventDefault();
+            alert('Please fill in all fields to verify your identity.');
+            return false;
+        }
+        
+        // Show loading state on button
+        const btn = document.getElementById('finalDisconnectBtn');
+        if (btn) {
+            btn.textContent = 'Verifying and Disconnecting...';
+            btn.disabled = true;
+        }
+    });
+
+    // ============== enrollment Flow Functions ==============
+    
+    function openReenrollModal() {
+        // Reset states
+        document.getElementById('reenrollConfirmCheck').checked = false;
+        document.getElementById('reenrollProceedBtn').disabled = true;
+        document.getElementById('reenrollPasskeyInput').value = '';
+        document.getElementById('reenrollPasskeyError').style.display = 'none';
+        document.getElementById('verifyReenrollPasskeyBtn').disabled = false;
+        
+        // Show enroll modal
+        document.getElementById('reenrollModal').classList.add('active');
+    }
+    
+    function closeReenrollModal() {
+        document.getElementById('reenrollModal').classList.remove('active');
+        closeReenrollPasskeyOverlay();
+    }
+    
+    function toggleReenrollButton() {
+        const checkbox = document.getElementById('reenrollConfirmCheck');
+        const button = document.getElementById('reenrollProceedBtn');
+        button.disabled = !checkbox.checked;
+        
+        if (checkbox.checked) {
+            button.style.background = '#0080bc';
+            button.style.color = '#000';
+            button.style.cursor = 'pointer';
+            button.style.opacity = '1';
+        } else {
+            button.style.background = '#555';
+            button.style.color = '#999';
+            button.style.cursor = 'not-allowed';
+            button.style.opacity = '0.6';
+        }
+    }
+    
+    function proceedToPasskeyVerification() {
+        // Close the enroll modal
+        document.getElementById('reenrollModal').classList.remove('active');
+        
+        // Show the passkey verification overlay
+        document.getElementById('reenrollPasskeyOverlay').classList.add('active');
+        document.getElementById('reenrollPasskeyInput').focus();
+    }
+    
+    function closeReenrollPasskeyOverlay() {
+        document.getElementById('reenrollPasskeyOverlay').classList.remove('active');
+        document.getElementById('reenrollPasskeyError').style.display = 'none';
+    }
+    
+    function verifyReenrollPasskey() {
+        const passkeyInput = document.getElementById('reenrollPasskeyInput');
+        const errorElement = document.getElementById('reenrollPasskeyError');
+        const verifyBtn = document.getElementById('verifyReenrollPasskeyBtn');
+        
+        const passkey = passkeyInput.value.trim();
+        
+        if (!passkey) {
+            errorElement.textContent = 'Please enter your passkey.';
+            errorElement.style.display = 'block';
+            return;
+        }
+        
+        // Disable button and show loading
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = 'Verifying...';
+        errorElement.style.display = 'none';
+        
+        // Send AJAX request to verify passkey
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'verify_reenroll_passkey=1&passkey=' + encodeURIComponent(passkey)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Passkey verified - submit the enrollment form
+                document.getElementById('reenrollPasskeyOverlay').classList.remove('active');
+                document.getElementById('reenrollForm').submit();
+            } else {
+                // Show error
+                errorElement.textContent = data.message || 'Incorrect passkey. Please try again.';
+                errorElement.style.display = 'block';
+                verifyBtn.disabled = false;
+                verifyBtn.textContent = 'Verify & Confirm';
+                passkeyInput.value = '';
+                passkeyInput.focus();
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            errorElement.textContent = 'An error occurred. Please try again.';
+            errorElement.style.display = 'block';
+            verifyBtn.disabled = false;
+            verifyBtn.textContent = 'Verify & Confirm';
+        });
+    }
+    
+    // Allow pressing Enter in passkey input
+    document.getElementById('reenrollPasskeyInput').addEventListener('keypress', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            verifyReenrollPasskey();
+        }
+    });
+
+    // ============== Payment Selector Logic ==============
+    
     const serverAccounts = {
         btc: { 
             address: "<?= htmlspecialchars($serverAccount['btc_address'] ?? 'N/A') ?>", 
@@ -1852,19 +2180,34 @@
             network: "<?= htmlspecialchars($serverAccount['usdt_network'] ?? 'TRC20') ?>" 
         }
     };
-    
+            
     const paymentAddressElement = document.getElementById('paymentAddress');
     const paymentNetworkElement = document.getElementById('paymentNetwork');
     const copyAddressBtn = document.getElementById('copyAddressBtn');
     const confirmPaidBtn = document.getElementById('confirmPaidBtn');
     const paymentConfirmationCheck = document.getElementById('paymentConfirmationCheck');
-    const serverShareAmountHidden = document.getElementById('serverShareAmountHidden');
-    
+    let serverShareAmountHidden = document.getElementById('serverShareAmountHidden');
+            
     const finalConfirmationModal = document.getElementById('finalConfirmationModal');
     const finalConfirmAmount = document.getElementById('finalConfirmAmount');
     const finalConfirmCoin = document.getElementById('finalConfirmCoin');
     const formServerShareAmount = document.getElementById('formServerShareAmount');
     const formPaymentCoin = document.getElementById('formPaymentCoin');
+
+    // Function to update server share amount from the current PHP value
+    function updateServerShareAmount() {
+        // Get the current server share from the PHP variable
+        const serverShare = <?php echo number_format($serverShare, 2, '.', ''); ?>;
+        if (serverShareAmountHidden) {
+            serverShareAmountHidden.value = serverShare;
+        }
+        
+        // Update the payment modal text
+        const paymentDescEl = document.querySelector('#paymentModal p');
+        if (paymentDescEl && paymentDescEl.innerHTML.includes('Send $')) {
+            paymentDescEl.innerHTML = `Send $${serverShare.toFixed(2)} worth of the selected cryptocurrency`;
+        }
+    }
 
     function getSelectedCoin() {
         return document.querySelector('input[name="coin"]:checked').value;
@@ -1882,12 +2225,13 @@
     function togglePaidButton() {
         confirmPaidBtn.disabled = !paymentConfirmationCheck.checked;
     }
-    
+
     function triggerFinalConfirmation() {
         const selectedCoin = getSelectedCoin();
-        const amount = serverShareAmountHidden.value;
+        // Get the current server share amount from the hidden input or PHP
+        let amount = serverShareAmountHidden ? serverShareAmountHidden.value : <?php echo number_format($serverShare, 2, '.', ''); ?>;
         
-        finalConfirmAmount.textContent = '$' + amount;
+        finalConfirmAmount.textContent = '$' + parseFloat(amount).toFixed(2);
         finalConfirmCoin.textContent = selectedCoin.toUpperCase();
         
         formServerShareAmount.value = amount;
@@ -1896,6 +2240,17 @@
         document.getElementById('paymentModal').classList.remove('active');
         finalConfirmationModal.classList.add('active');
     }
+
+    // Override the pay button click to ensure amount is correct
+    document.querySelectorAll('.btn-pay').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            // Update server share amount before showing payment modal
+            updateServerShareAmount();
+            document.getElementById('profitSplitModal').classList.remove('active');
+            document.getElementById('paymentModal').classList.add('active');
+        });
+    });
 
     copyAddressBtn.addEventListener('click', function() {
         const address = paymentAddressElement.textContent;
@@ -1906,11 +2261,12 @@
                 console.error('Could not copy text: ', err);
             });
         } else {
-             alert('Address not available or clipboard access denied.');
+            alert('Address not available or clipboard access denied.');
         }
     });
 
     document.addEventListener('DOMContentLoaded', function() {
+        updateServerShareAmount();
         updatePaymentDetails(getSelectedCoin());
         togglePaidButton();
         
@@ -1922,6 +2278,674 @@
     paymentAddressElement.addEventListener('click', function() {
         copyAddressBtn.click();
     });
-    </script>
+    
+    // Close modals when clicking outside
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', function(event) {
+            if (event.target === this) {
+                this.classList.remove('active');
+            }
+        });
+    });
+    
+    // Close passkey overlay when clicking outside the box
+    document.getElementById('reenrollPasskeyOverlay').addEventListener('click', function(event) {
+        if (event.target === this) {
+            closeReenrollPasskeyOverlay();
+        }
+    });
+    
+            // Close final disconnect modal when clicking outside
+    document.getElementById('finalDisconnectModal').addEventListener('click', function(event) {
+        if (event.target === this) {
+            closeFinalDisconnectModal();
+        }
+    });
+</script>
+<script>
+        // ============== LIVE BALANCE UPDATES ==============
+        
+        // Store DOM elements for performance
+        const depositBalanceEl = document.querySelector('.stat-card:first-child h2');
+        const profitLossEl = document.querySelector('.stat-card:nth-child(2) h2');
+        const currentBalanceEl = document.querySelector('.stat-card:nth-child(3) h2');
+        const loyaltyDaysLeftEl = document.querySelector('.loyalty-card p');
+        const loyaltyStatusEl = document.querySelector('.loyalty-status-msg');
+        
+        // Track if update is in progress
+        let isUpdating = false;
+        let updateInterval = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        
+        // Function to fetch latest balances and update all UI elements
+        async function fetchLiveBalances() {
+            if (isUpdating) return;
+            
+            isUpdating = true;
+            
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    credentials: 'same-origin'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    retryCount = 0;
+                    
+                    // Update balance displays
+                    if (depositBalanceEl && data.deposit_balance) {
+                        animateValue(depositBalanceEl, depositBalanceEl.innerText.replace('$', ''), data.deposit_balance, '$');
+                    }
+                    
+                    if (profitLossEl && data.profit_loss) {
+                        animateValue(profitLossEl, profitLossEl.innerText.replace('$', ''), data.profit_loss, '$');
+                        profitLossEl.className = data.profit_loss_class;
+                    }
+                    
+                    if (currentBalanceEl && data.current_balance) {
+                        animateValue(currentBalanceEl, currentBalanceEl.innerText.replace('$', ''), data.current_balance, '$');
+                        currentBalanceEl.className = data.current_balance_class;
+                    }
+                    
+                    // Update contract dates display
+                    const contractDatesEl = document.querySelector('.contract-dates');
+                    if (contractDatesEl && data.formatted_start_date && data.formatted_end_date) {
+                        contractDatesEl.innerHTML = `Started: ${data.formatted_start_date} | Ends: ${data.formatted_end_date}`;
+                    } else if (contractDatesEl && !data.formatted_start_date) {
+                        contractDatesEl.style.display = 'none';
+                    }
+                    
+                    // Update days left text
+                    const loyaltyTextEl = document.querySelector('.loyalty-card p');
+                    if (loyaltyTextEl) {
+                        if (data.is_contract_active && data.contract_days_left > 0) {
+                            loyaltyTextEl.innerHTML = `${data.contract_days_left} days left.`;
+                        } else if (data.contract_completed && data.profit_loss && parseFloat(data.profit_loss) > 0) {
+                            // Keep existing profit split text, don't override
+                            if (!loyaltyTextEl.innerHTML.includes('Please complete the profit split')) {
+                                loyaltyTextEl.innerHTML = `Your contract has ended with a profit of $${data.profit_loss}.`;
+                            }
+                        } else if (data.contract_completed && data.profit_loss && parseFloat(data.profit_loss) < 0) {
+                            loyaltyTextEl.innerHTML = `Don't give up! Every loss is a learning opportunity. You can enroll for a new contract and bounce back stronger!`;
+                        } else if (!data.is_contract_active && !data.contract_completed) {
+                            loyaltyTextEl.innerHTML = `You don't have an active contract. Click enroll to start a new trading contract.`;
+                        }
+                    }
+                    
+                    // Update loyalty status message
+                    const loyaltyStatusEl = document.querySelector('.loyalty-status-msg');
+                    if (loyaltyStatusEl && data.loyalty_status_message) {
+                        loyaltyStatusEl.innerHTML = data.loyalty_status_message;
+                    }
+                    
+                    // Update dashboard disclaimer
+                    const disclaimerEl = document.querySelector('.dashboard-disclaimer');
+                    if (disclaimerEl && data.dashboard_disclaimer) {
+                        disclaimerEl.innerHTML = data.dashboard_disclaimer;
+                        // Add payment badge if needed
+                        if (data.loyalties_status === 'unpaid-payment') {
+                            if (!disclaimerEl.querySelector('.payment-required-badge')) {
+                                const badge = document.createElement('span');
+                                badge.className = 'payment-required-badge';
+                                badge.innerHTML = 'Payment Required';
+                                disclaimerEl.appendChild(badge);
+                            }
+                        } else {
+                            const badge = disclaimerEl.querySelector('.payment-required-badge');
+                            if (badge) badge.remove();
+                        }
+                    }
+                    
+                    // Update loyalty button
+                    const loyaltyBtn = document.querySelector('.loyalty-card button');
+                    if (loyaltyBtn && data.loyalty_btn_text) {
+                        loyaltyBtn.innerHTML = data.loyalty_btn_text;
+                        loyaltyBtn.className = data.loyalty_btn_class;
+                        
+                        // Update button action based on state
+                        if (data.loyalties_status === 'unpaid-payment') {
+                            loyaltyBtn.setAttribute('onclick', "document.getElementById('profitSplitModal').classList.add('active')");
+                        } else if (data.show_reenroll_button) {
+                            loyaltyBtn.setAttribute('onclick', "openReenrollModal()");
+                        } else if (data.loyalties_status === 'payment-made') {
+                            loyaltyBtn.removeAttribute('onclick');
+                            loyaltyBtn.disabled = true;
+                        } else if (data.loyalties_status === 'payment-confirmed') {
+                            loyaltyBtn.setAttribute('onclick', "openReenrollModal()");
+                        } else if (data.is_contract_active) {
+                            loyaltyBtn.removeAttribute('onclick');
+                            loyaltyBtn.disabled = true;
+                        }
+                    }
+                    
+                    // Show/hide payment note
+                    const paymentNote = document.querySelector('.loyalty-card .payment-note');
+                    if (data.show_payment_note) {
+                        if (!paymentNote) {
+                            const note = document.createElement('p');
+                            note.className = 'payment-note';
+                            note.style.cssText = 'color: var(--info-color); margin-top: 10px; font-style: italic;';
+                            note.innerHTML = ' Your payment is on review. Once confirmed by the server, you\'ll be able to enroll.';
+                            document.querySelector('.loyalty-card').appendChild(note);
+                        }
+                    } else if (paymentNote) {
+                        paymentNote.remove();
+                    }
+                    
+                    // Update profit split modal values if it exists
+                    const profitModal = document.getElementById('profitSplitModal');
+                    if (profitModal && data.profit_to_split) {
+                        const profitAmountEl = profitModal.querySelector('.split-total');
+                        if (profitAmountEl) {
+                            profitAmountEl.innerHTML = `Total Profit: $${data.profit_to_split}`;
+                        }
+                        
+                        // Update server share and user share calculations
+                        const serverSharePercent = <?php echo $SERVER_SHARE_PERCENT; ?>;
+                        const userSharePercent = <?php echo $USER_SHARE_PERCENT; ?>;
+                        const profitAmount = parseFloat(data.profit_to_split);
+                        const serverShare = (profitAmount * serverSharePercent / 100).toFixed(2);
+                        const userShare = (profitAmount * userSharePercent / 100).toFixed(2);
+                        
+                        const serverShareEl = profitModal.querySelector('.split-item:last-child h4:last-child');
+                        const userShareEl = profitModal.querySelector('.split-item:first-child h4:last-child');
+                        
+                        if (serverShareEl) serverShareEl.innerHTML = `$${serverShare}`;
+                        if (userShareEl) userShareEl.innerHTML = `$${userShare}`;
+                        
+                        const paymentAmountEl = document.querySelector('#paymentModal p');
+                        if (paymentAmountEl && paymentAmountEl.innerHTML.includes('Send $')) {
+                            paymentAmountEl.innerHTML = `Send $${serverShare} worth of the selected cryptocurrency`;
+                        }
+                        
+                        const hiddenAmount = document.getElementById('serverShareAmountHidden');
+                        if (hiddenAmount) hiddenAmount.value = serverShare;
+                    }
+                } else if (data.error) {
+                    console.warn('Balance update error:', data.error);
+                    retryCount++;
+                    if (retryCount >= MAX_RETRIES) {
+                        stopLiveUpdates();
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to fetch live balances:', error);
+                retryCount++;
+                if (retryCount >= MAX_RETRIES) {
+                    stopLiveUpdates();
+                    const updateHint = document.createElement('div');
+                    updateHint.style.cssText = 'position:fixed; bottom:10px; right:10px; background:rgba(0,0,0,0.7); color:#ff6b6b; padding:5px 10px; border-radius:5px; font-size:11px; z-index:9999;';
+                    updateHint.innerText = 'Live updates paused. Refresh page to resume.';
+                    document.body.appendChild(updateHint);
+                    setTimeout(() => updateHint.remove(), 5000);
+                }
+            } finally {
+                isUpdating = false;
+            }
+    }
+        
+        // Smooth number animation
+        function animateValue(element, start, end, prefix = '', suffix = '', duration = 300) {
+            if (!element) return;
+            
+            start = parseFloat(start.toString().replace(/[^0-9.-]/g, '')) || 0;
+            end = parseFloat(end.toString().replace(/[^0-9.-]/g, '')) || 0;
+            
+            if (start === end) return;
+            
+            const range = end - start;
+            let current = start;
+            let startTime = null;
+            
+            function step(timestamp) {
+                if (!startTime) startTime = timestamp;
+                const elapsed = timestamp - startTime;
+                const progress = Math.min(1, elapsed / duration);
+                current = start + (range * progress);
+                element.innerText = prefix + current.toFixed(2) + suffix;
+                
+                if (progress < 1) {
+                    requestAnimationFrame(step);
+                } else {
+                    element.innerText = prefix + end.toFixed(2) + suffix;
+                }
+            }
+            
+            requestAnimationFrame(step);
+        }
+        
+        // Start live updates
+        function startLiveUpdates(intervalSeconds = 5) {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+            
+            fetchLiveBalances();
+            updateInterval = setInterval(fetchLiveBalances, intervalSeconds * 1000);
+        }
+        
+        // Stop live updates
+        function stopLiveUpdates() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+        }
+        
+        // Handle page visibility
+        let isPageVisible = true;
+        
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                isPageVisible = false;
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                    updateInterval = setInterval(fetchLiveBalances, 30000);
+                }
+            } else {
+                isPageVisible = true;
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                    updateInterval = setInterval(fetchLiveBalances, 5000);
+                }
+                fetchLiveBalances();
+            }
+        });
+        
+        // Initialize live updates only if not in passkey mode
+        <?php if (!$show_passkey_form && $passkey_verified): ?>
+        startLiveUpdates(5);
+        
+        window.addEventListener('beforeunload', function() {
+            stopLiveUpdates();
+        });
+        <?php endif; ?>
+</script>
+<script>
+    // ============== NOTIFICATION SYSTEM ==============
+    
+    let notificationPanelOpen = false;
+
+    function toggleNotifications() {
+        const panel = document.getElementById('notificationPanel');
+        if (notificationPanelOpen) {
+            panel.classList.remove('active');
+            notificationPanelOpen = false;
+            // Mark notifications as read when closing
+            markNotificationsAsRead();
+        } else {
+            panel.classList.add('active');
+            notificationPanelOpen = true;
+            // Refresh notifications when opening
+            refreshNotifications();
+        }
+    }
+
+    function markNotificationsAsRead() {
+        // Only mark if there are unread notifications
+        const unreadItems = document.querySelectorAll('.notification-item.unread');
+        if (unreadItems.length === 0) return;
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'mark_notifications_read=1'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Update UI - remove unread class from all
+                document.querySelectorAll('.notification-item.unread').forEach(item => {
+                    item.classList.remove('unread');
+                });
+                // Hide the badge
+                const badge = document.getElementById('notificationBadge');
+                if (badge) {
+                    badge.style.display = 'none';
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error marking notifications as read:', error);
+        });
+    }
+
+    // Function to refresh notifications list
+    function refreshNotifications() {
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'get_notifications_list=1'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const notificationList = document.getElementById('notificationList');
+                if (data.notifications && data.notifications.length > 0) {
+                    let html = '';
+                    data.notifications.forEach(notification => {
+                        const unreadClass = notification.update === 'new' ? 'unread' : '';
+                        const typeClass = notification.type || 'info';
+                        
+                        // Additional JavaScript sanitization
+                        let cleanMessage = notification.message;
+                        cleanMessage = cleanMessage.replace(/^[???]+\s*/, '');
+                        cleanMessage = cleanMessage.replace(/[???]/g, '');
+                        cleanMessage = cleanMessage.replace(/[\u{1F300}-\u{1F6FF}]/gu, '');
+                        
+                        html += `
+                            <div class="notification-item ${unreadClass} ${typeClass}"
+                                data-id="${notification.id}"
+                                data-update="${notification.update}">
+                                <div class="notification-section">${escapeHtml(notification.section)}</div>
+                                <div class="notification-message">${escapeHtml(cleanMessage.trim())}</div>
+                                <div class="notification-time">${formatDate(notification.time)}</div>
+                            </div>
+                        `;
+                    });
+                    notificationList.innerHTML = html;
+                } else {
+                    notificationList.innerHTML = '<div class="empty-notifications">No notifications</div>';
+                }
+                
+                // Update badge count
+                const badge = document.getElementById('notificationBadge');
+                if (data.unread_count > 0) {
+                    if (badge) {
+                        badge.textContent = data.unread_count;
+                        badge.style.display = 'flex';
+                    } else {
+                        const bell = document.querySelector('.notification-bell');
+                        const newBadge = document.createElement('span');
+                        newBadge.className = 'notification-badge';
+                        newBadge.id = 'notificationBadge';
+                        newBadge.textContent = data.unread_count;
+                        bell.appendChild(newBadge);
+                    }
+                } else if (badge) {
+                    badge.style.display = 'none';
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error refreshing notifications:', error);
+        });
+    }
+
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+
+    // Helper function to format date
+    function formatDate(dateString) {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins} min ago`;
+        if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+        if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+        
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    // Improved polling for new notifications
+    function pollNewNotifications() {
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'check_new_notifications=1'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const badge = document.getElementById('notificationBadge');
+                if (data.unread_count > 0) {
+                    if (badge) {
+                        const currentCount = parseInt(badge.textContent) || 0;
+                        if (currentCount !== data.unread_count) {
+                            badge.textContent = data.unread_count;
+                            badge.style.display = 'flex';
+                            // If panel is open, refresh the list
+                            if (notificationPanelOpen) {
+                                refreshNotifications();
+                            }
+                        }
+                    } else {
+                        // Create badge if it doesn't exist
+                        const bell = document.querySelector('.notification-bell');
+                        const newBadge = document.createElement('span');
+                        newBadge.className = 'notification-badge';
+                        newBadge.id = 'notificationBadge';
+                        newBadge.textContent = data.unread_count;
+                        bell.appendChild(newBadge);
+                        // If panel is open, refresh the list
+                        if (notificationPanelOpen) {
+                            refreshNotifications();
+                        }
+                    }
+                } else if (badge) {
+                    badge.style.display = 'none';
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error polling notifications:', error);
+        });
+    }
+
+    // Close notification panel when clicking outside
+    document.addEventListener('click', function(event) {
+        const panel = document.getElementById('notificationPanel');
+        const bell = document.querySelector('.notification-bell');
+        
+        if (notificationPanelOpen && panel && !panel.contains(event.target) && !bell.contains(event.target)) {
+            panel.classList.remove('active');
+            notificationPanelOpen = false;
+            markNotificationsAsRead();
+        }
+    });
+
+    // Start polling for new notifications every 3 seconds
+    setInterval(pollNewNotifications, 3000);
+
+    // Initial refresh on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        refreshNotifications();
+    });
+</script>
+<script>
+    // ============== REVENUE HISTORY FUNCTIONS ==============
+
+    function openRevenueHistoryModal() {
+        const modal = document.getElementById('revenueHistoryModal');
+        modal.classList.add('active');
+        loadRevenueHistory();
+    }
+
+    function closeRevenueHistoryModal() {
+        document.getElementById('revenueHistoryModal').classList.remove('active');
+    }
+
+    function loadRevenueHistory() {
+        const container = document.getElementById('revenueHistoryContainer');
+        container.innerHTML = '<div class="empty-revenue">Loading...</div>';
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'action=get_revenue_history'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.history && data.history.length > 0) {
+                let html = '';
+                data.history.forEach((record) => {
+                    const statusClass = getStatusClass(record.loyalty_status);
+                    const statusText = getStatusText(record.loyalty_status);
+                    const profitClass = record.profit >= 0 ? 'profit-positive' : 'profit-negative';
+                    const totalRevenue = record.server_share + record.user_share;
+                    
+                    html += `
+                        <div class="revenue-item" data-id="${record.id}">
+                            <div class="revenue-header" onclick="toggleRevenueDetails(this)">
+                                <div class="revenue-header-left">
+                                    <div class="revenue-date-range">${formatDateRange(record.execution_start_date, record.execution_end_date)}</div>
+                                    <div class="revenue-user-share">$${formatNumber(record.user_share)}</div>
+                                </div>
+                                <div class="revenue-status ${statusClass}">${statusText}</div>
+                            </div>
+                            <div class="revenue-details">
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Invested:</span>
+                                    <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Harvested (Your Share):</span>
+                                    <span class="revenue-detail-value ${profitClass}">$${formatNumber(record.user_share)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Server Share:</span>
+                                    <span class="revenue-detail-value">$${formatNumber(record.server_share)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Total Revenue:</span>
+                                    <span class="revenue-detail-value ${profitClass}">$${formatNumber(totalRevenue)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Final Balance:</span>
+                                    <span class="revenue-detail-value">$${formatNumber(record.current_balance)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Profit/Loss:</span>
+                                    <span class="revenue-detail-value ${profitClass}">$${formatNumber(record.profit)}</span>
+                                </div>
+                                ${record.loyalty_status === 'pending_payment' ? 
+                                    `<div class="revenue-detail-row" style="border-bottom: none; margin-top: 8px;">
+                                        <span class="revenue-detail-label" style="color: #f59e0b;">Payment Pending:</span>
+                                        <span class="revenue-detail-value" style="color: #f59e0b;">Awaiting server share payment of $${formatNumber(record.server_share)}</span>
+                                    </div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            } else if (data.success && (!data.history || data.history.length === 0)) {
+                container.innerHTML = '<div class="empty-revenue">No revenue history yet. Complete a contract to see your revenue records.</div>';
+            } else {
+                container.innerHTML = '<div class="empty-revenue">Failed to load revenue history. Please try again.</div>';
+            }
+        })
+        .catch(error => {
+            console.error('Error loading revenue history:', error);
+            container.innerHTML = '<div class="empty-revenue">Error loading revenue history. Please refresh and try again.</div>';
+        });
+    }
+
+    function getStatusClass(status) {
+        switch(status) {
+            case 'completed': return 'completed';
+            case 'pending_payment': return 'pending';
+            case 'loss_completed': return 'loss';
+            case 'below_threshold': return 'completed';
+            default: return 'pending';
+        }
+    }
+
+    function getStatusText(status) {
+        switch(status) {
+            case 'completed': return 'Completed';
+            case 'pending_payment': return 'Payment Pending';
+            case 'loss_completed': return 'Loss';
+            case 'below_threshold': return 'Completed';
+            default: return status || 'Recorded';
+        }
+    }
+
+    function formatDateRange(startDate, endDate) {
+        if (!startDate || startDate === '0000-00-00') return 'Date not set';
+        
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        const formatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
+        return `${start.toLocaleDateString('en-US', formatOptions)} - ${end.toLocaleDateString('en-US', formatOptions)}`;
+    }
+
+    function formatNumber(value) {
+        return parseFloat(value).toFixed(2);
+    }
+
+    function toggleRevenueDetails(headerElement) {
+        const detailsDiv = headerElement.nextElementSibling;
+        const revenueItem = headerElement.closest('.revenue-item');
+        
+        if (detailsDiv.classList.contains('active')) {
+            detailsDiv.classList.remove('active');
+            // Ensure the item maintains its original width
+            if (revenueItem) {
+                revenueItem.style.width = '100%';
+            }
+        } else {
+            // Close any other open details
+            document.querySelectorAll('.revenue-details.active').forEach(detail => {
+                detail.classList.remove('active');
+            });
+            
+            // Ensure all revenue items have consistent width
+            document.querySelectorAll('.revenue-item').forEach(item => {
+                item.style.width = '100%';
+            });
+            
+            detailsDiv.classList.add('active');
+            
+            // Force a reflow to ensure smooth expansion without shifting
+            if (revenueItem) {
+                const originalWidth = revenueItem.offsetWidth;
+                revenueItem.style.width = originalWidth + 'px';
+                setTimeout(() => {
+                    revenueItem.style.width = '100%';
+                }, 10);
+            }
+        }
+    }
+
+    // Close modal when clicking outside
+    document.addEventListener('click', function(event) {
+        const modal = document.getElementById('revenueHistoryModal');
+        if (event.target === modal) {
+            closeRevenueHistoryModal();
+        }
+    });
+</script>
 </body>
 </html>

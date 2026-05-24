@@ -1,23 +1,22 @@
 <?php
 // phpmyadmin_tablesfetch.php
-// Hardcoded credentials + safe for fetch() calls
+// Updated to accept both GET and POST for sql_query
 
 $host       = 'sql312.infinityfree.com';
 $dbname     = 'if0_40473107_harvhub';
 $dbUsername = 'if0_40473107';
 $dbPassword = 'InDQmdl53FZ85';
 
-// Optional: Only allow requests from your own domain (better than the old block)
-if (!empty($_SERVER['HTTP_ORIGIN']) && $_SERVER['HTTP_ORIGIN'] !== 'https://yourdomain.com') {  // change to your real domain or remove line
-    // Remove this whole if() for testing / local use
-}
-
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');  // Remove in production if you want tighter security
-header('Access-Control-Allow-Methods: GET, POST');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// === NO MORE "Direct access denied" BLOCK ===
+// Handle preflight requests
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit();
+}
 
 function handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table = null, $sqlQuery = null) {
     try {
@@ -28,8 +27,11 @@ function handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table 
             PDO::ATTR_EMULATE_PREPARES   => false
         ]);
 
-        // Custom SQL query
+        // Custom SQL query - now accepts from GET, POST, or JSON
         if ($sqlQuery !== null) {
+            // Log for debugging
+            error_log("Executing query: " . $sqlQuery);
+            
             $stmt = $pdo->query($sqlQuery);
             $result = [];
 
@@ -37,7 +39,8 @@ function handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table 
                 $result['rows'] = $stmt->fetchAll();
                 $result['columnMeta'] = [];
                 for ($i = 0; $i < $stmt->columnCount(); $i++) {
-                    $result['columnMeta'][] = $stmt->getColumnMeta($i);
+                    $meta = $stmt->getColumnMeta($i);
+                    $result['columnMeta'][] = ['name' => $meta['name']];
                 }
             } else {
                 $result['affectedRows'] = $stmt->rowCount();
@@ -74,9 +77,35 @@ function handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table 
     }
 }
 
-// Get parameters safely
-$table    = $_GET['table'] ?? null;
-$sqlQuery = $_POST['sql_query'] ?? null;
+// Get parameters from multiple sources
+$table = null;
+$sqlQuery = null;
+
+// Check GET parameters
+if (isset($_GET['table'])) {
+    $table = $_GET['table'];
+}
+if (isset($_GET['sql_query'])) {
+    $sqlQuery = $_GET['sql_query'];
+}
+
+// Check POST parameters (form data)
+if (isset($_POST['table'])) {
+    $table = $_POST['table'];
+}
+if (isset($_POST['sql_query'])) {
+    $sqlQuery = $_POST['sql_query'];
+}
+
+// Check JSON input (for application/json requests)
+$inputJSON = file_get_contents('php://input');
+if ($inputJSON) {
+    $input = json_decode($inputJSON, true);
+    if ($input) {
+        if (isset($input['table'])) $table = $input['table'];
+        if (isset($input['sql_query'])) $sqlQuery = $input['sql_query'];
+    }
+}
 
 // Return JSON
 echo json_encode(handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table, $sqlQuery));
