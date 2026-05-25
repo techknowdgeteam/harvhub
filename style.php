@@ -1,4 +1,5 @@
 <style>
+    
     :root {
         --bg-light: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         --bg-dark: linear-gradient(135deg, #141e30 0%, #243b55 100%);
@@ -44,7 +45,6 @@
 
     html, body {
         height: 100%;
-        background: var(--bg-light);
         color: var(--text-light);
         overflow-x: hidden;
         transition: background 0.3s ease;
@@ -53,11 +53,12 @@
     body {
         overflow: hidden;
         position: relative;
+        background: var(--bg-light);
     }
     .custom-body {
         width: 100%;
         height: 100%;
-        background: none;
+        background: var(--bg-light);
         overflow-y: auto; /* Allows vertical scroll only in custom-body */
         -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
         scrollbar-width: none; /* Hides scrollbar in Firefox */
@@ -1605,7 +1606,301 @@
         }
     }
 </style>
+<style>
+    /* Revenue History Button */
+    .btn-revenue-history {
+        background: none;
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
 
+    /* Revenue History Modal */
+    #revenueHistoryModal.modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.95);
+        backdrop-filter: blur(20px);
+        z-index: 10000;
+        padding: 0;
+    }
+
+    #revenueHistoryModal .modal-content {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        max-height: none;
+        border-radius: 0;
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        background: var(--card-light);
+        margin: 0;
+        overflow: hidden;
+    }
+
+    #revenueHistoryModal h2 {
+        margin-bottom: 1rem;
+        flex-shrink: 0;
+    }
+
+    /* Revenue History Container - Takes remaining space, no horizontal scroll */
+    .revenue-history-container {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 0;
+        margin: 1rem 0;
+        width: 100%;
+        -ms-overflow-style: none;
+        scrollbar-width: thin;
+    }
+
+    .revenue-history-container::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .revenue-history-container::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 10px;
+    }
+
+    .revenue-history-container::-webkit-scrollbar-thumb {
+        background: var(--accent);
+        border-radius: 10px;
+    }
+
+    /* Revenue Item - Fixed width container */
+    .revenue-item {
+        background: none;
+        border-radius: 5px;
+        margin-bottom: 12px;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        border: none;
+        width: 100%;
+        box-sizing: border-box;
+        display: block;
+    }
+
+    .revenue-item:hover {
+        border-color: var(--accent);
+    }
+
+    /* Revenue Header - Fixed width container */
+    .revenue-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 20px;
+        cursor: pointer;
+        background: rgba(255, 255, 255, 0.03);
+        transition: all 0.3s ease;
+        width: 100%;
+        box-sizing: border-box;
+        gap: 15px;
+    }
+
+    .revenue-header:hover {
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    .revenue-header-left {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+    }
+
+    .revenue-date-range {
+        font-weight: 600;
+        font-size: 0.75rem;
+        color: rgb(141, 141, 141);
+        opacity: 0.9;
+        word-break: break-word;
+    }
+
+    .revenue-user-share {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--success-color);
+    }
+
+    /* Status badge */
+    .revenue-status {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    .revenue-status.completed {
+        color: #10b981;
+    }
+
+    .revenue-status.pending {
+        color: #f59e0b;
+    }
+
+    .revenue-status.loss {
+        color: #ef4444;
+    }
+
+    /* Revenue Details section - NO horizontal scroll, preserves layout */
+    .revenue-details {
+        display: none;
+        padding: 16px 20px;
+        background: rgba(0, 0, 0, 0.2);
+        border-top: 1px solid var(--glass-border);
+        width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
+    }
+
+    .revenue-details.active {
+        display: block;
+        animation: slideDown 0.3s ease;
+    }
+
+    /* Each detail row - flex with proper wrapping */
+    .revenue-detail-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .revenue-detail-row:last-child {
+        border-bottom: none;
+    }
+
+    .revenue-detail-label {
+        font-weight: 500;
+        opacity: 0.7;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+
+    .revenue-detail-value {
+        font-weight: 600;
+        font-size: 0.9rem;
+        text-align: right;
+        word-break: break-word;
+        flex-shrink: 0;
+    }
+
+    .revenue-detail-value.profit-positive {
+        color: var(--success);
+    }
+
+    .revenue-detail-value.profit-negative {
+        color: var(--danger);
+    }
+
+    .empty-revenue {
+        text-align: center;
+        padding: 60px 20px;
+        opacity: 0.7;
+        font-size: 1rem;
+    }
+
+    #revenueHistoryModal .modal-actions {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--glass-border);
+        justify-content: flex-end;
+        flex-shrink: 0;
+    }
+
+    #revenueHistoryModal .modal-actions button {
+        padding: 10px 24px;
+        font-size: 0.9rem;
+    }
+
+    @keyframes slideDown {
+        from {
+            opacity: 0;
+            transform: translateY(-5px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    /* Mobile responsive adjustments - no width changes on click */
+    @media (max-width: 768px) {
+        #revenueHistoryModal .modal-content {
+            padding: 1rem;
+        }
+        
+        .revenue-header {
+            padding: 12px 16px;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        
+        .revenue-status {
+            align-self: flex-start;
+        }
+        
+        .revenue-details {
+            padding: 12px 16px;
+        }
+        
+        .revenue-detail-row {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
+        
+        .revenue-detail-value {
+            text-align: left;
+        }
+    }
+    /* Active Contract Card */
+    .revenue-item.active-contract {
+        background: rgba(16, 185, 129, 0.05);
+        margin-bottom: 20px;
+    }
+    
+    .revenue-item.active-contract .revenue-header {
+        background: none;
+    }
+    
+    .revenue-item.active-contract .revenue-user-share {
+        color: var(--accent);
+        font-size: 1rem;
+        letter-spacing: 0.5px;
+    }
+    
+    .revenue-item.active-contract .revenue-date-range {
+        color: var(--accent);
+        font-weight: 600;
+    }
+    
+</style>
 <style>
     /* Additional styles for unpaid-payment state */
     .unpaid-warning {
