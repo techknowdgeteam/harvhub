@@ -2255,6 +2255,197 @@
             }
             exit;
         }
+        // 5z5: Get System Server IP Configuration
+        if ($action === 'get_system_ip_config') {
+            try {
+                $stmt = $pdo->prepare("SELECT system_server_ipconfig FROM {$serverAccountTable} WHERE id = 1");
+                $stmt->execute();
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $config = [];
+                if ($result && !empty($result['system_server_ipconfig'])) {
+                    $config = json_decode($result['system_server_ipconfig'], true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $config = [];
+                    }
+                }
+                
+                echo json_encode(['success' => true, 'config' => $config]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z6: Update System Server IP Configuration
+        if ($action === 'update_system_ip_config') {
+            $config = json_decode($_POST['config'] ?? '{}', true);
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                echo json_encode(['error' => 'Invalid JSON configuration']);
+                exit;
+            }
+            
+            // Verify admin credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            try {
+                $jsonConfig = json_encode($config, JSON_PRETTY_PRINT);
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET system_server_ipconfig = ? WHERE id = 1");
+                $stmt->execute([$jsonConfig]);
+                
+                echo json_encode(['success' => true, 'message' => 'IP configuration updated successfully']);
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z7: Search Users for IP Assignment - SEARCHES ALL USERS
+        if ($action === 'search_users_for_ip') {
+            $search = trim($_POST['search'] ?? '');
+            $exclude_ids = isset($_POST['exclude_ids']) ? json_decode($_POST['exclude_ids'], true) : [];
+            
+            if (strlen($search) < 1) {
+                echo json_encode(['success' => true, 'users' => []]);
+                exit;
+            }
+            
+            $users = [];
+            $searchTerm = '%' . $search . '%';
+            
+            // Search in insiders_server table - NO STATUS FILTERING, get ALL users
+            try {
+                $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
+                if ($checkTable1->rowCount() > 0) {
+                    // First, check what columns exist in this table
+                    $availableColumns = [];
+                    $colQuery = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable}");
+                    while ($col = $colQuery->fetch(PDO::FETCH_ASSOC)) {
+                        $availableColumns[] = $col['Field'];
+                    }
+                    
+                    // Build SELECT with available columns only
+                    $selectFields = "id, fullname, email, '{$insidersServerTable}' as source";
+                    if (in_array('broker', $availableColumns)) $selectFields .= ", broker";
+                    if (in_array('login', $availableColumns)) $selectFields .= ", login";
+                    if (in_array('broker_balance', $availableColumns)) $selectFields .= ", broker_balance";
+                    if (in_array('application_status', $availableColumns)) $selectFields .= ", application_status";
+                    
+                    $stmt1 = $pdo->prepare("
+                        SELECT {$selectFields} 
+                        FROM {$insidersServerTable} 
+                        WHERE (fullname LIKE ? OR email LIKE ? OR id LIKE ?)
+                        ORDER BY fullname ASC
+                        LIMIT 50
+                    ");
+                    $stmt1->execute([$searchTerm, $searchTerm, $searchTerm]);
+                    $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($results as $user) {
+                        if (!in_array($user['id'], $exclude_ids)) {
+                            $users[] = $user;
+                        }
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Error searching insiders_server_table: " . $e->getMessage());
+            }
+            
+            // Search in insiders table - NO STATUS FILTERING, get ALL users
+            try {
+                $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
+                if ($checkTable2->rowCount() > 0) {
+                    // First, check what columns exist in this table
+                    $availableColumns = [];
+                    $colQuery = $pdo->query("SHOW COLUMNS FROM {$insidersTable}");
+                    while ($col = $colQuery->fetch(PDO::FETCH_ASSOC)) {
+                        $availableColumns[] = $col['Field'];
+                    }
+                    
+                    // Build SELECT with available columns only
+                    $selectFields = "id, fullname, email, '{$insidersTable}' as source";
+                    if (in_array('broker', $availableColumns)) $selectFields .= ", broker";
+                    if (in_array('login', $availableColumns)) $selectFields .= ", login";
+                    if (in_array('broker_balance', $availableColumns)) $selectFields .= ", broker_balance";
+                    if (in_array('application_status', $availableColumns)) $selectFields .= ", application_status";
+                    
+                    $stmt2 = $pdo->prepare("
+                        SELECT {$selectFields} 
+                        FROM {$insidersTable} 
+                        WHERE (fullname LIKE ? OR email LIKE ? OR id LIKE ?)
+                        ORDER BY fullname ASC
+                        LIMIT 50
+                    ");
+                    $stmt2->execute([$searchTerm, $searchTerm, $searchTerm]);
+                    $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($results as $user) {
+                        if (!in_array($user['id'], $exclude_ids)) {
+                            $users[] = $user;
+                        }
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Error searching insiders_table: " . $e->getMessage());
+            }
+            
+            // Remove duplicates by ID (in case a user appears in both tables - unlikely but safe)
+            $uniqueUsers = [];
+            $seenIds = [];
+            foreach ($users as $user) {
+                if (!in_array($user['id'], $seenIds)) {
+                    $seenIds[] = $user['id'];
+                    $uniqueUsers[] = $user;
+                }
+            }
+            
+            echo json_encode(['success' => true, 'users' => $uniqueUsers]);
+            exit;
+        }
+
+        // 5z8: Get User Details by IDs
+        if ($action === 'get_users_by_ids') {
+            $user_ids = json_decode($_POST['user_ids'] ?? '[]', true);
+            $source_table = $_POST['source_table'] ?? $insidersTable;
+            
+            if (empty($user_ids) || !is_array($user_ids)) {
+                echo json_encode(['success' => true, 'users' => []]);
+                exit;
+            }
+            
+            $users = [];
+            $placeholders = implode(',', array_fill(0, count($user_ids), '?'));
+            
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT id, fullname, email, broker, login, broker_balance, profitandloss, application_status 
+                    FROM {$source_table} 
+                    WHERE id IN ({$placeholders})
+                ");
+                $stmt->execute($user_ids);
+                $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                echo json_encode(['success' => true, 'users' => $users]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
     }
 
     // ============================================
@@ -2829,6 +3020,7 @@
                     <h2> Admin Navigation</h2>
                     <div class="nav-menu">
                         <a href="serveraccount.php?view=settings"> Server Settings & Configuration</a>
+                        <a href="serveraccount.php?view=system_ips">🖥️ System Servers IP</a> 
                         <a href="serveraccount.php?view=paid_users"> Revenue & Users Dashboard</a>
                         <a href="serveraccount.php?view=account_management">Account Management</a>
                         <a href="serveraccount.php?view=analytics">Analytics</a>
@@ -2844,6 +3036,8 @@
             <!-- ============================================ -->
             <?php elseif ($currentView === 'analytics'): ?>
                 <?php include 'analytics.php'; ?>     
+            <?php elseif ($currentView === 'system_ips'): ?>
+                <?php include 'system_server_ips.php'; ?>
             <!-- ============================================ -->
             <!-- SECTION 10d: SETTINGS & CONFIGURATION        -->
             <!-- ============================================ -->

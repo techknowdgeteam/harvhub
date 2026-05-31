@@ -448,7 +448,7 @@
     } elseif ($balance_under_verification) {
         // Under verification - Show pending message, NO buttons
         $dashboard_disclaimer = "Account verification in progress.";
-        $loyalty_text = "Your account is currently under review. Once verified, you'll be able to start trading. This process technically takes 24-48 hours.";
+        $loyalty_text = "Your account is currently under review. Once verified, you'll start earning. This process technically takes 24-48 hours.";
         $loyalties_message = "Verification Pending";
         $show_apply_button = false;  // CRITICAL: Hide apply button
         $show_reenroll_button = false;  // CRITICAL: Hide enroll button
@@ -1720,12 +1720,16 @@
                     <span class="loyalty-status-msg"><?= htmlspecialchars($loyalties_message) ?></span>
                     <p><?= htmlspecialchars($loyalty_text) ?></p>
 
-                    <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
+                    <?php if ($is_contract_active && $executionStartDate && $executionStartDate !== '0000-00-00'): ?>
                         <span class="contract-dates">
                             Started: <?= htmlspecialchars($formatted_start_date) ?> | Ends: <?= htmlspecialchars($formatted_end_date) ?>
                         </span>
                     <?php endif; ?>
-                    <p><?= $CONTRACT_DURATION ?> days contract duration</p>
+                    
+                    <?php if ($is_contract_active): ?>
+                        <p><?= $CONTRACT_DURATION ?> days contract duration</p>
+                    <?php endif; ?>
+                    
                     <?php if ($MIN_PROFIT_FOR_SPLIT > 0): ?>
                         <small style="opacity:0.6;">Min profit for split: $<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?></small>
                     <?php endif; ?>
