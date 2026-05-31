@@ -4,6 +4,118 @@
 ?>
 
 <style>
+    /* IP Properties Section Styles */
+    .ip-properties-section {
+        background: var(--bg-primary);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 20px;
+        border: 1px solid var(--border-color);
+    }
+
+    .ip-properties-section .assigned-users-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .add-property-btn {
+        background: #9b59b6;
+        color: white;
+        border: none;
+        padding: 5px 12px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        transition: background 0.2s ease;
+    }
+
+    .add-property-btn:hover {
+        background: #8e44ad;
+    }
+
+    .ip-properties-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .property-item {
+        background: var(--bg-secondary);
+        border-radius: 6px;
+        padding: 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border: 1px solid var(--border-color);
+    }
+
+    .property-item:hover {
+        border-color: #9b59b6;
+    }
+
+    .property-info {
+        flex: 1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: baseline;
+    }
+
+    .property-key {
+        font-weight: 600;
+        font-size: 13px;
+        color: #9b59b6;
+        font-family: monospace;
+    }
+
+    .property-value {
+        font-size: 13px;
+        color: var(--text-primary);
+        word-break: break-all;
+    }
+
+    .property-actions {
+        display: flex;
+        gap: 8px;
+    }
+
+    .edit-property-btn {
+        background: #f39c12;
+        color: white;
+        border: none;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+    }
+
+    .edit-property-btn:hover {
+        background: #e67e22;
+    }
+
+    .delete-property-btn {
+        background: #e74c3c;
+        color: white;
+        border: none;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+    }
+
+    .delete-property-btn:hover {
+        background: #c0392b;
+    }
+
+    .no-properties {
+        text-align: center;
+        padding: 15px;
+        color: var(--text-secondary);
+        font-size: 12px;
+    }
     /* System IP Management Styles */
     .ip-management-container {
         max-width: 1400px;
@@ -632,10 +744,36 @@
         });
     }
     
+    // Store expanded IPs before re-render
+    let expandedIps = [];
+
+    // Function to save expanded state
+    function saveExpandedState() {
+        expandedIps = [];
+        document.querySelectorAll('.ip-card.expanded').forEach(card => {
+            const ip = card.getAttribute('data-ip');
+            if (ip) expandedIps.push(ip);
+        });
+    }
+
+    // Function to restore expanded state
+    function restoreExpandedState() {
+        expandedIps.forEach(ip => {
+            const card = document.querySelector(`.ip-card[data-ip="${escapeHtml(ip).replace(/"/g, '&quot;')}"]`);
+            if (card) {
+                card.classList.add('expanded');
+            }
+        });
+        expandedIps = [];
+    }
+
     // Render IP configuration
     function renderIpConfig(config) {
         const container = document.getElementById('ip-config-container');
         const ipAddresses = Object.keys(config);
+        
+        // Save current expanded state before re-rendering
+        saveExpandedState();
         
         if (ipAddresses.length === 0) {
             container.innerHTML = `
@@ -648,23 +786,50 @@
             return;
         }
         
-        // Fetch all user details for all IPs
+        // Fetch all user details for all IPs (but don't re-render immediately)
         const allUserIds = [];
         ipAddresses.forEach(ip => {
-            const userIds = config[ip] || [];
+            let ipData = config[ip];
+            let userIds = [];
+            
+            // Extract user IDs from the data structure
+            if (Array.isArray(ipData)) {
+                if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                    userIds = ipData.slice(0, -1);
+                } else {
+                    userIds = [...ipData];
+                }
+            } else if (typeof ipData === 'object') {
+                userIds = ipData._userIds || [];
+            }
+            
             userIds.forEach(id => {
                 if (!allUserIds.includes(id)) allUserIds.push(id);
             });
         });
         
-        if (allUserIds.length > 0) {
-            fetchUserDetails(allUserIds);
-        }
-        
         let html = '<div class="ip-grid">';
         
         ipAddresses.forEach(ip => {
-            const userIds = config[ip] || [];
+            let ipData = config[ip];
+            let userIds = [];
+            let properties = {};
+            
+            // Extract user IDs and properties from the data structure
+            if (Array.isArray(ipData)) {
+                if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                    properties = ipData[ipData.length - 1];
+                    userIds = ipData.slice(0, -1);
+                } else {
+                    userIds = [...ipData];
+                    properties = {};
+                }
+            } else if (typeof ipData === 'object') {
+                userIds = ipData._userIds || [];
+                properties = { ...ipData };
+                delete properties._userIds;
+            }
+            
             const userCount = userIds.length;
 
             html += `
@@ -676,14 +841,29 @@
                         </div>
                     </div>
                     <div class="ip-card-body">
+                        <!-- IP Properties Section -->
+                        <div class="ip-properties-section">
+                            <div class="assigned-users-title">
+                                <span>⚙️ IP Properties / Configuration</span>
+                            </div>
+                            <div class="ip-properties-list" id="properties-list-${escapeHtml(ip).replace(/\./g, '-')}">
+                                ${renderIpProperties(ip, ipData)}
+                            </div>
+                            <div class="assigned-users-title">
+                                <button class="add-property-btn" onclick="event.stopPropagation(); showAddPropertyModal('${escapeHtml(ip)}')">
+                                    + Add Property
+                                </button>
+                            </div>
+                        </div>
                         <div class="assigned-users-section">
                             <div class="assigned-users-title">
-                                <span>📋 Assigned Users (${userCount})</span>
+                                <span> Assigned Users (${userCount})</span>
                             </div>
                             <div class="assigned-users-list" id="users-list-${escapeHtml(ip).replace(/\./g, '-')}">
                                 ${renderAssignedUsers(ip, userIds)}
                             </div>
                         </div>
+                        
                         <div class="add-users-section">
                             <div class="assigned-users-title">
                                 <span>➕ Add Users to ${escapeHtml(ip)}</span>
@@ -712,6 +892,9 @@
         html += '</div>';
         container.innerHTML = html;
         
+        // Restore expanded state after re-render
+        restoreExpandedState();
+        
         // Initialize pending changes tracking
         ipAddresses.forEach(ip => {
             if (!pendingChanges[ip]) {
@@ -721,6 +904,143 @@
                 };
             }
         });
+        
+        // Now fetch user details asynchronously without disrupting the UI
+        if (allUserIds.length > 0) {
+            fetchUserDetailsBackground(allUserIds);
+        }
+    }
+
+    // Fetch user details in background without re-rendering
+    function fetchUserDetailsBackground(userIds) {
+        const uniqueIds = [...new Set(userIds)];
+        const idsToFetch = uniqueIds.filter(id => !userCache[id]);
+        
+        if (idsToFetch.length === 0) return;
+        
+        Promise.all([
+            fetchUsersFromTable(idsToFetch, '<?= $insidersTable ?>'),
+            fetchUsersFromTable(idsToFetch, '<?= $insidersServerTable ?>')
+        ]).then(([users1, users2]) => {
+            const allUsers = [...users1, ...users2];
+            let hasNewUsers = false;
+            allUsers.forEach(user => {
+                if (!userCache[user.id]) {
+                    userCache[user.id] = user;
+                    hasNewUsers = true;
+                }
+            });
+            
+            if (hasNewUsers) {
+                updateAllUserDisplays();
+            }
+        });
+    }
+
+    // Fetch user details (wrapper for backward compatibility)
+    function fetchUserDetails(userIds) {
+        fetchUserDetailsBackground(userIds);
+    }
+
+    // Update ALL user displays (both expanded and collapsed)
+    function updateAllUserDisplays() {
+        document.querySelectorAll('.ip-card').forEach(card => {
+            const ip = card.getAttribute('data-ip');
+            if (ip && currentIpConfig[ip]) {
+                let ipData = currentIpConfig[ip];
+                let userIds = [];
+                
+                // Extract user IDs from the data structure
+                if (Array.isArray(ipData)) {
+                    if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                        userIds = ipData.slice(0, -1);
+                    } else {
+                        userIds = [...ipData];
+                    }
+                } else if (typeof ipData === 'object') {
+                    userIds = ipData._userIds || [];
+                }
+                
+                const usersListDiv = card.querySelector('.assigned-users-list');
+                if (usersListDiv) {
+                    usersListDiv.innerHTML = renderAssignedUsers(ip, userIds);
+                }
+                
+                // Update the user count badge
+                const userCount = userIds.length;
+                const badgeSpan = card.querySelector('.ip-badge');
+                if (badgeSpan) {
+                    badgeSpan.textContent = `${userCount} user${userCount !== 1 ? 's' : ''}`;
+                }
+                
+                // Update the assigned users title count
+                const usersTitle = card.querySelector('.assigned-users-section .assigned-users-title span');
+                if (usersTitle) {
+                    usersTitle.textContent = `📋 Assigned Users (${userCount})`;
+                }
+            }
+        });
+    }
+
+    // Update user displays (wrapper for backward compatibility)
+    function updateUserDisplays() {
+        updateAllUserDisplays();
+    }
+
+    // Render IP properties
+    function renderIpProperties(ip, ipData) {
+        let propertiesHtml = '';
+        let properties = {};
+        
+        if (ipData && typeof ipData === 'object') {
+            if (Array.isArray(ipData)) {
+                if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                    properties = ipData[ipData.length - 1];
+                } else {
+                    properties = {};
+                }
+            } else {
+                properties = ipData;
+            }
+        }
+        
+        const propertyKeys = Object.keys(properties).filter(key => {
+            return !/^\d+$/.test(key) && key !== '_userIds';
+        });
+        
+        if (propertyKeys.length === 0) {
+            return '<div class="no-properties">No properties configured. Click "Add Property" to add configuration.</div>';
+        }
+        
+        propertyKeys.forEach(key => {
+            const value = properties[key];
+            let displayValue = '';
+            
+            if (typeof value === 'object') {
+                displayValue = JSON.stringify(value);
+            } else {
+                displayValue = value;
+            }
+            
+            propertiesHtml += `
+                <div class="property-item" data-property-key="${escapeHtml(key)}">
+                    <div class="property-info">
+                        <span class="property-key">📌 ${escapeHtml(key)}:</span>
+                        <span class="property-value">${escapeHtml(String(displayValue))}</span>
+                    </div>
+                    <div class="property-actions">
+                        <button class="edit-property-btn" onclick="event.stopPropagation(); editProperty('${escapeHtml(ip)}', '${escapeHtml(key)}', '${escapeHtml(String(displayValue)).replace(/'/g, "\\'")}')">
+                            ✏️
+                        </button>
+                        <button class="delete-property-btn" onclick="event.stopPropagation(); deleteProperty('${escapeHtml(ip)}', '${escapeHtml(key)}')">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        return propertiesHtml;
     }
     
     // Render assigned users for an IP
@@ -730,13 +1050,16 @@
         }
         
         let html = '';
+        let hasMissingUsers = false;
+        
         userIds.forEach(userId => {
             const user = userCache[userId];
             if (user) {
                 html += `
                     <div class="assigned-user-item" data-user-id="${userId}" data-ip="${escapeHtml(ip)}">
                         <div class="user-info">
-                            <div class="user-name">👤 ${escapeHtml(user.fullname || 'N/A')} (ID: ${userId}) <br> ${escapeHtml(user.email || 'N/A')}</div>
+                            <div class="user-name">👤 ${escapeHtml(user.fullname || 'N/A')} (ID: ${userId})</div>
+                            <div class="user-email">📧 ${escapeHtml(user.email || 'N/A')}</div>
                         </div>
                         <button class="remove-user-btn" onclick="removeUserFromIp('${escapeHtml(ip)}', '${userId}')">
                             Remove
@@ -744,12 +1067,14 @@
                     </div>
                 `;
             } else {
+                hasMissingUsers = true;
                 html += `
                     <div class="assigned-user-item" data-user-id="${userId}" data-ip="${escapeHtml(ip)}">
                         <div class="user-info">
-                            <div class="user-name">Loading user ${userId}...</div>
+                            <div class="user-name">⏳ Loading user ${userId}...</div>
+                            <div class="user-email">Please wait...</div>
                         </div>
-                        <button class="remove-user-btn" onclick="removeUserFromIp('${escapeHtml(ip)}', '${userId}')">
+                        <button class="remove-user-btn" onclick="removeUserFromIp('${escapeHtml(ip)}', '${userId}')" disabled style="opacity:0.5; cursor:not-allowed;">
                             Remove
                         </button>
                     </div>
@@ -757,29 +1082,16 @@
             }
         });
         
+        if (hasMissingUsers) {
+            const missingUserIds = userIds.filter(id => !userCache[id]);
+            if (missingUserIds.length > 0) {
+                setTimeout(() => {
+                    fetchUserDetailsBackground(missingUserIds);
+                }, 100);
+            }
+        }
+        
         return html;
-    }
-    
-    // Fetch user details for multiple user IDs
-    function fetchUserDetails(userIds) {
-        const uniqueIds = [...new Set(userIds)];
-        const idsToFetch = uniqueIds.filter(id => !userCache[id]);
-        
-        if (idsToFetch.length === 0) return;
-        
-        // Try both tables
-        Promise.all([
-            fetchUsersFromTable(idsToFetch, '<?= $insidersTable ?>'),
-            fetchUsersFromTable(idsToFetch, '<?= $insidersServerTable ?>')
-        ]).then(([users1, users2]) => {
-            const allUsers = [...users1, ...users2];
-            allUsers.forEach(user => {
-                userCache[user.id] = user;
-            });
-            
-            // Re-render to show loaded users
-            renderIpConfig(currentIpConfig);
-        });
     }
     
     function fetchUsersFromTable(userIds, table) {
@@ -819,7 +1131,7 @@
         card.classList.toggle('expanded');
     }
     
-    // Search users for IP assignment - FIXED to always show users even if linked
+    // Search users for IP assignment
     let searchTimeouts = {};
     
     function searchUsers(inputElement, ip) {
@@ -838,12 +1150,9 @@
         }
         
         searchTimeouts[searchKey] = setTimeout(() => {
-            // Get current users for this IP and pending adds
             const currentUsers = currentIpConfig[ip] || [];
             const pendingAdds = pendingChanges[ip]?.toAdd || [];
-            const excludeIds = [...currentUsers, ...pendingAdds];
             
-            // Build reverse mapping: user_id -> ip for ALL users
             const userToIpMap = {};
             for (const [existingIp, userIds] of Object.entries(currentIpConfig)) {
                 if (Array.isArray(userIds)) {
@@ -862,7 +1171,7 @@
                 body: new URLSearchParams({
                     action: 'search_users_for_ip',
                     search: searchTerm,
-                    exclude_ids: JSON.stringify([]) // DON'T exclude anyone from search results
+                    exclude_ids: JSON.stringify([])
                 })
             })
             .then(response => response.json())
@@ -886,17 +1195,17 @@
                         let disabledStyle = '';
                         
                         if (isAlreadyInThisIp || isPendingAdd) {
-                            ipStatusHtml = `<div class="search-result-ip-status linked">✅ User is already assigned to this IP</div>`;
+                            ipStatusHtml = `<div class="search-result-ip-status linked">✅ User is already assigned to THIS IP</div>`;
                             selectable = false;
                             onclickAction = '';
                             disabledStyle = 'style="opacity:0.5; cursor:not-allowed;"';
                         } else if (linkedIp) {
-                            ipStatusHtml = `<div class="search-result-ip-status linked-to-other">🔗 User is currently linked to IP: <strong>${escapeHtml(linkedIp)}</strong></div>`;
-                            // Still selectable - can be moved/reassigned
-                            selectable = true;
-                            disabledStyle = '';
+                            ipStatusHtml = `<div class="search-result-ip-status linked-to-other">🔒 User is currently linked to IP: <strong>${escapeHtml(linkedIp)}</strong><br><span style="font-size: 11px;">⚠️ Must be removed from current IP first</span></div>`;
+                            selectable = false;
+                            onclickAction = '';
+                            disabledStyle = 'style="opacity:0.5; cursor:not-allowed;"';
                         } else {
-                            ipStatusHtml = `<div class="search-result-ip-status not-linked">⚠️ User is not linked to any server IP (available to assign)</div>`;
+                            ipStatusHtml = `<div class="search-result-ip-status not-linked">✅ User is not linked to any server IP (available to assign)</div>`;
                             selectable = true;
                             disabledStyle = '';
                         }
@@ -931,23 +1240,19 @@
         const resultsDiv = document.getElementById(`search-results-${searchKey}`);
         const searchInput = document.querySelector(`#search-results-${searchKey}`).previousElementSibling;
         
-        // Clear search
         searchInput.value = '';
         resultsDiv.classList.remove('show');
         resultsDiv.innerHTML = '';
         
-        // Initialize pending changes for this IP if needed
         if (!pendingChanges[ip]) {
             pendingChanges[ip] = { toAdd: [], toRemove: [] };
         }
         
-        // Check if user is already assigned (should not happen due to exclude in search, but double-check)
         const currentUsers = currentIpConfig[ip] || [];
         if (!currentUsers.includes(userId) && !pendingChanges[ip].toAdd.includes(userId)) {
             pendingChanges[ip].toAdd.push(userId);
             updatePendingUsersDisplay(ip);
             
-            // Cache user info
             if (!userCache[userId]) {
                 userCache[userId] = { id: userId, fullname: fullname, email: email };
             }
@@ -1171,25 +1476,48 @@
         const pending = pendingChanges[ip];
         if (!pending) return;
         
-        let currentUsers = [...(currentIpConfig[ip] || [])];
+        let ipData = currentIpConfig[ip] || [];
+        let userIds = [];
+        let properties = {};
+        
+        if (Array.isArray(ipData)) {
+            if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                properties = ipData[ipData.length - 1];
+                userIds = ipData.slice(0, -1);
+            } else {
+                userIds = [...ipData];
+                properties = {};
+            }
+        } else if (typeof ipData === 'object') {
+            userIds = ipData._userIds || [];
+            properties = { ...ipData };
+            delete properties._userIds;
+        }
         
         pending.toRemove.forEach(userId => {
-            const index = currentUsers.indexOf(parseInt(userId));
+            const index = userIds.indexOf(parseInt(userId));
             if (index !== -1) {
-                currentUsers.splice(index, 1);
+                userIds.splice(index, 1);
             }
         });
         
         pending.toAdd.forEach(userId => {
-            if (!currentUsers.includes(parseInt(userId))) {
-                currentUsers.push(parseInt(userId));
+            if (!userIds.includes(parseInt(userId))) {
+                userIds.push(parseInt(userId));
             }
         });
         
-        currentUsers.sort((a, b) => a - b);
+        userIds.sort((a, b) => a - b);
+        
+        let newIpData;
+        if (Object.keys(properties).length === 0) {
+            newIpData = userIds;
+        } else {
+            newIpData = [...userIds, properties];
+        }
         
         const newConfig = { ...currentIpConfig };
-        newConfig[ip] = currentUsers;
+        newConfig[ip] = newIpData;
         
         fetch('serveraccount.php', {
             method: 'POST',
@@ -1224,9 +1552,9 @@
     function deleteIpAddress(ip) {
         showPasswordModalForIpDelete(ip);
     }
-    // Edit IP address - rename existing IP with custom modal
+    
+    // Edit IP address
     function editIpAddress(oldIp) {
-        // Create custom input modal
         let editModal = document.getElementById('ip-edit-input-modal');
         if (!editModal) {
             editModal = document.createElement('div');
@@ -1246,7 +1574,6 @@
             document.body.appendChild(editModal);
         }
         
-        // Set the current IP as default value
         const inputField = document.getElementById('ip-edit-input');
         inputField.value = oldIp;
         inputField.focus();
@@ -1258,7 +1585,6 @@
         const confirmBtn = document.getElementById('ip-edit-input-confirm');
         const cancelBtn = document.getElementById('ip-edit-input-cancel');
         
-        // Remove old event listeners by cloning
         const newConfirmBtn = confirmBtn.cloneNode(true);
         const newCancelBtn = cancelBtn.cloneNode(true);
         confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
@@ -1267,7 +1593,6 @@
         newConfirmBtn.onclick = () => {
             const newIp = inputField.value.trim();
             
-            // Validate input - ONLY check if empty
             if (!newIp) {
                 showMessage('❌ Value cannot be empty', 'error');
                 inputField.focus();
@@ -1280,8 +1605,6 @@
                 return;
             }
             
-            // REMOVED IP PATTERN VALIDATION - allow any value
-            
             editModal.classList.remove('show');
             showPasswordModalForIpEdit(oldIp, newIp);
         };
@@ -1290,7 +1613,6 @@
             editModal.classList.remove('show');
         };
         
-        // Allow Enter key to submit
         inputField.onkeypress = (e) => {
             if (e.key === 'Enter') {
                 newConfirmBtn.click();
@@ -1370,17 +1692,35 @@
     }
 
     function executeIpEdit(oldIp, newIp, password) {
-        // Create new config with the IP renamed
+        let oldIpData = currentIpConfig[oldIp] || [];
+        let userIds = [];
+        let properties = {};
+        
+        if (Array.isArray(oldIpData)) {
+            if (oldIpData.length > 0 && typeof oldIpData[oldIpData.length - 1] === 'object' && !Array.isArray(oldIpData[oldIpData.length - 1])) {
+                properties = oldIpData[oldIpData.length - 1];
+                userIds = oldIpData.slice(0, -1);
+            } else {
+                userIds = [...oldIpData];
+                properties = {};
+            }
+        }
+        
         const newConfig = { ...currentIpConfig };
         
-        // Check if new IP already exists
         if (newConfig[newIp]) {
             showMessage('❌ Error: IP address ' + newIp + ' already exists!', 'error');
             return;
         }
         
-        // Move the users from old IP to new IP
-        newConfig[newIp] = newConfig[oldIp];
+        let newIpData;
+        if (Object.keys(properties).length === 0) {
+            newIpData = userIds;
+        } else {
+            newIpData = [...userIds, properties];
+        }
+        
+        newConfig[newIp] = newIpData;
         delete newConfig[oldIp];
         
         fetch('serveraccount.php', {
@@ -1399,10 +1739,8 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Update local config
                 currentIpConfig = newConfig;
                 
-                // Update pending changes reference if exists
                 if (pendingChanges[oldIp]) {
                     pendingChanges[newIp] = pendingChanges[oldIp];
                     delete pendingChanges[oldIp];
@@ -1515,158 +1853,8 @@
         });
     }
     
-    // Global Search Function
-    function setupGlobalSearch() {
-        const searchInput = document.getElementById('global-search-input');
-        const resultsDiv = document.getElementById('global-search-results');
-        
-        if (!searchInput) return;
-        
-        searchInput.addEventListener('input', function() {
-            const searchTerm = this.value.trim();
-            
-            if (globalSearchTimeout) {
-                clearTimeout(globalSearchTimeout);
-            }
-            
-            if (searchTerm.length < 1) {
-                resultsDiv.classList.remove('show');
-                resultsDiv.innerHTML = '';
-                return;
-            }
-            
-            globalSearchTimeout = setTimeout(() => {
-                performGlobalSearch(searchTerm);
-            }, 500);
-        });
-        
-        // Close results when clicking outside
-        document.addEventListener('click', function(e) {
-            if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
-                resultsDiv.classList.remove('show');
-            }
-        });
-    }
-    
-    function performGlobalSearch(searchTerm) {
-        const resultsDiv = document.getElementById('global-search-results');
-        
-        // Build reverse mapping: user_id -> ip
-        const userToIpMap = {};
-        for (const [ip, userIds] of Object.entries(currentIpConfig)) {
-            if (Array.isArray(userIds)) {
-                userIds.forEach(userId => {
-                    userToIpMap[userId] = ip;
-                });
-            }
-        }
-        
-        fetch('serveraccount.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'XMLHttpRequest'
-            },
-            body: new URLSearchParams({
-                action: 'search_users_for_ip',
-                search: searchTerm,
-                exclude_ids: JSON.stringify([])
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success && data.users.length > 0) {
-                resultsDiv.innerHTML = data.users.map(user => {
-                    const linkedIp = userToIpMap[user.id];
-                    let ipHtml = '';
-                    if (linkedIp) {
-                        ipHtml = `<div class="global-result-ip">🔗 Linked to IP: ${escapeHtml(linkedIp)}</div>`;
-                    } else {
-                        ipHtml = `<div class="global-result-no-ip">⚠️ User is not linked to any server IP</div>`;
-                    }
-                    
-                    return `
-                        <div class="global-search-result-item" onclick="scrollToIp('${linkedIp ? escapeHtml(linkedIp) : ''}', ${user.id})">
-                            <div class="global-result-name">👤 ${escapeHtml(user.fullname)} (ID: ${user.id})</div>
-                            <div class="global-result-email">📧 ${escapeHtml(user.email)}</div>
-                            ${ipHtml}
-                        </div>
-                    `;
-                }).join('');
-                resultsDiv.classList.add('show');
-            } else {
-                resultsDiv.innerHTML = '<div class="global-search-result-item" style="color: var(--text-secondary);">No users found</div>';
-                resultsDiv.classList.add('show');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            resultsDiv.innerHTML = '<div class="global-search-result-item" style="color: #e74c3c;">Error searching users</div>';
-            resultsDiv.classList.add('show');
-        });
-    }
-    
-    function scrollToIp(ip, userId) {
-        const resultsDiv = document.getElementById('global-search-results');
-        resultsDiv.classList.remove('show');
-        document.getElementById('global-search-input').value = '';
-        
-        if (!ip) {
-            showMessage(`User ID ${userId} is not linked to any server IP.`, 'error');
-            return;
-        }
-        
-        // Find and expand the IP card
-        const cards = document.querySelectorAll('.ip-card');
-        for (const card of cards) {
-            if (card.getAttribute('data-ip') === ip) {
-                card.classList.add('expanded');
-                card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                
-                // Highlight the user in the list
-                setTimeout(() => {
-                    const userItem = card.querySelector(`.assigned-user-item[data-user-id="${userId}"]`);
-                    if (userItem) {
-                        userItem.style.backgroundColor = 'rgba(46, 204, 113, 0.2)';
-                        userItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        setTimeout(() => {
-                            userItem.style.backgroundColor = '';
-                        }, 3000);
-                    }
-                }, 500);
-                break;
-            }
-        }
-    }
-    
-    // Close modals when clicking outside
-    document.addEventListener('click', function(event) {
-        const modals = document.querySelectorAll('.modal');
-        modals.forEach(modal => {
-            if (event.target === modal && modal.style.display === 'flex') {
-                modal.style.display = 'none';
-            }
-            if (event.target === modal && modal.classList.contains('show')) {
-                modal.classList.remove('show');
-            }
-        });
-    });
-    
-    // Show message helper
-    function showMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message';
-        messageDiv.innerHTML = '<span style="color:' + (type === 'error' ? '#e74c3c' : '#2ecc71') + ';">' + message + '</span>';
-        const container = document.querySelector('.container');
-        if (!container) return;
-        const existingMessage = container.querySelector('.message');
-        if (existingMessage) existingMessage.remove();
-        container.insertBefore(messageDiv, container.firstChild);
-        setTimeout(() => messageDiv.remove(), 3000);
-    }
     // Add new IP address
     function addNewIpAddress() {
-        // Create custom input modal
         let addModal = document.getElementById('ip-add-input-modal');
         if (!addModal) {
             addModal = document.createElement('div');
@@ -1695,7 +1883,6 @@
         const confirmBtn = document.getElementById('ip-add-input-confirm');
         const cancelBtn = document.getElementById('ip-add-input-cancel');
         
-        // Remove old event listeners by cloning
         const newConfirmBtn = confirmBtn.cloneNode(true);
         const newCancelBtn = cancelBtn.cloneNode(true);
         confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
@@ -1704,16 +1891,12 @@
         newConfirmBtn.onclick = () => {
             const newIp = inputField.value.trim();
             
-            // Validate input - ONLY check if empty
             if (!newIp) {
                 showMessage('❌ Value cannot be empty', 'error');
                 inputField.focus();
                 return;
             }
             
-            // REMOVED IP PATTERN VALIDATION - allow any value
-            
-            // Check if key already exists
             if (currentIpConfig[newIp]) {
                 showMessage('❌ Key "' + newIp + '" already exists!', 'error');
                 inputField.focus();
@@ -1728,7 +1911,6 @@
             addModal.classList.remove('show');
         };
         
-        // Allow Enter key to submit
         inputField.onkeypress = (e) => {
             if (e.key === 'Enter') {
                 newConfirmBtn.click();
@@ -1805,7 +1987,6 @@
     }
 
     function executeIpAdd(newIp, password) {
-        // Create new config with the IP added as empty array
         const newConfig = { ...currentIpConfig };
         newConfig[newIp] = [];
         
@@ -1825,15 +2006,8 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Update local config
                 currentIpConfig = newConfig;
-                
-                // Initialize pending changes for new IP
-                pendingChanges[newIp] = {
-                    toAdd: [],
-                    toRemove: []
-                };
-                
+                pendingChanges[newIp] = { toAdd: [], toRemove: [] };
                 loadSystemIpConfig();
                 showMessage('✅ IP address ' + newIp + ' added successfully!', 'success');
             } else {
@@ -1846,12 +2020,644 @@
         });
     }
     
-    // Escape HTML helper
+    // Global Search Functions
+    function setupGlobalSearch() {
+        const searchInput = document.getElementById('global-search-input');
+        const resultsDiv = document.getElementById('global-search-results');
+        
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('input', function() {
+            const searchTerm = this.value.trim();
+            
+            if (globalSearchTimeout) {
+                clearTimeout(globalSearchTimeout);
+            }
+            
+            if (searchTerm.length < 1) {
+                resultsDiv.classList.remove('show');
+                resultsDiv.innerHTML = '';
+                return;
+            }
+            
+            globalSearchTimeout = setTimeout(() => {
+                performGlobalSearch(searchTerm);
+            }, 500);
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
+                resultsDiv.classList.remove('show');
+            }
+        });
+    }
+    
+    function performGlobalSearch(searchTerm) {
+        const resultsDiv = document.getElementById('global-search-results');
+        
+        const userToIpMap = {};
+        for (const [ip, userIds] of Object.entries(currentIpConfig)) {
+            if (Array.isArray(userIds)) {
+                userIds.forEach(userId => {
+                    userToIpMap[userId] = ip;
+                });
+            }
+        }
+        
+        fetch('serveraccount.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: new URLSearchParams({
+                action: 'search_users_for_ip',
+                search: searchTerm,
+                exclude_ids: JSON.stringify([])
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.users.length > 0) {
+                resultsDiv.innerHTML = data.users.map(user => {
+                    const linkedIp = userToIpMap[user.id];
+                    let ipHtml = '';
+                    if (linkedIp) {
+                        ipHtml = `<div class="global-result-ip">🔗 Linked to IP: ${escapeHtml(linkedIp)}</div>`;
+                    } else {
+                        ipHtml = `<div class="global-result-no-ip">⚠️ User is not linked to any server IP</div>`;
+                    }
+                    
+                    return `
+                        <div class="global-search-result-item" onclick="scrollToIp('${linkedIp ? escapeHtml(linkedIp) : ''}', ${user.id})">
+                            <div class="global-result-name">👤 ${escapeHtml(user.fullname)} (ID: ${user.id})</div>
+                            <div class="global-result-email">📧 ${escapeHtml(user.email)}</div>
+                            ${ipHtml}
+                        </div>
+                    `;
+                }).join('');
+                resultsDiv.classList.add('show');
+            } else {
+                resultsDiv.innerHTML = '<div class="global-search-result-item" style="color: var(--text-secondary);">No users found</div>';
+                resultsDiv.classList.add('show');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            resultsDiv.innerHTML = '<div class="global-search-result-item" style="color: #e74c3c;">Error searching users</div>';
+            resultsDiv.classList.add('show');
+        });
+    }
+    
+    function scrollToIp(ip, userId) {
+        const resultsDiv = document.getElementById('global-search-results');
+        resultsDiv.classList.remove('show');
+        document.getElementById('global-search-input').value = '';
+        
+        if (!ip) {
+            showMessage(`User ID ${userId} is not linked to any server IP.`, 'error');
+            return;
+        }
+        
+        const cards = document.querySelectorAll('.ip-card');
+        for (const card of cards) {
+            if (card.getAttribute('data-ip') === ip) {
+                card.classList.add('expanded');
+                card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                
+                setTimeout(() => {
+                    const userItem = card.querySelector(`.assigned-user-item[data-user-id="${userId}"]`);
+                    if (userItem) {
+                        userItem.style.backgroundColor = 'rgba(46, 204, 113, 0.2)';
+                        userItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        setTimeout(() => {
+                            userItem.style.backgroundColor = '';
+                        }, 3000);
+                    }
+                }, 500);
+                break;
+            }
+        }
+    }
+    
+    // Property Management Functions
+    function showAddPropertyModal(ip) {
+        let modal = document.getElementById('ip-property-add-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'ip-property-add-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 450px;">
+                    <h3>➕ Add IP Property</h3>
+                    <p>Add a new property for IP: <strong id="add-property-ip-display"></strong></p>
+                    <label style="display: block; margin-top: 15px; font-size: 13px; font-weight: 600;">Property Key:</label>
+                    <input type="text" id="property-key-input" class="json-password-input" placeholder="e.g., capacity, url, loginid" autocomplete="off" style="width: 100%; padding: 10px; margin: 5px 0;">
+                    <label style="display: block; margin-top: 10px; font-size: 13px; font-weight: 600;">Property Value:</label>
+                    <input type="text" id="property-value-input" class="json-password-input" placeholder="Enter value" autocomplete="off" style="width: 100%; padding: 10px; margin: 5px 0;">
+                    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                        <button type="button" id="property-add-cancel" class="modal-cancel-btn">Cancel</button>
+                        <button type="button" id="property-add-confirm" class="modal-confirm-btn" style="background: #9b59b6;">Add Property</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        document.getElementById('add-property-ip-display').textContent = ip;
+        const keyInput = document.getElementById('property-key-input');
+        const valueInput = document.getElementById('property-value-input');
+        keyInput.value = '';
+        valueInput.value = '';
+        keyInput.focus();
+        
+        modal.classList.add('show');
+        modal.setAttribute('data-ip', ip);
+        
+        const confirmBtn = document.getElementById('property-add-confirm');
+        const cancelBtn = document.getElementById('property-add-cancel');
+        
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        newConfirmBtn.onclick = () => {
+            const propertyKey = keyInput.value.trim();
+            const propertyValue = valueInput.value.trim();
+            
+            if (!propertyKey) {
+                showMessage('❌ Property key cannot be empty', 'error');
+                keyInput.focus();
+                return;
+            }
+            
+            const storedIp = modal.getAttribute('data-ip');
+            modal.classList.remove('show');
+            showPasswordModalForPropertyAdd(storedIp, propertyKey, propertyValue);
+        };
+        
+        newCancelBtn.onclick = () => {
+            modal.classList.remove('show');
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        };
+    }
+
+    function showPasswordModalForPropertyAdd(ip, propertyKey, propertyValue) {
+        let modal = document.getElementById('property-add-password-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'property-add-password-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 400px;">
+                    <h3>🔐 Confirm Add Property</h3>
+                    <p>You are about to add property:</p>
+                    <p><strong id="add-prop-key"></strong> = <strong id="add-prop-value"></strong></p>
+                    <p style="font-size: 12px; margin-top: 10px;">Please enter your admin password to confirm.</p>
+                    <input type="password" id="property-add-password" class="json-password-input" placeholder="Admin Password" autocomplete="off">
+                    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                        <button type="button" id="property-add-password-cancel" class="modal-cancel-btn">Cancel</button>
+                        <button type="button" id="property-add-password-confirm" class="modal-confirm-btn" style="background: #9b59b6;">Confirm Add</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        document.getElementById('add-prop-key').textContent = propertyKey;
+        document.getElementById('add-prop-value').textContent = propertyValue || '(empty)';
+        modal.classList.add('show');
+        modal.setAttribute('data-ip', ip);
+        modal.setAttribute('data-key', propertyKey);
+        modal.setAttribute('data-value', propertyValue);
+        
+        const passwordInput = document.getElementById('property-add-password');
+        passwordInput.value = '';
+        passwordInput.focus();
+        
+        const confirmBtn = document.getElementById('property-add-password-confirm');
+        const cancelBtn = document.getElementById('property-add-password-cancel');
+        
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        newConfirmBtn.onclick = () => {
+            const password = passwordInput.value;
+            if (!password) {
+                alert('Password is required');
+                passwordInput.focus();
+                return;
+            }
+            const storedIp = modal.getAttribute('data-ip');
+            const storedKey = modal.getAttribute('data-key');
+            const storedValue = modal.getAttribute('data-value');
+            modal.classList.remove('show');
+            executePropertyAdd(storedIp, storedKey, storedValue, password);
+        };
+        
+        newCancelBtn.onclick = () => {
+            modal.classList.remove('show');
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        };
+    }
+
+    function executePropertyAdd(ip, propertyKey, propertyValue, password) {
+        let ipData = currentIpConfig[ip] || [];
+        let userIds = [];
+        let properties = {};
+        
+        if (Array.isArray(ipData)) {
+            if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                properties = ipData[ipData.length - 1];
+                userIds = ipData.slice(0, -1);
+            } else {
+                userIds = [...ipData];
+                properties = {};
+            }
+        } else if (typeof ipData === 'object') {
+            userIds = ipData._userIds || [];
+            properties = { ...ipData };
+            delete properties._userIds;
+        }
+        
+        properties[propertyKey] = propertyValue;
+        
+        const newIpData = [...userIds, properties];
+        const newConfig = { ...currentIpConfig };
+        newConfig[ip] = newIpData;
+        
+        fetch('serveraccount.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: new URLSearchParams({
+                action: 'update_system_ip_config',
+                config: JSON.stringify(newConfig),
+                admin_password: password,
+                login_id: '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>'
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentIpConfig = newConfig;
+                loadSystemIpConfig();
+                showMessage('✅ Property "' + propertyKey + '" added successfully!', 'success');
+            } else {
+                showMessage('❌ Error: ' + (data.error || 'Failed to add property'), 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showMessage('❌ Error adding property', 'error');
+        });
+    }
+
+    function editProperty(ip, propertyKey, currentValue) {
+        let modal = document.getElementById('ip-property-edit-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'ip-property-edit-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 450px;">
+                    <h3>✏️ Edit Property</h3>
+                    <p>Edit property for IP: <strong id="edit-property-ip-display"></strong></p>
+                    <label style="display: block; margin-top: 15px; font-size: 13px; font-weight: 600;">Property Key:</label>
+                    <input type="text" id="edit-property-key-input" class="json-password-input" autocomplete="off" style="width: 100%; padding: 10px; margin: 5px 0;">
+                    <label style="display: block; margin-top: 10px; font-size: 13px; font-weight: 600;">Property Value:</label>
+                    <input type="text" id="edit-property-value-input" class="json-password-input" autocomplete="off" style="width: 100%; padding: 10px; margin: 5px 0;">
+                    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                        <button type="button" id="property-edit-cancel" class="modal-cancel-btn">Cancel</button>
+                        <button type="button" id="property-edit-confirm" class="modal-confirm-btn" style="background: #f39c12;">Save Changes</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        document.getElementById('edit-property-ip-display').textContent = ip;
+        const keyInput = document.getElementById('edit-property-key-input');
+        const valueInput = document.getElementById('edit-property-value-input');
+        keyInput.value = propertyKey;
+        valueInput.value = currentValue;
+        keyInput.focus();
+        keyInput.select();
+        
+        modal.classList.add('show');
+        modal.setAttribute('data-ip', ip);
+        modal.setAttribute('data-old-key', propertyKey);
+        
+        const confirmBtn = document.getElementById('property-edit-confirm');
+        const cancelBtn = document.getElementById('property-edit-cancel');
+        
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        newConfirmBtn.onclick = () => {
+            const newKey = keyInput.value.trim();
+            const newValue = valueInput.value.trim();
+            
+            if (!newKey) {
+                showMessage('❌ Property key cannot be empty', 'error');
+                keyInput.focus();
+                return;
+            }
+            
+            const storedIp = modal.getAttribute('data-ip');
+            const oldKey = modal.getAttribute('data-old-key');
+            modal.classList.remove('show');
+            showPasswordModalForPropertyEdit(storedIp, oldKey, newKey, newValue);
+        };
+        
+        newCancelBtn.onclick = () => {
+            modal.classList.remove('show');
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        };
+    }
+
+    function showPasswordModalForPropertyEdit(ip, oldKey, newKey, newValue) {
+        let modal = document.getElementById('property-edit-password-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'property-edit-password-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 400px;">
+                    <h3>🔐 Confirm Edit Property</h3>
+                    <p>You are about to edit property:</p>
+                    <p><strong id="edit-prop-old"></strong> → <strong id="edit-prop-new"></strong></p>
+                    <p style="font-size: 12px; margin-top: 10px;">Please enter your admin password to confirm.</p>
+                    <input type="password" id="property-edit-password" class="json-password-input" placeholder="Admin Password" autocomplete="off">
+                    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                        <button type="button" id="property-edit-password-cancel" class="modal-cancel-btn">Cancel</button>
+                        <button type="button" id="property-edit-password-confirm" class="modal-confirm-btn" style="background: #f39c12;">Confirm Edit</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        document.getElementById('edit-prop-old').textContent = oldKey + ' = ' + (newValue || '(empty)');
+        document.getElementById('edit-prop-new').textContent = newKey + ' = ' + (newValue || '(empty)');
+        modal.classList.add('show');
+        modal.setAttribute('data-ip', ip);
+        modal.setAttribute('data-old-key', oldKey);
+        modal.setAttribute('data-new-key', newKey);
+        modal.setAttribute('data-value', newValue);
+        
+        const passwordInput = document.getElementById('property-edit-password');
+        passwordInput.value = '';
+        passwordInput.focus();
+        
+        const confirmBtn = document.getElementById('property-edit-password-confirm');
+        const cancelBtn = document.getElementById('property-edit-password-cancel');
+        
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        newConfirmBtn.onclick = () => {
+            const password = passwordInput.value;
+            if (!password) {
+                alert('Password is required');
+                passwordInput.focus();
+                return;
+            }
+            const storedIp = modal.getAttribute('data-ip');
+            const storedOldKey = modal.getAttribute('data-old-key');
+            const storedNewKey = modal.getAttribute('data-new-key');
+            const storedValue = modal.getAttribute('data-value');
+            modal.classList.remove('show');
+            executePropertyEdit(storedIp, storedOldKey, storedNewKey, storedValue, password);
+        };
+        
+        newCancelBtn.onclick = () => {
+            modal.classList.remove('show');
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        };
+    }
+
+    function executePropertyEdit(ip, oldKey, newKey, newValue, password) {
+        let ipData = currentIpConfig[ip] || [];
+        let userIds = [];
+        let properties = {};
+        
+        if (Array.isArray(ipData)) {
+            if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                properties = ipData[ipData.length - 1];
+                userIds = ipData.slice(0, -1);
+            } else {
+                userIds = [...ipData];
+                properties = {};
+            }
+        }
+        
+        delete properties[oldKey];
+        properties[newKey] = newValue;
+        
+        const newIpData = [...userIds, properties];
+        const newConfig = { ...currentIpConfig };
+        newConfig[ip] = newIpData;
+        
+        fetch('serveraccount.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: new URLSearchParams({
+                action: 'update_system_ip_config',
+                config: JSON.stringify(newConfig),
+                admin_password: password,
+                login_id: '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>'
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentIpConfig = newConfig;
+                loadSystemIpConfig();
+                showMessage('✅ Property updated successfully!', 'success');
+            } else {
+                showMessage('❌ Error: ' + (data.error || 'Failed to update property'), 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showMessage('❌ Error updating property', 'error');
+        });
+    }
+
+    function deleteProperty(ip, propertyKey) {
+        showPasswordModalForPropertyDelete(ip, propertyKey);
+    }
+
+    function showPasswordModalForPropertyDelete(ip, propertyKey) {
+        let modal = document.getElementById('property-delete-password-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'property-delete-password-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 400px;">
+                    <h3>⚠️ Confirm Delete Property</h3>
+                    <p>You are about to delete property: <strong id="delete-prop-key"></strong></p>
+                    <p style="color: #e74c3c; font-size: 12px;">This action cannot be undone!</p>
+                    <p style="font-size: 12px; margin-top: 10px;">Please enter your admin password to confirm.</p>
+                    <input type="password" id="property-delete-password" class="json-password-input" placeholder="Admin Password" autocomplete="off">
+                    <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                        <button type="button" id="property-delete-password-cancel" class="modal-cancel-btn">Cancel</button>
+                        <button type="button" id="property-delete-password-confirm" class="modal-confirm-btn" style="background: #e74c3c;">Delete Property</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        document.getElementById('delete-prop-key').textContent = propertyKey;
+        modal.classList.add('show');
+        modal.setAttribute('data-ip', ip);
+        modal.setAttribute('data-key', propertyKey);
+        
+        const passwordInput = document.getElementById('property-delete-password');
+        passwordInput.value = '';
+        passwordInput.focus();
+        
+        const confirmBtn = document.getElementById('property-delete-password-confirm');
+        const cancelBtn = document.getElementById('property-delete-password-cancel');
+        
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        newConfirmBtn.onclick = () => {
+            const password = passwordInput.value;
+            if (!password) {
+                alert('Password is required');
+                passwordInput.focus();
+                return;
+            }
+            const storedIp = modal.getAttribute('data-ip');
+            const storedKey = modal.getAttribute('data-key');
+            modal.classList.remove('show');
+            executePropertyDelete(storedIp, storedKey, password);
+        };
+        
+        newCancelBtn.onclick = () => {
+            modal.classList.remove('show');
+        };
+        
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        };
+    }
+
+    function executePropertyDelete(ip, propertyKey, password) {
+        let ipData = currentIpConfig[ip] || [];
+        let userIds = [];
+        let properties = {};
+        
+        if (Array.isArray(ipData)) {
+            if (ipData.length > 0 && typeof ipData[ipData.length - 1] === 'object' && !Array.isArray(ipData[ipData.length - 1])) {
+                properties = ipData[ipData.length - 1];
+                userIds = ipData.slice(0, -1);
+            } else {
+                userIds = [...ipData];
+                properties = {};
+            }
+        }
+        
+        delete properties[propertyKey];
+        
+        let newIpData;
+        if (Object.keys(properties).length === 0) {
+            newIpData = userIds;
+        } else {
+            newIpData = [...userIds, properties];
+        }
+        
+        const newConfig = { ...currentIpConfig };
+        newConfig[ip] = newIpData;
+        
+        fetch('serveraccount.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: new URLSearchParams({
+                action: 'update_system_ip_config',
+                config: JSON.stringify(newConfig),
+                admin_password: password,
+                login_id: '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>'
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentIpConfig = newConfig;
+                loadSystemIpConfig();
+                showMessage('✅ Property "' + propertyKey + '" deleted successfully!', 'success');
+            } else {
+                showMessage('❌ Error: ' + (data.error || 'Failed to delete property'), 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showMessage('❌ Error deleting property', 'error');
+        });
+    }
+    
+    // Helper Functions
     function escapeHtml(text) {
         if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+    
+    function showMessage(message, type) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message';
+        messageDiv.innerHTML = '<span style="color:' + (type === 'error' ? '#e74c3c' : '#2ecc71') + ';">' + message + '</span>';
+        const container = document.querySelector('.container');
+        if (!container) return;
+        const existingMessage = container.querySelector('.message');
+        if (existingMessage) existingMessage.remove();
+        container.insertBefore(messageDiv, container.firstChild);
+        setTimeout(() => messageDiv.remove(), 3000);
     }
     
     // Initialize on load

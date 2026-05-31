@@ -3020,7 +3020,7 @@
                     <h2> Admin Navigation</h2>
                     <div class="nav-menu">
                         <a href="serveraccount.php?view=settings"> Server Settings & Configuration</a>
-                        <a href="serveraccount.php?view=system_ips">🖥️ System Servers IP</a> 
+                        <a href="serveraccount.php?view=system_ips"> System Servers IP</a> 
                         <a href="serveraccount.php?view=paid_users"> Revenue & Users Dashboard</a>
                         <a href="serveraccount.php?view=account_management">Account Management</a>
                         <a href="serveraccount.php?view=analytics">Analytics</a>
