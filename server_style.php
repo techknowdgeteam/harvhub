@@ -250,483 +250,6 @@
 </style>
 
 <style>
-    /* New Users Styles */
-    .new-users-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        min-width: 800px;
-        margin-bottom: 20px;
-    }
-    .new-users-table th, .new-users-table td {
-        border: 1px solid var(--border-color);
-        padding: 12px 8px;
-        text-align: left;
-        vertical-align: middle;
-    }
-    .new-users-table th {
-        background-color: var(--table-header-bg);
-        color: var(--header-color);
-        font-weight: 600;
-        white-space: nowrap;
-    }
-    .new-users-table tr:nth-child(even) {
-        background-color: var(--table-even-row-bg);
-    }
-    
-    .status-update-form {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-    .status-input {
-        flex: 1;
-        min-width: 120px;
-        padding: 8px 10px;
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        background-color: var(--input-bg);
-        color: var(--text-color);
-        font-size: 13px;
-        margin: 0;
-    }
-    .update-btn {
-        width: auto;
-        padding: 8px 14px;
-        background-color: #2196F3;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: bold;
-        margin-top: 20px;
-        white-space: nowrap;
-    }
-    .update-btn:hover {
-        background-color: #1976D2;
-    }
-    
-    .status-badge-new {
-        display: inline-block;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-        font-size: 11px;
-        background-color: #2196F3;
-        color: white;
-        white-space: nowrap;
-    }
-    
-    .no-users-message {
-        text-align: center;
-        padding: 40px;
-        border: 2px dashed var(--border-color);
-        border-radius: 12px;
-        color: #888;
-    }
-
-    @media (max-width: 600px) {
-        .status-update-form { flex-direction: column; }
-        .status-input { width: 100%; min-width: auto; }
-        .update-btn { width: 100%; }
-    }
-</style>
-
-<style>
-    /* Revenue Summary Cards */
-    .revenue-summary {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
-        margin: 20px 0;
-    }
-    .summary-card {
-        background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(76, 175, 80, 0.05));
-        border: 1px solid var(--border-color);
-        border-radius: 14px;
-        padding: 16px;
-        text-align: center;
-    }
-    .summary-card.warning {
-        background: linear-gradient(135deg, rgba(255, 152, 0, 0.1), rgba(255, 152, 0, 0.05));
-    }
-    .summary-card .label {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #888;
-        margin-bottom: 5px;
-    }
-    .summary-card .value {
-        font-size: 1.6rem;
-        font-weight: bold;
-        color: var(--header-color);
-    }
-    .summary-card .sub {
-        font-size: 0.8rem;
-        color: #888;
-        margin-top: 5px;
-    }
-
-    /* Filter Toggle Buttons */
-    .filter-section {
-        margin: 20px 0;
-    }
-    .filter-toggles {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-bottom: 15px;
-    }
-    .filter-btn {
-        flex: 1;
-        min-width: 100px;
-        padding: 12px 20px;
-        background-color: var(--input-bg);
-        color: var(--text-color);
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: bold;
-        transition: all 0.2s;
-        margin: 0;
-    }
-    .filter-btn.active {
-        background-color: var(--primary-color);
-        color: white;
-        border-color: var(--primary-color);
-    }
-    .filter-btn:hover {
-        border-color: var(--primary-color);
-    }
-    .search-container {
-        display: flex;
-        gap: 10px;
-        margin-top: 15px;
-    }
-    .search-input {
-        flex: 1;
-        padding: 12px;
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        background-color: var(--input-bg);
-        color: var(--text-color);
-        font-size: 14px;
-    }
-    .search-input::placeholder {
-        color: #888;
-    }
-    .reset-btn {
-        width: auto;
-        padding: 12px 20px;
-        background-color: var(--accent-color);
-        margin: 0;
-    }
-
-    .table-wrapper {
-        width: 100%;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        margin-top: 20px;
-        margin-bottom: 100px;
-        border-radius: 12px;
-    }
-    .user-list-table { 
-        width: 100%; 
-        border-collapse: collapse; 
-        font-size: 13px; 
-        min-width: 1100px;
-        margin-bottom: 20px;
-    }
-    .user-list-table th, .user-list-table td { 
-        border: 1px solid var(--border-color); 
-        padding: 12px 8px; 
-        text-align: left; 
-        vertical-align: middle;
-    }
-    .user-list-table th { 
-        background-color: var(--table-header-bg); 
-        color: var(--header-color); 
-        font-weight: 600;
-        white-space: nowrap;
-    }
-    .user-list-table tr:nth-child(even) { background-color: var(--table-even-row-bg); }
-    .user-list-table button { width: auto; padding: 8px 14px; margin: 0; font-size: 13px; }
-    .confirm-btn { background-color: var(--primary-color); margin-top: 0; }
-    
-    .profit { color: var(--profit-color); font-weight: bold; }
-    .loss { color: var(--loss-color); font-weight: bold; }
-    .status-badge { 
-        padding: 4px 10px; 
-        border-radius: 20px; 
-        font-weight: bold; 
-        font-size: 11px;
-        color: white;
-        white-space: nowrap;
-        display: inline-block;
-    }
-    .loyalty-paid { background-color: #f39c12; }
-    .loyalty-paymentconfirmed { background-color: var(--primary-color); }
-    .loyalty-unpaid { background-color: #7f8c8d; }
-    .eligible-badge {
-        background-color: var(--primary-color);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 10px;
-        margin-left: 5px;
-    }
-
-    /* Payment Status Styles */
-    .payment-status-select {
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        background: white;
-        color: black;
-        font-size: 12px;
-        cursor: pointer;
-    }
-    
-    .payment-status-select:focus {
-        outline: none;
-        border-color: var(--accent-color);
-    }
-    
-    .update-status-btn {
-        padding: 6px 12px;
-        background: var(--accent-color);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        font-size: 11px;
-        cursor: pointer;
-        margin-left: 5px;
-        transition: all 0.3s ease;
-    }
-    
-    .update-status-btn:hover {
-        background: var(--accent-hover);
-        transform: translateY(-1px);
-    }
-    
-    .status-cell {
-        min-width: 180px;
-    }
-    
-    .status-badge-payment-confirmed {
-        background: #27ae60;
-        color: white;
-    }
-    
-    .status-badge-payment-rejected {
-        background: #e74c3c;
-        color: white;
-    }
-    
-    .status-badge-payment-not-received {
-        background: #f39c12;
-        color: white;
-    }
-    
-    .status-badge-payment-failed {
-        background: #c0392b;
-        color: white;
-    }
-    
-    /* Server Decision Styles */
-    .server-decision-select {
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        background: white;
-        color: black;
-        font-size: 12px;
-        cursor: pointer;
-    }
-    
-    .server-decision-select:focus {
-        outline: none;
-        border-color: var(--accent-color);
-    }
-    
-    .update-decision-btn {
-        padding: 6px 12px;
-        background: #9b59b6;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        font-size: 11px;
-        cursor: pointer;
-        margin-left: 5px;
-        transition: all 0.3s ease;
-    }
-    
-    .update-decision-btn:hover {
-        background: #8e44ad;
-        transform: translateY(-1px);
-    }
-    
-    .unpaid-age-cell {
-        font-size: 11px;
-        line-height: 1.4;
-    }
-    
-    .unpaid-age-ended {
-        color: #e74c3c;
-        font-weight: bold;
-    }
-    
-    .unpaid-age-not-ended {
-        color: #f39c12;
-    }
-    
-    .expected-payment-badge {
-        background: #e74c3c;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 10px;
-        margin-left: 5px;
-    }
-    
-    .server-decision-badge {
-        display: inline-block;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: bold;
-    }
-    
-    .server-decision-blacklisted {
-        background: #2c3e50;
-        color: white;
-    }
-    
-    .server-decision-re-instate {
-        background: #27ae60;
-        color: white;
-    }
-    
-    .server-decision-suspend {
-        background: #e74c3c;
-        color: white;
-    }
-
-    /* Live update indicator styles */
-    .updating {
-        animation: highlightPulse 0.3s ease-out;
-    }
-    
-    @keyframes highlightPulse {
-        0% { background-color: rgba(52, 152, 219, 0); }
-        50% { background-color: rgba(52, 152, 219, 0.3); }
-        100% { background-color: rgba(52, 152, 219, 0); }
-    }
-    
-    .live-badge {
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        background-color: #2ecc71;
-        border-radius: 50%;
-        margin-left: 8px;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { opacity: 0.5; transform: scale(1); }
-        50% { opacity: 1; transform: scale(1.2); }
-        100% { opacity: 0.5; transform: scale(1); }
-    }
-    
-    .user-row.updating-row {
-        background-color: rgba(52, 152, 219, 0.1);
-        transition: background-color 0.3s;
-    }
-    
-    .filter-section {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 15px;
-        margin-bottom: 20px;
-        padding: 15px;
-        background: var(--bg-secondary);
-        border-radius: 12px;
-    }
-    
-    .filter-toggles {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-    
-    .filter-btn {
-        padding: 8px 16px;
-        background: var(--bg-tertiary);
-        border: 1px solid var(--border-color);
-        border-radius: 20px;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    
-    .filter-btn.active {
-        background: var(--accent-color);
-        color: white;
-        border-color: var(--accent-color);
-    }
-    
-    .search-container {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-    }
-    
-    .search-input {
-        padding: 8px 12px;
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        width: 250px;
-    }
-    
-    .reset-btn {
-        padding: 8px 16px;
-        background: #e74c3c;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-    }
-    
-    .reset-btn:hover {
-        background: #c0392b;
-    }
-    
-    .status-update-form.disabled-form {
-        opacity: 0.5;
-        pointer-events: none;
-    }
-    
-    .status-badge-not-eligible {
-        background: #7f8c8d;
-        color: white;
-    }
-    
-    @media (max-width: 600px) {
-        .revenue-summary { grid-template-columns: repeat(2, 1fr); }
-        .summary-card .value { font-size: 1.3rem; }
-        .filter-toggles { flex-direction: column; }
-        .filter-btn { width: 100%; }
-        .table-wrapper { margin-bottom: 100px; }
-    }
-</style>
-
-<style>
     /* Account Management Styles */
     .account-management-container,
     .invested-management-container,
@@ -2015,7 +1538,6 @@
     }
 </style>
 
-
 <style>
     /* Analytics specific styles - Mobile First */
     .analytics-container {
@@ -2841,3 +2363,479 @@
     }
 </style>
 
+<style>
+    /* New Users Styles */
+    .new-users-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        min-width: 800px;
+        margin-bottom: 20px;
+    }
+    .new-users-table th, .new-users-table td {
+        border: 1px solid var(--border-color);
+        padding: 12px 8px;
+        text-align: left;
+        vertical-align: middle;
+    }
+    .new-users-table th {
+        background-color: var(--table-header-bg);
+        color: var(--header-color);
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .new-users-table tr:nth-child(even) {
+        background-color: var(--table-even-row-bg);
+    }
+    
+    .status-update-form {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .status-input {
+        flex: 1;
+        min-width: 120px;
+        padding: 8px 10px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        font-size: 13px;
+        margin: 0;
+    }
+    .update-btn {
+        width: auto;
+        padding: 8px 14px;
+        background-color: #2196F3;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: bold;
+        margin-top: 20px;
+        white-space: nowrap;
+    }
+    .update-btn:hover {
+        background-color: #1976D2;
+    }
+    
+    .status-badge-new {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 11px;
+        background-color: #2196F3;
+        color: white;
+        white-space: nowrap;
+    }
+    
+    .no-users-message {
+        text-align: center;
+        padding: 40px;
+        border: 2px dashed var(--border-color);
+        border-radius: 12px;
+        color: #888;
+    }
+
+    @media (max-width: 600px) {
+        .status-update-form { flex-direction: column; }
+        .status-input { width: 100%; min-width: auto; }
+        .update-btn { width: 100%; }
+    }
+</style>
+
+<style>
+    /* Revenue Summary Cards */
+    .revenue-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin: 20px 0;
+    }
+    .summary-card {
+        background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(76, 175, 80, 0.05));
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        padding: 16px;
+        text-align: center;
+    }
+    .summary-card.warning {
+        background: linear-gradient(135deg, rgba(255, 152, 0, 0.1), rgba(255, 152, 0, 0.05));
+    }
+    .summary-card .label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        margin-bottom: 5px;
+    }
+    .summary-card .value {
+        font-size: 1.6rem;
+        font-weight: bold;
+        color: var(--header-color);
+    }
+    .summary-card .sub {
+        font-size: 0.8rem;
+        color: #888;
+        margin-top: 5px;
+    }
+
+    /* Filter Toggle Buttons */
+    .filter-section {
+        margin: 20px 0;
+    }
+    .filter-toggles {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 15px;
+    }
+    .filter-btn {
+        flex: 1;
+        min-width: 100px;
+        padding: 12px 20px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        transition: all 0.2s;
+        margin: 0;
+    }
+    .filter-btn.active {
+        background-color: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+    .filter-btn:hover {
+        border-color: var(--primary-color);
+    }
+    .search-container {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+    }
+    .search-input {
+        flex: 1;
+        padding: 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        font-size: 14px;
+    }
+    .search-input::placeholder {
+        color: #888;
+    }
+    .reset-btn {
+        width: auto;
+        padding: 12px 20px;
+        background-color: var(--accent-color);
+        margin: 0;
+    }
+
+    .table-wrapper {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin-top: 20px;
+        margin-bottom: 100px;
+        border-radius: 12px;
+    }
+    .user-list-table { 
+        width: 100%; 
+        border-collapse: collapse; 
+        font-size: 13px; 
+        min-width: 1100px;
+        margin-bottom: 20px;
+    }
+    .user-list-table th, .user-list-table td { 
+        border: 1px solid var(--border-color); 
+        padding: 12px 8px; 
+        text-align: left; 
+        vertical-align: middle;
+    }
+    .user-list-table th { 
+        background-color: var(--table-header-bg); 
+        color: var(--header-color); 
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .user-list-table tr:nth-child(even) { background-color: var(--table-even-row-bg); }
+    .user-list-table button { width: auto; padding: 8px 14px; margin: 0; font-size: 13px; }
+    .confirm-btn { background-color: var(--primary-color); margin-top: 0; }
+    
+    .profit { color: var(--profit-color); font-weight: bold; }
+    .loss { color: var(--loss-color); font-weight: bold; }
+    .status-badge { 
+        padding: 4px 10px; 
+        border-radius: 20px; 
+        font-weight: bold; 
+        font-size: 11px;
+        color: white;
+        white-space: nowrap;
+        display: inline-block;
+    }
+    .loyalty-paid { background-color: #f39c12; }
+    .loyalty-paymentconfirmed { background-color: var(--primary-color); }
+    .loyalty-unpaid { background-color: #7f8c8d; }
+    .eligible-badge {
+        background-color: var(--primary-color);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        margin-left: 5px;
+    }
+
+    /* Payment Status Styles */
+    .payment-status-select {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: white;
+        color: black;
+        font-size: 12px;
+        cursor: pointer;
+    }
+    
+    .payment-status-select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+    
+    .update-status-btn {
+        padding: 6px 12px;
+        background: var(--accent-color);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+        margin-left: 5px;
+        transition: all 0.3s ease;
+    }
+    
+    .update-status-btn:hover {
+        background: var(--accent-hover);
+        transform: translateY(-1px);
+    }
+    
+    .status-cell {
+        min-width: 180px;
+    }
+    
+    .status-badge-payment-confirmed {
+        background: #27ae60;
+        color: white;
+    }
+    
+    .status-badge-payment-rejected {
+        background: #e74c3c;
+        color: white;
+    }
+    
+    .status-badge-payment-not-received {
+        background: #f39c12;
+        color: white;
+    }
+    
+    .status-badge-payment-failed {
+        background: #c0392b;
+        color: white;
+    }
+    
+    /* Server Decision Styles */
+    .server-decision-select {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: white;
+        color: black;
+        font-size: 12px;
+        cursor: pointer;
+    }
+    
+    .server-decision-select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+    
+    .update-decision-btn {
+        padding: 6px 12px;
+        background: #9b59b6;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 11px;
+        cursor: pointer;
+        margin-left: 5px;
+        transition: all 0.3s ease;
+    }
+    
+    .update-decision-btn:hover {
+        background: #8e44ad;
+        transform: translateY(-1px);
+    }
+    
+    .unpaid-age-cell {
+        font-size: 11px;
+        line-height: 1.4;
+    }
+    
+    .unpaid-age-ended {
+        color: #e74c3c;
+        font-weight: bold;
+    }
+    
+    .unpaid-age-not-ended {
+        color: #f39c12;
+    }
+    
+    .expected-payment-badge {
+        background: #e74c3c;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        margin-left: 5px;
+    }
+    
+    .server-decision-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: bold;
+    }
+    
+    .server-decision-blacklisted {
+        background: #2c3e50;
+        color: white;
+    }
+    
+    .server-decision-re-instate {
+        background: #27ae60;
+        color: white;
+    }
+    
+    .server-decision-suspend {
+        background: #e74c3c;
+        color: white;
+    }
+
+    /* Live update indicator styles */
+    .updating {
+        animation: highlightPulse 0.3s ease-out;
+    }
+    
+    @keyframes highlightPulse {
+        0% { background-color: rgba(52, 152, 219, 0); }
+        50% { background-color: rgba(52, 152, 219, 0.3); }
+        100% { background-color: rgba(52, 152, 219, 0); }
+    }
+    
+    .live-badge {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background-color: #2ecc71;
+        border-radius: 50%;
+        margin-left: 8px;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 0.5; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.2); }
+        100% { opacity: 0.5; transform: scale(1); }
+    }
+    
+    .user-row.updating-row {
+        background-color: rgba(52, 152, 219, 0.1);
+        transition: background-color 0.3s;
+    }
+    
+    .filter-section {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 15px;
+        margin-bottom: 20px;
+        padding: 15px;
+        background: var(--bg-secondary);
+        border-radius: 12px;
+    }
+    
+    .filter-toggles {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    
+    .filter-btn {
+        padding: 8px 16px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 20px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .filter-btn.active {
+        background: var(--accent-color);
+        color: white;
+        border-color: var(--accent-color);
+    }
+    
+    .search-container {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+    
+    .search-input {
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        width: 250px;
+    }
+    
+    .reset-btn {
+        padding: 8px 16px;
+        background: #e74c3c;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+    
+    .reset-btn:hover {
+        background: #c0392b;
+    }
+    
+    .status-update-form.disabled-form {
+        opacity: 0.5;
+        pointer-events: none;
+    }
+    
+    .status-badge-not-eligible {
+        background: #7f8c8d;
+        color: white;
+    }
+    
+    @media (max-width: 600px) {
+        .revenue-summary { grid-template-columns: repeat(2, 1fr); }
+        .summary-card .value { font-size: 1.3rem; }
+        .filter-toggles { flex-direction: column; }
+        .filter-btn { width: 100%; }
+        .table-wrapper { margin-bottom: 100px; }
+    }
+</style>

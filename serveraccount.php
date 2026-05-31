@@ -140,6 +140,44 @@
         
         return $statusMap[$status] ?? $status;
     }
+    // Add this after calculateUnpaidAge() or normalizePaymentStatus()
+    function calculatePaymentSummaryFromHistory($history) {
+        $summary = [
+            'total_unpaid_revenue' => 0,
+            'total_payment_made' => 0,
+            'total_payment_confirmed' => 0,
+            'total_cancelled_contracts' => 0,
+            'unpaid_count' => 0,
+            'payment_made_count' => 0,
+            'payment_confirmed_count' => 0,
+            'cancelled_count' => 0
+        ];
+        
+        if (!is_array($history)) {
+            return $summary;
+        }
+        
+        foreach ($history as $record) {
+            $loyalties = strtolower($record['loyalties'] ?? '');
+            $serverShare = (float)($record['server_share'] ?? 0);
+            
+            if (in_array($loyalties, ['unpaid-payment', 'unpaid_payment', 'unpaid payment', 'unpaid'])) {
+                $summary['total_unpaid_revenue'] += $serverShare;
+                $summary['unpaid_count']++;
+            } elseif (in_array($loyalties, ['payment-made', 'payment_made', 'payment made'])) {
+                $summary['total_payment_made'] += $serverShare;
+                $summary['payment_made_count']++;
+            } elseif (in_array($loyalties, ['payment-confirmed', 'payment_confirmed', 'payment confirmed'])) {
+                $summary['total_payment_confirmed'] += $serverShare;
+                $summary['payment_confirmed_count']++;
+            } elseif (in_array($loyalties, ['contract_cancelled', 'contract-cancelled', 'contract cancelled'])) {
+                $summary['total_cancelled_contracts'] += $serverShare;
+                $summary['cancelled_count']++;
+            }
+        }
+        
+        return $summary;
+    }
 
     function determineUserStatus($user, $contractDuration, $minProfitForSplit) {
         $executionStartDate = $user['execution_start_date'] ?? null;
@@ -350,6 +388,185 @@
                 }
             } else {
                 echo json_encode(['error' => 'Invalid request']);
+            }
+            exit;
+        }
+        // 5aa: Get Active Investors (users with active contracts)
+        if ($action === 'get_active_investors') {
+            try {
+                $users = array();
+                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $today = date('Y-m-d');
+                
+                // Get from insiders_server table
+                try {
+                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
+                    if ($checkTable1->rowCount() > 0) {
+                        $stmt1 = $pdo->prepare("
+                            SELECT id, fullname, email, execution_start_date, profitandloss, '{$insidersServerTable}' as source, ? as contract_duration
+                            FROM {$insidersServerTable} 
+                            WHERE execution_start_date IS NOT NULL 
+                            AND execution_start_date != '0000-00-00'
+                            AND execution_start_date <= ?
+                            ORDER BY id DESC
+                        ");
+                        $stmt1->execute([$contractDuration, $today]);
+                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        // Filter for active contracts
+                        foreach ($results as $user) {
+                            if (!empty($user['execution_start_date'])) {
+                                $start = new DateTime($user['execution_start_date']);
+                                $end = clone $start;
+                                $end->modify("+{$contractDuration} days");
+                                $todayDT = new DateTime();
+                                if ($todayDT <= $end) {
+                                    $users[] = $user;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception $e) { }
+                
+                // Get from insiders table
+                try {
+                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
+                    if ($checkTable2->rowCount() > 0) {
+                        $stmt2 = $pdo->prepare("
+                            SELECT id, fullname, email, execution_start_date, profitandloss, '{$insidersTable}' as source, ? as contract_duration
+                            FROM {$insidersTable} 
+                            WHERE execution_start_date IS NOT NULL 
+                            AND execution_start_date != '0000-00-00'
+                            AND execution_start_date <= ?
+                            ORDER BY id DESC
+                        ");
+                        $stmt2->execute([$contractDuration, $today]);
+                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($results as $user) {
+                            if (!empty($user['execution_start_date'])) {
+                                $start = new DateTime($user['execution_start_date']);
+                                $end = clone $start;
+                                $end->modify("+{$contractDuration} days");
+                                $todayDT = new DateTime();
+                                if ($todayDT <= $end) {
+                                    $users[] = $user;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception $e) { }
+                
+                echo json_encode(['success' => true, 'users' => $users]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5ab: Get Completed Investors with enhanced data
+        if ($action === 'get_completed_investors') {
+            try {
+                $users = array();
+                
+                // Get from insiders_server table
+                try {
+                    $checkColumn1 = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'revenue_history'");
+                    if ($checkColumn1->rowCount() > 0) {
+                        $stmt1 = $pdo->prepare("
+                            SELECT id, fullname, email, revenue_history, loyalties, '{$insidersServerTable}' as source
+                            FROM {$insidersServerTable} 
+                            WHERE revenue_history IS NOT NULL 
+                            AND revenue_history != ''
+                            AND revenue_history != '[]'
+                            ORDER BY id DESC
+                        ");
+                        $stmt1->execute();
+                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($results as $user) {
+                            $history = json_decode($user['revenue_history'], true);
+                            $user['history_count'] = is_array($history) ? count($history) : 0;
+                            $user['current_loyalties'] = $user['loyalties'] ?? null;
+                            
+                            // Calculate payment summaries from history
+                            $paymentSummary = calculatePaymentSummaryFromHistory($history);
+                            $user['payment_summary'] = $paymentSummary;
+                            
+                            $users[] = $user;
+                        }
+                    }
+                } catch (Exception $e) { }
+                
+                // Get from insiders table
+                try {
+                    $checkColumn2 = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'revenue_history'");
+                    if ($checkColumn2->rowCount() > 0) {
+                        $stmt2 = $pdo->prepare("
+                            SELECT id, fullname, email, revenue_history, loyalties, '{$insidersTable}' as source
+                            FROM {$insidersTable} 
+                            WHERE revenue_history IS NOT NULL 
+                            AND revenue_history != ''
+                            AND revenue_history != '[]'
+                            ORDER BY id DESC
+                        ");
+                        $stmt2->execute();
+                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($results as $user) {
+                            $history = json_decode($user['revenue_history'], true);
+                            $user['history_count'] = is_array($history) ? count($history) : 0;
+                            $user['current_loyalties'] = $user['loyalties'] ?? null;
+                            
+                            // Calculate payment summaries from history
+                            $paymentSummary = calculatePaymentSummaryFromHistory($history);
+                            $user['payment_summary'] = $paymentSummary;
+                            
+                            $users[] = $user;
+                        }
+                    }
+                } catch (Exception $e) { }
+                
+                echo json_encode(['success' => true, 'users' => $users]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5ac: Get Revenue History for a specific user
+        if ($action === 'get_revenue_history') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            try {
+                // Check if revenue_history column exists
+                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+                if ($checkColumn->rowCount() == 0) {
+                    echo json_encode(['success' => true, 'history' => []]);
+                    exit;
+                }
+                
+                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $history = [];
+                if ($result && !empty($result['revenue_history'])) {
+                    $history = json_decode($result['revenue_history'], true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $history = [];
+                    }
+                }
+                
+                echo json_encode(['success' => true, 'history' => $history]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
             exit;
         }
@@ -1537,7 +1754,7 @@
             }
             exit;
         }
-        // 5y: Cancel Contract - Update execution_start_date to make contract expired
+        // 5y: Cancel Contract - Update active record to contract_cancelled
         if ($action === 'cancel_contract') {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
@@ -1567,11 +1784,70 @@
                 exit;
             }
             
+            // Get current user data before cancellation
+            $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $userData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$userData) {
+                echo json_encode(['error' => 'User not found']);
+                exit;
+            }
+            
             // Get contract duration from server account
             $contractDuration = (int)($adminData['contract_duration'] ?? 30);
             
+            // Get current revenue history
+            $history = [];
+            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+            if ($checkColumn->rowCount() > 0) {
+                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($result && !empty($result['revenue_history'])) {
+                    $history = json_decode($result['revenue_history'], true);
+                    if (!is_array($history)) {
+                        $history = [];
+                    }
+                }
+            }
+            
+            // Sort history to find the latest record
+            usort($history, function($a, $b) {
+                $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                return $dateB - $dateA;
+            });
+            
+            $latestRecord = !empty($history) ? $history[0] : null;
+            $latestLoyalties = strtolower($latestRecord['loyalties'] ?? '');
+            
+            // Check if latest record has 'active' status
+            if (!$latestRecord || strpos($latestLoyalties, 'active') === false) {
+                echo json_encode(['error' => 'Cannot cancel contract: No active record found or active is not the latest record']);
+                exit;
+            }
+            
+            // Update the latest active record to contract_cancelled
+            $history[0]['loyalties'] = 'contract_cancelled';
+            $history[0]['cancelled_at'] = date('Y-m-d H:i:s');
+            $history[0]['cancelled_by'] = $login_id;
+            
+            // Save updated history
+            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+            
+            if ($checkColumn->rowCount() == 0) {
+                $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
+            }
+            
+            $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+            $updateStmt->execute([$jsonHistory, $user_id]);
+            
+            // Set loyalties to contract_cancelled
+            $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = 'contract_cancelled' WHERE id = ?");
+            $updateLoyalties->execute([$user_id]);
+            
             // Calculate new execution start date that makes the contract expired
-            // Set date to: today - contract_duration - 2 days (to ensure contract is ended)
             $today = new DateTime();
             $newExecutionDate = clone $today;
             $daysToSubtract = $contractDuration + 2;
@@ -1582,19 +1858,10 @@
             $updateStmt = $pdo->prepare("UPDATE {$source_table} SET execution_start_date = ? WHERE id = ?");
             $updateStmt->execute([$newExecutionDateStr, $user_id]);
             
-            // Calculate new contract days left for response
-            $start = new DateTime($newExecutionDateStr);
-            $end = clone $start;
-            $end->modify("+{$contractDuration} days");
-            $todayForCalc = new DateTime();
-            $todayForCalc->setTime(0, 0, 0);
-            $contractDaysLeft = $todayForCalc->diff($end)->format('%r%a');
-            
             echo json_encode([
                 'success' => true,
-                'message' => "Contract cancelled successfully. Execution start date changed to {$newExecutionDateStr}",
-                'new_execution_date' => $newExecutionDateStr,
-                'contract_days_left' => $contractDaysLeft
+                'message' => "Contract cancelled successfully. Active record updated to contract_cancelled.",
+                'new_execution_date' => $newExecutionDateStr
             ]);
             exit;
         }
@@ -1643,6 +1910,348 @@
                 }
             } else {
                 echo json_encode(['success' => false, 'error' => 'Invalid user selection']);
+            }
+            exit;
+        }
+        // Add this AJAX endpoint to get investor details including revenue history (add to SECTION 5)
+        if ($action === 'get_investor_details') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($user) {
+                    $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                    $brokerBalance = (float)($user['broker_balance'] ?? 0);
+                    $profitAndLoss = (float)($user['profitandloss'] ?? 0);
+                    $currentBalance = $brokerBalance + $profitAndLoss;
+                    
+                    // Get revenue history to check latest record
+                    $history = [];
+                    $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+                    if ($checkColumn->rowCount() > 0) {
+                        $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                        $stmt->execute([$user_id]);
+                        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                        if ($result && !empty($result['revenue_history'])) {
+                            $history = json_decode($result['revenue_history'], true);
+                        }
+                    }
+                    
+                    echo json_encode([
+                        'success' => true,
+                        'user' => [
+                            'fullname' => $user['fullname'],
+                            'email' => $user['email'],
+                            'execution_start_date' => $user['execution_start_date'],
+                            'contract_duration' => $contractDuration,
+                            'profitandloss' => $profitAndLoss,
+                            'current_balance' => $currentBalance,
+                            'broker_balance' => $brokerBalance,
+                            'server_share' => 0,
+                            'user_share' => 0,
+                            'revenue_history' => $history
+                        ]
+                    ]);
+                } else {
+                    echo json_encode(['error' => 'User not found']);
+                }
+            } else {
+                echo json_encode(['error' => 'Invalid request']);
+            }
+            exit;
+        }
+        // 5z2: Update revenue history record status (for payment-made -> payment-confirmed)
+        if ($action === 'update_revenue_status') {
+            $record_id = $_POST['record_id'] ?? '';
+            $new_status = $_POST['new_status'] ?? '';
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            // Verify admin credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            // Validate input
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            try {
+                // Get current revenue history
+                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$result || empty($result['revenue_history'])) {
+                    echo json_encode(['error' => 'No revenue history found']);
+                    exit;
+                }
+                
+                $history = json_decode($result['revenue_history'], true);
+                if (!is_array($history)) {
+                    echo json_encode(['error' => 'Invalid revenue history format']);
+                    exit;
+                }
+                
+                // FIRST: Sort history by recorded_at DESCENDING (newest FIRST)
+                usort($history, function($a, $b) {
+                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                    return $dateB - $dateA; // Descending - newest first
+                });
+                
+                $updated = false;
+                $latestPaymentMadeIndex = -1;
+                
+                // Find the FIRST (newest) record with 'payment-made' in loyalties
+                for ($i = 0; $i < count($history); $i++) {
+                    $loyalties = strtolower($history[$i]['loyalties'] ?? '');
+                    if (strpos($loyalties, 'payment-made') !== false) {
+                        $latestPaymentMadeIndex = $i;
+                        break; // Stop at the first one (which is the newest after sorting)
+                    }
+                }
+                
+                // If found a payment-made record, update it
+                if ($latestPaymentMadeIndex !== -1) {
+                    // Update the latest payment-made record
+                    $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
+                    $updated = true;
+                } else {
+                    echo json_encode(['error' => 'No payment-made record found to update']);
+                    exit;
+                }
+                
+                if ($updated) {
+                    // Save updated history (maintain original order or resort by recorded_at)
+                    usort($history, function($a, $b) {
+                        $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                        $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                        return $dateA - $dateB; // Ascending for storage
+                    });
+                    
+                    $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+                    $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+                    $updateStmt->execute([$jsonHistory, $user_id]);
+                    
+                    echo json_encode(['success' => true, 'message' => 'Revenue history updated successfully']);
+                } else {
+                    echo json_encode(['error' => 'No changes made']);
+                }
+                
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+        // 5z3: Update user's current loyalties status (for current revenue table)
+        if ($action === 'update_user_loyalties') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            $new_status = $_POST['new_status'] ?? '';
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            // Verify admin credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            // Validate input
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            $allowed_statuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
+            if (!in_array($new_status, $allowed_statuses)) {
+                echo json_encode(['error' => 'Invalid status value']);
+                exit;
+            }
+            
+            try {
+                $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
+                $stmt->execute([$new_status, $user_id]);
+                
+                echo json_encode(['success' => true, 'message' => 'User status updated successfully']);
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+        // 5z4: Check and create active contract record in revenue history
+        if ($action === 'ensure_active_contract_record') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            try {
+                // Get user data
+                $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $userData = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$userData) {
+                    echo json_encode(['error' => 'User not found']);
+                    exit;
+                }
+                
+                // Check if contract is active
+                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $executionStartDate = $userData['execution_start_date'] ?? null;
+                
+                if (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
+                    echo json_encode(['error' => 'No execution start date set']);
+                    exit;
+                }
+                
+                $start = new DateTime($executionStartDate);
+                $end = clone $start;
+                $end->modify("+{$contractDuration} days");
+                $today = new DateTime();
+                $today->setTime(0, 0, 0);
+                
+                // Check if contract is still active
+                if ($today > $end) {
+                    echo json_encode(['error' => 'Contract is not active anymore']);
+                    exit;
+                }
+                
+                // Get current revenue history
+                $history = [];
+                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+                if ($checkColumn->rowCount() > 0) {
+                    $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                    $stmt->execute([$user_id]);
+                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($result && !empty($result['revenue_history'])) {
+                        $history = json_decode($result['revenue_history'], true);
+                        if (!is_array($history)) {
+                            $history = [];
+                        }
+                    }
+                }
+                
+                // Sort history by recorded_at or id to find the latest
+                usort($history, function($a, $b) {
+                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                    return $dateB - $dateA;
+                });
+                
+                $latestRecord = !empty($history) ? $history[0] : null;
+                $latestLoyalties = strtolower($latestRecord['loyalties'] ?? '');
+                
+                // Check if latest record is already 'active'
+                if ($latestRecord && strpos($latestLoyalties, 'active') !== false) {
+                    echo json_encode(['success' => true, 'message' => 'Active record already exists as latest', 'already_active' => true]);
+                    exit;
+                }
+                
+                // Create new active record
+                $brokerBalance = (float)($userData['broker_balance'] ?? 0);
+                $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
+                $currentBalance = $brokerBalance + $profitAndLoss;
+                
+                $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
+                $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
+                $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
+                
+                $serverShare = 0;
+                $userShare = 0;
+                if ($profitAndLoss > $minProfitForSplit) {
+                    $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
+                    $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
+                }
+                
+                // Generate new ID
+                $newId = 1;
+                if (!empty($history)) {
+                    $maxId = 0;
+                    foreach ($history as $item) {
+                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
+                            $maxId = (int)$item['id'];
+                        }
+                    }
+                    $newId = $maxId + 1;
+                }
+                
+                $executionEndDate = clone $start;
+                $executionEndDate->modify("+{$contractDuration} days");
+                
+                $activeRecord = [
+                    'id' => $newId,
+                    'execution_start_date' => $executionStartDate,
+                    'execution_end_date' => $executionEndDate->format('Y-m-d'),
+                    'starting_balance' => $brokerBalance,
+                    'current_balance' => $currentBalance,
+                    'profit' => $profitAndLoss,
+                    'user_share' => $userShare,
+                    'server_share' => $serverShare,
+                    'loyalties' => 'active',
+                    'recorded_at' => date('Y-m-d H:i:s')
+                ];
+                
+                // Add to history (as latest)
+                $history[] = $activeRecord;
+                
+                // Sort to ensure active is latest (by recorded_at)
+                usort($history, function($a, $b) {
+                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : 0;
+                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : 0;
+                    return $dateB - $dateA;
+                });
+                
+                // Save updated history
+                $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+                
+                if ($checkColumn->rowCount() == 0) {
+                    $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
+                }
+                
+                $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+                $updateStmt->execute([$jsonHistory, $user_id]);
+                
+                echo json_encode(['success' => true, 'message' => 'Active contract record created successfully', 'record' => $activeRecord]);
+                
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
             }
             exit;
         }
@@ -1838,7 +2447,7 @@
             exit;
         }
 
-        // 6e: Update Payment Status (with hierarchical validation)
+        // 6e: Update Payment Status (with hierarchical validation and revenue history update)
         if (isset($_POST['update_payment_status']) && $re_authenticated_for_action) {
             $user_id = $_POST['user_id'] ?? '';
             $new_status = trim($_POST['payment_status'] ?? '');
@@ -1858,8 +2467,56 @@
                         $decision = determineUserStatus($targetUser, $contractDuration, $minProfitForSplit);
                         
                         if ($decision['has_eligible_profit'] && $decision['should_show_in_revenue']) {
+                            // Update the main loyalties field
                             $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
                             $stmt->execute([$normalizedStatus, $user_id]);
+                            // If confirming payment, also update the revenue history
+                            if ($normalizedStatus === 'payment-confirmed') {
+                                // Get current revenue history
+                                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+                                if ($checkColumn->rowCount() > 0) {
+                                    $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                                    $stmt->execute([$user_id]);
+                                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                                    
+                                    if ($result && !empty($result['revenue_history'])) {
+                                        $history = json_decode($result['revenue_history'], true);
+                                        if (is_array($history)) {
+                                            // FIRST: Sort by recorded_at DESCENDING (newest first)
+                                            usort($history, function($a, $b) {
+                                                $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                                                $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                                                return $dateB - $dateA;
+                                            });
+                                            
+                                            // Find the FIRST (newest) payment-made record
+                                            $latestPaymentMadeIndex = -1;
+                                            for ($i = 0; $i < count($history); $i++) {
+                                                $loyalties = strtolower($history[$i]['loyalties'] ?? '');
+                                                if (strpos($loyalties, 'payment-made') !== false) {
+                                                    $latestPaymentMadeIndex = $i;
+                                                    break; // Stop at first (newest)
+                                                }
+                                            }
+                                            
+                                            // Update if found
+                                            if ($latestPaymentMadeIndex !== -1) {
+                                                $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
+                                                // Resort by ID or recorded_at for storage
+                                                usort($history, function($a, $b) {
+                                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                                                    return $dateA - $dateB;
+                                                });
+                                                $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+                                                $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+                                                $updateStmt->execute([$jsonHistory, $user_id]);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
                             $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment status updated to '{$normalizedStatus}' for User ID {$user_id}!</span>";
                         } else {
                             $_SESSION['admin_message'] = "<span style='color:red;'>❌ Cannot update status: User does not have an eligible profit split scenario. Reason: {$decision['reason']}</span>";
@@ -2352,94 +3009,7 @@
             <!-- SECTION 10e: REVENUE DASHBOARD               -->
             <!-- ============================================ -->
                 <?php elseif ($currentView === 'paid_users'): ?>
-                    <h2> Revenue & Users Dashboard <span class="live-badge"></span></h2>
-                    
-                    <!-- Revenue Summary Cards -->
-                    <div class="revenue-summary">
-                        <div class="summary-card"><div class="label">Total Broker Balance</div><div class="value" id="total-broker-balance" data-value="<?= $revenueSummary['total_broker_balance'] ?? 0 ?>"><?= format_currency($revenueSummary['total_broker_balance'] ?? 0) ?></div></div>
-                        <div class="summary-card"><div class="label">Total P&L</div><div class="value" id="total-profit" style="color: <?= ($revenueSummary['total_profit'] ?? 0) >= 0 ? 'var(--profit-color)' : 'var(--loss-color)' ?>" data-value="<?= $revenueSummary['total_profit'] ?? 0 ?>"><?= format_currency($revenueSummary['total_profit'] ?? 0) ?></div></div>
-                        <div class="summary-card"><div class="label">Current Balance</div><div class="value" id="total-current-balance" data-value="<?= $revenueSummary['total_current_balance'] ?? 0 ?>"><?= format_currency($revenueSummary['total_current_balance'] ?? 0) ?></div></div>
-                        <div class="summary-card"><div class="label">User Share Total</div><div class="value" id="total-user-share" data-value="<?= $revenueSummary['total_user_share'] ?? 0 ?>"><?= format_currency($revenueSummary['total_user_share'] ?? 0) ?></div><div class="sub">User Share (<?= $serverAccount['user_share_percent'] ?? 70 ?>%)</div></div>
-                        <div class="summary-card warning"><div class="label">Expected Payments</div><div class="value" id="total-expected-payments" data-value="<?= $revenueSummary['total_unpaid_payments'] ?? 0 ?>"><?= format_currency($revenueSummary['total_unpaid_payments'] ?? 0) ?></div><div class="sub">Expected Server Share</div></div>
-                        <div class="summary-card payments-made"><div class="label">Payments Made</div><div class="value" id="total-payments-made" data-value="<?= $revenueSummary['total_payments_made'] ?? 0 ?>"><?= format_currency($revenueSummary['total_payments_made'] ?? 0) ?></div><div class="sub">Payment Made</div></div>
-                        <div class="summary-card payments-received"><div class="label">Payments Confirmed</div><div class="value" id="total-payments-received" data-value="<?= $revenueSummary['total_payments_received'] ?? 0 ?>"><?= format_currency($revenueSummary['total_payments_received'] ?? 0) ?></div><div class="sub">Payment Confirmed</div></div>
-                        <div class="summary-card"><div class="label">Users with Profit</div><div class="value" id="users-with-profit" data-value="<?= $revenueSummary['users_with_profit'] ?? 0 ?>"><?= $revenueSummary['users_with_profit'] ?? 0 ?></div><div class="sub">Above min threshold</div></div>
-                    </div>
-                    
-                    <div class="section-divider"><span> All Users Directory</span></div>
-
-                    <h3>👥 User Directory - Filter & Search</h3>
-                    
-                    <div class="filter-section">
-                        <div class="filter-toggles">
-                            <button class="filter-btn active" data-filter="all"> All Users</button>
-                            <button class="filter-btn" data-filter="confirmed"> Confirmed Payments</button>
-                            <button class="filter-btn" data-filter="payment-made"> Payment Made</button>
-                            <button class="filter-btn" data-filter="unpaid"> Expected Payments</button>
-                            <button class="filter-btn" data-filter="eligible"> Eligible Profit</button>
-                        </div>
-                        <div class="search-container">
-                            <input type="text" id="user-search" class="search-input" placeholder="Search by ID, Email, or Full Name...">
-                            <button id="reset-search" class="reset-btn">Reset</button>
-                        </div>
-                    </div>
-                    
-                    <?php if (!empty($allUsers)): ?>
-                        <div class="table-wrapper">
-                            <table class="user-list-table">
-                                <thead>
-                                    <tr><th>ID</th><th>Name</th><th>Email</th><th>Broker</th><th>Login</th><th>Broker Balance</th><th>Profit/Loss</th><th>Current Balance</th><th>Server Share</th><th>User Share</th><th>Expected Payment</th><th>Unpaid Payment Age</th><th>Status</th><th>Server Decision</th><th>Update Status</th><th>Source</th></tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($allUsers as $user): ?>
-                                        <?php
-                                            $shouldShowInRevenue = $user['should_show_in_revenue'];
-                                            $displayStatus = $user['display_status'];
-                                            $decisionReason = $user['decision_reason'];
-                                            $server_decision = $user['server_decision'] ?? '';
-                                            $isPaymentConfirmed = ($displayStatus === 'payment-confirmed');
-                                            $isPaymentMade = ($displayStatus === 'payment-made');
-                                            $isUnpaidPayment = ($displayStatus === 'unpaid-payment');
-                                            $isEligible = $user['has_eligible_profit'];
-                                            $isUpdateDisabled = !$shouldShowInRevenue || !$isEligible;
-                                        ?>
-                                        <tr class="user-row" 
-                                            data-user-id="<?= htmlspecialchars($user['id']) ?>"
-                                            data-source-table="<?= htmlspecialchars($user['source']) ?>"
-                                            data-display-status="<?= htmlspecialchars($displayStatus) ?>"
-                                            data-is-payment-confirmed="<?= $isPaymentConfirmed ? 'true' : 'false' ?>"
-                                            data-is-payment-made="<?= $isPaymentMade ? 'true' : 'false' ?>"
-                                            data-is-unpaid-payment="<?= $isUnpaidPayment ? 'true' : 'false' ?>"
-                                            data-is-eligible="<?= $isEligible ? 'true' : 'false' ?>"
-                                            data-should-show="<?= $shouldShowInRevenue ? 'true' : 'false' ?>"
-                                            data-id="<?= htmlspecialchars($user['id']) ?>"
-                                            data-email="<?= htmlspecialchars(strtolower($user['email'] ?? '')) ?>"
-                                            data-fullname="<?= htmlspecialchars(strtolower($user['fullname'] ?? '')) ?>">
-                                            <td><?= htmlspecialchars($user['id']) ?></td>
-                                            <td><?= htmlspecialchars($user['fullname'] ?: 'N/A') ?></td>
-                                            <td><?= htmlspecialchars($user['email']) ?></td>
-                                            <td><?= htmlspecialchars($user['broker'] ?: 'N/A') ?></td>
-                                            <td><?= htmlspecialchars($user['login'] ?: 'N/A') ?></td>
-                                            <td class="broker-balance-cell"><?= $shouldShowInRevenue ? format_currency($user['broker_balance_display']) : '-' ?></td>
-                                            <td class="profit-loss-cell <?= $user['profitandloss_display'] >= 0 ? 'profit' : 'loss' ?>"><?= $shouldShowInRevenue ? ($user['profitandloss_display'] >= 0 ? '+' : '') . format_currency($user['profitandloss_display']) : '-' ?></td>
-                                            <td class="current-balance-cell <?= $user['current_balance'] >= 0 ? 'profit' : 'loss' ?>"><?= $shouldShowInRevenue ? format_currency($user['current_balance']) : '-' ?></td>
-                                            <td class="server-share-cell"><?= $isEligible ? format_currency($user['server_share']) : '-' ?></td>
-                                            <td class="user-share-cell"><?= $isEligible ? format_currency($user['user_share']) : '-' ?></td>
-                                            <td class="expected-payment-cell" style="font-weight: bold; color: var(--accent-color);"><?= $isEligible ? format_currency($user['expected_payment']) : '-' ?></td>
-                                            <td class="unpaid-age-cell"><?php if ($user['unpaid_payment_age']['ended_on'] && $shouldShowInRevenue): ?><div><strong>Ended:</strong> <?= htmlspecialchars($user['unpaid_payment_age']['ended_on']) ?></div><div class="<?= $user['unpaid_payment_age']['is_ended'] ? 'unpaid-age-ended' : 'unpaid-age-not-ended' ?>"><strong>Age:</strong> <?= htmlspecialchars($user['unpaid_payment_age']['age']) ?></div><?php else: ?>-<?php endif; ?></td>
-                                            <td class="status-cell"><span class="status-badge <?= $displayStatus === 'payment-confirmed' ? 'status-badge-payment-confirmed' : ($displayStatus === 'payment-made' ? 'status-badge-payment-made' : ($displayStatus === 'unpaid-payment' ? 'status-badge-unpaid-payment' : ($displayStatus === 'Not Eligible' ? 'status-badge-not-eligible' : 'loyalty-unpaid'))) ?>"><?= htmlspecialchars($displayStatus) ?></span><?php if ($isEligible && $isPaymentConfirmed): ?><span class="eligible-badge received-badge">confirmed</span><?php elseif ($isEligible && $isPaymentMade): ?><span class="eligible-badge made-badge">made</span><?php elseif ($isEligible && $isUnpaidPayment): ?><span class="eligible-badge unpaid-badge">unpaid</span><?php elseif ($isEligible): ?><span class="eligible-badge">eligible</span><?php endif; ?></td>
-                                            <td class="server-decision-cell"><?php if ($server_decision): ?><div class="server-decision-badge server-decision-<?= htmlspecialchars($server_decision) ?>"><?= htmlspecialchars($server_decision) ?></div><?php else: ?><span style="color: #888; font-size: 11px;">No decision</span><?php endif; ?><form method="POST" action="serveraccount.php?view=paid_users" class="server-decision-form"><input type="hidden" name="update_server_decision" value="1"><input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>"><input type="hidden" name="source_table" value="<?= htmlspecialchars($user['source']) ?>"><select name="server_decision" class="server-decision-select"><option value="">Select...</option><option value="blacklisted" <?= $server_decision === 'blacklisted' ? 'selected' : '' ?>> Blacklist</option><option value="re-instated" <?= $server_decision === 're-instated' ? 'selected' : '' ?>> Re-instate</option><option value="suspended" <?= $server_decision === 'suspended' ? 'selected' : '' ?>> Suspend</option></select><button type="submit" class="update-decision-btn">Update</button></form></td>
-                                            <td class="status-update-cell"><form method="POST" action="serveraccount.php?view=paid_users" class="payment-status-form <?= $isUpdateDisabled ? 'disabled-form' : '' ?>"><input type="hidden" name="update_payment_status" value="1"><input type="hidden" name="user_id" value="<?= htmlspecialchars($user['id']) ?>"><input type="hidden" name="source_table" value="<?= htmlspecialchars($user['source']) ?>"><select name="payment_status" class="payment-status-select" <?= $isUpdateDisabled ? 'disabled' : '' ?>><option value="">Select...</option><option value="payment-confirmed" <?= $displayStatus === 'payment-confirmed' ? 'selected' : '' ?>> Payment Confirmed</option><option value="payment-made" <?= $displayStatus === 'payment-made' ? 'selected' : '' ?>> Payment Made</option><option value="unpaid-payment" <?= $displayStatus === 'unpaid-payment' ? 'selected' : '' ?>> Unpaid Payment</option></select><button type="submit" class="update-status-btn" <?= $isUpdateDisabled ? 'disabled' : '' ?>>Update</button></form><?php if ($isUpdateDisabled && $user['reason']): ?><small style="color: #888; font-size: 10px;"><?= htmlspecialchars($user['decision_reason']) ?></small><?php endif; ?></td>
-                                            <td><?= htmlspecialchars($user['source']) ?></td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                        <p class="user-count">Showing <span id="user-count"><?= count($allUsers) ?></span> of <?= count($allUsers) ?> total users</p>
-                    <?php else: ?>
-                        <p style="text-align: center; padding: 40px; border: 2px dashed var(--border-color); border-radius: 12px; color: #888;">No users found in the database.</p>
-                    <?php endif; ?>
+                    <?php include 'revenue.php'; ?>  
                 <?php endif; ?>
                 
             </div>

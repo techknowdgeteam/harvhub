@@ -1,7 +1,19 @@
+
 <style>
     
-    :root {
-        --bg-light: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    :root { 
+        --bg: #fff; 
+        --text: #1c1e21; 
+        --accent: #2e8b57;
+        --input-bg: #f0f2f5; 
+        --section-bg: #fff;
+        --section-shadow: 0 4px 12px rgba(0,0,0,0.08); 
+        --header-bg: #f5f5f5; 
+        --profile-bg: #e9ebee; 
+        --profile-icon-bg: #ccc;
+        --profile-details-bg: #f9f9f9;
+        --profile-details-border: #ddd;
+        --bg-light: white;
         --bg-dark: linear-gradient(135deg, #141e30 0%, #243b55 100%);
         --text-light: #1e293b;
         --text-dark: #f1f5f9;
@@ -23,69 +35,98 @@
         --passkey-text: #1c1e21;
         --error-color: #ff6b6b;
     }
-
     @media (prefers-color-scheme: dark) {
-        :root {
+        :root { 
+            --bg: #000; 
+            --text: #e4e6eb; 
+            --accent: #2e8b57;
+            --input-bg: #1a1a1a; 
+            --section-bg: rgba(255,255,255,0.05); 
+            --section-shadow: none; 
+            --header-bg: rgba(0,0,0,0.3);
+            --profile-bg: #1a1a1a; 
+            --profile-icon-bg: #444;
+            --profile-details-bg: #0d0d0d;
+            --profile-details-border: #333;
             --bg-light: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
             --text-light: #f1f5f9;
-            --card-light: rgba(30, 41, 59, 0.95);
+            --card-light: rgba(37, 52, 77, 0.6);
             --glass-border: rgba(255, 255, 255, 0.1);
             /* Preserve passkey dark mode colors */
             --passkey-bg: rgba(40, 40, 40, 0.9);
             --passkey-text: #e4e6eb;
         }
     }
-
-    * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+    font-family: 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden; /* Added: prevents vertical scroll on body */
+    position: relative;
+}
+html, body { 
+    -ms-overflow-style: none; 
+    scrollbar-width: none; 
+}
+html::-webkit-scrollbar, body::-webkit-scrollbar { 
+    display: none; 
+}
+.container, .modal-content { 
+    overflow-y: auto; 
+    -ms-overflow-style: none; 
+    scrollbar-width: none; 
+}
+.container::-webkit-scrollbar, .modal-content::-webkit-scrollbar { 
+    display: none; 
+}
+/* Background effects */
+body::before {
+    content: ""; 
+    position: absolute; 
+    inset: 0;
+    background: var(--bg-light);
+    background-size: cover, cover, 120px 120px; 
+    opacity: 0.5; 
+    pointer-events: none; 
+    z-index: -1;
+}
+@media (prefers-color-scheme: light) {
+    body::before { 
+        opacity: 0.1; 
+        background-blend-mode: multiply; 
     }
+}
+.custom-body {
+    width: 100%;
+    height: 100%;
+    background: var(--bg-light);
+    overflow-y: auto; /* Allows vertical scroll only in custom-body */
+    -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
+    scrollbar-width: none; /* Hides scrollbar in Firefox */
+}
+.custom-body::-webkit-scrollbar {
+    display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
+}
+</style>
+<style>
+    
 
-    html, body {
-        height: 100%;
-        color: var(--text-light);
-        overflow-x: hidden;
-        transition: background 0.3s ease;
+    /* Prevent pull-to-refresh reload */
+    html {
+        overscroll-behavior: none;
     }
 
     body {
-        overflow: hidden;
+        overscroll-behavior: none;
         position: relative;
-        background: var(--bg-light);
-    }
-    .custom-body {
-        width: 100%;
-        height: 100%;
-        background: var(--bg-light);
-        overflow-y: auto; /* Allows vertical scroll only in custom-body */
-        -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
-        scrollbar-width: none; /* Hides scrollbar in Firefox */
-    }
-    .custom-body::-webkit-scrollbar {
-        display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
     }
 
-    /* Animated background particles (only for dashboard, not passkey) */
-    body:not(.passkey-active)::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        background: 
-            radial-gradient(circle at 20% 30%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
-            radial-gradient(circle at 80% 70%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
-            repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 2px, transparent 2px, transparent 8px);
-        pointer-events: none;
-        z-index: -1;
-        animation: gradientShift 15s ease infinite;
+    /* For any scrollable containers */
+    .scrollable-container {
+        overscroll-behavior: contain;
     }
-
-    @keyframes gradientShift {
-        0%, 100% { opacity: 0.5; }
-        50% { opacity: 0.8; }
-    }
-
     /* ===== PASSKEY MODAL - PRESERVED ORIGINAL STYLES ===== */
     .passkey-overlay {
         position: fixed;
@@ -266,22 +307,9 @@
         animation: cardAppear 0.5s ease;
     }
 
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-        background: linear-gradient(90deg, var(--accent), var(--info), var(--accent));
-        transform: translateX(-100%);
-        transition: transform 0.5s ease;
-    }
-
     .stat-card:hover {
         transform: translateY(-10px) scale(1.02);
         box-shadow: var(--shadow-hover);
-        border-color: var(--accent);
     }
 
     .stat-card:hover::before {
@@ -372,37 +400,13 @@
         opacity: 0.9;
     }
 
-    /* Trades Card Special Styling */
-    .stat-card.trades-card {
-        grid-column: 1 / -1;
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(59, 130, 246, 0.1));
-        border: 2px solid transparent;
-        background-clip: padding-box;
-        position: relative;
-    }
-
-    .stat-card.trades-card::before {
-        content: '';
-        position: absolute;
-        inset: -2px;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        border-radius: 26px;
-        opacity: 0;
-        transition: opacity 0.3s ease;
-        z-index: -1;
-    }
-
-    .stat-card.trades-card:hover::before {
-        opacity: 0.3;
-    }
 
     /* Loyalty Card */
     .stat-card.loyalty-card {
         grid-column: 1 / -1;
         max-width: 800px;
         margin: 2rem auto;
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15));
-        border: 2px solid rgba(0, 255, 34, 0.3);
+        background: var(--card-light);
     }
 
     .loyalty-status-msg {
@@ -504,7 +508,7 @@
     /* Replace these existing styles */
     .note-btndanger{
         display: flex;
-        justify-content: center
+        justify-content: center;
         width: 100%;
     }
     .note-btndanger-block{
@@ -529,9 +533,9 @@
     }
 
     .note {
-        margin-bottom: 15px;
         opacity: 0.8;
         line-height: 1.6;
+        font-size: 15px;
     }
     .encouragement-note {
         text-align: center;
@@ -572,7 +576,7 @@
     /* Logout Link */
     .logout-link-p{
         margin-top: 20px;
-        margin-bottom: 50px;
+        margin-bottom: 70px;
     }
     .logout-link {
         display: block;
@@ -1214,7 +1218,7 @@
         padding: 14px;
         margin-top: 15px;
         background: var(--success-color);
-        color: #00589ca9;
+        color: #e0f2ffa9;
         border: none;
         border-radius: 8px;
         font-size: 1.1rem;
@@ -1439,6 +1443,7 @@
     body:has(.passkey-overlay) .notification-container {
         z-index: 10001 !important;
     }
+    
 
     /* Ensure passkey screen is above everything when active */
     .passkey-overlay .passkey-screen {
@@ -1610,7 +1615,7 @@
     /* Revenue History Button */
     .btn-revenue-history {
         background: none;
-        color: white;
+        color: rgba(79, 79, 79, 0.95);
         border: none;
         border-radius: 12px;
         font-size: 0.85rem;

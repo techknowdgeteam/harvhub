@@ -1,5 +1,28 @@
 <?php
     session_start();
+    // --- SESSION TIMEOUT CONFIGURATION (24 HOURS INACTIVITY) ---
+    $inactivity_limit = 86400; // 24 hours in seconds
+    
+    // Check if user is logged in
+    if (isset($_SESSION['user_email'])) {
+        // Check if last activity timestamp exists
+        if (isset($_SESSION['last_activity'])) {
+            $inactivity_time = time() - $_SESSION['last_activity'];
+            
+            // If inactive for more than 24 hours, destroy session
+            if ($inactivity_time > $inactivity_limit) {
+                session_unset();
+                session_destroy();
+                
+                // Redirect to login page
+                header("Location: index.php?timeout=1");
+                exit;
+            }
+        }
+        
+        // Update last activity timestamp
+        $_SESSION['last_activity'] = time();
+    }
     // mydashboard.php
 
     // --- Configuration and Connection ---
@@ -47,314 +70,6 @@
         die("Database connection failed.");
     }
 
-    function recordRevenueHistory($pdo, $email, $user, $startDate, $startingBalance, $profit, $serverShare, $userShare, $status, $updateExisting = false) {
-        $tableName = "insiders";
-        
-        // Calculate end date
-        $stmt = $pdo->prepare("SELECT contract_duration FROM server_account LIMIT 1");
-        $stmt->execute();
-        $serverConfig = $stmt->fetch(PDO::FETCH_ASSOC);
-        $contractDuration = $serverConfig ? (int)$serverConfig['contract_duration'] : 30;
-        
-        $start = new DateTime($startDate);
-        $end = clone $start;
-        $end->modify("+{$contractDuration} days");
-        $endDate = $end->format('Y-m-d');
-        
-        // Round values
-        $roundedStartingBalance = round((float)$startingBalance, 2);
-        $roundedProfit = round((float)$profit, 2);
-        $roundedCurrentBalance = round((float)$startingBalance + (float)$profit, 2);
-        $roundedServerShare = round((float)$serverShare, 2);
-        $roundedUserShare = round((float)$userShare, 2);
-        
-        // Get current revenue history
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $history = [];
-        if (!empty($result['revenue_history'])) {
-            $history = json_decode($result['revenue_history'], true);
-            if (!is_array($history)) $history = [];
-        }
-        
-        // CRITICAL FIX: Find record by execution_start_date (MOST RELIABLE)
-        $recordExists = false;
-        $existingIndex = -1;
-        
-        foreach ($history as $index => $record) {
-            $recordStartDate = $record['execution_start_date'] ?? '';
-            
-            // Match by exact start date
-            if ($recordStartDate === $startDate) {
-                $recordExists = true;
-                $existingIndex = $index;
-                break;
-            }
-        }
-        
-        if ($recordExists && $existingIndex >= 0) {
-            // UPDATE existing record with new status
-            $history[$existingIndex]['loyalty_status'] = $status;
-            $history[$existingIndex]['recorded_at'] = date('Y-m-d H:i:s');
-            $history[$existingIndex]['server_share'] = $roundedServerShare;
-            $history[$existingIndex]['user_share'] = $roundedUserShare;
-            $history[$existingIndex]['current_balance'] = $roundedCurrentBalance;
-            
-            error_log("Updated revenue history - Status: $status, User: $email, Start Date: $startDate");
-        } else {
-            // Add new record
-            $newRecord = [
-                'id' => uniqid(),
-                'execution_start_date' => $startDate,
-                'execution_end_date' => $endDate,
-                'starting_balance' => $roundedStartingBalance,
-                'current_balance' => $roundedCurrentBalance,
-                'profit' => $roundedProfit,
-                'server_share' => $roundedServerShare,
-                'user_share' => $roundedUserShare,
-                'loyalty_status' => $status,
-                'recorded_at' => date('Y-m-d H:i:s')
-            ];
-            
-            array_unshift($history, $newRecord);
-            error_log("Created new revenue history - Status: $status, User: $email, Start Date: $startDate");
-        }
-        
-        // Limit to last 100 records
-        if (count($history) > 100) {
-            $history = array_slice($history, 0, 100);
-        }
-        
-        // Save back to database
-        $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
-        $upd->execute([json_encode($history), $email]);
-        
-        return true;
-    }
-
-    function updateRevenueHistoryStatus($pdo, $email, $newStatus) {
-        $tableName = "insiders";
-        
-        // Get current user data
-        $stmt = $pdo->prepare("SELECT execution_start_date FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $userData = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$userData || !$userData['execution_start_date']) {
-            error_log("No execution_start_date found for user: $email");
-            return false;
-        }
-        
-        $startDate = $userData['execution_start_date'];
-        
-        // Get revenue history
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (empty($result['revenue_history'])) {
-            error_log("No revenue_history found for user: $email");
-            return false;
-        }
-        
-        $history = json_decode($result['revenue_history'], true);
-        if (!is_array($history)) {
-            return false;
-        }
-        
-        // Find and update by execution_start_date
-        $updated = false;
-        foreach ($history as $index => &$record) {
-            $recordStartDate = $record['execution_start_date'] ?? '';
-            
-            if ($recordStartDate === $startDate) {
-                $oldStatus = $record['loyalty_status'] ?? 'unknown';
-                $record['loyalty_status'] = $newStatus;
-                $record['recorded_at'] = date('Y-m-d H:i:s');
-                $updated = true;
-                error_log("Revenue history status updated - User: $email, Old: $oldStatus, New: $newStatus, Start Date: $startDate");
-                break;
-            }
-        }
-        
-        if ($updated) {
-            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
-            $upd->execute([json_encode($history), $email]);
-            return true;
-        }
-        
-        error_log("No matching record found for user: $email, Start Date: $startDate");
-        return false;
-    }
-
-    // NEW FUNCTION: Directly update revenue history status by start date
-    function updateRevenueHistoryStatusDirect($pdo, $email, $startDate, $newStatus) {
-        $tableName = "insiders";
-        
-        // Get revenue history
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (empty($result['revenue_history'])) {
-            return false;
-        }
-        
-        $history = json_decode($result['revenue_history'], true);
-        if (!is_array($history)) {
-            return false;
-        }
-        
-        // Find and update by exact start date
-        $updated = false;
-        foreach ($history as $index => &$record) {
-            if (($record['execution_start_date'] ?? '') === $startDate) {
-                $record['loyalty_status'] = $newStatus;
-                $record['recorded_at'] = date('Y-m-d H:i:s');
-                $updated = true;
-                error_log("DIRECT UPDATE - Status: $newStatus, User: $email, Start Date: $startDate");
-                break;
-            }
-        }
-        
-        if ($updated) {
-            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
-            $upd->execute([json_encode($history), $email]);
-            return true;
-        }
-        
-        return false;
-    }
-
-    // Function to update revenue history status for unpaid-payment (debtor status)
-    function updateRevenueHistoryToUnpaidPayment($pdo, $email) {
-        $tableName = "insiders";
-        
-        $stmt = $pdo->prepare("SELECT execution_start_date, broker_balance, profitandloss FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $userData = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$userData || !$userData['execution_start_date']) {
-            return false;
-        }
-        
-        $startDate = $userData['execution_start_date'];
-        $brokerBalance = (float)$userData['broker_balance'];
-        $profitAndLoss = (float)$userData['profitandloss'];
-        
-        $stmtConfig = $pdo->prepare("SELECT contract_duration, server_share_percent, user_share_percent FROM server_account LIMIT 1");
-        $stmtConfig->execute();
-        $config = $stmtConfig->fetch(PDO::FETCH_ASSOC);
-        $contractDuration = $config ? (int)$config['contract_duration'] : 30;
-        $SERVER_SHARE_PERCENT = $config ? (int)$config['server_share_percent'] : 40;
-        $USER_SHARE_PERCENT = $config ? (int)$config['user_share_percent'] : 60;
-        
-        $start = new DateTime($startDate);
-        $end = clone $start;
-        $end->modify("+{$contractDuration} days");
-        $endDate = $end->format('Y-m-d');
-        
-        $profitToSplit = max(0, $profitAndLoss);
-        $serverShare = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
-        $userShare = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
-        
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (empty($result['revenue_history'])) {
-            return false;
-        }
-        
-        $history = json_decode($result['revenue_history'], true);
-        if (!is_array($history)) {
-            return false;
-        }
-        
-        $targetSignature = md5(json_encode([
-            'execution_start_date' => $startDate,
-            'execution_end_date' => $endDate,
-            'starting_balance' => round($brokerBalance, 2),
-            'profit' => round($profitAndLoss, 2),
-            'server_share' => round($serverShare, 2),
-            'user_share' => round($userShare, 2)
-        ]));
-        
-        $updated = false;
-        foreach ($history as $index => &$record) {
-            $recordSignature = md5(json_encode([
-                'execution_start_date' => $record['execution_start_date'] ?? '',
-                'execution_end_date' => $record['execution_end_date'] ?? '',
-                'starting_balance' => round((float)($record['starting_balance'] ?? 0), 2),
-                'profit' => round((float)($record['profit'] ?? 0), 2),
-                'server_share' => round((float)($record['server_share'] ?? 0), 2),
-                'user_share' => round((float)($record['user_share'] ?? 0), 2)
-            ]));
-            
-            if ($recordSignature === $targetSignature) {
-                $record['loyalty_status'] = 'pending_payment';
-                $record['recorded_at'] = date('Y-m-d H:i:s');
-                $updated = true;
-                break;
-            }
-        }
-        
-        if ($updated) {
-            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
-            $upd->execute([json_encode($history), $email]);
-        }
-        
-        return $updated;
-    }
-    // Function to sync ALL revenue history entries with current loyalty status
-    function syncAllRevenueHistoryStatuses($pdo, $email, $currentLoyaltyStatus) {
-        $tableName = "insiders";
-        
-        // Get current user data
-        $stmt = $pdo->prepare("SELECT execution_start_date, broker_balance, profitandloss FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $userData = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$userData || !$userData['execution_start_date']) {
-            return false;
-        }
-        
-        // Get revenue history
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (empty($result['revenue_history'])) {
-            return false;
-        }
-        
-        $history = json_decode($result['revenue_history'], true);
-        if (!is_array($history)) {
-            return false;
-        }
-        
-        $updated = false;
-        foreach ($history as $index => &$record) {
-            // Only update pending_payment records to match current status
-            if (isset($record['loyalty_status']) && $record['loyalty_status'] === 'pending_payment') {
-                if ($currentLoyaltyStatus === 'payment-made' || $currentLoyaltyStatus === 'payment-confirmed') {
-                    $record['loyalty_status'] = $currentLoyaltyStatus;
-                    $record['recorded_at'] = date('Y-m-d H:i:s');
-                    $updated = true;
-                }
-            }
-        }
-        
-        if ($updated) {
-            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
-            $upd->execute([json_encode($history), $email]);
-        }
-        
-        return $updated;
-    }
-
     // 3. Fetch user data
     $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
     $stmt->execute([$email]);
@@ -377,7 +92,7 @@
     }
     
     // Set dynamic values from DB
-    $MIN_INITIAL_DEPOSIT = (float)$serverAccount['minimum_deposit']; 
+    $MIN_INITIAL_DEPOSIT = (float)$serverAccount['min_broker_balance']; 
     $CONTRACT_DURATION = (int)$serverAccount['contract_duration'];
     $SERVER_SHARE_PERCENT = (int)$serverAccount['server_share_percent'];
     $USER_SHARE_PERCENT = (int)$serverAccount['user_share_percent'];
@@ -428,10 +143,68 @@
     }
     
     // Initial Balance Check
+    // =========================================================================
+    // BALANCE VERIFICATION SYSTEM
+    // =========================================================================
     $balance_check_failed = false;
-    if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
-        $balance_check_failed = true;
+    $balance_unverified = false;
+    $balance_under_verification = false;
+    $show_apply_button = false;
+    $balance_display_text = '';
+    $balance_display_value = '';
+
+    // Get balance verification status
+    $balanceVerificationStatus = $user['balance_verification'] ?? 'not-verified';
+
+    // Handle balance based on verification status
+    if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
+        // Not verified: force broker_balance to 0 and show "unverified"
+        if ($brokerBalance != 0) {
+            $updBalance = $pdo->prepare("UPDATE $tableName SET broker_balance = 0 WHERE email = ?");
+            $updBalance->execute([$email]);
+            $brokerBalance = 0;
+            $currentBalance = $brokerBalance + $profitAndLoss;
+        }
+        $balance_unverified = true;
+        $balance_display_text = "Unverified";
+        $balance_display_value = "unverified";
+        $show_apply_button = true;
+        
+    } elseif ($balanceVerificationStatus === 'applied-for-verification') {
+        // Under verification: force broker_balance to 0 and show "under verification"
+        if ($brokerBalance != 0) {
+            $updBalance = $pdo->prepare("UPDATE $tableName SET broker_balance = 0 WHERE email = ?");
+            $updBalance->execute([$email]);
+            $brokerBalance = 0;
+            $currentBalance = $brokerBalance + $profitAndLoss;
+        }
+        $balance_under_verification = true;
+        $balance_display_text = "Under Verification";
+        $balance_display_value = "under_verification";
+        
+    } elseif ($balanceVerificationStatus === 'verified') {
+        // Verified: check minimum deposit requirement
+        if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
+            // Revert to unverified status
+            $updBalance = $pdo->prepare("UPDATE $tableName SET balance_verification = 'not-verified', broker_balance = 0 WHERE email = ?");
+            $updBalance->execute([$email]);
+            
+            $balance_unverified = true;
+            $balance_check_failed = false;
+            $balance_display_text = "Unverified";
+            $balance_display_value = "unverified";
+            $show_apply_button = true;
+            
+            // Refresh brokerBalance to 0
+            $brokerBalance = 0;
+            $currentBalance = $brokerBalance + $profitAndLoss;
+            $balanceVerificationStatus = 'not-verified';
+        } else {
+            $balance_display_text = "";
+            $balance_display_value = number_format($brokerBalance, 2);
+        }
     }
+    // Prepare Active Contract Data for Revenue History Display
     // Prepare Active Contract Data for Revenue History Display
     $activeContractData = null;
     if ($is_contract_active && $executionStartDate && $executionStartDate !== '0000-00-00') {
@@ -444,6 +217,56 @@
             'starting_balance' => $brokerBalance,
             'current_balance' => $currentBalance
         ];
+        
+        // ===== CHECK AND CREATE ACTIVE REVENUE HISTORY ENTRY IF MISSING =====
+        // Get existing revenue history
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $revenueHistory = [];
+        if (!empty($result['revenue_history'])) {
+            $revenueHistory = json_decode($result['revenue_history'], true);
+            if (!is_array($revenueHistory)) {
+                $revenueHistory = [];
+            }
+        }
+        
+        // Check if an active entry already exists for this contract period
+        $activeEntryExists = false;
+        foreach ($revenueHistory as $entry) {
+            if (isset($entry['loyalties']) && $entry['loyalties'] === 'active' 
+                && isset($entry['execution_start_date']) && $entry['execution_start_date'] === $executionStartDate) {
+                $activeEntryExists = true;
+                break;
+            }
+        }
+        
+        // If no active entry exists, create one
+        if (!$activeEntryExists) {
+            $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($executionStartDate)));
+            
+            $newRevenueEntry = [
+                'id' => time(),
+                'execution_start_date' => $executionStartDate,
+                'execution_end_date' => $endDate,
+                'starting_balance' => $brokerBalance,
+                'current_balance' => $brokerBalance,
+                'profit' => 0,
+                'user_share' => 0,
+                'server_share' => 0,
+                'loyalties' => 'active'
+            ];
+            
+            // Add new entry at the beginning
+            array_unshift($revenueHistory, $newRevenueEntry);
+            
+            // Save updated revenue history
+            $updatedRevenueHistory = json_encode($revenueHistory);
+            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+            $upd->execute([$updatedRevenueHistory, $email]);
+        }
+        // ===== END CHECK =====
     }
 
     // Extract remaining user data
@@ -465,6 +288,82 @@
     $profitToSplit = max(0, $profitAndLoss);
     $serverShare = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
     $userShare = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
+
+        // =========================================================================
+    // UPDATE REVENUE HISTORY WHEN CONTRACT ENDS
+    // =========================================================================
+    
+    // Check if contract has just ended (was active but now completed)
+    if ($contract_completed && $is_contract_valid) {
+        
+        // Get existing revenue history
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $revenueHistory = [];
+        $needsUpdate = false;
+        
+        if (!empty($result['revenue_history'])) {
+            $revenueHistory = json_decode($result['revenue_history'], true);
+            if (!is_array($revenueHistory)) {
+                $revenueHistory = [];
+            }
+        }
+        
+        // Find the LATEST active contract entry (the one with 'active' status)
+        // We'll look through all entries and find the most recent one with loyalties = 'active'
+        $latestActiveIndex = -1;
+        $latestActiveDate = null;
+        
+        foreach ($revenueHistory as $index => $entry) {
+            if (isset($entry['loyalties']) && $entry['loyalties'] === 'active') {
+                // Compare dates to find the latest active contract
+                $entryDate = $entry['execution_start_date'] ?? '';
+                if ($entryDate && ($latestActiveIndex === -1 || $entryDate > $latestActiveDate)) {
+                    $latestActiveIndex = $index;
+                    $latestActiveDate = $entryDate;
+                }
+            }
+        }
+        
+        // If we found an active contract entry, update it
+        if ($latestActiveIndex !== -1) {
+            $needsUpdate = true;
+            $entry = &$revenueHistory[$latestActiveIndex];
+            
+            // Update common fields
+            $entry['profit'] = $profitAndLoss;
+            $entry['current_balance'] = $currentBalance;
+            $entry['user_share'] = $userShare;
+            $entry['server_share'] = $serverShare;
+            
+            // Determine new status based on profit/loss outcome
+            if ($profitAndLoss < 0) {
+                // Contract ended in LOSS
+                $entry['loyalties'] = 'loss_completed';
+            } 
+            elseif ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
+                // Profit below threshold - no split required
+                $entry['loyalties'] = 'below_threshold';
+            }
+            elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT) {
+                // Profit above threshold - payment required
+                $entry['loyalties'] = 'unpaid-payment';
+            }
+            else {
+                // Zero profit or other cases
+                $entry['loyalties'] = 'contract_ended';
+            }
+        }
+        
+        // Save updated revenue history if changes were made
+        if ($needsUpdate) {
+            $updatedRevenueHistory = json_encode($revenueHistory);
+            $upd = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+            $upd->execute([$updatedRevenueHistory, $email]);
+        }
+    }
     
     // --- Determine Deposit Link ---
     $brokerLink = '';
@@ -503,128 +402,155 @@
     $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
 
     // =========================================================================
-    // LOYALTY LOGIC WITH HIERARCHICAL CONDITIONS
+    // LOYALTY LOGIC WITH HIERARCHICAL CONDITIONS (UPDATED WITH VERIFICATION)
     // =========================================================================
-    
+
     $showProfitSplit = false;
     $showWithdrawButtons = false;
     $loyalty_text = "";
-    $loyalty_status_message = "";
+    $loyalties_message = "";
     $dashboard_disclaimer = "";
     $show_reenroll_button = false;
     $show_payment_note = false;
-    
+    $show_apply_button = false;
+
     $loyalty_btn_action = "disabled";
     $loyalty_btn_text = "Not available";
     $loyalty_btn_class = "";
-    
+
     $is_execution_empty = ($executionStartDate === null || $executionStartDate === '0000-00-00');
-    
+
     // Flag to track if we need to update the database
     $needs_db_update = false;
-    $new_loyalties_status = null;
+    $new_loyalties_status = 'active';
     $needs_pnl_reset = false;
-    
+
     // ===== CRITICAL: If execution_start_date is empty, ensure profitAndLoss is 0 =====
     if ($is_execution_empty && $profitAndLoss != 0) {
         $needs_pnl_reset = true;
         $profitAndLoss = 0;
     }
-    
-    // ===== HIERARCHICAL DECISION TREE =====
-    
-    // PRIORITY 1: Balance check failed - minimum deposit not met
-    if ($balance_check_failed) {
-        $dashboard_disclaimer = "You need to deposit minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " to participate.";
-        $loyalty_text = "Your account is not yet eligible. Please fund your broker account with a minimum of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
-        $loyalty_status_message = "Minimum Deposit Required";
-        
-        $loyalty_btn_text = "Deposit $" . number_format($MIN_INITIAL_DEPOSIT, 2);
+
+    // ===== HIERARCHICAL DECISION TREE (VERIFICATION FIRST) =====
+
+    // PRIORITY 0: BALANCE VERIFICATION STATUS (HIGHEST PRIORITY)
+    if ($balance_unverified) {
+        // Not verified - Show Apply button ONLY, NO enroll button
+        $dashboard_disclaimer = "Account verification required.";
+        $loyalty_text = "Your account needs to be verified before you can participate. Apply for verification";
+        $loyalties_message = "Verification Required";
+        $show_apply_button = true;
+        $show_reenroll_button = false;  // CRITICAL: Ensure enroll is hidden
+        $loyalty_btn_text = "Apply";
         $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"window.open('{$brokerTarget}', '_blank')\"";
+        $loyalty_btn_action = "onclick=\"openApplyModal()\"";
+        
+    } elseif ($balance_under_verification) {
+        // Under verification - Show pending message, NO buttons
+        $dashboard_disclaimer = "Account verification in progress.";
+        $loyalty_text = "Your account is currently under review. Once verified, you'll be able to start trading. This process technically takes 24-48 hours.";
+        $loyalties_message = "Verification Pending";
+        $show_apply_button = false;  // CRITICAL: Hide apply button
+        $show_reenroll_button = false;  // CRITICAL: Hide enroll button
+        $loyalty_btn_text = "Under Review";
+        $loyalty_btn_class = "btn-loyalty-paid";
+        $loyalty_btn_action = "";
+        
+    }
+    // PRIORITY 1: Balance check failed - minimum deposit not met (Only after verified)
+    elseif ($balance_check_failed) {
+        // This should no longer happen as we revert to unverified, but keep as fallback
+        $dashboard_disclaimer = "Verification required. Minimum deposit of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " needed.";
+        $loyalty_text = "Your account balance is below the minimum requirement. Please deposit $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " then apply for verification.";
+        $loyalties_message = "Verification Required";
+        $show_apply_button = true;
+        $show_reenroll_button = false;
+        
+        $loyalty_btn_text = "Apply";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"openApplyModal()\"";
         
         if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
         }
     }
-    // PRIORITY 2: No execution start date OR execution date is invalid
+    // PRIORITY 2: Payment-made or payment-confirmed states
+    elseif ($loyaltiesStatus === 'payment-made') {
+        $dashboard_disclaimer = "Payment submitted for verification.";
+        $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
+        $loyalties_message = "Payment Pending Confirmation";
+        $show_payment_note = true;
+        $loyalty_btn_text = "Awaiting Confirmation";
+        $loyalty_btn_class = "btn-loyalty-paid";
+    }
+    elseif ($loyaltiesStatus === 'payment-confirmed') {
+        if ($profitAndLoss != 0 || $executionStartDate !== null) {
+            $needs_pnl_reset = true;
+            $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
+            $upd->execute([$email]);
+            
+            $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $profitAndLoss = 0;
+            $executionStartDate = null;
+            $loyaltiesStatus = null;
+        }
+        
+        $dashboard_disclaimer = "Ready to start a new contract.";
+        $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
+        $loyalties_message = "Ready to enroll";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+    }
+    // PRIORITY 3: Just joined or no execution date
+    elseif ($loyaltiesStatus === 'justjoined') {
+        $dashboard_disclaimer = "Welcome to HarvHub!";
+        $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
+        $loyalties_message = "Welcome New Member!";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+    }
+    // PRIORITY 4: No execution start date OR execution date is invalid
     elseif ($is_execution_empty) {
-        if ($loyaltiesStatus === 'payment-made') {
-            updateRevenueHistoryStatus($pdo, $email, 'payment-made');
-            $dashboard_disclaimer = "Payment submitted for verification.";
-            $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
-            $loyalty_status_message = "Payment Pending Confirmation";
-            $show_payment_note = true;
-            $loyalty_btn_text = "Awaiting Confirmation";
-            $loyalty_btn_class = "btn-loyalty-paid";
-        } elseif ($loyaltiesStatus === 'payment-confirmed') {
-            if ($profitAndLoss != 0 || $executionStartDate !== null) {
-                // UPDATE revenue history status from 'pending_payment' to 'completed'
-                updateRevenueHistoryStatus($pdo, $email, 'completed');
-                
-                $needs_pnl_reset = true;
-                $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
-                $upd->execute([$email]);
-                
-                $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
-                $stmt->execute([$email]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $profitAndLoss = 0;
-                $executionStartDate = null;
-                $loyaltiesStatus = null;
-            }
-            
-            $dashboard_disclaimer = "Ready to start a new contract.";
-            $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
-            $loyalty_status_message = "Ready to enroll";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-        } elseif ($loyaltiesStatus === 'justjoined') {
-            $dashboard_disclaimer = "Welcome to HarvHub!";
-            $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
-            $loyalty_status_message = "Welcome New Member!";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-        } else {
-            $dashboard_disclaimer = "No active contract.";
-            $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
-            $loyalty_status_message = "Ready to Start";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-            
-            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
-                $needs_db_update = true;
-                $new_loyalties_status = null;
-            }
+        $dashboard_disclaimer = "No active contract.";
+        $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
+        $loyalties_message = "Ready to Start";
+        $show_reenroll_button = true;
+        $loyalty_btn_text = "Enroll";
+        $loyalty_btn_class = "btn-loyalty-action";
+        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+        
+        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+            $needs_db_update = true;
+            $new_loyalties_status = 'active';
         }
     }
-    // PRIORITY 3: Contract is currently active (not ended yet)
+    // PRIORITY 5: Contract is currently active (not ended yet)
     elseif ($is_contract_active) {
         $dashboard_disclaimer = "Trading is active.";
         $loyalty_text = "{$contractDaysLeft} days left.";
-        $loyalty_status_message = "Contract Active";
+        $loyalties_message = "Contract Active";
         $loyalty_btn_text = "Active";
         $loyalty_btn_class = "btn-loyalty-confirmed";
         
         if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
         }
     }
-    // PRIORITY 4: Contract has ended (execution_start_date exists AND contract_completed = true)
+    // PRIORITY 6: Contract has ended (execution_start_date exists AND contract_completed = true)
     elseif ($contract_completed && $is_contract_valid) {
         if ($loyaltiesStatus === 'payment-made') {
             $dashboard_disclaimer = "Payment submitted for verification.";
             $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
-            $loyalty_status_message = "Payment Pending Confirmation";
+            $loyalties_message = "Payment Pending Confirmation";
             $show_payment_note = true;
             $loyalty_btn_text = "Awaiting Confirmation";
             $loyalty_btn_class = "btn-loyalty-paid";
@@ -648,7 +574,7 @@
             
             $dashboard_disclaimer = "Ready to start a new contract.";
             $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
-            $loyalty_status_message = "Ready to enroll";
+            $loyalties_message = "Ready to enroll";
             $show_reenroll_button = true;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
@@ -657,20 +583,14 @@
             $showWithdrawButtons = false;
         }
         elseif ($profitAndLoss < 0) {
-            // RECORD REVENUE HISTORY FOR LOSS FIRST
-            $recorded = recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, 0, 0, 'loss_completed');
-            
-            // Add this line for debugging (remove after testing)
-            error_log("Revenue recorded for loss: " . ($recorded ? "success" : "failed") . " for user: $email, profit: $profitAndLoss");
-            
             // Reset the contract immediately
             $needs_pnl_reset = true;
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
             
             $dashboard_disclaimer = "Contract completed with loss. You can start a new contract immediately.";
             $loyalty_text = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
-            $loyalty_status_message = "Ready for New Contract";
+            $loyalties_message = "Ready for New Contract";
             $show_reenroll_button = true;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
@@ -680,20 +600,14 @@
         }
         elseif ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
             // For below threshold, user gets 100% of profit, server gets 0
-            $userShare = $profitAndLoss;
-            $serverShare = 0;
-            
-            // RECORD REVENUE HISTORY FOR BELOW THRESHOLD with user getting full amount
-            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, $serverShare, $userShare, 'below_threshold');
-            
             // Reset the contract immediately
             $needs_pnl_reset = true;
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
             
             $dashboard_disclaimer = "Contract completed. Profit of $" . number_format($profitAndLoss, 2) . " is below the minimum split threshold of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . ". You keep 100% of the profit.";
             $loyalty_text = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Since this is below the minimum requirement of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . " for profit split, you keep the entire profit. Click Enroll to start a new {$CONTRACT_DURATION}-day contract.";
-            $loyalty_status_message = "Ready for New Contract";
+            $loyalties_message = "Ready for New Contract";
             $show_reenroll_button = true;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
@@ -702,8 +616,6 @@
             $showWithdrawButtons = false;
         }
         elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
-            // RECORD REVENUE HISTORY BEFORE UPDATING
-            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, $profitAndLoss, $serverShare, $userShare, 'pending_payment');
             
             $needs_db_update = true;
             $new_loyalties_status = 'unpaid-payment';
@@ -713,23 +625,20 @@
             $showWithdrawButtons = true;
             $dashboard_disclaimer = "Contract completed - Profit split required!";
             $loyalty_text = "Your {$CONTRACT_DURATION} days contract period has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to remain eligible.";
-            $loyalty_status_message = "Contract Ended - Payment Required";
+            $loyalties_message = "Contract Ended - Payment Required";
             $loyalty_btn_text = "View Profit Split";
             $loyalty_btn_class = "btn-loyalty-action";
             $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
         }
         else {
-            // RECORD REVENUE HISTORY FOR ZERO PROFIT
-            recordRevenueHistory($pdo, $email, $user, $executionStartDate, $brokerBalance, 0, 0, 0, 'completed');
-            
             // Reset the contract
             $needs_pnl_reset = true;
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
             
             $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
             $loyalty_text = "Your contract period has ended with no profit. Click Enroll to start a new {$CONTRACT_DURATION}-day contract.";
-            $loyalty_status_message = "Ready for New Contract";
+            $loyalties_message = "Ready for New Contract";
             $show_reenroll_button = true;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
@@ -738,11 +647,11 @@
             $showWithdrawButtons = false;
         }
     }
-    // PRIORITY 5: Fallback - no active contract, no special status
+    // PRIORITY 7: Fallback - no active contract, no special status
     else {
         $dashboard_disclaimer = "No active contract.";
         $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
-        $loyalty_status_message = "Ready to Start";
+        $loyalties_message = "Ready to Start";
         $show_reenroll_button = true;
         $loyalty_btn_text = "Enroll";
         $loyalty_btn_class = "btn-loyalty-action";
@@ -750,7 +659,7 @@
         
         if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
             $needs_db_update = true;
-            $new_loyalties_status = null;
+            $new_loyalties_status = 'active';
         }
     }
     
@@ -774,10 +683,6 @@
         $loyaltiesStatus = $new_loyalties_status;
     }
 
-    // ADD THIS NEW SECTION - Sync revenue history status on every page load
-    if ($loyaltiesStatus === 'payment-made' || $loyaltiesStatus === 'payment-confirmed') {
-        syncAllRevenueHistoryStatuses($pdo, $email, $loyaltiesStatus);
-    }
 
     // Parse Trades Data
     $tradesData = [
@@ -949,31 +854,53 @@
             
             $serverShare = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
             $userShare = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
-            
-            // CRITICAL: Force update the revenue history with payment-made status
-            $updateResult = recordRevenueHistory($pdo, $email, null, $startDate, $brokerBalance, $profitAndLoss, $serverShare, $userShare, 'payment-made', true);
-            
-            // VERIFY the update worked
-            if ($updateResult) {
-                error_log("Payment recorded successfully for user: $email");
-                
-                // Double-check by re-reading the history
-                $verifyStmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-                $verifyStmt->execute([$email]);
-                $verifyResult = $verifyStmt->fetch(PDO::FETCH_ASSOC);
-                if ($verifyResult && !empty($verifyResult['revenue_history'])) {
-                    $verifyHistory = json_decode($verifyResult['revenue_history'], true);
-                    foreach ($verifyHistory as $record) {
-                        if (($record['execution_start_date'] ?? '') === $startDate) {
-                            error_log("Verified: Revenue history status is now: " . ($record['loyalty_status'] ?? 'unknown'));
-                            break;
-                        }
-                    }
-                }
-            } else {
-                error_log("FAILED to update revenue history for user: $email");
+        }
+        
+        // ===== NEW CODE: Update revenue_history record from 'unpaid-payment' to 'payment-made' =====
+        // Get current revenue history
+        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $revenueHistory = [];
+        $needsUpdate = false;
+        
+        if (!empty($result['revenue_history'])) {
+            $revenueHistory = json_decode($result['revenue_history'], true);
+            if (!is_array($revenueHistory)) {
+                $revenueHistory = [];
             }
         }
+        
+        // Find the LATEST record with 'unpaid-payment' status
+        $latestUnpaidIndex = -1;
+        $latestUnpaidDate = null;
+        
+        foreach ($revenueHistory as $index => $entry) {
+            if (isset($entry['loyalties']) && $entry['loyalties'] === 'unpaid-payment') {
+                $entryDate = $entry['execution_end_date'] ?? $entry['execution_start_date'] ?? '';
+                if ($entryDate && ($latestUnpaidIndex === -1 || $entryDate > $latestUnpaidDate)) {
+                    $latestUnpaidIndex = $index;
+                    $latestUnpaidDate = $entryDate;
+                }
+            }
+        }
+        
+        // If found, update it to 'payment-made'
+        if ($latestUnpaidIndex !== -1) {
+            $revenueHistory[$latestUnpaidIndex]['loyalties'] = 'payment-made';
+            $revenueHistory[$latestUnpaidIndex]['payment_details'] = $paymentDetails;
+            $revenueHistory[$latestUnpaidIndex]['payment_date'] = $datetime;
+            $needsUpdate = true;
+        }
+        
+        // Save updated revenue history if changes were made
+        if ($needsUpdate) {
+            $updatedRevenueHistory = json_encode($revenueHistory);
+            $updHistory = $pdo->prepare("UPDATE $tableName SET revenue_history = ? WHERE email = ?");
+            $updHistory->execute([$updatedRevenueHistory, $email]);
+        }
+        // ===== END OF REVENUE HISTORY UPDATE =====
         
         // Update user's loyalty status
         $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 'payment-made', paymentdetails = ? WHERE email = ?");
@@ -992,8 +919,50 @@
             
             $today = date('Y-m-d');
             
-            $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ? WHERE email = ?");
-            $upd->execute([$today, $email]);
+            // Calculate end date based on contract duration
+            $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($today)));
+            
+            // Get current broker balance for starting balance
+            $stmt = $pdo->prepare("SELECT broker_balance FROM $tableName WHERE email = ?");
+            $stmt->execute([$email]);
+            $currentData = $stmt->fetch(PDO::FETCH_ASSOC);
+            $startingBalance = (float)($currentData['broker_balance'] ?? 0);
+            
+            // Create new revenue history entry
+            $newRevenueEntry = [
+                'id' => time(), // Use timestamp as unique ID
+                'execution_start_date' => $today,
+                'execution_end_date' => $endDate,
+                'starting_balance' => $startingBalance,
+                'current_balance' => $startingBalance, // Initially same as starting balance
+                'profit' => 0,
+                'user_share' => 0,
+                'server_share' => 0,
+                'loyalties' => 'active' // Initial status for active contract
+            ];
+            
+            // Get existing revenue history
+            $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
+            $stmt->execute([$email]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $revenueHistory = [];
+            if (!empty($result['revenue_history'])) {
+                $revenueHistory = json_decode($result['revenue_history'], true);
+                if (!is_array($revenueHistory)) {
+                    $revenueHistory = [];
+                }
+            }
+            
+            // Add new entry at the beginning
+            array_unshift($revenueHistory, $newRevenueEntry);
+            
+            // Save updated revenue history
+            $updatedRevenueHistory = json_encode($revenueHistory);
+            
+            // Update user data
+            $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, revenue_history = ? WHERE email = ?");
+            $upd->execute([$today, $updatedRevenueHistory, $email]);
             
             unset($_SESSION['reenroll_passkey_verified']);
             unset($_SESSION['reenroll_passkey_verified_time']);
@@ -1049,6 +1018,17 @@
             header("Location: mydashboard.php");
             exit;
         }
+    }
+    // Handle Apply for Verification
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_for_verification'])) {
+        // Update balance verification status to 'applied-for-verification'
+        $upd = $pdo->prepare("UPDATE $tableName SET balance_verification = 'applied-for-verification', broker_balance = 0 WHERE email = ?");
+        $upd->execute([$email]);
+        
+        $_SESSION['prg_redirect_safe'] = true;
+        $_SESSION['apply_success_message'] = "Your application has been submitted. Our team will verify your account. Please ensure you have deposited the minimum required amount.";
+        header("Location: mydashboard.php");
+        exit;
     }
 
     // Logout
@@ -1177,34 +1157,6 @@
         exit;
     }
 
-    // =========================================================================
-    // AJAX endpoint for revenue history
-    // =========================================================================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_revenue_history') {
-        header('Content-Type: application/json');
-        
-        if (!isset($_SESSION['user_email']) || !isset($_SESSION['passkey_verified']) || !$_SESSION['passkey_verified']) {
-            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
-            exit;
-        }
-        
-        $email = strtolower($_SESSION['user_email']);
-        
-        $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
-        $stmt->execute([$email]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $history = [];
-        if (!empty($result['revenue_history'])) {
-            $history = json_decode($result['revenue_history'], true);
-            if (!is_array($history)) {
-                $history = [];
-            }
-        }
-        
-        echo json_encode(['success' => true, 'history' => $history]);
-        exit;
-    }
 
     // Get notifications list (for AJAX refresh) - THIS MUST BE BEFORE THE GENERIC AJAX HANDLER
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_notifications_list'])) {
@@ -1276,7 +1228,7 @@
         
         $email = strtolower($_SESSION['user_email']);
         
-        $stmt = $pdo->prepare("SELECT broker_balance, profitandloss, loyalties, execution_start_date, broker, application_status FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt = $pdo->prepare("SELECT broker_balance, profitandloss, loyalties, execution_start_date, broker, application_status, balance_verification FROM $tableName WHERE email = ? AND application_status = 'approved'");
         $stmt->execute([$email]);
         $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -1286,6 +1238,7 @@
             $currentBalance = $brokerBalance + $profitAndLoss;
             $loyaltiesStatus = $liveUser['loyalties'] ?? null;
             $broker = strtolower($liveUser['broker'] ?? 'unknown');
+            $balanceVerificationStatus = $liveUser['balance_verification'] ?? 'not-verified';
             
             $executionStartDate = $liveUser['execution_start_date'] ?? null;
             $contractDaysLeft = 0;
@@ -1294,6 +1247,15 @@
             $formatted_start_date = null;
             $formatted_end_date = null;
             
+            // Get MIN_INITIAL_DEPOSIT from server_account table
+            $stmtConfig = $pdo->prepare("SELECT minimum_deposit, contract_duration, server_share_percent, user_share_percent, min_broker_balance, min_profit_for_split FROM server_account LIMIT 1");
+            $stmtConfig->execute();
+            $config = $stmtConfig->fetch(PDO::FETCH_ASSOC);
+            $MIN_INITIAL_DEPOSIT = $config ? (float)$config['minimum_deposit'] : 0;
+            $CONTRACT_DURATION = $config ? (int)$config['contract_duration'] : 30;
+            $MIN_PROFIT_FOR_SPLIT = $config ? (float)$config['min_profit_for_split'] : 100;
+            
+            // Calculate contract dates
             if ($executionStartDate && $executionStartDate !== '0000-00-00' && $executionStartDate !== null) {
                 $start = new DateTime($executionStartDate);
                 $formatted_start_date = $start->format('M d, Y');
@@ -1318,78 +1280,139 @@
                 }
             }
             
-            $loyalty_status_message = "";
+            // ===== HIERARCHICAL DECISION TREE FOR AJAX (PRIORITY ORDER) =====
+            
+            $loyalties_message = "";
             $show_reenroll_button = false;
+            $show_apply_button = false;
             $show_payment_note = false;
             $loyalty_btn_text = "";
             $loyalty_btn_class = "";
             $dashboard_disclaimer = "";
+            $balance_check_failed = false;
             
-            if ($loyaltiesStatus === 'payment-made') {
-                $loyalty_status_message = "Payment Pending Confirmation";
-                $show_payment_note = true;
-                $loyalty_btn_text = "Awaiting Confirmation";
+            // PRIORITY 0: BALANCE VERIFICATION STATUS (HIGHEST PRIORITY)
+            if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
+                $loyalties_message = "Verification Required";
+                $dashboard_disclaimer = "Account verification required.";
+                $show_apply_button = true;
+                $show_reenroll_button = false;
+                $loyalty_btn_text = "Apply";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "apply";
+                
+            } elseif ($balanceVerificationStatus === 'applied-for-verification') {
+                $loyalties_message = "Verification Pending";
+                $dashboard_disclaimer = "Account verification in progress.";
+                $show_apply_button = false;
+                $show_reenroll_button = false;
+                $loyalty_btn_text = "Under Review";
                 $loyalty_btn_class = "btn-loyalty-paid";
-                $dashboard_disclaimer = "Payment submitted for verification.";
-            } elseif ($loyaltiesStatus === 'payment-confirmed') {
-                updateRevenueHistoryStatus($pdo, $email, 'payment-confirmed');
-                $loyalty_status_message = "Ready to enroll";
-                $show_reenroll_button = true;
-                $loyalty_btn_text = "Enroll";
-                $loyalty_btn_class = "btn-loyalty-action";
-                $dashboard_disclaimer = "Ready to start a new contract.";
-            } elseif ($loyaltiesStatus === 'justjoined') {
-                $loyalty_status_message = "Welcome New Member!";
-                $show_reenroll_button = true;
-                $loyalty_btn_text = "Enroll";
-                $loyalty_btn_class = "btn-loyalty-action";
-                $dashboard_disclaimer = "Welcome to HarvHub!";
-            } elseif ($is_contract_active) {
-                $loyalty_status_message = "Contract Active";
-                $loyalty_btn_text = "Active";
-                $loyalty_btn_class = "btn-loyalty-confirmed";
-                $dashboard_disclaimer = "Trading is active.";
-            } elseif ($contract_completed) {
-                // Check if profit is above threshold AND not paid yet
-                if ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
-                    $loyalty_status_message = "Contract Ended - Payment Required";
-                    $loyalty_btn_text = "View Profit Split";
+                
+            } elseif ($balanceVerificationStatus === 'verified') {
+                // Check minimum deposit requirement
+                if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
+                    // Revert to unverified status
+                    $updBalance = $pdo->prepare("UPDATE $tableName SET balance_verification = 'not-verified', broker_balance = 0 WHERE email = ?");
+                    $updBalance->execute([$email]);
+                    
+                    $balanceVerificationStatus = 'not-verified';
+                    $balance_check_failed = false;
+                    $loyalties_message = "Verification Required";
+                    $dashboard_disclaimer = "Account verification required. Minimum deposit of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " needed.";
+                    $show_apply_button = true;
+                    $show_reenroll_button = false;
+                    $loyalty_btn_text = "Apply";
                     $loyalty_btn_class = "btn-loyalty-action";
-                    $dashboard_disclaimer = "Contract completed - Profit split required!";
-                } else if ($profitAndLoss < 0) {
-                    // LOSS case - show enroll button immediately
-                    $loyalty_status_message = "Ready for New Contract";
-                    $show_reenroll_button = true;
-                    $loyalty_btn_text = "Enroll";
-                    $loyalty_btn_class = "btn-loyalty-action";
-                    $dashboard_disclaimer = "Contract completed with loss. You can start a new contract.";
-                } else if ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
-                    // BELOW THRESHOLD case - user keeps full profit
-                    $loyalty_status_message = "Ready for New Contract";
-                    $show_reenroll_button = true;
-                    $loyalty_btn_text = "Enroll";
-                    $loyalty_btn_class = "btn-loyalty-action";
-                    $dashboard_disclaimer = "Contract completed. Profit below split threshold - no profit split required.";
-                } else if ($profitAndLoss == 0) {
-                    // ZERO PROFIT case
-                    $loyalty_status_message = "Ready for New Contract";
-                    $show_reenroll_button = true;
-                    $loyalty_btn_text = "Enroll";
-                    $loyalty_btn_class = "btn-loyalty-action";
-                    $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
-                } else {
-                    $loyalty_status_message = "Ready for New Contract";
-                    $show_reenroll_button = true;
-                    $loyalty_btn_text = "Enroll";
-                    $loyalty_btn_class = "btn-loyalty-action";
-                    $dashboard_disclaimer = "Ready to start a new contract.";
+                    $loyalty_btn_action = "apply";
                 }
-            } else {
-                $loyalty_status_message = "Ready to Start";
-                $show_reenroll_button = true;
-                $loyalty_btn_text = "Enroll";
-                $loyalty_btn_class = "btn-loyalty-action";
-                $dashboard_disclaimer = "No active contract.";
+                // Only proceed with contract logic if balance is verified AND minimum deposit is met
+                else {
+                    // PRIORITY 1: Payment-made state
+                    if ($loyaltiesStatus === 'payment-made') {
+                        $loyalties_message = "Payment Pending Confirmation";
+                        $show_payment_note = true;
+                        $loyalty_btn_text = "Awaiting Confirmation";
+                        $loyalty_btn_class = "btn-loyalty-paid";
+                        $dashboard_disclaimer = "Payment submitted for verification.";
+                        
+                    } 
+                    // PRIORITY 2: Payment-confirmed state
+                    elseif ($loyaltiesStatus === 'payment-confirmed') {
+                        $loyalties_message = "Ready to enroll";
+                        $show_reenroll_button = true;
+                        $loyalty_btn_text = "Enroll";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $dashboard_disclaimer = "Ready to start a new contract.";
+                        
+                    } 
+                    // PRIORITY 3: Just joined
+                    elseif ($loyaltiesStatus === 'justjoined') {
+                        $loyalties_message = "Welcome New Member!";
+                        $show_reenroll_button = true;
+                        $loyalty_btn_text = "Enroll";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $dashboard_disclaimer = "Welcome to HarvHub!";
+                        
+                    } 
+                    // PRIORITY 4: Active contract
+                    elseif ($is_contract_active) {
+                        $loyalties_message = "Contract Active";
+                        $loyalty_btn_text = "Active";
+                        $loyalty_btn_class = "btn-loyalty-confirmed";
+                        $dashboard_disclaimer = "Trading is active. {$contractDaysLeft} days left.";
+                        
+                    } 
+                    // PRIORITY 5: Contract completed (ended)
+                    elseif ($contract_completed) {
+                        // Check if profit is above threshold AND not paid yet
+                        if ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
+                            $loyalties_message = "Contract Ended - Payment Required";
+                            $loyalty_btn_text = "View Profit Split";
+                            $loyalty_btn_class = "btn-loyalty-action";
+                            $dashboard_disclaimer = "Contract completed - Profit split required!";
+                        } 
+                        else if ($profitAndLoss < 0) {
+                            // LOSS case - show enroll button
+                            $loyalties_message = "Ready for New Contract";
+                            $show_reenroll_button = true;
+                            $loyalty_btn_text = "Enroll";
+                            $loyalty_btn_class = "btn-loyalty-action";
+                            $dashboard_disclaimer = "Contract completed with loss. You can start a new contract.";
+                        } 
+                        else if ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
+                            // BELOW THRESHOLD case - user keeps full profit
+                            $loyalties_message = "Ready for New Contract";
+                            $show_reenroll_button = true;
+                            $loyalty_btn_text = "Enroll";
+                            $loyalty_btn_class = "btn-loyalty-action";
+                            $dashboard_disclaimer = "Contract completed. Profit below split threshold - no profit split required.";
+                        } 
+                        else if ($profitAndLoss == 0) {
+                            // ZERO PROFIT case
+                            $loyalties_message = "Ready for New Contract";
+                            $show_reenroll_button = true;
+                            $loyalty_btn_text = "Enroll";
+                            $loyalty_btn_class = "btn-loyalty-action";
+                            $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
+                        } 
+                        else {
+                            $loyalties_message = "Ready for New Contract";
+                            $show_reenroll_button = true;
+                            $loyalty_btn_text = "Enroll";
+                            $loyalty_btn_class = "btn-loyalty-action";
+                            $dashboard_disclaimer = "Ready to start a new contract.";
+                        }
+                    } 
+                    // PRIORITY 6: No active contract (fallback)
+                    else {
+                        $loyalties_message = "Ready to Start";
+                        $show_reenroll_button = true;
+                        $loyalty_btn_text = "Enroll";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $dashboard_disclaimer = "No active contract.";
+                    }
+                }
             }
             
             echo json_encode([
@@ -1405,14 +1428,19 @@
                 'formatted_start_date' => $formatted_start_date,
                 'formatted_end_date' => $formatted_end_date,
                 'loyalties_status' => $loyaltiesStatus,
-                'loyalty_status_message' => $loyalty_status_message,
+                'balance_verification_status' => $balanceVerificationStatus,
+                'loyalties_message' => $loyalties_message,
                 'show_reenroll_button' => $show_reenroll_button,
+                'show_apply_button' => $show_apply_button,
                 'show_payment_note' => $show_payment_note,
                 'loyalty_btn_text' => $loyalty_btn_text,
                 'loyalty_btn_class' => $loyalty_btn_class,
+                'loyalty_btn_action' => $loyalty_btn_action ?? '',
                 'dashboard_disclaimer' => $dashboard_disclaimer,
                 'broker' => $broker,
-                'profit_to_split' => number_format(max(0, $profitAndLoss), 2)
+                'profit_to_split' => number_format(max(0, $profitAndLoss), 2),
+                'balance_check_failed' => $balance_check_failed,
+                'min_initial_deposit' => $MIN_INITIAL_DEPOSIT
             ]);
         } else {
             echo json_encode(['error' => 'User not found']);
@@ -1424,10 +1452,68 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HarvHub Dashboard</title>
+<title>HarvHub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
 <?php include 'style.php'; ?>
+<style>
+    /* Apply for verification button styling */
+    .btn-loyalty-apply {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+        width: 100%;
+    }
 
+    .btn-loyalty-apply:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    /* Deposit required button */
+    .btn-loyalty-deposit {
+        background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        width: 100%;
+    }
+
+    /* Status badges */
+    .balance-status-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+
+    .balance-status-unverified {
+        background: #e74c3c;
+        color: white;
+    }
+
+    .balance-status-pending {
+        background: #f39c12;
+        color: white;
+    }
+
+    .balance-status-verified {
+        background: #2ecc71;
+        color: white;
+    }
+</style>
 </head>
 <body>
     <!-- Notification Bell -->
@@ -1514,7 +1600,7 @@
             <div class="passkey-overlay">
                 <div class="passkey-screen">
                     <h2>Create Your Passkey</h2>
-                    <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub dashboard access</p>
+                    <p style="margin:1.5rem 0; opacity:0.9;">Secure your HarvHub access</p>
                     <form method="POST">
                         <input type="password" name="new_passkey" placeholder="Enter strong passkey" required autofocus>
                         <input type="password" name="confirm_passkey" placeholder="Confirm passkey" required style="margin-top: 10px;">
@@ -1543,7 +1629,7 @@
         <?php endif; ?>
 
         <div class="dashboard-wrapper <?= $balanceDisplay === 'hide' && $passkey_verified ? 'blur-mode' : '' ?>">
-            <h1>🌾HarvHub Dashboard</h1>
+            <h1>🌾HarvHub</h1>
             <p class="welcome">Hello, <strong><?= htmlspecialchars($fullName) ?></strong></p>
 
             <?php if (!empty($dashboard_disclaimer)): ?>
@@ -1585,10 +1671,24 @@
                         <?= htmlspecialchars($login) ?>
                         <?= htmlspecialchars($server) ?>
                     </div>
-                    <h2>$<?= number_format($depositBalance, 2) ?></h2>
-                    <div class="stat-details-info">
-                        Seed
-                    </div>
+                    <?php if ($balance_unverified): ?>
+                        <div class="stat-details-info" style="color: var(--warning);">
+                            Unverified
+                        </div>
+                    <?php elseif ($balance_under_verification): ?>
+                        <div class="stat-details-info" style="color: var(--info);">
+                            Under Review
+                        </div>
+                    <?php elseif ($balance_check_failed): ?>
+                        <div class="stat-details-info" style="color: var(--warning);">
+                            Minimum deposit of $<?= number_format($MIN_INITIAL_DEPOSIT, 2) ?> required.
+                        </div>
+                    <?php else: ?>
+                        <h2>$<?= number_format($depositBalance, 2) ?></h2>
+                        <div class="stat-details-info">
+                            Verified Account
+                        </div>
+                    <?php endif; ?>
                     
                     <!-- NEW: Revenue History Button -->
                     <button type="button" class="btn-revenue-history" onclick="openRevenueHistoryModal()">
@@ -1617,7 +1717,7 @@
                 </div>
                 
                 <div class="stat-card loyalty-card">
-                    <span class="loyalty-status-msg"><?= htmlspecialchars($loyalty_status_message) ?></span>
+                    <span class="loyalty-status-msg"><?= htmlspecialchars($loyalties_message) ?></span>
                     <p><?= htmlspecialchars($loyalty_text) ?></p>
 
                     <?php if ($executionStartDate && $executionStartDate !== '0000-00-00'): ?>
@@ -1629,30 +1729,32 @@
                     <?php if ($MIN_PROFIT_FOR_SPLIT > 0): ?>
                         <small style="opacity:0.6;">Min profit for split: $<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?></small>
                     <?php endif; ?>
-
-                    <?php if ($show_payment_note): ?>
-                        <p style="color: var(--info-color); margin-top: 10px; font-style: italic;">
-                            Your payment is on review. Once confirmed by the server, you'll be able to enroll.
-                        </p>
-                    <?php endif; ?>
                     
-                    <?php if (!$show_payment_note): ?>
+                    <!-- ONLY SHOW ENROLL/ACTION BUTTON WHEN NOT IN APPLY MODE AND NOT IN PAYMENT NOTE MODE -->
+                    <?php if (!$show_payment_note && !$show_apply_button): ?>
                         <button 
                             <?= $loyalty_btn_action ?>
                             class="<?= htmlspecialchars($loyalty_btn_class) ?>"
+                            <?= ($loyalty_btn_class === 'btn-loyalty-paid' && $loyalty_btn_text !== 'Awaiting Confirmation') ? 'disabled' : '' ?>
                         >
                             <?= htmlspecialchars($loyalty_btn_text) ?>
+                        </button>
+                    <?php endif; ?>
+
+                    <!-- ONLY SHOW APPLY BUTTON WHEN show_apply_button IS TRUE -->
+                    <?php if ($show_apply_button): ?>
+                        <button 
+                            onclick="openApplyModal()"
+                            class="btn-loyalty-action"
+                            style="margin-top: 1rem; width: 100%;"
+                        >
+                            Apply for Verification
                         </button>
                     <?php endif; ?>
                 </div>
             </div>
             <div class="note-btndanger">
                 <div class="note-btndanger-block">
-                    <p class="note">
-                        Your PnL is updated every 24 hours.<br>
-                        Automated execution runs 24/7 on your connected account.
-                    </p>
-
                     <button class="btn-danger" onclick="openDisconnectModal()">
                         Disconnect My Account
                     </button>
@@ -2004,7 +2106,72 @@
             </div>
         </div>
     </div>
+    <!-- Apply for Verification Modal -->
+<div id="applyModal" class="modal">
+    <div class="modal-content">
+        <h2 style="color: var(--info);">Apply for Verification</h2>
+        
+        <p style="margin: 1.5rem 0; line-height: 1.6;">
+            Before proceeding with your application, please ensure:
+        </p>
+        
+        <div class="apply-instructions" style="background: rgba(255, 255, 255, 0.05); padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+            <ul style="list-style: none; padding-left: 0;">
+                <li style="margin-bottom: 10px;">✓ Your broker account is active and accessible with same login credentials</li>
+                <li style="margin-bottom: 10px;">✓ You have deposited into your broker account</li>
+            </ul>
+        </div>
+        
+        <div class="apply-warning" style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107; padding: 1rem; margin: 1rem 0;">
+            <strong style="color: #ffc107;">⚠ Important:</strong>
+            <p style="margin-top: 0.5rem;">Ensure you have deposited into your account before confirming application.</p>
+        </div>
+        
+        <div class="modal-actions" style="flex-direction: column; gap: 10px;">
+            <form method="POST" style="width: 100%;">
+                <input type="hidden" name="apply_for_verification" value="1">
+                <button type="submit" class="btn-full" style="background: var(--info); color: white; width: 100%;">
+                    Confirm Application
+                </button>
+            </form>
+            <button onclick="closeApplyModal()" style="width: 100%; padding: 12px; background: #555; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+<script>
+    // This function must be available globally
+    function openApplyModal() {
+        const modal = document.getElementById('applyModal');
+        if (modal) {
+            modal.classList.add('active');
+        }
+    }
 
+    function closeApplyModal() {
+        const modal = document.getElementById('applyModal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+
+    // Close apply modal when clicking outside
+    document.addEventListener('click', function(event) {
+        const modal = document.getElementById('applyModal');
+        if (event.target === modal) {
+            closeApplyModal();
+        }
+    });
+
+    // Check for apply success message
+    <?php if (isset($_SESSION['apply_success_message'])): ?>
+        setTimeout(function() {
+            alert('<?= htmlspecialchars($_SESSION['apply_success_message']) ?>');
+        }, 100);
+        <?php unset($_SESSION['apply_success_message']); ?>
+    <?php endif; ?>
+</script>
 <script>
     // Clean URL
     if (window.history.replaceState) {
@@ -2325,7 +2492,7 @@
         const profitLossEl = document.querySelector('.stat-card:nth-child(2) h2');
         const currentBalanceEl = document.querySelector('.stat-card:nth-child(3) h2');
         const loyaltyDaysLeftEl = document.querySelector('.loyalty-card p');
-        const loyaltyStatusEl = document.querySelector('.loyalty-status-msg');
+        const loyaltiesEl = document.querySelector('.loyalty-status-msg');
         
         // Track if update is in progress
         let isUpdating = false;
@@ -2399,9 +2566,9 @@
                     }
                     
                     // Update loyalty status message
-                    const loyaltyStatusEl = document.querySelector('.loyalty-status-msg');
-                    if (loyaltyStatusEl && data.loyalty_status_message) {
-                        loyaltyStatusEl.innerHTML = data.loyalty_status_message;
+                    const loyaltiesEl = document.querySelector('.loyalty-status-msg');
+                    if (loyaltiesEl && data.loyalties_message) {
+                        loyaltiesEl.innerHTML = data.loyalties_message;
                     }
                     
                     // Update dashboard disclaimer
@@ -2422,26 +2589,109 @@
                         }
                     }
                     
-                    // Update loyalty button
+                    // Update loyalty button in the live updates
+                    // Update loyalty button in the live updates
                     const loyaltyBtn = document.querySelector('.loyalty-card button');
                     if (loyaltyBtn && data.loyalty_btn_text) {
                         loyaltyBtn.innerHTML = data.loyalty_btn_text;
                         loyaltyBtn.className = data.loyalty_btn_class;
                         
-                        // Update button action based on state
-                        if (data.loyalties_status === 'unpaid-payment') {
+                        // Remove any existing onclick handlers first
+                        loyaltyBtn.removeAttribute('onclick');
+                        loyaltyBtn.disabled = false;
+                        
+                        // Update button action based on state from server
+                        if (data.show_apply_button) {
+                            // Apply for verification mode
+                            loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
+                            loyaltyBtn.disabled = false;
+                        } 
+                        else if (data.loyalty_btn_action === 'deposit') {
+                            // Deposit required mode
+                            const brokerTarget = '<?= htmlspecialchars($brokerTarget) ?>';
+                            loyaltyBtn.setAttribute('onclick', `window.open('${brokerTarget}', '_blank')`);
+                            loyaltyBtn.disabled = false;
+                        }
+                        else if (data.loyalty_btn_action === 'apply') {
+                            // Apply for verification mode (fallback)
+                            loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
+                            loyaltyBtn.disabled = false;
+                        }
+                        else if (data.loyalties_status === 'unpaid-payment') {
+                            // Profit split required mode
                             loyaltyBtn.setAttribute('onclick', "document.getElementById('profitSplitModal').classList.add('active')");
-                        } else if (data.show_reenroll_button) {
+                            loyaltyBtn.disabled = false;
+                        } 
+                        else if (data.show_reenroll_button) {
+                            // Enrollment mode
                             loyaltyBtn.setAttribute('onclick', "openReenrollModal()");
-                        } else if (data.loyalties_status === 'payment-made') {
-                            loyaltyBtn.removeAttribute('onclick');
+                            loyaltyBtn.disabled = false;
+                        } 
+                        else if (data.loyalties_status === 'payment-made') {
+                            // Payment pending - disabled
                             loyaltyBtn.disabled = true;
-                        } else if (data.loyalties_status === 'payment-confirmed') {
+                        } 
+                        else if (data.loyalties_status === 'payment-confirmed') {
+                            // Payment confirmed - ready to enroll
                             loyaltyBtn.setAttribute('onclick', "openReenrollModal()");
-                        } else if (data.is_contract_active) {
-                            loyaltyBtn.removeAttribute('onclick');
+                            loyaltyBtn.disabled = false;
+                        }
+                        else if (data.is_contract_active) {
+                            // Active contract - disabled
                             loyaltyBtn.disabled = true;
                         }
+                        else {
+                            // Default fallback - disabled
+                            loyaltyBtn.disabled = true;
+                        }
+                    }
+
+                    // Update dashboard disclaimer (remove duplicate after this)
+                    const disclaimerEl = document.querySelector('.dashboard-disclaimer');
+                    if (disclaimerEl && data.dashboard_disclaimer) {
+                        disclaimerEl.innerHTML = data.dashboard_disclaimer;
+                        
+                        // Add payment badge if needed
+                        if (data.loyalties_status === 'unpaid-payment') {
+                            if (!disclaimerEl.querySelector('.payment-required-badge')) {
+                                const badge = document.createElement('span');
+                                badge.className = 'payment-required-badge';
+                                badge.innerHTML = 'Payment Required';
+                                disclaimerEl.appendChild(badge);
+                            }
+                        } else {
+                            const badge = disclaimerEl.querySelector('.payment-required-badge');
+                            if (badge) badge.remove();
+                        }
+                    }
+
+                    // Also update the disclaimer to show balance check failed message appropriately
+                    const disclaimerEl = document.querySelector('.dashboard-disclaimer');
+                    if (disclaimerEl && data.dashboard_disclaimer) {
+                        disclaimerEl.innerHTML = data.dashboard_disclaimer;
+                        
+                        // Add payment badge if needed
+                        if (data.loyalties_status === 'unpaid-payment') {
+                            if (!disclaimerEl.querySelector('.payment-required-badge')) {
+                                const badge = document.createElement('span');
+                                badge.className = 'payment-required-badge';
+                                badge.innerHTML = 'Payment Required';
+                                disclaimerEl.appendChild(badge);
+                            }
+                        } else {
+                            const badge = disclaimerEl.querySelector('.payment-required-badge');
+                            if (badge) badge.remove();
+                        }
+                    }
+
+                    // Hide/show the reenroll button container based on state
+                    const reenrollBtnContainer = document.querySelector('.loyalty-card .reenroll-container');
+                    if (data.show_reenroll_button) {
+                        // Show enroll button
+                    } else if (data.show_apply_button) {
+                        // Apply button is already shown
+                    } else {
+                        // Hide any enrollment-related buttons
                     }
                     
                     // Show/hide payment note
@@ -2813,76 +3063,106 @@
         const container = document.getElementById('revenueHistoryContainer');
         container.innerHTML = '<div class="empty-revenue">Loading...</div>';
         
-        fetch(window.location.href, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'action=get_revenue_history'
-        })
-        .then(response => response.json())
-        .then(data => {
-            let html = '';
-            
-            // Check if contract is active and add active contract card at the top
-            <?php if ($is_contract_active && $activeContractData): ?>
-            html += `
-                <div class="revenue-item active-contract">
-                    <div class="revenue-header" onclick="toggleRevenueDetails(this)">
-                        <div class="revenue-header-left">
-                            <div class="revenue-user-share" style="color: white; display: flex; align-items: center; gap: 8px;">
-                                Next Revenue Harvest
-                            </div>
-                            <div class="revenue-date-range" style="color: rgb(121, 121, 121); font-weight: 600;">
-                                <?= htmlspecialchars($activeContractData['formatted_end_date']) ?>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="revenue-details">
-                        <div class="revenue-detail-row">
-                            <span class="revenue-detail-label">Invested:</span>
-                            <span class="revenue-detail-value">$<?= number_format($activeContractData['starting_balance'], 2) ?></span>
-                        </div>
-                        <div class="revenue-detail-row">
-                            <span class="revenue-detail-label">⏳ Days Remaining:</span>
-                            <span class="revenue-detail-value"><?= $contractDaysLeft ?> days left</span>
-                        </div>
-                        <div class="revenue-detail-row" style="border-bottom: none;">
-                            <span class="revenue-detail-label"> Harvest Date:</span>
-                            <span class="revenue-detail-value"><?= htmlspecialchars($activeContractData['formatted_end_date']) ?></span>
-                        </div>
-                    </div>
-                </div>
-            `;
-            <?php endif; ?>
-            
-            if (data.success && data.history && data.history.length > 0) {
-                data.history.forEach((record) => {
-                    const statusClass = getStatusClass(record.loyalty_status);
-                    const statusText = getStatusText(record.loyalty_status);
-                    const profitClass = record.profit >= 0 ? 'profit-positive' : 'profit-negative';
-                    const totalRevenue = record.profit < 0 ? record.profit : (record.server_share + record.user_share);
+        // Get revenue history from user data (already loaded)
+        const historyData = <?php echo json_encode($user['revenue_history'] ?? '[]'); ?>;
+        let history = [];
+        
+        if (historyData && historyData !== '[]') {
+            try {
+                history = typeof historyData === 'string' ? JSON.parse(historyData) : historyData;
+                if (!Array.isArray(history)) history = [];
+                
+                // ===== CRITICAL FIX: Sort records from newest to oldest =====
+                history.sort((a, b) => {
+                    // First try to sort by execution_start_date
+                    const dateA = new Date(a.execution_start_date);
+                    const dateB = new Date(b.execution_start_date);
                     
-                    // Get status message for display
-                    let statusMessage = '';
-                    if (record.loyalty_status === 'pending_payment') {
-                        statusMessage = `<span class="revenue-status ${statusClass}">⚠️ ${statusText}</span>`;
-                    } else if (record.loyalty_status === 'payment-made') {
-                        statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText} - Under Review</span>`;
-                    } else if (record.loyalty_status === 'payment-confirmed') {
-                        statusMessage = `<span class="revenue-status ${statusClass}">✅ ${statusText} - Payment Confirmed</span>`;
-                    } else if (record.loyalty_status === 'completed') {
-                        statusMessage = `<span class="revenue-status ${statusClass}">✓ ${statusText}</span>`;
-                    } else if (record.loyalty_status === 'loss_completed') {
-                        statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
-                    } else if (record.loyalty_status === 'below_threshold') {
-                        statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText} (No Split Required)</span>`;
-                    } else {
-                        statusMessage = `<span class="revenue-status ${statusClass}">${statusText}</span>`;
+                    // If dates are different, sort by date (newest first)
+                    if (dateA.getTime() !== dateB.getTime()) {
+                        return dateB.getTime() - dateA.getTime();
                     }
                     
+                    // If same date, sort by ID/timestamp (newest first)
+                    const idA = parseInt(a.id) || 0;
+                    const idB = parseInt(b.id) || 0;
+                    return idB - idA;
+                });
+            } catch(e) {
+                history = [];
+            }
+        }
+        
+        let html = '';
+        
+        if (history && history.length > 0) {
+            history.forEach((record) => {
+                const statusClass = getStatusClass(record.loyalties);
+                const statusText = getStatusText(record.loyalties);
+                const profitClass = record.profit >= 0 ? 'profit-positive' : 'profit-negative';
+                const totalRevenue = record.profit < 0 ? record.profit : (record.server_share + record.user_share);
+                
+                // Check if this is an active contract
+                const isActiveContract = (record.loyalties === 'active');
+                
+                // Get status message for display
+                let statusMessage = '';
+                if (record.loyalties === 'pending_payment') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
+                } else if (record.loyalties === 'payment-made') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText} - Under Review</span>`;
+                } else if (record.loyalties === 'payment-confirmed') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ✓ Payment Confirmed</span>`;
+                } else if (record.loyalties === 'completed') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
+                } else if (record.loyalties === 'loss_completed') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
+                } else if (record.loyalties === 'below_threshold') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText} (No Split Required)</span>`;
+                } else if (record.loyalties === 'contract_cancelled') {
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
+                } else {
+                    statusMessage = `<span class="revenue-status ${statusClass}">${statusText}</span>`;
+                }
+                
+                if (isActiveContract) {
+                    // Simplified display for active contract
+                    const startDate = new Date(record.execution_start_date);
+                    const endDate = new Date(record.execution_end_date);
+                    const daysRemaining = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
+                    
                     html += `
-                        <div class="revenue-item" data-id="${record.id}">
+                        <div class="revenue-item active-contract-simplified" data-id="${record.id || Math.random()}">
+                            <div class="revenue-header" onclick="toggleRevenueDetails(this)">
+                                <div class="revenue-header-left">
+                                    <div class="revenue-user-share" style="color: white; font-weight: bold; font-size: 0.9rem;">
+                                        Next Revenue Harvest
+                                    </div>
+                                    <div class="revenue-date-range" style="color: rgb(141, 141, 141); font-weight: 600;">
+                                        ${formatDateSimple(endDate)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="revenue-details">
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Invested:</span>
+                                    <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">⏳ Days Remaining:</span>
+                                    <span class="revenue-detail-value">${daysRemaining > 0 ? daysRemaining : 0} days left</span>
+                                </div>
+                                <div class="revenue-detail-row" style="border-bottom: none;">
+                                    <span class="revenue-detail-label">Harvest Date:</span>
+                                    <span class="revenue-detail-value">${formatDateSimple(endDate)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Full display for completed/non-active contracts
+                    html += `
+                        <div class="revenue-item" data-id="${record.id || Math.random()}">
                             <div class="revenue-header" onclick="toggleRevenueDetails(this)">
                                 <div class="revenue-header-left">
                                     <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 8px;">
@@ -2915,44 +3195,35 @@
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-value">${statusMessage}</span>
                                 </div>
-                                
                             </div>
                         </div>
                     `;
-                });
-                container.innerHTML = html;
-            } else if (data.success && (!data.history || data.history.length === 0)) {
-                if (!html.includes('active-contract')) {
-                    container.innerHTML = '<div class="empty-revenue">No revenue history yet. Complete a contract to see your revenue records.</div>';
-                } else {
-                    container.innerHTML = html;
                 }
-            } else {
-                if (!html.includes('active-contract')) {
-                    container.innerHTML = '<div class="empty-revenue">Failed to load revenue history. Please try again.</div>';
-                } else {
-                    container.innerHTML = html;
-                }
-            }
-        })
-        .catch(error => {
-            console.error('Error loading revenue history:', error);
-            container.innerHTML = '<div class="empty-revenue">Error loading revenue history. Please refresh and try again.</div>';
-        });
+            });
+            container.innerHTML = html;
+        } else if (!html.includes('active-contract')) {
+            container.innerHTML = '<div class="empty-revenue">No revenue history yet. Complete a contract to see your revenue records.</div>';
+        } else {
+            container.innerHTML = html;
+        }
     }
 
     function getStatusClass(status) {
         switch(status) {
+            case 'active': return 'active';
             case 'completed': return 'completed';
             case 'pending_payment': return 'pending';
             case 'loss_completed': return 'loss';
             case 'below_threshold': return 'completed';
+            case 'payment-made': return 'pending';
+            case 'payment-confirmed': return 'completed';
             default: return 'pending';
         }
     }
 
     function getStatusText(status) {
         switch(status) {
+            case 'active': return 'Active Contract';
             case 'completed': return 'Completed';
             case 'pending_payment': return 'Payment Required';
             case 'loss_completed': return 'Contract ended in loss';
@@ -2976,6 +3247,11 @@
     function formatNumber(value) {
         return parseFloat(value).toFixed(2);
     }
+    function formatDateSimple(date) {
+        if (!date) return 'Date not set';
+        const d = new Date(date);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
 
     function toggleRevenueDetails(headerElement) {
         const detailsDiv = headerElement.nextElementSibling;
@@ -2983,24 +3259,20 @@
         
         if (detailsDiv.classList.contains('active')) {
             detailsDiv.classList.remove('active');
-            // Ensure the item maintains its original width
             if (revenueItem) {
                 revenueItem.style.width = '100%';
             }
         } else {
-            // Close any other open details
             document.querySelectorAll('.revenue-details.active').forEach(detail => {
                 detail.classList.remove('active');
             });
             
-            // Ensure all revenue items have consistent width
             document.querySelectorAll('.revenue-item').forEach(item => {
                 item.style.width = '100%';
             });
             
             detailsDiv.classList.add('active');
             
-            // Force a reflow to ensure smooth expansion without shifting
             if (revenueItem) {
                 const originalWidth = revenueItem.offsetWidth;
                 revenueItem.style.width = originalWidth + 'px';
@@ -3018,6 +3290,54 @@
             closeRevenueHistoryModal();
         }
     });
+    // --- INACTIVITY TIMEOUT (24 HOURS) ---
+    let inactivityTimer;
+    const INACTIVITY_LIMIT = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+    function resetInactivityTimer() {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => {
+            // Redirect to logout
+            window.location.href = '?logout=1&timeout=1';
+        }, INACTIVITY_LIMIT);
+    }
+
+    // Reset timer on user activity
+    window.addEventListener('load', resetInactivityTimer);
+    window.addEventListener('mousemove', resetInactivityTimer);
+    window.addEventListener('mousedown', resetInactivityTimer);
+    window.addEventListener('keypress', resetInactivityTimer);
+    window.addEventListener('scroll', resetInactivityTimer);
+    window.addEventListener('touchstart', resetInactivityTimer);
+    window.addEventListener('click', resetInactivityTimer);
+    // Prevent overscroll page reload
+    document.addEventListener('touchmove', function(e) {
+        const element = e.target;
+        let scrollable = false;
+        let current = element;
+        
+        // Check if the target element is scrollable
+        while (current && current !== document.body) {
+            const overflowY = window.getComputedStyle(current).overflowY;
+            if (overflowY === 'auto' || overflowY === 'scroll') {
+                scrollable = true;
+                break;
+            }
+            current = current.parentElement;
+        }
+        
+        if (!scrollable) {
+            const scrollTop = document.documentElement.scrollTop || document.body.scrollTop;
+            const scrollHeight = document.documentElement.scrollHeight;
+            const clientHeight = document.documentElement.clientHeight;
+            
+            // Prevent pull-to-refresh at top or bottom
+            if ((scrollTop === 0 && e.touches[0].clientY > e.touches[0].clientY) ||
+                (scrollTop + clientHeight >= scrollHeight && e.touches[0].clientY < e.touches[0].clientY)) {
+                e.preventDefault();
+            }
+        }
+    }, { passive: false });
 </script>
 </body>
 </html>
