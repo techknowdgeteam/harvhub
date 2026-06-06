@@ -31,58 +31,58 @@
     }
     * { margin:0; padding:0; box-sizing:border-box; }
     body {
-    font-family: 'Segoe UI', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    height: 100vh;
-    overflow: hidden; /* Added: prevents vertical scroll on body */
-    position: relative;
-}
-html, body { 
-    -ms-overflow-style: none; 
-    scrollbar-width: none; 
-}
-html::-webkit-scrollbar, body::-webkit-scrollbar { 
-    display: none; 
-}
-.container, .modal-content { 
-    overflow-y: auto; 
-    -ms-overflow-style: none; 
-    scrollbar-width: none; 
-}
-.container::-webkit-scrollbar, .modal-content::-webkit-scrollbar { 
-    display: none; 
-}
-/* Background effects */
-body::before {
-    content: ""; 
-    position: absolute; 
-    inset: 0;
-    background: radial-gradient(circle at 20% 80%, #1a0033 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, #000033 0%, transparent 50%),
-                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="white"/><circle cx="30" cy="70" r="1.5" fill="white"/><circle cx="70" cy="30" r="1" fill="white"/><circle cx="90" cy="80" r="1.2" fill="white"/><circle cx="50" cy="50" r="1.8" fill="white"/></svg>') repeat;
-    background-size: cover, cover, 120px 120px; 
-    opacity: 0.5; 
-    pointer-events: none; 
-    z-index: -1;
-}
-@media (prefers-color-scheme: light) {
-    body::before { 
-        opacity: 0.1; 
-        background-blend-mode: multiply; 
+        font-family: 'Segoe UI', sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        overflow: hidden; /* Added: prevents vertical scroll on body */
+        position: relative;
     }
-}
-.custom-body {
-    width: 100%;
-    height: 100%;
-    background: none;
-    overflow-y: auto; /* Allows vertical scroll only in custom-body */
-    -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
-    scrollbar-width: none; /* Hides scrollbar in Firefox */
-}
-.custom-body::-webkit-scrollbar {
-    display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
-}
+    html, body { 
+        -ms-overflow-style: none; 
+        scrollbar-width: none; 
+    }
+    html::-webkit-scrollbar, body::-webkit-scrollbar { 
+        display: none; 
+    }
+    .container, .modal-content { 
+        overflow-y: auto; 
+        -ms-overflow-style: none; 
+        scrollbar-width: none; 
+    }
+    .container::-webkit-scrollbar, .modal-content::-webkit-scrollbar { 
+        display: none; 
+    }
+    /* Background effects */
+    body::before {
+        content: ""; 
+        position: absolute; 
+        inset: 0;
+        background: radial-gradient(circle at 20% 80%, #1a0033 0%, transparent 50%),
+                    radial-gradient(circle at 80% 20%, #000033 0%, transparent 50%),
+                    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="white"/><circle cx="30" cy="70" r="1.5" fill="white"/><circle cx="70" cy="30" r="1" fill="white"/><circle cx="90" cy="80" r="1.2" fill="white"/><circle cx="50" cy="50" r="1.8" fill="white"/></svg>') repeat;
+        background-size: cover, cover, 120px 120px; 
+        opacity: 0.5; 
+        pointer-events: none; 
+        z-index: -1;
+    }
+    @media (prefers-color-scheme: light) {
+        body::before { 
+            opacity: 0.1; 
+            background-blend-mode: multiply; 
+        }
+    }
+    .custom-body {
+        width: 100%;
+        height: 100%;
+        background: none;
+        overflow-y: auto; /* Allows vertical scroll only in custom-body */
+        -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
+        scrollbar-width: none; /* Hides scrollbar in Firefox */
+    }
+    .custom-body::-webkit-scrollbar {
+        display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
+    }
     .container { height: 100vh; padding: 2rem; }
     header { 
         position: relative; text-align: center; padding: 1rem 2rem 2rem; 

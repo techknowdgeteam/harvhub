@@ -73,10 +73,10 @@
     .container { 
         max-width: 1200px; 
         margin: 0 auto; 
-        background: var(--container-bg); 
+        background: none; 
         padding: 20px; 
         margin-bottom: 100px; 
-        border-radius: 16px; 
+        border-radius: 2px; 
         box-shadow: 0 4px 20px rgba(0,0,0,0.3); 
         transition: background 0.3s; 
     }
@@ -256,7 +256,6 @@
     .execution-management-container,
     .user-viewer-container {
         margin-top: 20px;
-        margin-bottom: 150px;
         border: 2px solid var(--border-color);
         border-radius: 12px;
         overflow-x: auto;
@@ -1535,6 +1534,276 @@
             width: 100%;
             justify-content: flex-end;
         }
+    }
+    /* ==================== FIXED SCROLLABLE LISTS FOR ALL TABS ==================== */
+
+    /* User Configuration Tab - User List */
+    #users-tab .user-list-panel {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #users-tab .user-list-panel h3 {
+        flex-shrink: 0;
+    }
+
+    #user-items-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 200px;
+    }
+
+    /* Invested With Tab */
+    #invested-tab .invested-management-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #invested-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Active Investors Tab */
+    #verified-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #verified-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Pending Users Tab */
+    #pending-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #pending-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Suspended Users Tab */
+    #suspended-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #suspended-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Just Joined Users Tab */
+    #justjoined-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #justjoined-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Just Joined & Valid Tab */
+    #justjoinedvalid-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #justjoinedvalid-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Approved Users Tab */
+    #approved-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #approved-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Bypassed Users Tab */
+    #bypassed-tab .user-viewer-container {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #bypassed-users-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 300px;
+    }
+
+    /* Auto Trading Tab - User List Panel */
+    #autotrading-tab .user-list-panel {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #autotrading-tab .user-list-panel h3 {
+        flex-shrink: 0;
+    }
+
+    #autotrading-user-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 200px;
+    }
+
+    /* Execution History Tab - User List Panel */
+    #execution-tab .user-list-panel {
+        max-height: 550px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #execution-tab .user-list-panel h3 {
+        flex-shrink: 0;
+    }
+
+    #execution-user-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 200px;
+    }
+
+    /* Ensure table containers are scrollable */
+    .user-viewer-table-container,
+    .invested-users-table-container {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 450px;
+    }
+
+    /* Table wrapper for horizontal scroll */
+    .table-responsive {
+        overflow-x: auto;
+        width: 100%;
+    }
+
+    /* Fix for user-items container */
+    .user-items {
+        overflow-y: auto;
+        max-height: none;
+        flex: 1;
+    }
+    /* Make Server Configuration container match Account Management Configurations height */
+    #server-tab .account-management-container:first-child .json-viewer {
+        max-height: 400px;
+        overflow-y: auto;
+        padding: 20px;
+    }
+
+    /* Ensure the pre element inside scrolls properly */
+    #server-tab .account-management-container:first-child .json-structure {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    /* Collapsible Config Entry Styles */
+    .config-entry-header {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .config-entry-header:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .config-entry-title-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+    }
+
+    .collapse-icon {
+        display: inline-block;
+        width: 20px;
+        font-size: 14px;
+        color: var(--accent-color);
+        font-weight: bold;
+        transition: transform 0.2s ease;
+    }
+
+    .config-entry-title {
+        font-weight: bold;
+        font-size: 16px;
+        color: var(--accent-color);
+        word-break: break-all;
+    }
+
+    /* Keep buttons clickable without triggering header click */
+    .config-entry-buttons button {
+        cursor: pointer;
+        position: relative;
+        z-index: 1;
+    }
+
+    .config-entry-buttons button:hover {
+        transform: translateY(-1px);
+    }
+
+    /* Smooth transition for content */
+    .config-entry-content {
+        transition: all 0.3s ease;
+        overflow: hidden;
+    }
+
+    .config-entry-content.show {
+        display: block;
+    }
+
+    /* Animation for expand/collapse */
+    @keyframes fadeSlideIn {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .config-entry-content > * {
+        animation: fadeSlideIn 0.2s ease;
     }
 </style>
 

@@ -574,6 +574,55 @@
         background: rgba(231, 76, 60, 0.15);
         color: #e74c3c;
     }
+/* Search and filter styles */
+.filter-history-btn {
+    padding: 5px 12px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.filter-history-btn.active {
+    background: var(--accent-color);
+    color: white;
+}
+
+.filter-history-btn:hover:not(.active) {
+    background: var(--border-color);
+}
+
+/* Scrollable list styles */
+.revenue-user-items {
+    max-height: 450px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.revenue-user-items::-webkit-scrollbar {
+    width: 5px;
+}
+
+.revenue-user-items::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+    border-radius: 3px;
+}
+
+.revenue-user-items::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+/* Search input focus styles */
+.search-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
 </style>
 
 <!-- Revenue Navigation Tabs -->
@@ -688,7 +737,11 @@
     <div class="revenue-split-view">
         <div class="revenue-user-list-panel">
             <h3>📈 Active Investors</h3>
-            <div id="active-investors-list" class="revenue-user-items">
+            <!-- ADD SEARCH INPUT HERE -->
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                <input type="text" id="active-investors-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+            </div>
+            <div id="active-investors-list" class="revenue-user-items" style="max-height: 450px; overflow-y: auto;">
                 <div style="text-align: center; padding: 20px; font-size: 12px;">Loading...</div>
             </div>
         </div>
@@ -710,7 +763,11 @@
     <div class="revenue-split-view">
         <div class="revenue-user-list-panel">
             <h3>📊 Completed Investors</h3>
-            <div id="completed-investors-list" class="revenue-user-items">
+            <!-- ADD SEARCH INPUT HERE -->
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                <input type="text" id="completed-investors-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+            </div>
+            <div id="completed-investors-list" class="revenue-user-items" style="max-height: 450px; overflow-y: auto;">
                 <div style="text-align: center; padding: 20px; font-size: 12px;">Loading...</div>
             </div>
         </div>
@@ -719,6 +776,14 @@
                 <h3 id="completed-investor-name">Revenue History</h3>
                 <button class="refresh-history-btn" onclick="refreshCompletedInvestor()">🔄 Refresh</button>
             </div>
+            
+            <!-- ADD FILTER BUTTONS AND SEARCH FOR HISTORY SECTION -->
+            <div style="margin-bottom: 15px; padding: 10px; background: var(--bg-primary); border-radius: 8px;">
+                <div>
+                    <input type="text" id="history-search-input" class="search-input" placeholder="🔍 Search history records..." style="width: 100%; padding: 8px; font-size: 12px;">
+                </div>
+            </div>
+            
             <div id="revenue-history-container">
                 <div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">Select a user from the list to view their revenue history</div>
             </div>
@@ -886,6 +951,7 @@
         if (!container) return;
         
         container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px;">Loading active investors...</div>';
+        setupActiveInvestorsSearch();
         
         fetch('serveraccount.php', {
             method: 'POST',
@@ -1182,14 +1248,26 @@
         }
     }
 
-    // Load Completed Investors
+    // Load Completed Investors - NOW SHOWS ALL USERS TOGETHER (NO GROUPING)
     function loadCompletedInvestors() {
         const container = document.getElementById('completed-investors-list');
         if (!container) return;
         
-        container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px;">Loading completed investors...</div>';
+        container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px;">Loading all users...</div>';
+        setupCompletedInvestorsSearch();
         
+        // Fetch ALL users from both tables
         Promise.all([
+            // Get ALL users from insiders_server table
+            fetch('serveraccount.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: 'action=get_all_users_for_management'
+            }).then(res => res.json()),
+            // Get users with revenue history
             fetch('serveraccount.php', {
                 method: 'POST',
                 headers: {
@@ -1198,6 +1276,7 @@
                 },
                 body: 'action=get_completed_investors'
             }).then(res => res.json()),
+            // Get active investors to check for recently completed
             fetch('serveraccount.php', {
                 method: 'POST',
                 headers: {
@@ -1207,78 +1286,102 @@
                 body: 'action=get_active_investors'
             }).then(res => res.json())
         ])
-        .then(([historyData, activeData]) => {
+        .then(([allUsersData, historyData, activeData]) => {
             let userMap = new Map();
+            const today = new Date();
+            const contractDuration = <?= (int)($serverAccount['contract_duration'] ?? 30) ?>;
             
-            if (historyData.success && historyData.users) {
-                historyData.users.forEach(user => {
+            // FIRST: Add ALL users from get_all_users_for_management (this gives us every user)
+            if (allUsersData.success && allUsersData.users) {
+                allUsersData.users.forEach(user => {
                     userMap.set(`${user.id}_${user.source}`, {
-                        ...user,
-                        has_history: true,
-                        completed_type: 'recorded'
+                        id: user.id,
+                        source: user.source,
+                        fullname: user.fullname || 'N/A',
+                        email: user.email || 'N/A',
+                        has_history: false,
+                        has_active_contract: false,
+                        is_completed: false,
+                        payment_summary: { total_unpaid_revenue: 0, total_payment_made: 0, total_payment_confirmed: 0, total_cancelled_contracts: 0, unpaid_count: 0, payment_made_count: 0, payment_confirmed_count: 0, cancelled_count: 0 },
+                        application_status: user.application_status || 'unknown',
+                        user_type: 'no_history'
                     });
                 });
             }
             
+            // SECOND: Update users who have revenue history
+            if (historyData.success && historyData.users) {
+                historyData.users.forEach(user => {
+                    const key = `${user.id}_${user.source}`;
+                    if (userMap.has(key)) {
+                        let existing = userMap.get(key);
+                        existing.has_history = true;
+                        existing.payment_summary = user.payment_summary || existing.payment_summary;
+                        existing.user_type = 'recorded';
+                        existing.history_count = user.history_count || 0;
+                        existing.current_loyalties = user.current_loyalties;
+                    } else {
+                        userMap.set(key, {
+                            ...user,
+                            has_history: true,
+                            user_type: 'recorded'
+                        });
+                    }
+                });
+            }
+            
+            // THIRD: Mark users with active contracts
             if (activeData.success && activeData.users) {
-                const today = new Date();
-                const contractDuration = <?= (int)($serverAccount['contract_duration'] ?? 30) ?>;
-                
                 activeData.users.forEach(user => {
-                    if (user.execution_start_date) {
-                        const start = new Date(user.execution_start_date);
-                        const end = new Date(start);
-                        end.setDate(end.getDate() + contractDuration);
+                    const key = `${user.id}_${user.source}`;
+                    if (userMap.has(key)) {
+                        let existing = userMap.get(key);
+                        existing.has_active_contract = true;
                         
-                        if (end <= today) {
-                            const key = `${user.id}_${user.source}`;
-                            if (!userMap.has(key)) {
-                                userMap.set(key, {
-                                    ...user,
-                                    has_history: false,
-                                    completed_type: 'recent',
-                                    execution_end_date: end.toISOString().split('T')[0]
-                                });
+                        // Check if contract just ended (recently completed)
+                        if (user.execution_start_date) {
+                            const start = new Date(user.execution_start_date);
+                            const end = new Date(start);
+                            end.setDate(end.getDate() + contractDuration);
+                            
+                            if (end <= today) {
+                                existing.is_completed = true;
+                                existing.user_type = 'recent';
+                                existing.execution_end_date = end.toISOString().split('T')[0];
+                            } else if (existing.user_type === 'no_history') {
+                                existing.user_type = 'active';
                             }
                         }
                     }
                 });
             }
             
-            const allCompletedUsers = Array.from(userMap.values());
-            allCompletedUsers.sort((a, b) => {
-                const dateA = a.execution_end_date || a.recorded_at || '';
-                const dateB = b.execution_end_date || b.recorded_at || '';
-                return dateB.localeCompare(dateA);
+            // Convert map to array
+            const allUsers = Array.from(userMap.values());
+            
+            // Sort by user_type priority: recorded > recent > active > no_history, then by name
+            allUsers.sort((a, b) => {
+                const typeOrder = { 'recorded': 1, 'recent': 2, 'active': 3, 'no_history': 4 };
+                const orderA = typeOrder[a.user_type] || 5;
+                const orderB = typeOrder[b.user_type] || 5;
+                if (orderA !== orderB) return orderA - orderB;
+                return (a.fullname || '').localeCompare(b.fullname || '');
             });
             
-            if (allCompletedUsers.length === 0) {
-                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888; font-size: 12px;">No completed investors found</div>';
+            if (allUsers.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888; font-size: 12px;">No users found</div>';
                 return;
             }
             
-            const recordedUsers = allCompletedUsers.filter(u => u.has_history === true);
-            const recentUsers = allCompletedUsers.filter(u => u.has_history === false);
-            
+            // JUST LIST ALL USERS - NO SECTION DIVIDERS
             container.innerHTML = '';
-            
-            if (recentUsers.length > 0) {
-                const recentSection = document.createElement('div');
-                recentSection.innerHTML = `<div class="section-divider-small" style="margin: 10px 0;"><span>🆕 Recently Completed (History Pending)</span></div>`;
-                container.appendChild(recentSection);
-                recentUsers.forEach(user => container.appendChild(createCompletedUserItem(user, 'recent')));
-            }
-            
-            if (recordedUsers.length > 0) {
-                const recordedSection = document.createElement('div');
-                recordedSection.innerHTML = `<div class="section-divider-small" style="margin: 20px 0 10px 0;"><span>📜 Recorded History</span></div>`;
-                container.appendChild(recordedSection);
-                recordedUsers.forEach(user => container.appendChild(createCompletedUserItem(user, 'recorded')));
-            }
+            allUsers.forEach(user => {
+                container.appendChild(createCompletedUserItem(user, user.user_type));
+            });
         })
         .catch(error => {
             console.error('Error:', error);
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c; font-size: 12px;">Error loading completed investors</div>';
+            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c; font-size: 12px;">Error loading users</div>';
         });
     }
 
@@ -1290,6 +1393,7 @@
         userDiv.setAttribute('data-fullname', user.fullname || '');
         userDiv.setAttribute('data-email', user.email || '');
         userDiv.setAttribute('data-has-history', user.has_history || false);
+        userDiv.setAttribute('data-user-type', type);
         
         if (user.payment_summary) {
             userDiv.setAttribute('data-unpaid-revenue', user.payment_summary.total_unpaid_revenue || 0);
@@ -1311,12 +1415,28 @@
                             (user.payment_summary?.payment_confirmed_count || 0) + 
                             (user.payment_summary?.cancelled_count || 0);
         
-        const typeBadge = type === 'recent' ? 
-            '<span class="status-badge-modern status-recent" style="font-size: 8px; margin-left: 5px;">Recent</span>' : 
-            '<span class="status-badge-modern status-completed" style="font-size: 8px; margin-left: 5px;">Recorded</span>';
+        // Type badge styling
+        let typeBadge = '';
+        let typeClass = '';
+        switch(type) {
+            case 'recent':
+                typeBadge = '<span class="status-badge-modern status-recent" style="font-size: 8px; margin-left: 5px;">Recent</span>';
+                break;
+            case 'recorded':
+                typeBadge = '<span class="status-badge-modern status-completed" style="font-size: 8px; margin-left: 5px;">Recorded</span>';
+                break;
+            case 'no_history':
+                typeBadge = '<span class="status-badge-modern" style="background: rgba(52, 152, 219, 0.15); color: #3498db; font-size: 8px; margin-left: 5px;">No History</span>';
+                break;
+            case 'active':
+                typeBadge = '<span class="status-badge-modern status-active" style="font-size: 8px; margin-left: 5px;">Active</span>';
+                break;
+            default:
+                typeBadge = '';
+        }
         
         let summaryBadges = '';
-        if (user.payment_summary) {
+        if (user.payment_summary && (user.payment_summary.payment_made_count > 0 || user.payment_summary.payment_confirmed_count > 0 || user.payment_summary.unpaid_count > 0)) {
             if (user.payment_summary.payment_made_count > 0) {
                 summaryBadges += `<span class="status-badge-modern" style="background: rgba(241, 196, 15, 0.15); color: #f39c12; font-size: 8px; margin-left: 4px;">💰 ${user.payment_summary.payment_made_count} made ($${user.payment_summary.total_payment_made.toFixed(2)})</span>`;
             }
@@ -1329,131 +1449,29 @@
             if (user.payment_summary.cancelled_count > 0) {
                 summaryBadges += `<span class="status-badge-modern" style="background: rgba(155, 89, 182, 0.15); color: #9b59b6; font-size: 8px; margin-left: 4px;">${user.payment_summary.cancelled_count} cancelled ($${user.payment_summary.total_cancelled_contracts.toFixed(2)})</span>`;
             }
-            if (user.payment_summary.failed_count > 0) {
-                summaryBadges += `<span class="status-badge-modern" style="background: rgba(231, 76, 60, 0.15); color: #e74c3c; font-size: 8px; margin-left: 4px;">${user.payment_summary.failed_count} failed ($${user.payment_summary.total_failed_payments.toFixed(2)})</span>`;
-            }
+        } else if (type === 'no_history') {
+            summaryBadges = '<span class="status-badge-modern" style="background: rgba(52, 152, 219, 0.1); color: #7f8c8d; font-size: 8px;">No contract activity yet</span>';
+        } else if (type === 'active') {
+            summaryBadges = '<span class="status-badge-modern status-active" style="font-size: 8px;">Contract in progress</span>';
+        }
+        
+        let recordsInfo = '';
+        if (totalRecords > 0) {
+            recordsInfo = ` | ${totalRecords} records`;
+        } else if (type === 'no_history') {
+            recordsInfo = ' | No records';
         }
         
         userDiv.innerHTML = `
             <div class="revenue-user-item-name">${escapeHtml(user.fullname || 'N/A')} ${typeBadge}</div>
             <div class="revenue-user-item-email">${escapeHtml(user.email || 'N/A')}</div>
-            <div class="revenue-user-item-id">ID: ${user.id} | ${totalRecords} total records</div>
+            <div class="revenue-user-item-id">ID: ${user.id}${recordsInfo}</div>
             <div class="revenue-user-item-badges" style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">${summaryBadges}</div>
         `;
         return userDiv;
     }
 
-    // MAIN FUNCTION: Load Revenue History with Actions Column - FIXED sorting
-    function loadRevenueHistoryForUserWithSummary(paymentSummary) {
-        const container = document.getElementById('revenue-history-container');
-        if (!container) return;
-        
-        if (!currentRevenueUserId || !currentRevenueUserSource) {
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">Select a user from the list to view their revenue history</div>';
-            return;
-        }
-        
-        container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px;">Loading revenue history...</div>';
-        
-        fetch('serveraccount.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'XMLHttpRequest'
-            },
-            body: 'action=get_revenue_history&user_id=' + encodeURIComponent(currentRevenueUserId) + '&source_table=' + encodeURIComponent(currentRevenueUserSource)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success && data.history && data.history.length > 0) {
-                // FIXED: Sort the history by recorded_at DESCENDING (newest first) BEFORE storing
-                const sortedHistory = [...data.history].sort((a, b) => {
-                    const dateA = a.recorded_at ? new Date(a.recorded_at) : (a.id ? new Date(a.id * 1000) : new Date(0));
-                    const dateB = b.recorded_at ? new Date(b.recorded_at) : (b.id ? new Date(b.id * 1000) : new Date(0));
-                    return dateB - dateA; // Newest first
-                });
-                
-                window.currentRevenueRecords = sortedHistory;
-                window.currentFilterType = 'all';
-                
-                let totals = { unpaid: 0, payment_made: 0, payment_confirmed: 0, cancelled: 0, failed: 0 };
-                let totalProfit = 0, totalServerShare = 0, totalUserShare = 0;
-                let categoryCounts = { 
-                    'payment-made': 0, 
-                    'payment-confirmed': 0, 
-                    'unpaid-payment': 0, 
-                    'contract-cancelled': 0,
-                    'failed-payment': 0 
-                };
 
-                data.history.forEach(record => {
-                    const loyalties = (record.loyalties || '').toLowerCase();
-                    const amount = parseFloat(record.server_share || 0);
-                    totalProfit += parseFloat(record.profit || 0);
-                    totalServerShare += parseFloat(record.server_share || 0);
-                    totalUserShare += parseFloat(record.user_share || 0);
-                    
-                    if (loyalties.includes('unpaid')) { totals.unpaid += amount; categoryCounts['unpaid-payment']++; }
-                    else if (loyalties.includes('payment-made')) { totals.payment_made += amount; categoryCounts['payment-made']++; }
-                    else if (loyalties.includes('payment-confirmed')) { totals.payment_confirmed += amount; categoryCounts['payment-confirmed']++; }
-                    else if (loyalties.includes('cancelled')) { totals.cancelled += amount; categoryCounts['contract-cancelled']++; }
-                    else if (loyalties.includes('failed')) { totals.failed += amount; categoryCounts['failed-payment']++; }
-                });
-                
-                const statsHtml = `
-                    <div class="completed-stats-row" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px;">
-                        <div class="completed-stat-card"><div class="completed-stat-label">Total Records</div><div class="completed-stat-value">${data.history.length}</div></div>
-                        <div class="completed-stat-card"><div class="completed-stat-label">Total Profit</div><div class="completed-stat-value ${totalProfit >= 0 ? 'profit-positive' : 'profit-negative'}">${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)}</div></div>
-                        <div class="completed-stat-card"><div class="completed-stat-label">Server Share</div><div class="completed-stat-value">$${totalServerShare.toFixed(2)}</div></div>
-                        <div class="completed-stat-card"><div class="completed-stat-label">User Revenue</div><div class="completed-stat-value">$${totalUserShare.toFixed(2)}</div></div>
-                    </div>
-                    <div class="completed-stats-row" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px;">
-                        <div class="completed-stat-card clickable-filter" data-filter-type="payment-made" style="border-left: 3px solid #f39c12; cursor: pointer;">
-                            <div class="completed-stat-label">💰 Payment Made</div>
-                            <div class="completed-stat-value" style="color: #f39c12;">$${totals.payment_made.toFixed(2)}</div>
-                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['payment-made']} record(s)</div>
-                        </div>
-                        <div class="completed-stat-card clickable-filter" data-filter-type="payment-confirmed" style="border-left: 3px solid #27ae60; cursor: pointer;">
-                            <div class="completed-stat-label">✅ Payment Confirmed</div>
-                            <div class="completed-stat-value" style="color: #27ae60;">$${totals.payment_confirmed.toFixed(2)}</div>
-                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['payment-confirmed']} record(s)</div>
-                        </div>
-                        <div class="completed-stat-card clickable-filter" data-filter-type="unpaid-payment" style="border-left: 3px solid #e74c3c; cursor: pointer;">
-                            <div class="completed-stat-label">⚠️ Unpaid</div>
-                            <div class="completed-stat-value" style="color: #e74c3c;">$${totals.unpaid.toFixed(2)}</div>
-                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['unpaid-payment']} record(s)</div>
-                        </div>
-                        <div class="completed-stat-card clickable-filter" data-filter-type="contract-cancelled" style="border-left: 3px solid #9b59b6; cursor: pointer;">
-                            <div class="completed-stat-label">Cancelled</div>
-                            <div class="completed-stat-value" style="color: #9b59b6;">$${totals.cancelled.toFixed(2)}</div>
-                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['contract-cancelled']} record(s)</div>
-                        </div>
-                        <div class="completed-stat-card clickable-filter" data-filter-type="failed-payment" style="border-left: 3px solid #e74c3c; cursor: pointer;">
-                            <div class="completed-stat-label">Failed Payments</div>
-                            <div class="completed-stat-value" style="color: #e74c3c;">$${totals.failed.toFixed(2)}</div>
-                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['failed-payment']} record(s)</div>
-                        </div>
-                    </div>
-                    <div id="filter-status-badge" style="margin-bottom: 15px; text-align: center; display: none;">
-                        <span class="status-badge-modern" id="current-filter-badge" style="background: var(--accent-color); color: white;"></span>
-                    </div>
-                    <div id="revenue-history-table-container">
-                        ${renderHistoryTableWithActions('all')}
-                    </div>
-                `;
-                
-                container.innerHTML = statsHtml;
-                attachFilterClickHandlers();
-                attachActionButtonHandlers();
-            } else {
-                container.innerHTML = '<div style="text-align: center; padding: 20px; color: #888; font-size: 12px;">No revenue history records found for this user</div>';
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            container.innerHTML = '<div style="text-align: center; padding: 20px; color: #e74c3c; font-size: 12px;">Error loading revenue history</div>';
-        });
-    }
 
     // Render table with Actions column - FIXED: Newest records at the TOP
     function renderHistoryTableWithActions(filterType) {
@@ -1859,7 +1877,7 @@
         }
     }
 
-    // Select Completed Investor
+    // Select Completed Investor - Now handles users without history
     function selectCompletedInvestor(userId, sourceTable, fullname, email, hasHistory, paymentSummary) {
         currentRevenueUserId = userId;
         currentRevenueUserSource = sourceTable;
@@ -1879,9 +1897,9 @@
             const container = document.getElementById('revenue-history-container');
             container.innerHTML = `
                 <div style="text-align: center; padding: 40px;">
-                    <div class="status-badge-modern status-recent" style="display: inline-block; margin-bottom: 15px;">Recently Completed</div>
-                    <p style="color: #888;">This investor's contract has recently ended.</p>
-                    <p style="font-size: 12px; color: #666;">Revenue history will appear here once the profit split is processed.</p>
+                    <div class="status-badge-modern" style="display: inline-block; margin-bottom: 15px; background: rgba(52, 152, 219, 0.15); color: #3498db;">ℹ️ No Revenue History</div>
+                    <p style="color: #888;">This user is registered but has no completed contract history yet.</p>
+                    <p style="font-size: 12px; color: #666; margin-top: 10px;">Revenue history will appear here once the user completes a contract and profit split is processed.</p>
                 </div>
             `;
         }
@@ -2102,7 +2120,474 @@
         container.insertBefore(messageDiv, container.firstChild);
         setTimeout(() => messageDiv.remove(), 3000);
     }
+    // ==================== ACTIVE INVESTORS SEARCH ====================
+    function setupActiveInvestorsSearch() {
+        const searchInput = document.getElementById('active-investors-search');
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const userItems = document.querySelectorAll('#active-investors-list .revenue-user-item');
+            let visibleCount = 0;
+            
+            userItems.forEach(item => {
+                const name = (item.getAttribute('data-fullname') || '').toLowerCase();
+                const email = (item.getAttribute('data-email') || '').toLowerCase();
+                const userId = (item.getAttribute('data-user-id') || '');
+                
+                if (searchTerm === '' || name.includes(searchTerm) || email.includes(searchTerm) || userId.includes(searchTerm)) {
+                    item.style.display = '';
+                    visibleCount++;
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            // Show message if no results
+            const container = document.getElementById('active-investors-list');
+            const noResultsMsg = container.querySelector('.no-results-msg');
+            if (visibleCount === 0 && searchTerm !== '') {
+                if (!noResultsMsg) {
+                    const msg = document.createElement('div');
+                    msg.className = 'no-results-msg';
+                    msg.style.textAlign = 'center';
+                    msg.style.padding = '20px';
+                    msg.style.color = '#888';
+                    msg.style.fontSize = '12px';
+                    msg.innerHTML = 'No matching investors found';
+                    container.appendChild(msg);
+                }
+            } else if (noResultsMsg) {
+                noResultsMsg.remove();
+            }
+        });
+    }
 
+    // ==================== COMPLETED INVESTORS SEARCH ====================
+    function setupCompletedInvestorsSearch() {
+        const searchInput = document.getElementById('completed-investors-search');
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const userItems = document.querySelectorAll('#completed-investors-list .revenue-user-item');
+            let visibleCount = 0;
+            
+            userItems.forEach(item => {
+                const name = (item.getAttribute('data-fullname') || '').toLowerCase();
+                const email = (item.getAttribute('data-email') || '').toLowerCase();
+                const userId = (item.getAttribute('data-user-id') || '');
+                
+                if (searchTerm === '' || name.includes(searchTerm) || email.includes(searchTerm) || userId.includes(searchTerm)) {
+                    item.style.display = '';
+                    visibleCount++;
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            // Show message if no results
+            const container = document.getElementById('completed-investors-list');
+            const noResultsMsg = container.querySelector('.no-results-msg');
+            if (visibleCount === 0 && searchTerm !== '') {
+                if (!noResultsMsg) {
+                    const msg = document.createElement('div');
+                    msg.className = 'no-results-msg';
+                    msg.style.textAlign = 'center';
+                    msg.style.padding = '20px';
+                    msg.style.color = '#888';
+                    msg.style.fontSize = '12px';
+                    msg.innerHTML = 'No matching investors found';
+                    container.appendChild(msg);
+                }
+            } else if (noResultsMsg) {
+                noResultsMsg.remove();
+            }
+        });
+    }
+
+    // ==================== HISTORY FILTER AND SEARCH ====================
+    let currentHistoryFilter = 'all';
+    let currentHistorySearchTerm = '';
+
+    function setupHistoryFilters() {
+        const filterBtns = document.querySelectorAll('.filter-history-btn');
+        const searchInput = document.getElementById('history-search-input');
+        
+        filterBtns.forEach(btn => {
+            btn.removeEventListener('click', handleHistoryFilterClick);
+            btn.addEventListener('click', handleHistoryFilterClick);
+        });
+        
+        if (searchInput) {
+            searchInput.removeEventListener('keyup', handleHistorySearch);
+            searchInput.addEventListener('keyup', handleHistorySearch);
+        }
+    }
+
+    function handleHistoryFilterClick(event) {
+        const btn = event.currentTarget;
+        const filterType = btn.getAttribute('data-history-filter');
+        
+        // Update active state
+        document.querySelectorAll('.filter-history-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        currentHistoryFilter = filterType;
+        
+        // Re-render history table with current filter and search
+        renderFilteredHistoryTable();
+    }
+
+    function handleHistorySearch(event) {
+        currentHistorySearchTerm = event.target.value.toLowerCase();
+        renderFilteredHistoryTable();
+    }
+
+    function renderFilteredHistoryTable() {
+        if (!window.currentRevenueRecords || window.currentRevenueRecords.length === 0) {
+            const container = document.getElementById('revenue-history-table-container');
+            if (container) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">No records found.</div>';
+            }
+            return;
+        }
+        
+        let filteredRecords = [...window.currentRevenueRecords];
+        
+        // Apply status filter
+        if (currentHistoryFilter !== 'all') {
+            filteredRecords = filteredRecords.filter(record => {
+                const loyalties = (record.loyalties || '').toLowerCase();
+                if (currentHistoryFilter === 'payment-made') return loyalties.includes('payment-made');
+                if (currentHistoryFilter === 'payment-confirmed') return loyalties.includes('payment-confirmed');
+                if (currentHistoryFilter === 'unpaid-payment') return loyalties.includes('unpaid');
+                if (currentHistoryFilter === 'contract-cancelled') return loyalties.includes('cancelled');
+                if (currentHistoryFilter === 'failed-payment') return loyalties.includes('failed');
+                return false;
+            });
+        }
+        
+        // Apply search term filter
+        if (currentHistorySearchTerm !== '') {
+            filteredRecords = filteredRecords.filter(record => {
+                // Search in various fields
+                const searchableFields = [
+                    (record.loyalties || '').toLowerCase(),
+                    (record.execution_start_date || ''),
+                    (record.execution_end_date || ''),
+                    String(record.id || ''),
+                    String(record.server_share || ''),
+                    String(record.user_share || ''),
+                    String(record.profit || '')
+                ].join(' ').toLowerCase();
+                
+                return searchableFields.includes(currentHistorySearchTerm);
+            });
+        }
+        
+        // Sort by recorded_at DESCENDING (newest first)
+        filteredRecords.sort((a, b) => {
+            const dateA = a.recorded_at ? new Date(a.recorded_at) : (a.id ? new Date(a.id * 1000) : new Date(0));
+            const dateB = b.recorded_at ? new Date(b.recorded_at) : (b.id ? new Date(b.id * 1000) : new Date(0));
+            return dateB - dateA;
+        });
+        
+        const container = document.getElementById('revenue-history-table-container');
+        if (container) {
+            container.innerHTML = renderHistoryTableHTML(filteredRecords);
+            attachActionButtonHandlers();
+        }
+        
+        // Update filter badge display
+        const filterStatusDiv = document.getElementById('filter-status-badge');
+        if (filterStatusDiv) {
+            if (currentHistoryFilter !== 'all' || currentHistorySearchTerm !== '') {
+                let filterText = '';
+                if (currentHistoryFilter !== 'all') {
+                    switch(currentHistoryFilter) {
+                        case 'payment-made': filterText = '💰 Payment Made'; break;
+                        case 'payment-confirmed': filterText = '✅ Payment Confirmed'; break;
+                        case 'unpaid-payment': filterText = '⚠️ Unpaid'; break;
+                        case 'contract-cancelled': filterText = '❌ Cancelled'; break;
+                        case 'failed-payment': filterText = '💀 Failed'; break;
+                    }
+                }
+                if (currentHistorySearchTerm !== '') {
+                    filterText += (filterText ? ' + ' : '') + `🔍 "${currentHistorySearchTerm}"`;
+                }
+                filterStatusDiv.style.display = 'block';
+                const badge = document.getElementById('current-filter-badge');
+                if (badge) badge.textContent = filterText || 'Filtered';
+            } else {
+                filterStatusDiv.style.display = 'none';
+            }
+        }
+    }
+
+    function renderHistoryTableHTML(records) {
+        if (!records || records.length === 0) {
+            return '<div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">No matching records found.</div>';
+        }
+        
+        let tableHtml = `
+            <div class="revenue-history-table">
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; min-width: 1000px; border-collapse: collapse; font-size: 12px;">
+                        <thead>
+                            <tr style="background: var(--bg-primary);">
+                                <th style="padding: 10px 8px;">ID</th>
+                                <th>Recorded At</th>
+                                <th>Start Date</th>
+                                <th>End Date</th>
+                                <th>Start Bal</th>
+                                <th>End Bal</th>
+                                <th>Profit</th>
+                                <th>Server</th>
+                                <th>User</th>
+                                <th>Status</th>
+                                <th style="min-width: 180px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        records.forEach(record => {
+            const profitClass = record.profit >= 0 ? 'profit-positive' : 'profit-negative';
+            const statusDisplay = record.loyalties || '-';
+            const recordId = record.id;
+            const currentStatusLower = statusDisplay.toLowerCase();
+            
+            let recordedAtDisplay = '-';
+            if (record.recorded_at) {
+                const date = new Date(record.recorded_at);
+                recordedAtDisplay = date.toLocaleString();
+            } else if (record.id) {
+                const date = new Date(record.id * 1000);
+                recordedAtDisplay = date.toLocaleString() + ' (approx)';
+            }
+            
+            let statusClass = 'status-completed';
+            if (currentStatusLower.includes('unpaid')) statusClass = 'status-ended';
+            else if (currentStatusLower.includes('payment-made')) statusClass = 'status-active';
+            else if (currentStatusLower.includes('cancelled')) statusClass = 'status-ended';
+            else if (currentStatusLower.includes('failed')) statusClass = 'status-failed';
+            else if (currentStatusLower.includes('active')) statusClass = 'status-active';
+            
+            let actionOptions = '';
+            if (currentStatusLower.includes('payment-confirmed')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}">
+                    <option value="">Select...</option>
+                    <option value="payment-confirmed">Payment confirmed ✅</option>
+                    <option value="unpaid-payment">Unpaid</option>
+                    <option value="failed-payment">Failed Payment</option>
+                </select>`;
+            } else if (currentStatusLower.includes('payment-made')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}">
+                    <option value="">Select...</option>
+                    <option value="payment-confirmed">Payment confirmed ✅</option>
+                    <option value="unpaid-payment">Unpaid</option>
+                    <option value="failed-payment">Failed Payment</option>
+                </select>`;
+            } else if (currentStatusLower.includes('unpaid')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}">
+                    <option value="">Select...</option>
+                    <option value="payment-confirmed">Payment confirmed ✅</option>
+                    <option value="unpaid-payment">Unpaid</option>
+                    <option value="failed-payment">Failed Payment</option>
+                </select>`;
+            } else if (currentStatusLower.includes('failed')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}">
+                    <option value="">Select...</option>
+                    <option value="payment-confirmed">Payment confirmed ✅</option>
+                    <option value="unpaid-payment">Unpaid</option>
+                    <option value="failed-payment">Failed Payment</option>
+                </select>`;
+            } else if (currentStatusLower.includes('cancelled')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}" disabled><option>Cancelled - No actions</option></select>`;
+            } else if (currentStatusLower.includes('active')) {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}" disabled><option>Active Contract</option></select>`;
+            } else {
+                actionOptions = `<select class="status-action-select" data-record-id="${recordId}">
+                    <option value="">Select...</option>
+                    <option value="payment-confirmed">Payment confirmed ✅</option>
+                    <option value="unpaid-payment">Unpaid</option>
+                    <option value="failed-payment">Failed Payment</option>
+                </select>`;
+            }
+            
+            tableHtml += `
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 8px;"><code>${escapeHtml(String(recordId)).substring(0, 8)}</code></td>
+                    <td style="padding: 8px; font-size: 11px; white-space: nowrap;">${escapeHtml(recordedAtDisplay)}</td>
+                    <td style="padding: 8px;">${escapeHtml(record.execution_start_date || '-')}</td>
+                    <td style="padding: 8px;">${escapeHtml(record.execution_end_date || '-')}</td>
+                    <td style="padding: 8px;">$${parseFloat(record.starting_balance || 0).toFixed(2)}</td>
+                    <td style="padding: 8px;">$${parseFloat(record.current_balance || 0).toFixed(2)}</td>
+                    <td style="padding: 8px;" class="${profitClass}">${record.profit >= 0 ? '+' : ''}$${parseFloat(record.profit || 0).toFixed(2)}</td>
+                    <td style="padding: 8px;">$${parseFloat(record.server_share || 0).toFixed(2)}</td>
+                    <td style="padding: 8px;">$${parseFloat(record.user_share || 0).toFixed(2)}</td>
+                    <td><span class="status-badge-modern ${statusClass}">${escapeHtml(statusDisplay)}</span></td>
+                    <td>
+                        ${actionOptions}
+                        <button class="update-status-btn-inline" data-record-id="${recordId}" style="display: none; padding: 5px; background: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer;">Update</button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        tableHtml += `</tbody></table></div></div>`;
+        return tableHtml;
+    }
+
+    // Update loadRevenueHistoryForUserWithSummary to use the new filtered rendering
+    function loadRevenueHistoryForUserWithSummary(paymentSummary) {
+        const container = document.getElementById('revenue-history-container');
+        if (!container) return;
+        
+        if (!currentRevenueUserId || !currentRevenueUserSource) {
+            container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">Select a user from the list to view their revenue history</div>';
+            return;
+        }
+        
+        container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px;">Loading revenue history...</div>';
+        
+        fetch('serveraccount.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: 'action=get_revenue_history&user_id=' + encodeURIComponent(currentRevenueUserId) + '&source_table=' + encodeURIComponent(currentRevenueUserSource)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.history && data.history.length > 0) {
+                // Store records globally
+                window.currentRevenueRecords = [...data.history];
+                
+                // Reset filters
+                currentHistoryFilter = 'all';
+                currentHistorySearchTerm = '';
+                
+                // Update filter buttons active state
+                document.querySelectorAll('.filter-history-btn').forEach(btn => {
+                    if (btn.getAttribute('data-history-filter') === 'all') {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+                
+                // Clear search input
+                const searchInput = document.getElementById('history-search-input');
+                if (searchInput) searchInput.value = '';
+                
+                // Calculate totals
+                let totals = { unpaid: 0, payment_made: 0, payment_confirmed: 0, cancelled: 0, failed: 0 };
+                let totalProfit = 0, totalServerShare = 0, totalUserShare = 0;
+                let categoryCounts = { 
+                    'payment-made': 0, 
+                    'payment-confirmed': 0, 
+                    'unpaid-payment': 0, 
+                    'contract-cancelled': 0,
+                    'failed-payment': 0 
+                };
+
+                data.history.forEach(record => {
+                    const loyalties = (record.loyalties || '').toLowerCase();
+                    const amount = parseFloat(record.server_share || 0);
+                    totalProfit += parseFloat(record.profit || 0);
+                    totalServerShare += parseFloat(record.server_share || 0);
+                    totalUserShare += parseFloat(record.user_share || 0);
+                    
+                    if (loyalties.includes('unpaid')) { totals.unpaid += amount; categoryCounts['unpaid-payment']++; }
+                    else if (loyalties.includes('payment-made')) { totals.payment_made += amount; categoryCounts['payment-made']++; }
+                    else if (loyalties.includes('payment-confirmed')) { totals.payment_confirmed += amount; categoryCounts['payment-confirmed']++; }
+                    else if (loyalties.includes('cancelled')) { totals.cancelled += amount; categoryCounts['contract-cancelled']++; }
+                    else if (loyalties.includes('failed')) { totals.failed += amount; categoryCounts['failed-payment']++; }
+                });
+                
+                const statsHtml = `
+                    <div class="completed-stats-row" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px;">
+                        <div class="completed-stat-card"><div class="completed-stat-label">Total Records</div><div class="completed-stat-value">${data.history.length}</div></div>
+                        <div class="completed-stat-card"><div class="completed-stat-label">Total Profit</div><div class="completed-stat-value ${totalProfit >= 0 ? 'profit-positive' : 'profit-negative'}">${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)}</div></div>
+                        <div class="completed-stat-card"><div class="completed-stat-label">Server Share</div><div class="completed-stat-value">$${totalServerShare.toFixed(2)}</div></div>
+                        <div class="completed-stat-card"><div class="completed-stat-label">User Revenue</div><div class="completed-stat-value">$${totalUserShare.toFixed(2)}</div></div>
+                    </div>
+                    <div class="completed-stats-row" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px;">
+                        <div class="completed-stat-card" data-filter-type="payment-made" style="border-left: 3px solid #f39c12;">
+                            <div class="completed-stat-label">💰 Payment Made</div>
+                            <div class="completed-stat-value" style="color: #f39c12;">$${totals.payment_made.toFixed(2)}</div>
+                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['payment-made']} record(s)</div>
+                        </div>
+                        <div class="completed-stat-card" data-filter-type="payment-confirmed" style="border-left: 3px solid #27ae60;">
+                            <div class="completed-stat-label">✅ Payment Confirmed</div>
+                            <div class="completed-stat-value" style="color: #27ae60;">$${totals.payment_confirmed.toFixed(2)}</div>
+                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['payment-confirmed']} record(s)</div>
+                        </div>
+                        <div class="completed-stat-card" data-filter-type="unpaid-payment" style="border-left: 3px solid #e74c3c;">
+                            <div class="completed-stat-label">⚠️ Unpaid</div>
+                            <div class="completed-stat-value" style="color: #e74c3c;">$${totals.unpaid.toFixed(2)}</div>
+                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['unpaid-payment']} record(s)</div>
+                        </div>
+                        <div class="completed-stat-card" data-filter-type="contract-cancelled" style="border-left: 3px solid #9b59b6;">
+                            <div class="completed-stat-label">Cancelled</div>
+                            <div class="completed-stat-value" style="color: #9b59b6;">$${totals.cancelled.toFixed(2)}</div>
+                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['contract-cancelled']} record(s)</div>
+                        </div>
+                        <div class="completed-stat-card" data-filter-type="failed-payment" style="border-left: 3px solid #e74c3c;">
+                            <div class="completed-stat-label">Failed Payments</div>
+                            <div class="completed-stat-value" style="color: #e74c3c;">$${totals.failed.toFixed(2)}</div>
+                            <div class="completed-stat-label" style="font-size: 10px;">${categoryCounts['failed-payment']} record(s)</div>
+                        </div>
+                    </div>
+                    <div id="filter-status-badge" style="margin-bottom: 15px; text-align: center; display: none;">
+                        <span class="status-badge-modern" id="current-filter-badge" style="background: var(--accent-color); color: white;"></span>
+                        <button id="clear-filter-btn" style="margin-left: 10px; padding: 2px 8px; font-size: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Clear</button>
+                    </div>
+                    <div id="revenue-history-table-container">
+                        ${renderHistoryTableHTML(window.currentRevenueRecords)}
+                    </div>
+                `;
+                
+                container.innerHTML = statsHtml;
+                
+                // Setup filter buttons
+                setupHistoryFilters();
+                
+                // Setup clear filter button
+                const clearFilterBtn = document.getElementById('clear-filter-btn');
+                if (clearFilterBtn) {
+                    clearFilterBtn.onclick = () => {
+                        currentHistoryFilter = 'all';
+                        currentHistorySearchTerm = '';
+                        document.querySelectorAll('.filter-history-btn').forEach(btn => {
+                            if (btn.getAttribute('data-history-filter') === 'all') {
+                                btn.classList.add('active');
+                            } else {
+                                btn.classList.remove('active');
+                            }
+                        });
+                        const searchInput = document.getElementById('history-search-input');
+                        if (searchInput) searchInput.value = '';
+                        renderFilteredHistoryTable();
+                        
+                        const filterBadgeDiv = document.getElementById('filter-status-badge');
+                        if (filterBadgeDiv) filterBadgeDiv.style.display = 'none';
+                    };
+                }
+                
+                attachActionButtonHandlers();
+            } else {
+                container.innerHTML = '<div style="text-align: center; padding: 20px; color: #888; font-size: 12px;">No revenue history records found for this user</div>';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            container.innerHTML = '<div style="text-align: center; padding: 20px; color: #e74c3c; font-size: 12px;">Error loading revenue history</div>';
+        });
+    }
     function escapeHtml(text) {
         if (!text) return '';
         const div = document.createElement('div');

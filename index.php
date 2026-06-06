@@ -356,7 +356,9 @@
             </header>
             
             <!-- Organized Information Grid -->
-              <div class="info-grid">
+            <!-- Organized Information Grid - Only show if user is NOT approved -->
+            <?php if ($application_status !== 'approved'): ?>
+            <div class="info-grid">
                 <div class="info-card">
                     <h3>Investing & Harvesting</h3>
                     <p>Deposit to your chosen MT5 broker and invest with professional traders based on verified ratings and analytics.</p>
@@ -396,6 +398,7 @@
                     </ul>
                 </div>
             </div>
+            <?php endif; ?>
             
             <div style="text-align:center; margin:2rem 0;">
                 <?php

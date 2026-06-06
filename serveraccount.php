@@ -2256,15 +2256,15 @@
             exit;
         }
         // 5z5: Get System Server IP Configuration
-        if ($action === 'get_system_ip_config') {
+        if ($action === 'get_system_config') {
             try {
-                $stmt = $pdo->prepare("SELECT system_server_ipconfig FROM {$serverAccountTable} WHERE id = 1");
+                $stmt = $pdo->prepare("SELECT system_server_config FROM {$serverAccountTable} WHERE id = 1");
                 $stmt->execute();
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $config = [];
-                if ($result && !empty($result['system_server_ipconfig'])) {
-                    $config = json_decode($result['system_server_ipconfig'], true);
+                if ($result && !empty($result['system_server_config'])) {
+                    $config = json_decode($result['system_server_config'], true);
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         $config = [];
                     }
@@ -2278,7 +2278,7 @@
         }
 
         // 5z6: Update System Server IP Configuration
-        if ($action === 'update_system_ip_config') {
+        if ($action === 'update_system_config') {
             $config = json_decode($_POST['config'] ?? '{}', true);
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
@@ -2307,10 +2307,10 @@
             
             try {
                 $jsonConfig = json_encode($config, JSON_PRETTY_PRINT);
-                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET system_server_ipconfig = ? WHERE id = 1");
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET system_server_config = ? WHERE id = 1");
                 $stmt->execute([$jsonConfig]);
                 
-                echo json_encode(['success' => true, 'message' => 'IP configuration updated successfully']);
+                echo json_encode(['success' => true, 'message' => 'Configuration updated successfully']);
             } catch (Exception $e) {
                 echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
             }
@@ -2318,7 +2318,7 @@
         }
 
         // 5z7: Search Users for IP Assignment - SEARCHES ALL USERS
-        if ($action === 'search_users_for_ip') {
+        if ($action === 'search_users_for_config') {
             $search = trim($_POST['search'] ?? '');
             $exclude_ids = isset($_POST['exclude_ids']) ? json_decode($_POST['exclude_ids'], true) : [];
             
@@ -2443,6 +2443,67 @@
                 echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+        // 5z9: Get Manual Content
+        if ($action === 'get_manual_content') {
+            try {
+                $stmt = $pdo->prepare("SELECT manual FROM {$serverAccountTable} WHERE id = 1");
+                $stmt->execute();
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $manual = [];
+                if ($result && !empty($result['manual'])) {
+                    $manual = json_decode($result['manual'], true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $manual = [];
+                    }
+                }
+                
+                echo json_encode(['success' => true, 'manual' => $manual]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z10: Update Manual Content
+        if ($action === 'update_manual_content') {
+            $manual = json_decode($_POST['manual'] ?? '[]', true);
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                echo json_encode(['error' => 'Invalid JSON format']);
+                exit;
+            }
+            
+            // Verify admin credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            try {
+                $jsonManual = json_encode($manual, JSON_PRETTY_PRINT);
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET manual = ? WHERE id = 1");
+                $stmt->execute([$jsonManual]);
+                
+                echo json_encode(['success' => true]);
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
             }
             exit;
         }
@@ -3020,10 +3081,11 @@
                     <h2> Admin Navigation</h2>
                     <div class="nav-menu">
                         <a href="serveraccount.php?view=settings"> Server Settings & Configuration</a>
-                        <a href="serveraccount.php?view=system_ips"> System Servers IP</a> 
+                        <a href="serveraccount.php?view=system_config"> System Servers Config</a> 
                         <a href="serveraccount.php?view=paid_users"> Revenue & Users Dashboard</a>
                         <a href="serveraccount.php?view=account_management">Account Management</a>
                         <a href="serveraccount.php?view=analytics">Analytics</a>
+                        <a href="serveraccount.php?view=manual">📚 Manual</a>
                     </div>
                     
             <!-- ============================================ -->
@@ -3036,8 +3098,10 @@
             <!-- ============================================ -->
             <?php elseif ($currentView === 'analytics'): ?>
                 <?php include 'analytics.php'; ?>     
-            <?php elseif ($currentView === 'system_ips'): ?>
-                <?php include 'system_server_ips.php'; ?>
+            <?php elseif ($currentView === 'system_config'): ?>
+                <?php include 'system_server_config.php'; ?>
+            <?php elseif ($currentView === 'manual'): ?>
+                <?php include 'manual.php'; ?>
             <!-- ============================================ -->
             <!-- SECTION 10d: SETTINGS & CONFIGURATION        -->
             <!-- ============================================ -->
@@ -3050,20 +3114,8 @@
                         <h3> Payment & Revenue Settings</h3>
                         <div class="settings-grid">
                             <div class="settings-card">
-                                <label for="minimum_deposit">Minimum Deposit ($)</label>
-                                <input type="number" step="0.01" min="0.00" id="minimum_deposit" name="minimum_deposit" value="<?= htmlspecialchars($serverAccount['minimum_deposit'] ?? '0.00') ?>" required>
-                            </div>
-                            <div class="settings-card">
                                 <label for="contract_duration">Contract Duration (Days)</label>
                                 <input type="number" min="0" id="contract_duration" name="contract_duration" value="<?= htmlspecialchars($serverAccount['contract_duration'] ?? '') ?>">
-                            </div>
-                            <div class="settings-card">
-                                <label for="minimum_contract_days">Min Contract Days</label>
-                                <input type="number" min="0" id="minimum_contract_days" name="minimum_contract_days" value="<?= htmlspecialchars($serverAccount['minimum_contract_days'] ?? '5') ?>">
-                            </div>
-                            <div class="settings-card">
-                                <label for="expiry_threshold_days">Expiry Threshold (Days)</label>
-                                <input type="number" min="0" id="expiry_threshold_days" name="expiry_threshold_days" value="<?= htmlspecialchars($serverAccount['expiry_threshold_days'] ?? '5') ?>">
                             </div>
                         </div>
                         
@@ -3115,13 +3167,6 @@
                     </form>
 
                     <hr>
-
-                    <h3> News & Announcements</h3>
-                    <form method="POST" action="serveraccount.php?view=settings" id="news-form">
-                        <input type="hidden" name="update_news" value="1">
-                        <textarea name="news_content" placeholder="Enter news or announcements here..."><?= htmlspecialchars($serverAccount['news'] ?? '') ?></textarea>
-                        <button type="submit" style="margin-top: 10px;">Update News</button>
-                    </form>
 
                     <hr>
 

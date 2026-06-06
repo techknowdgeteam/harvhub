@@ -1,28 +1,5 @@
 <?php
     session_start();
-    // --- SESSION TIMEOUT CONFIGURATION (24 HOURS INACTIVITY) ---
-    $inactivity_limit = 86400; // 24 hours in seconds
-    
-    // Check if user is logged in
-    if (isset($_SESSION['user_email'])) {
-        // Check if last activity timestamp exists
-        if (isset($_SESSION['last_activity'])) {
-            $inactivity_time = time() - $_SESSION['last_activity'];
-            
-            // If inactive for more than 24 hours, destroy session
-            if ($inactivity_time > $inactivity_limit) {
-                session_unset();
-                session_destroy();
-                
-                // Redirect to login page
-                header("Location: index.php?timeout=1");
-                exit;
-            }
-        }
-        
-        // Update last activity timestamp
-        $_SESSION['last_activity'] = time();
-    }
     // mydashboard.php
 
     // --- Configuration and Connection ---
@@ -3294,15 +3271,64 @@
             closeRevenueHistoryModal();
         }
     });
-    // --- INACTIVITY TIMEOUT (24 HOURS) ---
+    // --- INACTIVITY RELOAD (1 MINUTE) - RELOADS EVERY TIME (ONLY IF PASSKEY MODAL NOT ACTIVE) ---
     let inactivityTimer;
-    const INACTIVITY_LIMIT = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+    const INACTIVITY_LIMIT = 60 * 1000; // 1 minute in milliseconds
 
     function resetInactivityTimer() {
         clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
-            // Redirect to logout
-            window.location.href = '?logout=1&timeout=1';
+            // Check if passkey modal is active before reloading
+            const passkeyOverlay = document.getElementById('reenrollPasskeyOverlay');
+            const passkeyScreen = document.querySelector('.passkey-overlay');
+            const passkeyForm = document.querySelector('.passkey-screen');
+            
+            // Check if ANY passkey-related modal is visible/active
+            let isPasskeyModalActive = false;
+            
+            // Check for enrollment passkey overlay
+            if (passkeyOverlay && passkeyOverlay.classList.contains('active')) {
+                isPasskeyModalActive = true;
+                console.log('Inactivity reload skipped: Passkey verification overlay is active');
+            }
+            
+            // Check for main passkey overlay (create passkey or enter passkey)
+            if (passkeyScreen && passkeyScreen.offsetParent !== null) {
+                // offsetParent is null if element is hidden/display:none
+                isPasskeyModalActive = true;
+                console.log('Inactivity reload skipped: Passkey screen is visible');
+            }
+            
+            // Check if passkey form is visible (fallback check)
+            if (passkeyForm && window.getComputedStyle(passkeyForm).display !== 'none') {
+                isPasskeyModalActive = true;
+                console.log('Inactivity reload skipped: Passkey form is visible');
+            }
+            
+            // Also check if any modal with 'passkey' in its ID or class is active
+            const allModals = document.querySelectorAll('.modal.active, .passkey-overlay, .passkey-verification-overlay');
+            allModals.forEach(modal => {
+                if (modal.id && (modal.id.includes('passkey') || modal.id.includes('Passkey'))) {
+                    if (modal.classList.contains('active') || (modal.offsetParent !== null)) {
+                        isPasskeyModalActive = true;
+                        console.log('Inactivity reload skipped: Passkey modal "' + modal.id + '" is active');
+                    }
+                }
+                if (modal.classList && modal.classList.contains('passkey-verification-overlay') && modal.classList.contains('active')) {
+                    isPasskeyModalActive = true;
+                    console.log('Inactivity reload skipped: Passkey verification overlay is active');
+                }
+            });
+            
+            // Only reload if NO passkey modal is active
+            if (!isPasskeyModalActive) {
+                console.log('Inactivity reload triggered: No passkey modal active, reloading page...');
+                window.location.reload();
+            } else {
+                console.log('Inactivity reload skipped: Passkey modal is active');
+                // Reset timer to check again later (since passkey might be dismissed)
+                resetInactivityTimer();
+            }
         }, INACTIVITY_LIMIT);
     }
 
@@ -3314,6 +3340,37 @@
     window.addEventListener('scroll', resetInactivityTimer);
     window.addEventListener('touchstart', resetInactivityTimer);
     window.addEventListener('click', resetInactivityTimer);
+
+    // Also reset timer when modals are closed (to prevent immediate reload after closing passkey)
+    const originalCloseModalFunctions = {
+        closeReenrollPasskeyOverlay: window.closeReenrollPasskeyOverlay,
+        closeApplyModal: window.closeApplyModal
+    };
+
+    // Enhance closeReenrollPasskeyOverlay to reset timer
+    window.closeReenrollPasskeyOverlay = function() {
+        if (originalCloseModalFunctions.closeReenrollPasskeyOverlay) {
+            originalCloseModalFunctions.closeReenrollPasskeyOverlay();
+        }
+        resetInactivityTimer();
+    };
+
+    // Enhance closeApplyModal to reset timer
+    window.closeApplyModal = function() {
+        if (originalCloseModalFunctions.closeApplyModal) {
+            originalCloseModalFunctions.closeApplyModal();
+        }
+        resetInactivityTimer();
+    };
+
+    // Also reset timer when any modal is closed
+    document.addEventListener('click', function(event) {
+        const modals = document.querySelectorAll('.modal.active, .passkey-overlay.active, .passkey-verification-overlay.active');
+        if (modals.length > 0 && event.target.classList && event.target.classList.contains('modal')) {
+            // Modal is being closed
+            resetInactivityTimer();
+        }
+    });
     // Prevent overscroll page reload
     document.addEventListener('touchmove', function(e) {
         const element = e.target;

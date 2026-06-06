@@ -17,30 +17,99 @@
     <button class="tab-btn active" data-tab="server">📁 Server Configuration</button>
     <button class="tab-btn" data-tab="users">👥 User Configuration</button>
     <button class="tab-btn" data-tab="invested">💰 Invested With</button>
-    <button class="tab-btn" data-tab="verified">👥 Active Investors</button>
     <button class="tab-btn" data-tab="pending">⏳ Pending Users</button>
-    <button class="tab-btn" data-tab="suspended">🚫 Suspended Users</button>
     <button class="tab-btn" data-tab="justjoined">🆕 Just Joined</button>
     <button class="tab-btn" data-tab="justjoinedvalid">📝 Just Joined & Valid</button>
     <button class="tab-btn" data-tab="approved">✓ Approved Users</button>
-    <button class="tab-btn" data-tab="bypassed">⚠️ Bypass Unauthorized Actions users</button>
+    <button class="tab-btn" data-tab="verified">👥 Active Investors</button>
     <button class="tab-btn" data-tab="execution">📜 Execution History</button>
+    <button class="tab-btn" data-tab="suspended">🚫 Suspended Users</button>
+    <button class="tab-btn" data-tab="bypassed">⚠️ Bypass Unauthorized Actions users</button>
     <button class="tab-btn" data-tab="autotrading">🤖 Restrictions Decision</button>
+</div>
+
+
+<!-- User Configuration Tab -->
+<div id="users-tab" class="management-tab" style="display: none;">
+    <div class="split-view">
+        <div class="user-list-panel">
+            <h3>Users List</h3>
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                <input type="text" id="user-list-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+            </div>
+            <div id="user-items-list" class="user-items" style="max-height: 450px; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px;">Loading users...</div>
+            </div>
+        </div>
+        <div class="management-panel">
+            <div class="management-header">
+                <h3>User Account Configuration</h3>
+                <div class="header-buttons">
+                    <button type="button" class="edit-json-btn-header" id="user-edit-btn" onclick="toggleEditMode('user')" disabled>✏️ Edit JSON</button>
+                    <button type="button" class="copy-json-btn-header" id="user-copy-btn" onclick="copyJsonToClipboard('user')" style="background: #3498db; display: none;">📋 Copy JSON</button>
+                    <button type="button" class="cancel-edit-btn" id="user-cancel-btn" style="display:none;" onclick="cancelEdit('user')">Cancel</button>
+                </div>
+            </div>
+
+            <div id="selected-user-info" class="user-info">
+                <div class="user-info-item"><span class="user-info-label">Selected User:</span> <span id="selected-user-name">None</span></div>
+                <div class="user-info-item"><span class="user-info-label">Email:</span> <span id="selected-user-email">-</span></div>
+                <div class="user-info-item"><span class="user-info-label">Source:</span> <span id="selected-user-source">-</span></div>
+                <div class="user-info-item"><span class="user-info-label">Current Status:</span> <span id="current-application-status" class="status-badge-pending">-</span></div>
+                <div class="user-info-item">
+                    <span class="user-info-label">Change Status:</span>
+                    <select id="application-status-select" class="status-select">
+                        <option value="">Select Status</option>
+                        <option value="approved">Approve</option>
+                        <option value="declined">Decline</option>
+                        <option value="pending">Pending</option>
+                        <option value="suspended">Suspend</option>
+                        <option value="blacklisted">Blacklist</option>
+                    </select>
+                    <button id="update-status-btn" class="update-status-small-btn" onclick="updateApplicationStatus()">Update</button>
+                </div>
+            </div>
+
+            <!-- Foldable User Configuration Container -->
+            <div class="account-management-container" style="margin-top: 20px;">
+                <div class="config-entry-header" onclick="toggleUserConfigExpand()">
+                    <div class="config-entry-title-wrapper">
+                        <span class="collapse-icon" id="user-config-icon">▶</span>
+                        <span class="config-entry-title" id="user-config-title">📁 User Configuration</span>
+                    </div>
+                    <div class="config-entry-buttons" onclick="event.stopPropagation()">
+                        <button type="button" class="copy-config-btn" id="user-config-copy-btn" onclick="copyUserConfigToClipboard()" style="display: none;">📋 Copy JSON</button>
+                    </div>
+                </div>
+                <div class="config-entry-content" id="user-config-content" style="display: none;">
+                    <div id="user-json-viewer" class="json-viewer">
+                        <div style="text-align: center; padding: 40px; color: #888;">Select a user from the list to view their configuration</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Server Configuration Tab -->
 <div id="server-tab" class="management-tab active">
+    <!-- Server Configuration with Fold Layout -->
     <div class="account-management-container">
-        <div class="management-header">
-            <h3>Server Configuration</h3>
-            <div class="header-buttons">
-                <button type="button" class="edit-json-btn-header" id="server-edit-btn" onclick="toggleEditMode('server')">✏️ Edit JSON</button>
-                <button type="button" class="copy-json-btn-header" id="server-copy-btn" onclick="copyJsonToClipboard('server')" style="background: #3498db;">📋 Copy JSON</button>
-                <button type="button" class="cancel-edit-btn" id="server-cancel-btn" style="display:none;" onclick="cancelEdit('server')">Cancel</button>
+        <div class="config-entry-header" onclick="toggleServerConfigExpand()">
+            <div class="config-entry-title-wrapper">
+                <span class="collapse-icon" id="server-config-icon">▶</span>
+                <span class="config-entry-title">📁 Server Configuration</span>
+            </div>
+            <div class="config-entry-buttons" onclick="event.stopPropagation()">
+                <button type="button" class="edit-config-btn" id="server-edit-btn" onclick="toggleEditMode('server')">✏️ Edit JSON</button>
+                <button type="button" class="copy-config-btn" id="server-copy-btn" onclick="copyJsonToClipboard('server')">📋 Copy JSON</button>
+                <button type="button" class="cancel-config-btn" id="server-cancel-btn" style="display:none;" onclick="cancelEdit('server')">Cancel</button>
             </div>
         </div>
-        <div id="server-json-viewer" class="json-viewer">
-            <div style="text-align: center; padding: 40px;">Loading server configuration...</div>
+        <div class="config-entry-content" id="server-config-content" style="display: none;">
+            <div id="server-json-viewer" class="json-viewer">
+                <div style="text-align: center; padding: 40px;">Loading server configuration...</div>
+            </div>
         </div>
     </div>
     
@@ -59,50 +128,6 @@
     </div>
 </div>
 
-<!-- User Configuration Tab -->
-<div id="users-tab" class="management-tab" style="display: none;">
-    <div class="split-view">
-        <div class="user-list-panel">
-            <h3>Users List</h3>
-            <div id="user-items-list" class="user-items">
-                <div style="text-align: center; padding: 20px;">Loading users...</div>
-            </div>
-        </div>
-        <div class="management-panel">
-            <div class="management-header">
-                <h3>User Account Configuration</h3>
-                <div class="header-buttons">
-                    <button type="button" class="edit-json-btn-header" id="user-edit-btn" onclick="toggleEditMode('user')" disabled>✏️ Edit JSON</button>
-                    <button type="button" class="copy-json-btn-header" id="user-copy-btn" onclick="copyJsonToClipboard('user')" style="background: #3498db; display: none;">📋 Copy JSON</button>
-                    <button type="button" class="cancel-edit-btn" id="user-cancel-btn" style="display:none;" onclick="cancelEdit('user')">Cancel</button>
-                </div>
-            </div>
-
-            <div id="selected-user-info" class="user-info">
-                <div class="user-info-item"><span class="user-info-label">Selected User:</span> <span id="selected-user-name">None</span></div>
-                <div class="user-info-item"><span class="user-info-label">Email:</span> <span id="selected-user-email">-</span></div>
-                <div class="user-info-item"><span class="user-info-label">Source:</span> <span id="selected-user-source">-</span></div>
-                <div class="user-info-item">
-                    <span class="user-info-label">Application Status:</span>
-                    <select id="application-status-select" class="status-select" onchange="updateApplicationStatus()" disabled>
-                        <option value="">Select Status</option>
-                        <option value="approved">Approve</option>
-                        <option value="declined">Decline</option>
-                        <option value="pending">Pending</option>
-                        <option value="suspended">Suspend</option>
-                        <option value="blacklisted">Blacklist</option>
-                    </select>
-                    <button id="update-status-btn" class="update-status-small-btn" onclick="updateApplicationStatus()" disabled style="display: none;">Update</button>
-                </div>
-            </div>
-
-            <div id="user-json-viewer" class="json-viewer-full">
-                <div style="text-align: center; padding: 40px; color: #888;">Select a user from the list to view their configuration</div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Invested With Management Tab -->
 <div id="invested-tab" class="management-tab" style="display: none;">
     <div class="invested-management-container">
@@ -112,7 +137,11 @@
                 <button type="button" class="refresh-invested-btn" onclick="loadInvestedWithUsers()">🔄 Refresh List</button>
             </div>
         </div>
-        <div id="invested-users-list" class="invested-users-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="invested-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="invested-users-list" class="invested-users-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading users...</div>
         </div>
     </div>
@@ -127,7 +156,11 @@
                 <button type="button" class="refresh-verified-btn" onclick="loadVerifiedUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="verified-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="verified-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="verified-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading Active Investors...</div>
         </div>
     </div>
@@ -142,7 +175,11 @@
                 <button type="button" class="refresh-pending-btn" onclick="loadPendingUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="pending-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="pending-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="pending-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading pending users...</div>
         </div>
     </div>
@@ -157,7 +194,11 @@
                 <button type="button" class="refresh-suspended-btn" onclick="loadSuspendedUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="suspended-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="suspended-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="suspended-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading suspended users...</div>
         </div>
     </div>
@@ -172,7 +213,11 @@
                 <button type="button" class="refresh-justjoined-btn" onclick="loadJustJoinedUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="justjoined-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="justjoined-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="justjoined-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading just joined users...</div>
         </div>
     </div>
@@ -187,7 +232,11 @@
                 <button type="button" class="refresh-justjoinedvalid-btn" onclick="loadJustJoinedValidUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="justjoinedvalid-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="justjoinedvalid-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="justjoinedvalid-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading users...</div>
         </div>
     </div>
@@ -202,11 +251,16 @@
                 <button type="button" class="refresh-approved-btn" onclick="loadApprovedUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="approved-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="approved-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="approved-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading approved users...</div>
         </div>
     </div>
 </div>
+
 <!-- Bypassed Unauthorized Actions Users Tab -->
 <div id="bypassed-tab" class="management-tab" style="display: none;">
     <div class="user-viewer-container">
@@ -216,7 +270,11 @@
                 <button type="button" class="refresh-bypassed-btn" onclick="loadBypassedUsers()">🔄 Refresh</button>
             </div>
         </div>
-        <div id="bypassed-users-list" class="user-viewer-table-container">
+        <!-- ADD SEARCH INPUT -->
+        <div style="padding: 10px 20px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="bypassed-users-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+        </div>
+        <div id="bypassed-users-list" class="user-viewer-table-container" style="max-height: 500px; overflow-y: auto;">
             <div style="text-align: center; padding: 40px;">Loading bypassed users...</div>
         </div>
     </div>
@@ -227,7 +285,11 @@
     <div class="split-view">
         <div class="user-list-panel">
             <h3>Users List</h3>
-            <div id="execution-user-list" class="user-items">
+            <!-- ADD SEARCH INPUT -->
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                <input type="text" id="execution-user-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+            </div>
+            <div id="execution-user-list" class="user-items" style="max-height: 450px; overflow-y: auto;">
                 <div style="text-align: center; padding: 20px;">Loading users...</div>
             </div>
         </div>
@@ -243,7 +305,7 @@
                 <div class="user-info-item"><span class="user-info-label">Email:</span> <span id="selected-execution-user-email">-</span></div>
                 <div class="user-info-item"><span class="user-info-label">Source:</span> <span id="selected-execution-user-source">-</span></div>
             </div>
-            <div id="execution-history-list" class="execution-history-container">
+            <div id="execution-history-list" class="execution-history-container" style="max-height: 500px; overflow-y: auto;">
                 <div style="text-align: center; padding: 40px; color: #888;">Select a user from the list to view their execution history</div>
             </div>
         </div>
@@ -255,18 +317,21 @@
     <div class="split-view">
         <div class="user-list-panel">
             <h3>Users List</h3>
-            <div id="autotrading-user-list" class="user-items">
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+                <input type="text" id="autotrading-user-search" class="search-input" placeholder="🔍 Search by name, email or ID..." style="width: 100%; padding: 8px; font-size: 12px;">
+            </div>
+            <div id="autotrading-user-list" class="user-items" style="max-height: 450px; overflow-y: auto;">
                 <div style="text-align: center; padding: 20px;">Loading users...</div>
             </div>
         </div>
-        <div class="management-panel">
+        <div class="management-panel" style="overflow: hidden; display: flex; flex-direction: column;">
             <div class="management-header">
                 <h3>Restrictions Decision & Restriction Settings</h3>
                 <div class="header-buttons">
                     <button type="button" class="save-settings-btn" id="save-autotrading-btn" onclick="saveAutoTradingSettings()" style="background: #27ae60;">💾 Save All Settings</button>
                 </div>
             </div>
-            <div id="auto-trading-settings" class="auto-trading-settings-container">
+            <div id="auto-trading-settings" class="auto-trading-settings-container" style="flex: 1; overflow-y: auto;">
                 <div style="text-align: center; padding: 40px; color: #888;">Select a user from the list to manage their settings</div>
             </div>
         </div>
@@ -613,9 +678,7 @@
         document.body.removeChild(textArea);
     }
 
-    // Existing functions (loadUserAccountManagement, displayJsonViewer, toggleEditMode, etc.)
-    // ... (keep all your existing functions here unchanged)
-    
+
     function loadUserAccountManagement(userId, sourceTable) {
         if (!userId || !sourceTable) {
             showMessage('Invalid user selection', 'error');
@@ -647,6 +710,11 @@
             exitEditMode('user');
         }
         
+        // Get user info for title extraction
+        const selectedUserItem = document.querySelector(`.user-item[data-user-id="${userId}"]`);
+        const userFullname = selectedUserItem ? selectedUserItem.getAttribute('data-fullname') : '';
+        const userEmail = selectedUserItem ? selectedUserItem.getAttribute('data-email') : '';
+        
         fetch('serveraccount.php', {
             method: 'POST',
             headers: {
@@ -661,8 +729,8 @@
                 currentEditingData = data.data;
                 
                 const isEmpty = !data.data || 
-                               (typeof data.data === 'object' && Object.keys(data.data).length === 0) ||
-                               (Array.isArray(data.data) && data.data.length === 0);
+                            (typeof data.data === 'object' && Object.keys(data.data).length === 0) ||
+                            (Array.isArray(data.data) && data.data.length === 0);
                 
                 if (isEmpty) {
                     const container = document.querySelector('#user-json-viewer');
@@ -675,31 +743,58 @@
                         `;
                     }
                     
+                    // Reset title to default
+                    const titleSpan = document.getElementById('user-config-title');
+                    if (titleSpan) {
+                        titleSpan.innerHTML = '📁 User Configuration';
+                    }
+                    
                     if (editBtn) {
                         editBtn.disabled = false;
                         editBtn.style.opacity = '1';
                         editBtn.title = 'Create/Edit JSON configuration';
                     }
                     
-                    if (copyBtn) {
-                        copyBtn.style.display = 'none';
+                    const configCopyBtn = document.getElementById('user-config-copy-btn');
+                    if (configCopyBtn) {
+                        configCopyBtn.style.display = 'none';
                     }
                 } else {
-                    displayJsonViewer(data.data, '#user-json-viewer');
+                    // Pass user info to displayJsonViewer for title extraction
+                    // Also check if the data has a single key that contains the config
+                    let configKeyName = null;
+                    if (data.data && typeof data.data === 'object' && Object.keys(data.data).length === 1) {
+                        // If there's only one key in the data, that key might be the config name
+                        const singleKey = Object.keys(data.data)[0];
+                        // Check if the value is an object (nested config)
+                        if (data.data[singleKey] && typeof data.data[singleKey] === 'object') {
+                            configKeyName = singleKey;
+                            // Pass the nested data instead? No, keep as is for display
+                        }
+                    }
+
+                    displayJsonViewer(data.data, '#user-json-viewer', true, {
+                        id: userId,
+                        fullname: userFullname,
+                        email: userEmail,
+                        source: sourceTable
+                    }, configKeyName);
                     
                     if (editBtn) {
                         editBtn.disabled = false;
                         editBtn.style.opacity = '1';
                         editBtn.title = 'Edit JSON configuration';
                     }
-                    
-                    if (copyBtn) {
-                        copyBtn.style.display = 'inline-block';
-                    }
                 }
             } else {
                 showMessage(data.error || 'Error loading account management', 'error');
                 currentEditingData = {};
+                
+                // Reset title to default
+                const titleSpan = document.getElementById('user-config-title');
+                if (titleSpan) {
+                    titleSpan.innerHTML = '📁 User Configuration';
+                }
                 
                 if (editBtn) {
                     editBtn.disabled = false;
@@ -707,8 +802,9 @@
                     editBtn.title = 'Create JSON configuration (user exists)';
                 }
                 
-                if (copyBtn) {
-                    copyBtn.style.display = 'none';
+                const configCopyBtn = document.getElementById('user-config-copy-btn');
+                if (configCopyBtn) {
+                    configCopyBtn.style.display = 'none';
                 }
                 
                 const container = document.querySelector('#user-json-viewer');
@@ -727,19 +823,25 @@
             showMessage('Error loading account management', 'error');
             currentEditingData = {};
             
+            const titleSpan = document.getElementById('user-config-title');
+            if (titleSpan) {
+                titleSpan.innerHTML = '📁 User Configuration';
+            }
+            
             if (editBtn) {
                 editBtn.disabled = false;
                 editBtn.style.opacity = '1';
                 editBtn.title = 'Create JSON configuration';
             }
             
-            if (copyBtn) {
-                copyBtn.style.display = 'none';
+            const configCopyBtn = document.getElementById('user-config-copy-btn');
+            if (configCopyBtn) {
+                configCopyBtn.style.display = 'none';
             }
         });
     }
 
-    function displayJsonViewer(data, containerId) {
+    function displayJsonViewer(data, containerId, isUserConfig = false, userInfo = null, configKeyName = null) {
         const container = document.querySelector(containerId);
         if (!container) return;
         
@@ -750,10 +852,135 @@
             return;
         }
         
+        // If this is user configuration, extract and display the config name
+        if (isUserConfig && userInfo) {
+            const configTitle = extractConfigTitle(data, userInfo, configKeyName);
+            const titleSpan = document.getElementById('user-config-title');
+            if (titleSpan) {
+                titleSpan.innerHTML = `📁 ${escapeHtml(configTitle)}`;
+            }
+            
+            // Also show the copy button if there's data
+            const copyBtn = document.getElementById('user-config-copy-btn');
+            if (copyBtn && Object.keys(data).length > 0) {
+                copyBtn.style.display = 'inline-block';
+            }
+        }
+        
         const preElement = document.createElement('pre');
         preElement.className = 'json-structure';
         preElement.textContent = JSON.stringify(data, null, 2);
         container.appendChild(preElement);
+    }
+
+    // New function to extract configuration title based on priority rules
+    function extractConfigTitle(data, userInfo, configKeyName = null) {
+        // Priority 1: Check if data has a direct string field "configuration_title"
+        if (data.configuration_title && typeof data.configuration_title === 'string' && data.configuration_title.trim() !== '') {
+            return data.configuration_title;
+        }
+        
+        // Priority 2: Check if data has a direct string field "configuration_title"
+        if (data.configuration_title && typeof data.configuration_title === 'string' && data.configuration_title.trim() !== '') {
+            return data.configuration_title;
+        }
+        
+        // Priority 3: Check if data has a direct string field "configuration_title"
+        if (data.configuration_title && typeof data.configuration_title === 'string' && data.configuration_title.trim() !== '') {
+            return data.configuration_title;
+        }
+        
+        // Priority 4: Check if the data itself is stored with a key name (passed from displayJsonViewer)
+        // This handles the case where the entire config is stored as { "key_name": { ... } }
+        if (configKeyName && typeof configKeyName === 'string' && configKeyName.trim() !== '') {
+            // Check if the key name is not a generic/default name
+            if (!configKeyName.match(/^configuration_\d+$/) && configKeyName !== 'user_config') {
+                return configKeyName;
+            }
+        }
+        
+        // Priority 5: Check if data has a nested object with a name field
+        // Look for the first top-level key that contains name-related fields
+        for (const [key, value] of Object.entries(data)) {
+            if (value && typeof value === 'object') {
+                if (value.configuration_title && typeof value.configuration_title === 'string' && value.configuration_title.trim() !== '') {
+                    return value.configuration_title;
+                }
+                if (value.configuration_title && typeof value.configuration_title === 'string' && value.configuration_title.trim() !== '') {
+                    return value.configuration_title;
+                }
+                if (value.configuration_title && typeof value.configuration_title === 'string' && value.configuration_title.trim() !== '') {
+                    return value.configuration_title;
+                }
+                // If the key itself looks like a descriptive name (not a generic one)
+                if (!key.match(/^config_?\d*$|^settings$|^data$/) && key !== 'user_config' && !key.startsWith('_')) {
+                    return key;
+                }
+            }
+        }
+        
+        // Priority 6: Fallback to fullname + id
+        if (userInfo.fullname && userInfo.id) {
+            return `${userInfo.fullname} (ID: ${userInfo.id})`;
+        } else if (userInfo.fullname) {
+            return userInfo.fullname;
+        } else if (userInfo.id) {
+            return `User ID: ${userInfo.id}`;
+        }
+        
+        // Ultimate fallback
+        return 'User Configuration';
+    }
+
+    // New function to copy user config to clipboard
+    function copyUserConfigToClipboard() {
+        if (!currentEditingData) {
+            showMessage('No configuration data to copy', 'error');
+            return;
+        }
+        
+        const jsonString = JSON.stringify(currentEditingData, null, 2);
+        
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(jsonString).then(() => {
+                const btn = document.getElementById('user-config-copy-btn');
+                if (btn) {
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '✓ Copied!';
+                    btn.style.background = '#27ae60';
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.style.background = '#9b59b6';
+                    }, 2000);
+                }
+                showMessage('User configuration copied to clipboard!', 'success');
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                fallbackCopyToClipboard(jsonString);
+            });
+        } else {
+            fallbackCopyToClipboard(jsonString);
+        }
+    }
+
+    // Toggle expand/collapse for User Configuration
+    let isUserConfigExpanded = false;
+
+    function toggleUserConfigExpand() {
+        const contentDiv = document.getElementById('user-config-content');
+        const iconSpan = document.getElementById('user-config-icon');
+        
+        if (!contentDiv || !iconSpan) return;
+        
+        if (isUserConfigExpanded) {
+            contentDiv.style.display = 'none';
+            iconSpan.textContent = '▶';
+            isUserConfigExpanded = false;
+        } else {
+            contentDiv.style.display = 'block';
+            iconSpan.textContent = '▼';
+            isUserConfigExpanded = true;
+        }
     }
 
     function toggleEditMode(type) {
@@ -1112,6 +1339,9 @@
         container.innerHTML = '';
         
         Object.entries(configsData).forEach(([key, value]) => {
+            // Cache the data
+            setCachedConfigData(key, value);
+            
             const card = document.createElement('div');
             card.className = 'config-entry-card';
             card.id = `config-card-${key.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -1119,22 +1349,63 @@
             // Handle null or undefined values
             const displayValue = value || {};
             
+            // Set ALL cards as folded by default
+            const isExpanded = false;
+            
             card.innerHTML = `
-                <div class="config-entry-header">
-                    <span class="config-entry-title">📄 ${escapeHtml(key)}</span>
-                    <div class="config-entry-buttons" id="buttons-${key.replace(/[^a-zA-Z0-9]/g, '_')}">
+                <div class="config-entry-header" onclick="toggleConfigExpand('${escapeHtml(key).replace(/'/g, "\\'")}')">
+                    <div class="config-entry-title-wrapper">
+                        <span class="collapse-icon" id="icon-${key.replace(/[^a-zA-Z0-9]/g, '_')}">${isExpanded ? '▼' : '▶'}</span>
+                        <span class="config-entry-title">📄 ${escapeHtml(key)}</span>
+                    </div>
+                    <div class="config-entry-buttons" id="buttons-${key.replace(/[^a-zA-Z0-9]/g, '_')}" onclick="event.stopPropagation()">
                         <button class="edit-config-btn" onclick="editConfigEntry('${escapeHtml(key).replace(/'/g, "\\'")}')">✏️ Edit</button>
                         <button class="copy-config-btn" onclick="copyConfigEntry('${escapeHtml(key).replace(/'/g, "\\'")}')">📋 Copy</button>
                         <button class="delete-config-btn" onclick="deleteConfigEntry('${escapeHtml(key).replace(/'/g, "\\'")}')">🗑️ Delete</button>
                     </div>
                 </div>
-                <div class="config-entry-content" id="content-${key.replace(/[^a-zA-Z0-9]/g, '_')}">
+                <div class="config-entry-content" id="content-${key.replace(/[^a-zA-Z0-9]/g, '_')}" style="display: none;">
                     <pre class="config-json-view">${escapeHtml(JSON.stringify(displayValue, null, 2))}</pre>
                 </div>
             `;
             
             container.appendChild(card);
         });
+    }
+    // Toggle expand/collapse for config entries
+    let currentlyExpandedConfig = null;
+
+    function toggleConfigExpand(entryKey) {
+        const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
+        const contentDiv = document.getElementById(`content-${safeKey}`);
+        const iconSpan = document.getElementById(`icon-${safeKey}`);
+        
+        if (!contentDiv || !iconSpan) return;
+        
+        // If there's already an expanded config and it's not this one, collapse it
+        if (currentlyExpandedConfig && currentlyExpandedConfig !== entryKey) {
+            const prevSafeKey = currentlyExpandedConfig.replace(/[^a-zA-Z0-9]/g, '_');
+            const prevContentDiv = document.getElementById(`content-${prevSafeKey}`);
+            const prevIconSpan = document.getElementById(`icon-${prevSafeKey}`);
+            
+            if (prevContentDiv) {
+                prevContentDiv.style.display = 'none';
+            }
+            if (prevIconSpan) {
+                prevIconSpan.textContent = '▶';
+            }
+        }
+        
+        // Toggle the clicked config
+        if (contentDiv.style.display === 'none') {
+            contentDiv.style.display = 'block';
+            iconSpan.textContent = '▼';
+            currentlyExpandedConfig = entryKey;
+        } else {
+            contentDiv.style.display = 'none';
+            iconSpan.textContent = '▶';
+            currentlyExpandedConfig = null;
+        }
     }
 
     function editConfigEntry(entryKey) {
@@ -1144,6 +1415,17 @@
         }
         
         currentEditingConfigEntry = entryKey;
+        
+        // Ensure the config is expanded when editing
+        const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
+        const contentDiv = document.getElementById(`content-${safeKey}`);
+        const iconSpan = document.getElementById(`icon-${safeKey}`);
+        
+        if (contentDiv && contentDiv.style.display === 'none') {
+            contentDiv.style.display = 'block';
+            if (iconSpan) iconSpan.textContent = '▼';
+            currentlyExpandedConfig = entryKey;
+        }
         
         // Load the current data for this entry
         fetch('serveraccount.php', {
@@ -1162,10 +1444,6 @@
                     data: JSON.parse(JSON.stringify(data.data))
                 };
                 
-                const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
-                const contentDiv = document.getElementById(`content-${safeKey}`);
-                const buttonsDiv = document.getElementById(`buttons-${safeKey}`);
-                
                 if (contentDiv) {
                     contentDiv.innerHTML = `
                         <div style="margin-bottom: 10px;">
@@ -1177,6 +1455,7 @@
                     `;
                 }
                 
+                const buttonsDiv = document.getElementById(`buttons-${safeKey}`);
                 if (buttonsDiv) {
                     buttonsDiv.innerHTML = `
                         <button class="save-config-btn" onclick="saveConfigEntry('${escapeHtml(entryKey).replace(/'/g, "\\'")}')">💾 Save</button>
@@ -1204,8 +1483,15 @@
         
         if (contentDiv && originalConfigEntryBackup) {
             contentDiv.innerHTML = `
-                <pre class="config-json-view">${escapeHtml(JSON.stringify(originalConfigEntryBackup, null, 2))}</pre>
+                <pre class="config-json-view">${escapeHtml(JSON.stringify(originalConfigEntryBackup.data, null, 2))}</pre>
             `;
+            
+            // Keep the content expanded if it was expanded before
+            if (currentlyExpandedConfig === entryKey) {
+                contentDiv.style.display = 'block';
+                const iconSpan = document.getElementById(`icon-${safeKey}`);
+                if (iconSpan) iconSpan.textContent = '▼';
+            }
         }
         
         if (buttonsDiv) {
@@ -1434,38 +1720,105 @@
             });
         }
     }
+    // Cache for configuration data to avoid repeated network requests
+    let configDataCache = {};
+    let configDataCacheTimestamp = {};
+
+    function getCachedConfigData(entryKey, forceRefresh = false) {
+        const now = Date.now();
+        const cacheExpiry = 30000; // 30 seconds cache
+        
+        if (!forceRefresh && 
+            configDataCache[entryKey] && 
+            configDataCacheTimestamp[entryKey] && 
+            (now - configDataCacheTimestamp[entryKey]) < cacheExpiry) {
+            return configDataCache[entryKey];
+        }
+        return null;
+    }
+
+    function setCachedConfigData(entryKey, data) {
+        configDataCache[entryKey] = data;
+        configDataCacheTimestamp[entryKey] = Date.now();
+    }
+
+    function clearConfigCache() {
+        configDataCache = {};
+        configDataCacheTimestamp = {};
+    }
 
     function copyConfigEntry(entryKey) {
-        fetch('serveraccount.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'XMLHttpRequest'
-            },
-            body: 'action=get_config_entry&target_type=server&entry_key=' + encodeURIComponent(entryKey)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success && data.data) {
-                // Copy ONLY the data, not the key name
-                const jsonString = JSON.stringify(data.data, null, 2);
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(jsonString).then(() => {
-                        showMessage(`Configuration data for "${entryKey}" copied to clipboard!`, 'success');
-                    }).catch(() => {
-                        fallbackCopyToClipboard(jsonString);
-                    });
-                } else {
-                    fallbackCopyToClipboard(jsonString);
-                }
-            } else {
-                showMessage('No data found to copy', 'error');
+        // Get the displayed JSON directly from the DOM - NO NETWORK REQUEST
+        const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
+        const contentDiv = document.getElementById(`content-${safeKey}`);
+        
+        if (!contentDiv) {
+            showMessage('Configuration content not found', 'error');
+            return;
+        }
+        
+        // Try to get JSON from the pre element (display mode)
+        let preElement = contentDiv.querySelector('.config-json-view');
+        let dataValue = null;
+        
+        if (preElement) {
+            // In display mode - get text from pre element
+            dataValue = preElement.textContent;
+        } else {
+            // In edit mode - try to get from textarea
+            let textarea = contentDiv.querySelector('.config-json-editor');
+            if (textarea) {
+                dataValue = textarea.value;
             }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showMessage('Error copying configuration', 'error');
-        });
+        }
+        
+        if (!dataValue) {
+            showMessage('No configuration data found to copy', 'error');
+            return;
+        }
+        
+        // Validate JSON before copying
+        let parsedData;
+        try {
+            parsedData = JSON.parse(dataValue); // Parse and store the parsed data
+        } catch (e) {
+            showMessage('Invalid JSON format in configuration', 'error');
+            return;
+        }
+        
+        // Create the full JSON object with the key as the property name
+        const fullJsonObject = {
+            [entryKey]: parsedData
+        };
+        
+        // Convert to formatted JSON string
+        const jsonString = JSON.stringify(fullJsonObject, null, 2);
+        
+        // Copy immediately - NO NETWORK DELAY
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(jsonString).then(() => {
+                showMessage(`Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+                // Visual feedback on the copy button
+                const buttons = document.querySelectorAll(`.copy-config-btn`);
+                buttons.forEach(btn => {
+                    if (btn.parentElement.parentElement.querySelector('.config-entry-title')?.textContent.includes(entryKey)) {
+                        const originalText = btn.innerHTML;
+                        btn.innerHTML = '✓ Copied!';
+                        btn.style.background = '#27ae60';
+                        setTimeout(() => {
+                            btn.innerHTML = originalText;
+                            btn.style.background = '#9b59b6';
+                        }, 2000);
+                    }
+                });
+            }).catch(() => {
+                fallbackCopyToClipboard(jsonString);
+                showMessage(`Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+            });
+        } else {
+            fallbackCopyToClipboard(jsonString);
+            showMessage(`Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+        }
     }
 
     function deleteConfigEntry(entryKey) {
@@ -1866,7 +2219,7 @@
         }, 5000);
     }
 
-    // Updated Tab switching functionality
+    // Updated Tab switching functionality with search setup
     document.addEventListener('DOMContentLoaded', function() {
         const tabBtns = document.querySelectorAll('.tab-btn');
         const tabs = document.querySelectorAll('.management-tab');
@@ -1898,37 +2251,79 @@
                 } else if (tabId === 'users') {
                     document.getElementById('users-tab').style.display = 'block';
                     loadAllUsersForManagement();
+                    setupUserListSearch(); // ADDED: Search for user list
                 } else if (tabId === 'invested') {
                     document.getElementById('invested-tab').style.display = 'block';
                     loadInvestedWithUsers();
+                    setupTableSearch('invested-users-search', 'invested-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'verified') {
                     document.getElementById('verified-tab').style.display = 'block';
                     loadVerifiedUsers();
+                    setupTableSearch('verified-users-search', 'verified-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'pending') {
                     document.getElementById('pending-tab').style.display = 'block';
                     loadPendingUsers();
+                    setupTableSearch('pending-users-search', 'pending-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'suspended') {
                     document.getElementById('suspended-tab').style.display = 'block';
                     loadSuspendedUsers();
+                    setupTableSearch('suspended-users-search', 'suspended-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'justjoined') {
                     document.getElementById('justjoined-tab').style.display = 'block';
                     loadJustJoinedUsers();
+                    setupTableSearch('justjoined-users-search', 'justjoined-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'justjoinedvalid') {
                     document.getElementById('justjoinedvalid-tab').style.display = 'block';
                     loadJustJoinedValidUsers();
+                    setupTableSearch('justjoinedvalid-users-search', 'justjoinedvalid-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'approved') {
                     document.getElementById('approved-tab').style.display = 'block';
                     loadApprovedUsers();
+                    setupTableSearch('approved-users-search', 'approved-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 } else if (tabId === 'execution') {
                     document.getElementById('execution-tab').style.display = 'block';
                     loadUsersForExecutionHistory();
+                    setupExecutionUserSearch(); // ADDED: Search for execution user list
                 } else if (tabId === 'autotrading') {
                     document.getElementById('autotrading-tab').style.display = 'block';
                     loadAllUsersForAutoTrading();
-                }
-                else if (tabId === 'bypassed') {
+                    setupAutoTradingUserSearch(); // ADDED: Search for auto trading user list
+                } else if (tabId === 'bypassed') {
                     document.getElementById('bypassed-tab').style.display = 'block';
                     loadBypassedUsers();
+                    setupTableSearch('bypassed-users-search', 'bypassed-users-list', (row) => ({
+                        id: row.getAttribute('data-user-id') || '',
+                        email: (row.getAttribute('data-email') || '').toLowerCase(),
+                        fullname: (row.getAttribute('data-fullname') || '').toLowerCase()
+                    }));
                 }
             });
         });
@@ -2040,6 +2435,11 @@
             cancelEdit('user');
         }
         
+        // Reset the fold state when selecting a new user (keep it folded initially)
+        if (isUserConfigExpanded) {
+            toggleUserConfigExpand();
+        }
+        
         document.querySelectorAll('.user-item').forEach(item => {
             item.classList.remove('active');
         });
@@ -2053,18 +2453,26 @@
         if (emailSpan) emailSpan.textContent = email;
         if (sourceSpan) sourceSpan.textContent = sourceTable;
         
-        // Load current application status
+        // Get current application status
         const currentStatus = selectedItem ? selectedItem.getAttribute('data-application-status') : '';
+        const statusSpan = document.getElementById('current-application-status');
         const statusSelect = document.getElementById('application-status-select');
-        const updateBtn = document.getElementById('update-status-btn');
+        
+        if (statusSpan) {
+            let statusClass = 'status-badge-pending';
+            if (currentStatus === 'approved') statusClass = 'status-badge-approved';
+            else if (currentStatus === 'declined') statusClass = 'status-badge-declined';
+            else if (currentStatus === 'suspended') statusClass = 'status-badge-suspended';
+            else if (currentStatus === 'blacklisted') statusClass = 'status-badge-blacklisted';
+            else if (currentStatus === 'pending') statusClass = 'status-badge-pending';
+            else statusClass = 'status-badge-default';
+            
+            statusSpan.className = statusClass;
+            statusSpan.textContent = currentStatus || 'Not Set';
+        }
         
         if (statusSelect) {
-            statusSelect.disabled = false;
             statusSelect.value = currentStatus || '';
-        }
-        if (updateBtn) {
-            updateBtn.disabled = false;
-            updateBtn.style.display = 'inline-block';
         }
         
         loadUserAccountManagement(userId, sourceTable);
@@ -3910,6 +4318,149 @@
                 window.pendingStatusUpdate = null;
             }
         };
+    }
+    // Toggle expand/collapse for Server Configuration
+    let isServerConfigExpanded = false;
+
+    function toggleServerConfigExpand() {
+        const contentDiv = document.getElementById('server-config-content');
+        const iconSpan = document.getElementById('server-config-icon');
+        
+        if (!contentDiv || !iconSpan) return;
+        
+        if (isServerConfigExpanded) {
+            contentDiv.style.display = 'none';
+            iconSpan.textContent = '▶';
+            isServerConfigExpanded = false;
+        } else {
+            contentDiv.style.display = 'block';
+            iconSpan.textContent = '▼';
+            isServerConfigExpanded = true;
+        }
+    }
+    // ==================== TAB SEARCH FUNCTIONS ====================
+
+    // User List Search (User Configuration Tab)
+    function setupUserListSearch() {
+        const searchInput = document.getElementById('user-list-search');
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const userItems = document.querySelectorAll('#user-items-list .user-item');
+            let visibleCount = 0;
+            
+            userItems.forEach(item => {
+                const name = (item.getAttribute('data-fullname') || '').toLowerCase();
+                const email = (item.getAttribute('data-email') || '').toLowerCase();
+                const userId = (item.getAttribute('data-user-id') || '');
+                
+                if (searchTerm === '' || name.includes(searchTerm) || email.includes(searchTerm) || userId.includes(searchTerm)) {
+                    item.style.display = '';
+                    visibleCount++;
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            const container = document.getElementById('user-items-list');
+            let noResultsMsg = container.querySelector('.no-results-msg');
+            if (visibleCount === 0 && searchTerm !== '') {
+                if (!noResultsMsg) {
+                    noResultsMsg = document.createElement('div');
+                    noResultsMsg.className = 'no-results-msg';
+                    noResultsMsg.style.cssText = 'text-align: center; padding: 20px; color: #888;';
+                    noResultsMsg.innerHTML = 'No matching users found';
+                    container.appendChild(noResultsMsg);
+                }
+            } else if (noResultsMsg) {
+                noResultsMsg.remove();
+            }
+        });
+    }
+
+    // Generic table search setup
+    function setupTableSearch(searchInputId, tableContainerId, getRowData) {
+        const searchInput = document.getElementById(searchInputId);
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const container = document.getElementById(tableContainerId);
+            if (!container) return;
+            
+            const rows = container.querySelectorAll('.user-data-row');
+            let visibleCount = 0;
+            
+            rows.forEach(row => {
+                const rowData = getRowData(row);
+                if (searchTerm === '' || rowData.id.includes(searchTerm) || rowData.email.includes(searchTerm) || rowData.fullname.includes(searchTerm)) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            let noResultsMsg = container.querySelector('.no-results-msg');
+            if (visibleCount === 0 && searchTerm !== '') {
+                if (!noResultsMsg) {
+                    noResultsMsg = document.createElement('div');
+                    noResultsMsg.className = 'no-results-msg';
+                    noResultsMsg.style.cssText = 'text-align: center; padding: 40px; color: #888;';
+                    noResultsMsg.innerHTML = '🔍 No users match your search';
+                    container.appendChild(noResultsMsg);
+                }
+            } else if (noResultsMsg) {
+                noResultsMsg.remove();
+            }
+        });
+    }
+
+    // Execution User List Search
+    function setupExecutionUserSearch() {
+        const searchInput = document.getElementById('execution-user-search');
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const userItems = document.querySelectorAll('#execution-user-list .user-item');
+            
+            userItems.forEach(item => {
+                const name = (item.getAttribute('data-fullname') || '').toLowerCase();
+                const email = (item.getAttribute('data-email') || '').toLowerCase();
+                const userId = (item.getAttribute('data-user-id') || '');
+                
+                if (searchTerm === '' || name.includes(searchTerm) || email.includes(searchTerm) || userId.includes(searchTerm)) {
+                    item.style.display = '';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    // Auto Trading User List Search
+    function setupAutoTradingUserSearch() {
+        const searchInput = document.getElementById('autotrading-user-search');
+        if (!searchInput) return;
+        
+        searchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const userItems = document.querySelectorAll('#autotrading-user-list .user-item');
+            
+            userItems.forEach(item => {
+                const name = (item.getAttribute('data-fullname') || '').toLowerCase();
+                const email = (item.getAttribute('data-email') || '').toLowerCase();
+                const userId = (item.getAttribute('data-user-id') || '');
+                
+                if (searchTerm === '' || name.includes(searchTerm) || email.includes(searchTerm) || userId.includes(searchTerm)) {
+                    item.style.display = '';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        });
     }
 
     function executeStatusUpdate(password) {
