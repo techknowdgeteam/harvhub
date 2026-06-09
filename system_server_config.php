@@ -62,6 +62,7 @@
         flex-wrap: wrap;
         gap: 8px;
         align-items: baseline;
+        min-width: 0;
     }
 
     .property-key {
@@ -74,7 +75,10 @@
     .property-value {
         font-size: 13px;
         color: var(--text-primary);
-        word-break: break-all;
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+        max-width: 300px;
     }
 
     .property-actions {
@@ -116,6 +120,7 @@
         color: var(--text-secondary);
         font-size: 12px;
     }
+
     /* System IP Management Styles */
     .config-management-container {
         max-width: 1400px;
@@ -218,27 +223,6 @@
         margin-bottom: 5px;
     }
     
-    .global-result-ip {
-        font-size: 12px;
-        color: var(--accent-color);
-        font-family: monospace;
-        margin-top: 5px;
-        padding: 4px 8px;
-        background: rgba(52, 152, 219, 0.1);
-        border-radius: 5px;
-        display: inline-block;
-    }
-    
-    .global-result-no-ip {
-        font-size: 12px;
-        color: #e74c3c;
-        margin-top: 5px;
-        padding: 4px 8px;
-        background: rgba(231, 76, 60, 0.1);
-        border-radius: 5px;
-        display: inline-block;
-    }
-    
     .config-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
@@ -257,19 +241,39 @@
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     }
     
+    .config-card-header:hover {
+        background: var(--bg-hover);
+    }
+    
+    .config-card-body {
+        padding: 15px;
+        display: none;
+        overflow-x: hidden;
+    }
+    
+    .config-card.expanded .config-card-body {
+        display: block;
+    }
+    
     .config-card-header {
         background: var(--bg-primary);
         padding: 15px;
         border-bottom: 1px solid var(--border-color);
         display: flex;
-        justify-content: space-between;
         align-items: center;
         cursor: pointer;
         transition: background 0.2s ease;
+        flex-wrap: wrap;
+        gap: 8px;
     }
-    
-    .config-card-header:hover {
-        background: var(--bg-hover);
+
+    .config-address-config {
+        width: 98%;
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+        flex: 1;
+        min-width: 0;
     }
     
     .config-address {
@@ -280,7 +284,17 @@
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
-        height: 50px;
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+    }
+
+    .config-address-config span {
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+        display: inline-block;
+        max-width: 100%;
     }
     
     .config-badge {
@@ -290,15 +304,6 @@
         border-radius: 20px;
         font-size: 11px;
         font-weight: normal;
-    }
-    
-    .config-card-body {
-        padding: 15px;
-        display: none;
-    }
-    
-    .config-card.expanded .config-card-body {
-        display: block;
     }
     
     .assigned-users-section {
@@ -338,10 +343,6 @@
         border-color: var(--accent-color);
     }
     
-    .user-info {
-        flex: 1;
-    }
-    
     .user-name {
         font-weight: 600;
         font-size: 14px;
@@ -377,6 +378,9 @@
         border-top: 1px solid var(--border-color);
         padding-top: 15px;
         margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
     }
     
     .search-container-config {
@@ -487,93 +491,6 @@
         opacity: 1;
     }
     
-    .save-config-changes {
-        width: 100%;
-        margin-top: 15px;
-        padding: 10px;
-        background: #27ae60;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        transition: background 0.2s ease;
-    }
-    
-    .save-config-changes:hover {
-        background: #219a52;
-    }
-    
-    .delete-config-btn {
-        background: #e74c3c;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        transition: background 0.2s ease;
-        width: 100%;
-        margin-top: 10px;
-    }
-    
-    .delete-config-btn:hover {
-        background: #c0392b;
-    }
-    
-    .loading-spinner {
-        text-align: center;
-        padding: 40px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state {
-        text-align: center;
-        padding: 60px;
-        color: var(--text-secondary);
-        border: 2px dashed var(--border-color);
-        border-radius: 12px;
-    }
-    
-    @media (max-width: 768px) {
-        .config-grid {
-            grid-template-columns: 1fr;
-        }
-        
-        .config-card-header {
-            flex-direction: column;
-            gap: 10px;
-            align-items: flex-start;
-        }
-    }
-    .edit-config-btn {
-        background: #f39c12;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        transition: background 0.2s ease;
-        width: 100%;
-        margin-top: 10px;
-    }
-
-    .edit-config-btn:hover {
-        background: #e67e22;
-    }
-    .add-users-section {
-        border-top: 1px solid var(--border-color);
-        padding-top: 15px;
-        margin-top: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
     .save-config-changes,
     .edit-config-btn,
     .delete-config-btn {
@@ -614,7 +531,22 @@
     .delete-config-btn:hover {
         background: #c0392b;
     }
-    /* Custom IP Edit Input Styles */
+    
+    .loading-spinner {
+        text-align: center;
+        padding: 40px;
+        color: var(--text-secondary);
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 60px;
+        color: var(--text-secondary);
+        border: 2px dashed var(--border-color);
+        border-radius: 12px;
+    }
+    
+    /* Modal Styles */
     .json-password-input {
         width: 100%;
         padding: 12px;
@@ -661,6 +593,7 @@
     .modal-confirm-btn:hover {
         background: #219a52;
     }
+
     .add-config-btn {
         background: #3498db;
         color: white;
@@ -678,6 +611,83 @@
 
     .add-config-btn:hover {
         background: #2980b9;
+    }
+
+    /* Fix for confirm add config modal - wrap long config keys */
+    #config-add-password-modal .modal-content p strong {
+        word-break: break-word;
+        white-space: normal;
+        display: inline-block;
+        max-width: 100%;
+    }
+
+    #config-add-password-modal .modal-content p {
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+    }
+
+    /* Additional fix for any other modals that might display long config keys */
+    .modal-content p strong,
+    .modal-content p {
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+    }
+
+    @media (max-width: 768px) {
+        .config-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .config-card-header {
+            flex-direction: column;
+            gap: 10px;
+            align-items: flex-start;
+        }
+    }
+    /* Ensure cards expand/collapse independently */
+    .config-card {
+        transition: all 0.3s ease;
+        height: auto;
+        min-height: fit-content;
+    }
+
+    .config-card .config-card-body {
+        display: none;
+        overflow: hidden;
+        transition: none; /* Remove transition to prevent propagation */
+    }
+
+    .config-card.expanded .config-card-body {
+        display: block;
+    }
+
+    /* Prevent grid layout from affecting card heights */
+    .config-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+        gap: 20px;
+        align-items: start; /* Changed from default stretch to start */
+    }
+
+    /* Ensure each card is independent */
+    .config-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        position: relative;
+        background: var(--bg-secondary);
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid var(--border-color);
+        transition: box-shadow 0.3s ease;
+        height: auto;
+    }
+
+    /* Remove any potential sibling selectors that might affect other cards */
+    .config-card:has(.expanded) ~ .config-card {
+        /* Reset any unwanted styles */
+        margin-top: 0;
     }
 </style>
 
@@ -758,16 +768,18 @@
 
     // Function to restore expanded state
     function restoreExpandedState() {
+        // Only expand cards that were previously expanded
         expandedConfigs.forEach(configKey => {
             const card = document.querySelector(`.config-card[data-config="${escapeHtml(configKey).replace(/"/g, '&quot;')}"]`);
             if (card) {
                 card.classList.add('expanded');
             }
         });
+        // Clear the array after restoration
         expandedConfigs = [];
     }
 
-    // Render configuration
+    // Update the renderConfig function - ensure no global class changes
     function renderConfig(config) {
         const container = document.getElementById('config-config-container');
         const configKeys = Object.keys(config);
@@ -831,12 +843,20 @@
             }
             
             const userCount = userIds.length;
-
+            
+            // Add unique ID for each card for better DOM manipulation
+            const cardId = 'config-card-' + configKey.replace(/[^a-zA-Z0-9]/g, '-');
+            
             html += `
-                <div class="config-card" data-config="${escapeHtml(configKey)}">
-                    <div class="config-card-header" onclick="toggleConfigCard(this)">
+                <div class="config-card" data-config="${escapeHtml(configKey)}" id="${cardId}">
+                    <div class="config-card-header" onclick="toggleConfigCard(this, event)">
                         <div class="config-address">
-                            <span>🌐 ${escapeHtml(configKey)}</span>
+                            <span>🌐</span>
+                        </div>
+                        <div class="config-address config-address-config">
+                            <span> ${escapeHtml(configKey)}</span>
+                        </div>
+                        <div class="config-address">
                             <span class="config-badge">${userCount} user${userCount !== 1 ? 's' : ''}</span>
                         </div>
                     </div>
@@ -874,16 +894,16 @@
                                 <div class="search-results" id="search-results-${escapeHtml(configKey).replace(/\./g, '-')}"></div>
                             </div>
                             <div class="pending-users" id="pending-users-${escapeHtml(configKey).replace(/\./g, '-')}"></div>
-                            <button class="save-config-changes" onclick="saveConfigChanges('${escapeHtml(configKey)}')">
-                                💾 Save Changes for ${escapeHtml(configKey)}
-                            </button>
-                            <button class="edit-config-btn" onclick="editConfigKey('${escapeHtml(configKey)}')">
-                                ✏️ Edit Config Key
-                            </button>
-                            <button class="delete-config-btn" onclick="deleteConfigValue('${escapeHtml(configKey)}')">
-                                🗑️ Delete Config
-                            </button>
-                        </div>
+                                <button class="save-config-changes" onclick="saveConfigChanges('${escapeHtml(configKey)}')">
+                                    💾 Save Changes
+                                </button>
+                                <button class="edit-config-btn" onclick="editConfigKey('${escapeHtml(configKey)}')">
+                                    ✏️ Edit Config Key
+                                </button>
+                                <button class="delete-config-btn" onclick="deleteConfigValue('${escapeHtml(configKey)}')">
+                                    🗑️ Delete Config
+                                </button>
+                            </div>
                     </div>
                 </div>
             `;
@@ -892,7 +912,7 @@
         html += '</div>';
         container.innerHTML = html;
         
-        // Restore expanded state after re-render
+        // Restore expanded state after re-render - this only affects previously expanded cards
         restoreExpandedState();
         
         // Initialize pending changes tracking
@@ -1114,10 +1134,29 @@
         });
     }
     
-    // Toggle config card expansion
-    function toggleConfigCard(headerElement) {
+    // Toggle config card expansion - COMPLETELY INDEPENDENT
+    function toggleConfigCard(headerElement, event) {
+        if (event && event.stopPropagation) {
+            event.stopPropagation();
+        }
+        
         const card = headerElement.closest('.config-card');
-        card.classList.toggle('expanded');
+        const isCurrentlyExpanded = card.classList.contains('expanded');
+        
+        if (isCurrentlyExpanded) {
+            // Collapsing
+            card.classList.remove('expanded');
+        } else {
+            // Expanding - add class first
+            card.classList.add('expanded');
+            
+            // Force browser to recalculate layout without affecting other cards
+            // This prevents layout thrashing
+            requestAnimationFrame(() => {
+                const height = card.scrollHeight;
+                card.style.setProperty('--expanded-height', height + 'px');
+            });
+        }
     }
     
     // Search users for config assignment

@@ -327,11 +327,7 @@
                     </div>
                 <?php endif; ?>
                 
-                <p style="font-size:1.6rem; margin:1rem 0; text-align:center;">Our official website is coming soon</p>
                 
-                <?php if ($logged_in_email === ''): ?>
-                    <p style="text-align:center;">Join the waiting list now and become an Insider</p>
-                <?php endif; ?>
 
                 <?php if ($logged_in_email !== ''): ?>
                     <div id="mobileProfileStatus" class="profile-details">
@@ -342,8 +338,6 @@
                             <?php endif; ?>
                         </div>
                         <p><strong>Email:</strong> <?= htmlspecialchars($logged_in_email) ?></p>
-                        <p><strong>Status:</strong> <span id="mobileStatus"><?= ucfirst($application_status ?: 'Not Submitted') ?></span>
-                        </p>
                         <?php if (!empty($user_broker)): ?>
                             <p><strong>Broker:</strong> <?= htmlspecialchars($user_broker) ?></p>
                             <p><strong>Full Name:</strong> <?= htmlspecialchars($user_fullname) ?></p>
@@ -361,15 +355,18 @@
             <div class="info-grid">
                 <div class="info-card">
                     <h3>Investing & Harvesting</h3>
-                    <p>Deposit to your chosen MT5 broker and invest with professional traders based on verified ratings and analytics.</p>
                     <ul>
-                        <li>Your capital is protected—no over-leverage risk.</li>
-                        <li>Returns are guaranteed to be at least equal to the deposited amount within the contract period.</li>
-                        <li>Fully automated trade execution.</li>
+                        <li>Deposit to your broker MT5.</li>
+                        <li>Apply for account verification after approval.</li>
+                        <li>Enroll to start the programme.</li>
+                        <li>Market conditions determine the results and returns.</li>
+                        <li>Trades are fully automated during the contract period.</li>
+                        <li>Harvest your profits after contract period.</li>
+                        <li>Our service prioritizes the safety of your capital, though we cannot fully control market results.</li>
                     </ul>
                 </div>
                 
-                <div class="info-card">
+                <div class="info-card" style="display: none">
                     <h3>For Developers</h3>
                     <p>Build and submit your trading strategies for automated analysis on your chosen markets. Your developed strategy must have at least a 40% win rate.</p>
                     <ul>
@@ -379,7 +376,7 @@
                     </ul>
                 </div>
                 
-                <div class="info-card">
+                <div class="info-card" style="display: none">
                     <h3>For Account Managers</h3>
                     <p>Build your own strategies if you are a developer, or purchase proven strategies from other developers to attract investors and grow your portfolio.</p>
                     <ul>
@@ -390,11 +387,12 @@
                 </div>
                 
                 <div class="info-card">
-                    <h3>Requirements & Profit Share</h3>
+                    <h3>Requirements & Guidelines</h3>
                     <ul>
-                        <li>Investor: Minimum of <strong>$<?= number_format($min_broker_balance, 2) ?></strong> to broker + same prepaid amount to fuel your account.</li>
-                        <li>Account Manager: Choose your preferred profit-split percentage.</li>
-                        <li>Guaranteed minimum profit of at least your deposit amount after the management period.</li>
+                        <li>Investor: Ensure minimum of <strong>$<?= number_format($min_broker_balance, 2) ?></strong> is deposited into your broker account.</li>
+                        <li>Real Account: Only real accounts will be verified; demo accounts are not allowed.</li>
+                        <li>Profit Split: After contract completion, ensure you send the server percentage to remain eligible for the programme.</li>
+                        <li>Rules & Regulations: Do not withdraw profits, place trades, modify trades, transfer or deposit funds into your MT5 during the contract period.</li>
                     </ul>
                 </div>
             </div>
@@ -402,13 +400,13 @@
             
             <div style="text-align:center; margin:2rem 0;">
                 <?php
-                $button_text = 'Join insiders Now';
+                $button_text = 'Complete registration';
                 $button_id = 'joinBtn';
                 $button_onclick = '';
                 $button_class = 'btn';
 
                 if ($logged_in_email === '') {
-                    $button_text = 'Continue with your Email';
+                    $button_text = 'Sign up or Login';
                 } elseif ($already_submitted) {
                     $status_lower = strtolower($application_status);
                     if ($status_lower === 'blacklisted') {
@@ -446,7 +444,7 @@
         <div id="emailModal" class="modal">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('emailModal')">×</span>
-                <h2 style="text-align:center;">Continue with Your Email</h2>
+                <h2 style="text-align:center;">Sign up or Login</h2>
                 <form method="POST" style="margin-top:30px;">
                     <input type="email" name="login_email" placeholder="youremail@gmail.com" required style="text-align:center; font-size:1.1rem;">
                     <button type="submit" class="btn" style="width:100%; margin-top:15px;">Continue</button>
@@ -509,7 +507,7 @@
                         <span class="terms-value">30 Days</span>
                     </div>
                     <div class="terms-item">
-                        <span class="terms-label">Profit Split:</span>
+                        <span class="terms-label">Server share:</span>
                         <span class="terms-value">30%</span>
                     </div>
                 </div>
@@ -633,7 +631,7 @@
                         <?php else: ?>
                             <h2 style="color:#90ee90;">Application Received</h2>
                             <p style="font-size:1.2rem; line-height:1.7; margin:1.5rem 0;">
-                                We will notify you when execution begins.
+                                We will notify you once your broker details are verified.
                             </p>
                         <?php endif; ?>
                         <button class="btn" style="margin-top:2rem; width:80%; max-width:300px;" onclick="closeModal('insiderModal')">
@@ -671,7 +669,7 @@
                             This can only be submitted once. Double-check your details.
                         </p>
                         <button type="submit" name="submit_insider" class="btn" style="width:100%; margin-top:15px;">
-                            Submit & Join insiders
+                            Submit
                         </button>
                     </form>
                 <?php endif; ?>
@@ -721,7 +719,7 @@
                             
                             const joinBtn = document.getElementById('joinBtn');
                             if (joinBtn) {
-                                let buttonText = 'Join insiders Now';
+                                let buttonText = 'Complete registration';
                                 let buttonId = 'joinBtn';
                                 let buttonClass = 'btn';
                                 let buttonOnclick = '';

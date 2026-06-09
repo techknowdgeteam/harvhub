@@ -232,7 +232,8 @@
                 'profit' => 0,
                 'user_share' => 0,
                 'server_share' => 0,
-                'loyalties' => 'active'
+                'loyalties' => 'active',
+                'invested_with' => $broker // Add broker name as invested_with
             ];
             
             // Add new entry at the beginning
@@ -1434,6 +1435,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
 <?php include 'style.php'; ?>
 <style>
+    .revenue-detail-row .revenue-detail-label {
+        min-width: 120px;
+    }
+
+    .revenue-detail-value {
+        word-break: break-word;
+    }
+
+    /* For the invested broker name */
+    .revenue-detail-value.broker-name {
+        color: var(--accent);
+        font-weight: 500;
+    }
     /* Apply for verification button styling */
     .btn-loyalty-apply {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -3141,7 +3155,6 @@
                         </div>
                     `;
                 } else {
-                    // Full display for completed/non-active contracts
                     html += `
                         <div class="revenue-item" data-id="${record.id || Math.random()}">
                             <div class="revenue-header" onclick="toggleRevenueDetails(this)">
@@ -3156,6 +3169,10 @@
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Invested:</span>
                                     <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Programme:</span>
+                                    <span class="revenue-detail-value">${escapeHtml(record.invested_with || 'N/A')}</span>
                                 </div>
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Harvest (Your Share):</span>
