@@ -1497,17 +1497,17 @@
             return `<div style="text-align: center; padding: 40px; color: #888; font-size: 13px;">No ${filterType.replace('-', ' ')} records found.</div>`;
         }
         
-        // FIXED: Sort by recorded_at DESCENDING (newest FIRST, oldest LAST)
+        // Sort by recorded_at DESCENDING (newest FIRST, oldest LAST)
         filteredRecords.sort((a, b) => {
             const dateA = a.recorded_at ? new Date(a.recorded_at) : (a.id ? new Date(a.id * 1000) : new Date(0));
             const dateB = b.recorded_at ? new Date(b.recorded_at) : (b.id ? new Date(b.id * 1000) : new Date(0));
-            return dateB - dateA; // Descending - newest first
+            return dateB - dateA;
         });
         
         let tableHtml = `
             <div class="revenue-history-table">
                 <div style="overflow-x: auto;">
-                    <table style="width: 100%; min-width: 1000px; border-collapse: collapse; font-size: 12px;">
+                    <table style="width: 100%; min-width: 1100px; border-collapse: collapse; font-size: 12px;">
                         <thead>
                             <tr style="background: var(--bg-primary);">
                                 <th style="padding: 10px 8px;">ID</th>
@@ -1519,6 +1519,7 @@
                                 <th>Profit</th>
                                 <th>Server</th>
                                 <th>User</th>
+                                <th>Invested With</th>
                                 <th>Status</th>
                                 <th style="min-width: 180px;">Actions</th>
                             </tr>
@@ -1531,14 +1532,13 @@
             const statusDisplay = record.loyalties || '-';
             const recordId = record.id;
             const currentStatusLower = statusDisplay.toLowerCase();
+            const investedWith = record.invested_with || '-';
             
-            // Format recorded_at for display
             let recordedAtDisplay = '-';
             if (record.recorded_at) {
                 const date = new Date(record.recorded_at);
                 recordedAtDisplay = date.toLocaleString();
             } else if (record.id) {
-                // Fallback: use id as timestamp approximation
                 const date = new Date(record.id * 1000);
                 recordedAtDisplay = date.toLocaleString() + ' (approx)';
             }
@@ -1603,8 +1603,9 @@
                     <td style="padding: 8px;" class="${profitClass}">${record.profit >= 0 ? '+' : ''}$${parseFloat(record.profit || 0).toFixed(2)}</td>
                     <td style="padding: 8px;">$${parseFloat(record.server_share || 0).toFixed(2)}</td>
                     <td style="padding: 8px;">$${parseFloat(record.user_share || 0).toFixed(2)}</td>
-                    <td><span class="status-badge-modern ${statusClass}">${escapeHtml(statusDisplay)}</span></td>
-                    <td>
+                    <td style="padding: 8px;"><span class="status-badge-modern" style="background: rgba(52, 152, 219, 0.1);">${escapeHtml(investedWith)}</span></td>
+                    <td style="padding: 8px;"><span class="status-badge-modern ${statusClass}">${escapeHtml(statusDisplay)}</span></td>
+                    <td style="padding: 8px;">
                         ${actionOptions}
                         <button class="update-status-btn-inline" data-record-id="${recordId}" style="display: none; padding: 5px; background: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer;">Update</button>
                     </td>
@@ -2333,7 +2334,7 @@
         let tableHtml = `
             <div class="revenue-history-table">
                 <div style="overflow-x: auto;">
-                    <table style="width: 100%; min-width: 1000px; border-collapse: collapse; font-size: 12px;">
+                    <table style="width: 100%; min-width: 1100px; border-collapse: collapse; font-size: 12px;">
                         <thead>
                             <tr style="background: var(--bg-primary);">
                                 <th style="padding: 10px 8px;">ID</th>
@@ -2345,6 +2346,7 @@
                                 <th>Profit</th>
                                 <th>Server</th>
                                 <th>User</th>
+                                <th>Invested With</th>
                                 <th>Status</th>
                                 <th style="min-width: 180px;">Actions</th>
                             </tr>
@@ -2357,6 +2359,7 @@
             const statusDisplay = record.loyalties || '-';
             const recordId = record.id;
             const currentStatusLower = statusDisplay.toLowerCase();
+            const investedWith = record.invested_with || '-';
             
             let recordedAtDisplay = '-';
             if (record.recorded_at) {
@@ -2427,8 +2430,9 @@
                     <td style="padding: 8px;" class="${profitClass}">${record.profit >= 0 ? '+' : ''}$${parseFloat(record.profit || 0).toFixed(2)}</td>
                     <td style="padding: 8px;">$${parseFloat(record.server_share || 0).toFixed(2)}</td>
                     <td style="padding: 8px;">$${parseFloat(record.user_share || 0).toFixed(2)}</td>
-                    <td><span class="status-badge-modern ${statusClass}">${escapeHtml(statusDisplay)}</span></td>
-                    <td>
+                    <td style="padding: 8px;"><span class="status-badge-modern" style="background: rgba(52, 152, 219, 0.1);">${escapeHtml(investedWith)}</span></td>
+                    <td style="padding: 8px;"><span class="status-badge-modern ${statusClass}">${escapeHtml(statusDisplay)}</span></td>
+                    <td style="padding: 8px;">
                         ${actionOptions}
                         <button class="update-status-btn-inline" data-record-id="${recordId}" style="display: none; padding: 5px; background: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer;">Update</button>
                     </td>

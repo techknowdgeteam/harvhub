@@ -223,6 +223,7 @@
         if (!$activeEntryExists) {
             $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($executionStartDate)));
             
+            // Get the actual broker name from user data
             $newRevenueEntry = [
                 'id' => time(),
                 'execution_start_date' => $executionStartDate,
@@ -233,7 +234,7 @@
                 'user_share' => 0,
                 'server_share' => 0,
                 'loyalties' => 'active',
-                'invested_with' => $broker // Add broker name as invested_with
+                'invested_with' => $user['invested_with'] ?? null
             ];
             
             // Add new entry at the beginning
@@ -315,6 +316,11 @@
             $entry['current_balance'] = $currentBalance;
             $entry['user_share'] = $userShare;
             $entry['server_share'] = $serverShare;
+            
+            // Preserve invested_with if missing
+            if (!isset($entry['invested_with']) && isset($user['invested_with'])) {
+                $entry['invested_with'] = $user['invested_with'];
+            }
             
             // Determine new status based on profit/loss outcome
             if ($profitAndLoss < 0) {
@@ -414,8 +420,8 @@
     // PRIORITY 0: BALANCE VERIFICATION STATUS (HIGHEST PRIORITY)
     if ($balance_unverified) {
         // Not verified - Show Apply button ONLY, NO enroll button
-        $dashboard_disclaimer = "Account verification required.";
-        $loyalty_text = "Your account needs to be verified before you can participate. Apply for verification";
+        $dashboard_disclaimer = "No Active Contract.";
+        $loyalty_text = "Your account needs to be verified before you can enroll. Before applying, ensure you have deposited funds into your broker account. Apply for verification now.";
         $loyalties_message = "Verification Required";
         $show_apply_button = true;
         $show_reenroll_button = false;  // CRITICAL: Ensure enroll is hidden
@@ -426,7 +432,7 @@
     } elseif ($balance_under_verification) {
         // Under verification - Show pending message, NO buttons
         $dashboard_disclaimer = "Account verification in progress.";
-        $loyalty_text = "Your account is currently under review. Once verified, you'll start earning. This process technically takes 24-48 hours.";
+        $loyalty_text = "Your account is currently under review. Once verified, you can enroll. This process technically takes 24-48 hours.";
         $loyalties_message = "Verification Pending";
         $show_apply_button = false;  // CRITICAL: Hide apply button
         $show_reenroll_button = false;  // CRITICAL: Hide enroll button
@@ -908,15 +914,16 @@
             
             // Create new revenue history entry
             $newRevenueEntry = [
-                'id' => time(), // Use timestamp as unique ID
+                'id' => time(),
                 'execution_start_date' => $today,
                 'execution_end_date' => $endDate,
                 'starting_balance' => $startingBalance,
-                'current_balance' => $startingBalance, // Initially same as starting balance
+                'current_balance' => $startingBalance,
                 'profit' => 0,
                 'user_share' => 0,
                 'server_share' => 0,
-                'loyalties' => 'active' // Initial status for active contract
+                'loyalties' => 'active',
+                'invested_with' => $user['invested_with'] ?? null
             ];
             
             // Get existing revenue history
@@ -1441,6 +1448,10 @@
 
     .revenue-detail-value {
         word-break: break-word;
+    }
+    .invested_with-value{
+        font-size: 12px;
+        color: green;
     }
 
     /* For the invested broker name */
@@ -3171,10 +3182,6 @@
                                     <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
                                 </div>
                                 <div class="revenue-detail-row">
-                                    <span class="revenue-detail-label">Programme:</span>
-                                    <span class="revenue-detail-value">${escapeHtml(record.invested_with || 'N/A')}</span>
-                                </div>
-                                <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Harvest (Your Share):</span>
                                     <span class="revenue-detail-value ${profitClass}">$${formatNumber(record.user_share)}</span>
                                 </div>
@@ -3189,6 +3196,10 @@
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Final Balance:</span>
                                     <span class="revenue-detail-value">$${formatNumber(record.current_balance)}</span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Programme:</span>
+                                    <span class="revenue-detail-value invested_with-value">${escapeHtml(record.invested_with || 'N/A')}</span>
                                 </div>
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-value">${statusMessage}</span>
@@ -3419,3 +3430,4 @@
 </script>
 </body>
 </html>
+

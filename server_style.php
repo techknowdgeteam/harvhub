@@ -49,7 +49,7 @@
     @media (prefers-color-scheme: light) {
         :root {
             --bg-color: #f4f4f9;
-            --text-color: #333;
+            --text-color: #000000;
             --container-bg: white;
             --header-color: #2c3e50;
             --primary-color: #4CAF50;
@@ -67,7 +67,8 @@
             --bg-tertiary: #f0f0f0;
             --text-muted: #999999;
         }
-        html, body, #custom-body { background-color: var(--bg-color); }
+        html, body, #custom-body { background-color: var(--bg-color); 
+        color: black; }
     }
 
     .container { 

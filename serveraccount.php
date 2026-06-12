@@ -488,7 +488,22 @@
                             $history = json_decode($user['revenue_history'], true);
                             $user['history_count'] = is_array($history) ? count($history) : 0;
                             $user['current_loyalties'] = $user['loyalties'] ?? null;
-                            
+
+                            // Also add invested_with to the history records if missing
+                            if (is_array($history) && !empty($history)) {
+                                foreach ($history as &$record) {
+                                    if (!isset($record['invested_with']) && isset($user['invested_with'])) {
+                                        $record['invested_with'] = $user['invested_with'];
+                                    }
+                                }
+                                // Save back if changes were made
+                                $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
+                                if ($updatedHistory !== $user['revenue_history']) {
+                                    $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
+                                    $updateStmt->execute([$updatedHistory, $user['id']]);
+                                }
+                            }
+
                             // Calculate payment summaries from history
                             $paymentSummary = calculatePaymentSummaryFromHistory($history);
                             $user['payment_summary'] = $paymentSummary;
@@ -517,7 +532,22 @@
                             $history = json_decode($user['revenue_history'], true);
                             $user['history_count'] = is_array($history) ? count($history) : 0;
                             $user['current_loyalties'] = $user['loyalties'] ?? null;
-                            
+
+                            // Also add invested_with to the history records if missing
+                            if (is_array($history) && !empty($history)) {
+                                foreach ($history as &$record) {
+                                    if (!isset($record['invested_with']) && isset($user['invested_with'])) {
+                                        $record['invested_with'] = $user['invested_with'];
+                                    }
+                                }
+                                // Save back if changes were made
+                                $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
+                                if ($updatedHistory !== $user['revenue_history']) {
+                                    $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
+                                    $updateStmt->execute([$updatedHistory, $user['id']]);
+                                }
+                            }
+
                             // Calculate payment summaries from history
                             $paymentSummary = calculatePaymentSummaryFromHistory($history);
                             $user['payment_summary'] = $paymentSummary;
@@ -563,7 +593,27 @@
                         $history = [];
                     }
                 }
-                
+
+                // Also fetch invested_with for the user to add to history records if missing
+                $stmt2 = $pdo->prepare("SELECT invested_with FROM {$source_table} WHERE id = ?");
+                $stmt2->execute([$user_id]);
+                $userInvestedWith = $stmt2->fetch(PDO::FETCH_ASSOC)['invested_with'] ?? null;
+
+                if (is_array($history) && !empty($history) && $userInvestedWith) {
+                    $needsUpdate = false;
+                    foreach ($history as &$record) {
+                        if (!isset($record['invested_with'])) {
+                            $record['invested_with'] = $userInvestedWith;
+                            $needsUpdate = true;
+                        }
+                    }
+                    if ($needsUpdate) {
+                        $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+                        $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+                        $updateStmt->execute([$jsonHistory, $user_id]);
+                    }
+                }
+
                 echo json_encode(['success' => true, 'history' => $history]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1832,6 +1882,13 @@
             $history[0]['loyalties'] = 'contract_cancelled';
             $history[0]['cancelled_at'] = date('Y-m-d H:i:s');
             $history[0]['cancelled_by'] = $login_id;
+            // Preserve invested_with
+            if (!isset($history[0]['invested_with']) && isset($userData['invested_with'])) {
+                $history[0]['invested_with'] = $userData['invested_with'];
+            }
+            // ALSO: Reset balance_verification to 'not-verified' when contract is cancelled
+            $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
+            $resetBalance->execute([$user_id]);
             
             // Save updated history
             $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
@@ -1941,6 +1998,22 @@
                         }
                     }
                     
+                    // Add invested_with to history records if missing
+                    if (is_array($history) && !empty($history) && isset($user['invested_with'])) {
+                        $needsUpdate = false;
+                        foreach ($history as &$record) {
+                            if (!isset($record['invested_with'])) {
+                                $record['invested_with'] = $user['invested_with'];
+                                $needsUpdate = true;
+                            }
+                        }
+                        if ($needsUpdate) {
+                            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+                            $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+                            $updateStmt->execute([$jsonHistory, $user_id]);
+                        }
+                    }
+
                     echo json_encode([
                         'success' => true,
                         'user' => [
@@ -1953,7 +2026,8 @@
                             'broker_balance' => $brokerBalance,
                             'server_share' => 0,
                             'user_share' => 0,
-                            'revenue_history' => $history
+                            'revenue_history' => $history,
+                            'invested_with' => $user['invested_with'] ?? null
                         ]
                     ]);
                 } else {
@@ -2031,12 +2105,23 @@
                         break; // Stop at the first one (which is the newest after sorting)
                     }
                 }
+                // Get user data for invested_with
+                $stmt2 = $pdo->prepare("SELECT invested_with FROM {$source_table} WHERE id = ?");
+                $stmt2->execute([$user_id]);
+                $userData = $stmt2->fetch(PDO::FETCH_ASSOC);
                 
-                // If found a payment-made record, update it
                 if ($latestPaymentMadeIndex !== -1) {
                     // Update the latest payment-made record
                     $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
+                    // Preserve invested_with if it exists in the record
+                    if (!isset($history[$latestPaymentMadeIndex]['invested_with']) && isset($userData['invested_with'])) {
+                        $history[$latestPaymentMadeIndex]['invested_with'] = $userData['invested_with'];
+                    }
                     $updated = true;
+                    
+                    // ALSO: Reset balance_verification to 'not-verified' for this user
+                    $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
+                    $resetBalance->execute([$user_id]);
                 } else {
                     echo json_encode(['error' => 'No payment-made record found to update']);
                     exit;
@@ -2225,7 +2310,8 @@
                     'user_share' => $userShare,
                     'server_share' => $serverShare,
                     'loyalties' => 'active',
-                    'recorded_at' => date('Y-m-d H:i:s')
+                    'recorded_at' => date('Y-m-d H:i:s'),
+                    'invested_with' => $userData['invested_with'] ?? null
                 ];
                 
                 // Add to history (as latest)
@@ -2754,6 +2840,10 @@
                                             // Update if found
                                             if ($latestPaymentMadeIndex !== -1) {
                                                 $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
+                                                // Preserve invested_with if it exists in the record or from user data
+                                                if (!isset($history[$latestPaymentMadeIndex]['invested_with']) && isset($targetUser['invested_with'])) {
+                                                    $history[$latestPaymentMadeIndex]['invested_with'] = $targetUser['invested_with'];
+                                                }
                                                 // Resort by ID or recorded_at for storage
                                                 usort($history, function($a, $b) {
                                                     $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
@@ -2763,6 +2853,9 @@
                                                 $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
                                                 $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
                                                 $updateStmt->execute([$jsonHistory, $user_id]);
+                                                // ALSO: Reset balance_verification to 'not-verified' for this user
+                                                $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
+                                                $resetBalance->execute([$user_id]);
                                             }
                                         }
                                     }

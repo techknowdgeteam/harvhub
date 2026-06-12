@@ -3,7 +3,7 @@
     /* index_style.php MODIFIED STYLES for Light Mode (default) and Dark Mode */
     :root { 
         --bg: #fff; 
-        --text: #1c1e21; 
+        --text: #000000; 
         --accent: #2e8b57;
         --input-bg: #f0f2f5; 
         --section-bg: #fff;
@@ -27,6 +27,26 @@
             --profile-icon-bg: #444;
             --profile-details-bg: #0d0d0d;
             --profile-details-border: #333;
+        }
+    }
+    /* Force true black text in light mode */
+    @media (prefers-color-scheme: light) {
+        body, 
+        .container, 
+        .section, 
+        .info-card,
+        .info-card p,
+        .info-card li,
+        .welcome-message,
+        .profile-details p,
+        .modal-content p,
+        p, span, li, div, h1, h2, h3, h4 {
+            color: #000000 !important;
+            opacity: 1 !important;
+        }
+        
+        .info-card {
+            background: rgba(0,0,0,0.03);
         }
     }
     * { margin:0; padding:0; box-sizing:border-box; }
@@ -71,6 +91,9 @@
             opacity: 0.1; 
             background-blend-mode: multiply; 
         }
+        body, html {
+            color: black;
+        }
     }
     .custom-body {
         width: 100%;
@@ -88,7 +111,6 @@
         position: relative; text-align: center; padding: 1rem 2rem 2rem; 
         background: var(--header-bg); 
         border-radius: 15px; margin-bottom: 2rem; 
-        box-shadow: var(--section-shadow);
         min-height: 120px; 
     }
     h1 { font-size: 4rem; color: var(--accent); margin-bottom: 0.5rem; }
