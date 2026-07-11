@@ -53,8 +53,6 @@
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$user) {
-        session_unset();
-        session_destroy();
         header("Location: index.php");
         exit;
     }

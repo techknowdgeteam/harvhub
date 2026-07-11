@@ -609,50 +609,36 @@
         top: 0;
         z-index: 10;
         background: var(--table-header-bg);
+        flex-shrink: 0;
     }
 
     .management-panel .json-viewer-full {
         overflow-y: auto;
         flex: 1;
         width: 100%;
+        max-height: calc(80vh - 100px);
+        min-height: 400px;
     }
 
-    .user-info {
-        background: var(--bg-tertiary);
-        border-radius: 8px;
-        padding: 12px 15px;
-        margin: 15px;
-        display: flex;
-        gap: 20px;
-        flex-wrap: wrap;
-        font-size: 13px;
-    }
-
-    .user-info-item {
-        display: inline-flex;
-        align-items: baseline;
-        gap: 5px;
-    }
-
-    .user-info-label {
-        font-weight: bold;
-        color: var(--accent-color);
-    }
-
-    /* JSON Viewer Styles */
-    .json-viewer, .json-viewer-full {
+    /* JSON Viewer Styles - SCROLLABLE */
+    .json-viewer, 
+    .json-viewer-full {
         padding: 20px;
         background: var(--input-bg);
         width: 100%;
-        overflow-x: auto;
-        overflow-y: auto;
+        overflow: auto;
         box-sizing: border-box;
+        max-height: calc(80vh - 100px);
+        min-height: 400px;
     }
 
     .json-viewer-full {
-        min-height: 500px;
+        min-height: 400px;
+        max-height: calc(80vh - 100px);
+        overflow: auto;
     }
 
+    /* JSON Structure - READ MODE with scrolling */
     .json-structure {
         font-family: 'Courier New', 'Monaco', monospace;
         font-size: 13px;
@@ -663,19 +649,25 @@
         border-radius: 8px;
         margin: 0;
         white-space: pre;
-        overflow-x: auto;
+        overflow: auto;
         width: 100%;
         box-sizing: border-box;
+        max-height: calc(80vh - 160px);
+        min-height: 350px;
     }
 
     .editor-full-wrapper {
         width: 100%;
         display: block;
+        max-height: calc(80vh - 100px);
+        overflow: auto;
     }
 
+    /* JSON Editor - EDIT MODE with scrolling */
     .json-editor-fullwidth {
         width: 100%;
-        min-height: 500px;
+        min-height: 400px;
+        max-height: calc(80vh - 100px);
         padding: 20px;
         background: var(--bg-secondary);
         color: var(--text-color);
@@ -686,7 +678,7 @@
         line-height: 1.6;
         resize: vertical;
         white-space: pre;
-        overflow-x: auto;
+        overflow: auto;
         box-sizing: border-box;
     }
 
@@ -1037,7 +1029,7 @@
         transform: translateY(-1px);
     }
 
-    /* Scrollbar Styling */
+    /* Scrollbar Styling for all JSON containers */
     .json-viewer::-webkit-scrollbar,
     .json-viewer-full::-webkit-scrollbar,
     .account-management-container::-webkit-scrollbar,
@@ -1076,6 +1068,7 @@
     .user-viewer-container::-webkit-scrollbar-thumb:hover {
         background: #27ae60;
     }
+    
     /* Status Badge Styles */
     .status-badge-default {
         display: inline-block;
@@ -1174,7 +1167,7 @@
         cursor: not-allowed;
         transform: none;
     }
-    /* Unauthorized Actions Badge Styles */
+    
     /* Unauthorized Actions Badge Styles */
     .unauthorized-badge {
         display: inline-block;
@@ -1206,6 +1199,7 @@
         font-weight: bold;
         display: inline-block;
     }
+    
     /* Config Entries Grid Styles */
     .config-entries-grid {
         display: grid;
@@ -1236,6 +1230,28 @@
         border-bottom: 1px solid var(--border-color);
         flex-wrap: wrap;
         gap: 10px;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .config-entry-header:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .config-entry-title-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+    }
+
+    .collapse-icon {
+        display: inline-block;
+        width: 20px;
+        font-size: 14px;
+        color: var(--accent-color);
+        font-weight: bold;
+        transition: transform 0.2s ease;
     }
 
     .config-entry-title {
@@ -1248,6 +1264,7 @@
     .config-entry-buttons {
         display: flex;
         gap: 8px;
+        flex-shrink: 0;
     }
 
     .config-entry-buttons button {
@@ -1257,6 +1274,12 @@
         cursor: pointer;
         transition: all 0.2s;
         border: none;
+        position: relative;
+        z-index: 1;
+    }
+
+    .config-entry-buttons button:hover {
+        transform: translateY(-1px);
     }
 
     .edit-config-btn {
@@ -1266,7 +1289,6 @@
 
     .edit-config-btn:hover {
         background: #2980b9;
-        transform: translateY(-1px);
     }
 
     .copy-config-btn {
@@ -1276,7 +1298,6 @@
 
     .copy-config-btn:hover {
         background: #8e44ad;
-        transform: translateY(-1px);
     }
 
     .delete-config-btn {
@@ -1286,7 +1307,6 @@
 
     .delete-config-btn:hover {
         background: #c0392b;
-        transform: translateY(-1px);
     }
 
     .save-config-btn {
@@ -1296,7 +1316,6 @@
 
     .save-config-btn:hover {
         background: #229954;
-        transform: translateY(-1px);
     }
 
     .cancel-config-btn {
@@ -1306,13 +1325,33 @@
 
     .cancel-config-btn:hover {
         background: #7f8c8d;
-        transform: translateY(-1px);
     }
 
     .config-entry-content {
         padding: 15px;
-        max-height: 400px;
-        overflow-y: auto;
+        max-height: 500px;
+        overflow: auto;
+        transition: all 0.3s ease;
+    }
+
+    .config-entry-content.show {
+        display: block;
+    }
+
+    /* Animation for expand/collapse */
+    @keyframes fadeSlideIn {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .config-entry-content > * {
+        animation: fadeSlideIn 0.2s ease;
     }
 
     .config-json-view {
@@ -1323,12 +1362,15 @@
         font-size: 12px;
         white-space: pre-wrap;
         word-break: break-word;
-        overflow-x: auto;
+        overflow: auto;
+        max-height: 400px;
+        min-height: 100px;
     }
 
     .config-json-editor {
         width: 100%;
         min-height: 300px;
+        max-height: 500px;
         padding: 15px;
         background: var(--bg-secondary);
         color: var(--text-color);
@@ -1338,7 +1380,8 @@
         font-size: 12px;
         resize: vertical;
         white-space: pre;
-        overflow-x: auto;
+        overflow: auto;
+        box-sizing: border-box;
     }
 
     .config-json-editor:focus {
@@ -1381,6 +1424,7 @@
         color: var(--text-color);
         border-radius: 6px;
     }
+    
     /* Key Editor Styles */
     .config-key-editor {
         width: 100%;
@@ -1404,47 +1448,47 @@
     }
 
     /* Action Column Styles */
-        .action-cell {
-            min-width: 150px;
-        }
+    .action-cell {
+        min-width: 150px;
+    }
 
-        .contract-action-select {
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-            background: var(--input-bg);
-            color: var(--text-color);
-            font-size: 12px;
-            cursor: pointer;
-            margin-right: 8px;
-        }
+    .contract-action-select {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: var(--input-bg);
+        color: var(--text-color);
+        font-size: 12px;
+        cursor: pointer;
+        margin-right: 8px;
+    }
 
-        .apply-action-btn {
-            padding: 6px 12px;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
+    .apply-action-btn {
+        padding: 6px 12px;
+        background: #3498db;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
 
-        .apply-action-btn:hover {
-            background: #2980b9;
-            transform: translateY(-1px);
-        }
+    .apply-action-btn:hover {
+        background: #2980b9;
+        transform: translateY(-1px);
+    }
 
-        .apply-action-btn:disabled {
-            background: #95a5a6;
-            cursor: not-allowed;
-            transform: none;
-        }
+    .apply-action-btn:disabled {
+        background: #95a5a6;
+        cursor: not-allowed;
+        transform: none;
+    }
 
-        .contract-action-select:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
+    .contract-action-select:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 
     /* Terminal Path Styles - Updated for better wrapping */
     .terminal-path-value {
@@ -1520,8 +1564,7 @@
             max-width: 120px;
             font-size: 8px;
         }
-    }
-    @media (max-width: 768px) {
+        
         .config-entries-grid {
             grid-template-columns: 1fr;
         }
@@ -1536,157 +1579,18 @@
             justify-content: flex-end;
         }
     }
-    /* ==================== FIXED SCROLLABLE LISTS FOR ALL TABS ==================== */
-
-    /* User Configuration Tab - User List */
-    #users-tab .user-list-panel {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #users-tab .user-list-panel h3 {
-        flex-shrink: 0;
-    }
-
-    #user-items-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 200px;
-    }
-
-    /* Invested With Tab */
-    #invested-tab .invested-management-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #invested-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Active Investors Tab */
-    #verified-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #verified-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Pending Users Tab */
-    #pending-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #pending-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Suspended Users Tab */
-    #suspended-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #suspended-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Just Joined Users Tab */
-    #justjoined-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #justjoined-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Just Joined & Valid Tab */
-    #justjoinedvalid-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #justjoinedvalid-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Approved Users Tab */
-    #approved-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #approved-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Bypassed Users Tab */
-    #bypassed-tab .user-viewer-container {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #bypassed-users-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 300px;
-    }
-
-    /* Auto Trading Tab - User List Panel */
-    #autotrading-tab .user-list-panel {
-        max-height: 550px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #autotrading-tab .user-list-panel h3 {
-        flex-shrink: 0;
-    }
-
-    #autotrading-user-list {
-        flex: 1;
-        overflow-y: auto;
-        min-height: 200px;
-    }
-
-    /* Execution History Tab - User List Panel */
+    
+    /* Fixed scrollable lists for all tabs */
+    #users-tab .user-list-panel,
+    #invested-tab .invested-management-container,
+    #verified-tab .user-viewer-container,
+    #pending-tab .user-viewer-container,
+    #suspended-tab .user-viewer-container,
+    #justjoined-tab .user-viewer-container,
+    #justjoinedvalid-tab .user-viewer-container,
+    #approved-tab .user-viewer-container,
+    #bypassed-tab .user-viewer-container,
+    #autotrading-tab .user-list-panel,
     #execution-tab .user-list-panel {
         max-height: 550px;
         overflow-y: auto;
@@ -1694,17 +1598,28 @@
         flex-direction: column;
     }
 
+    #users-tab .user-list-panel h3,
+    #autotrading-tab .user-list-panel h3,
     #execution-tab .user-list-panel h3 {
         flex-shrink: 0;
     }
 
+    #user-items-list,
+    #invested-users-list,
+    #verified-users-list,
+    #pending-users-list,
+    #suspended-users-list,
+    #justjoined-users-list,
+    #justjoinedvalid-users-list,
+    #approved-users-list,
+    #bypassed-users-list,
+    #autotrading-user-list,
     #execution-user-list {
         flex: 1;
         overflow-y: auto;
         min-height: 200px;
     }
 
-    /* Ensure table containers are scrollable */
     .user-viewer-table-container,
     .invested-users-table-container {
         overflow-x: auto;
@@ -1712,99 +1627,31 @@
         max-height: 450px;
     }
 
-    /* Table wrapper for horizontal scroll */
     .table-responsive {
         overflow-x: auto;
         width: 100%;
     }
 
-    /* Fix for user-items container */
     .user-items {
         overflow-y: auto;
         max-height: none;
         flex: 1;
     }
-    /* Make Server Configuration container match Account Management Configurations height */
+
+    /* Server Configuration scrollable */
     #server-tab .account-management-container:first-child .json-viewer {
         max-height: 400px;
+        min-height: 200px;
         overflow-y: auto;
         padding: 20px;
     }
 
-    /* Ensure the pre element inside scrolls properly */
     #server-tab .account-management-container:first-child .json-structure {
         margin: 0;
         white-space: pre-wrap;
         word-break: break-word;
-    }
-    /* Collapsible Config Entry Styles */
-    .config-entry-header {
-        cursor: pointer;
-        user-select: none;
-    }
-
-    .config-entry-header:hover {
-        background: var(--bg-tertiary);
-    }
-
-    .config-entry-title-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex: 1;
-    }
-
-    .collapse-icon {
-        display: inline-block;
-        width: 20px;
-        font-size: 14px;
-        color: var(--accent-color);
-        font-weight: bold;
-        transition: transform 0.2s ease;
-    }
-
-    .config-entry-title {
-        font-weight: bold;
-        font-size: 16px;
-        color: var(--accent-color);
-        word-break: break-all;
-    }
-
-    /* Keep buttons clickable without triggering header click */
-    .config-entry-buttons button {
-        cursor: pointer;
-        position: relative;
-        z-index: 1;
-    }
-
-    .config-entry-buttons button:hover {
-        transform: translateY(-1px);
-    }
-
-    /* Smooth transition for content */
-    .config-entry-content {
-        transition: all 0.3s ease;
-        overflow: hidden;
-    }
-
-    .config-entry-content.show {
-        display: block;
-    }
-
-    /* Animation for expand/collapse */
-    @keyframes fadeSlideIn {
-        from {
-            opacity: 0;
-            transform: translateY(-10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    .config-entry-content > * {
-        animation: fadeSlideIn 0.2s ease;
+        max-height: 350px;
+        overflow-y: auto;
     }
 </style>
 

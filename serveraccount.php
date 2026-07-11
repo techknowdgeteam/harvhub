@@ -69,6 +69,67 @@
     }
 
     // ============================================
+    // SECTION 2.5: SYNC ACCOUNTMANAGEMENT TO ACCOUNTMANAGEMENT_CONFIGS
+    // ============================================
+    // This runs on every page load to ensure accountmanagement_configs always reflects
+    // the current data from accountmanagement column
+
+    try {
+        // Check if accountmanagement column exists and has data
+        if (isset($serverAccount['accountmanagement']) && !empty($serverAccount['accountmanagement'])) {
+            $currentManagementData = json_decode($serverAccount['accountmanagement'], true);
+            
+            // Only proceed if we have valid JSON data
+            if (json_last_error() === JSON_ERROR_NONE && is_array($currentManagementData) && !empty($currentManagementData)) {
+                
+                // Get current configs to compare
+                $currentConfigs = !empty($serverAccount['accountmanagement_configs']) 
+                    ? json_decode($serverAccount['accountmanagement_configs'], true) 
+                    : [];
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $currentConfigs = [];
+                }
+                
+                // Check if sync is needed - compare the data
+                $needsSync = false;
+                
+                // If configs is empty, definitely needs sync
+                if (empty($currentConfigs)) {
+                    $needsSync = true;
+                } else {
+                    // Check if any management data keys are missing from configs
+                    foreach ($currentManagementData as $key => $value) {
+                        if (!isset($currentConfigs[$key]) || $currentConfigs[$key] !== $value) {
+                            $needsSync = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // If sync needed, update the configs column
+                if ($needsSync) {
+                    // Merge: start with existing configs, then override with management data
+                    $mergedData = array_merge($currentConfigs, $currentManagementData);
+                    $jsonData = json_encode($mergedData, JSON_PRETTY_PRINT);
+                    
+                    $updateStmt = $pdo->prepare("UPDATE {$serverAccountTable} SET accountmanagement_configs = ? WHERE id = 1");
+                    $updateStmt->execute([$jsonData]);
+                    
+                    // Update the local $serverAccount variable with new configs
+                    $serverAccount['accountmanagement_configs'] = $jsonData;
+                    
+                    // Optional: Log the sync (comment out if not needed)
+                    // error_log("Synced accountmanagement to accountmanagement_configs at " . date('Y-m-d H:i:s'));
+                }
+            }
+        }
+    } catch (Exception $e) {
+        // Silently fail - don't break the page if sync fails
+        // error_log("Error syncing accountmanagement to configs: " . $e->getMessage());
+    }
+
+    // ============================================
     // SECTION 3: HELPER FUNCTIONS
     // ============================================
 
@@ -2958,12 +3019,17 @@
     // SECTION 7: DATA FETCHING FOR VIEWS
     // ============================================
 
-    // 7a: Paid Users / Revenue Dashboard Data
-    // 7a: Paid Users / Revenue Dashboard Data
+    // ============================================
+    // SECTION 7a: Paid Users / Revenue Dashboard Data
+    // ============================================
     if ($authenticated && $currentView === 'paid_users') {
         $allUsers = [];
         
-        // DASHBOARD SUMMARY - Calculate totals for ALL users (no filtering)
+        // Get contract duration for filtering
+        $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+        $today = date('Y-m-d');
+        
+        // DASHBOARD SUMMARY - Only for active investors
         $dashboardSummary = [
             'total_broker_balance' => 0,
             'total_profit' => 0,
@@ -2996,16 +3062,24 @@
         $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
         $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
         $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30.00);
-        $contractDuration = (int)($serverAccount['contract_duration'] ?? 0);
 
-        $stmt1 = $pdo->prepare("SELECT {$selectFields}, '{$insidersTable}' AS source FROM {$insidersTable}");
+        // ========== FETCH ONLY USERS WITH ACTIVE CONTRACTS ==========
+        // Build query with active contract filter
+        $activeContractFilter = "execution_start_date IS NOT NULL 
+                                AND execution_start_date != '0000-00-00' 
+                                AND DATE_ADD(execution_start_date, INTERVAL {$contractDuration} DAY) >= CURDATE()";
+        
+        // Fetch from insiders table - only active contracts
+        $stmt1 = $pdo->prepare("SELECT {$selectFields}, '{$insidersTable}' AS source FROM {$insidersTable} WHERE {$activeContractFilter}");
         $stmt1->execute();
         $allUsers = array_merge($allUsers, $stmt1->fetchAll(PDO::FETCH_ASSOC));
 
-        $stmt2 = $pdo->prepare("SELECT {$selectFields}, '{$insidersServerTable}' AS source FROM {$insidersServerTable}");
+        // Fetch from insiders_server table - only active contracts
+        $stmt2 = $pdo->prepare("SELECT {$selectFields}, '{$insidersServerTable}' AS source FROM {$insidersServerTable} WHERE {$activeContractFilter}");
         $stmt2->execute();
         $allUsers = array_merge($allUsers, $stmt2->fetchAll(PDO::FETCH_ASSOC));
         
+        // Process each user for the table and summaries
         foreach ($allUsers as &$user) {
             $brokerBalance = (float)($user['broker_balance'] ?? 0);
             $profitAndLoss = (float)($user['profitandloss'] ?? 0);
@@ -3015,7 +3089,7 @@
             $user['profitandloss_display'] = $profitAndLoss;
             $user['current_balance'] = $currentBalance;
             
-            // ========== DASHBOARD SUMMARY (ALL USERS - NO RULES) ==========
+            // ========== DASHBOARD SUMMARY (ALL ACTIVE USERS) ==========
             $dashboardSummary['total_broker_balance'] += $brokerBalance;
             $dashboardSummary['total_profit'] += $profitAndLoss;
             $dashboardSummary['total_current_balance'] += $currentBalance;
@@ -3029,21 +3103,20 @@
                 $dashboardSummary['total_user_share'] += $potentialUserShare;
                 $dashboardSummary['total_expected_payment'] += $potentialServerShare;
                 
-                // Track payment statuses for dashboard (based on actual loyalties)
+                // Track payment statuses for dashboard
                 $rawStatus = $user['loyalties'] ?? '';
                 $normalizedStatus = normalizePaymentStatus($rawStatus);
                 if ($normalizedStatus === 'payment-confirmed') {
                     $dashboardSummary['total_payments_received'] += $potentialServerShare;
-                    $dashboardSummary['total_unpaid_payments'] += 0;
                 } elseif ($normalizedStatus === 'payment-made') {
                     $dashboardSummary['total_payments_made'] += $potentialServerShare;
-                    $dashboardSummary['total_unpaid_payments'] += 0;
                 } else {
                     $dashboardSummary['total_unpaid_payments'] += $potentialServerShare;
                 }
             }
             
-            // ========== TABLE SUMMARY & DISPLAY LOGIC (WITH RULES) ==========
+            // ========== TABLE SUMMARY & DISPLAY LOGIC ==========
+            // Determine user status based on contract rules
             $decision = determineUserStatus($user, $contractDuration, $minProfitForSplit);
             
             $user['should_show_in_revenue'] = $decision['should_show_in_revenue'];
@@ -3064,6 +3137,7 @@
             $normalizedStatus = normalizePaymentStatus($rawStatus);
             $user['loyalties_normalized'] = $normalizedStatus;
             
+            // Determine display status for the table
             if (!$user['should_show_in_revenue']) {
                 $displayStatus = '';
             } elseif ($user['has_eligible_profit']) {
@@ -3083,6 +3157,7 @@
             }
             $user['display_status'] = $displayStatus;
             
+            // Add to table summary if should show
             if ($user['should_show_in_revenue']) {
                 $tableSummary['total_broker_balance'] += $brokerBalance;
                 $tableSummary['total_profit'] += $profitAndLoss;
@@ -3097,7 +3172,7 @@
         }
         unset($user);
         
-        // Use dashboard summary for display (this will be shown in summary cards)
+        // Use dashboard summary for display
         $revenueSummary = $dashboardSummary;
     }
 

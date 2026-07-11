@@ -25,7 +25,7 @@
     <button class="tab-btn" data-tab="execution">📜 Execution History</button>
     <button class="tab-btn" data-tab="suspended">🚫 Suspended Users</button>
     <button class="tab-btn" data-tab="bypassed">⚠️ Bypass Unauthorized Actions users</button>
-    <button class="tab-btn" data-tab="autotrading">🤖 Restrictions Decision</button>
+    <button class="tab-btn" data-tab="autotrading">🤖 Autotrading</button>
 </div>
 
 
@@ -312,7 +312,7 @@
     </div>
 </div>
 
-<!-- Restrictions Decision & Restrictions Tab -->
+<!-- Autotrading & Restrictions Tab -->
 <div id="autotrading-tab" class="management-tab" style="display: none;">
     <div class="split-view">
         <div class="user-list-panel">
@@ -326,7 +326,7 @@
         </div>
         <div class="management-panel" style="overflow: hidden; display: flex; flex-direction: column;">
             <div class="management-header">
-                <h3>Restrictions Decision & Restriction Settings</h3>
+                <h3>Autotrading</h3>
                 <div class="header-buttons">
                     <button type="button" class="save-settings-btn" id="save-autotrading-btn" onclick="saveAutoTradingSettings()" style="background: #27ae60;">💾 Save All Settings</button>
                 </div>
@@ -353,7 +353,7 @@
     let allUsersCache = [];
     let currentFilteredUsers = [];
 
-    // Restrictions Decision Settings Variables
+    // Autotrading Settings Variables
     let currentAutoTradingUserId = null;
     let currentAutoTradingSourceTable = null;
     let currentAutoTradingData = {
@@ -1973,10 +1973,8 @@
                 return;
             }
             
-            if (!/^[a-zA-Z0-9_\-]+$/.test(key)) {
-                showMessage('Key can only contain letters, numbers, underscores, and hyphens', 'error');
-                return;
-            }
+            // Allow any key name - removed validation
+            // Keys can now contain any characters
             
             modal.classList.remove('show');
             createNewConfigEntry(key);
@@ -2646,7 +2644,7 @@
                             <th>Invested With</th>
                             <th>Execution Start Date</th>
                             <th>Contract Days Left</th>
-                            <th>Restrictions Decision</th>
+                            <th>Autotrading</th>
                             <th>Demo Account</th>
                             <th>Account Mode</th>
                             <th>Terminal Path</th>
@@ -2954,7 +2952,7 @@
                             <th>Source</th>
                             <th>Invested With</th>
                             <th>Execution Start Date</th>
-                            <th>Restrictions Decision</th>
+                            <th>Autotrading</th>
                             <th>Bypass Restriction</th>
                             <th>Broker Balance</th>
                             <th>Account Mode</th>
@@ -3040,7 +3038,7 @@
                             <th>Invested With</th>
                             <th>Execution Start Date</th>
                             <th>Contract Days Left</th>
-                            <th>Restrictions Decision</th>
+                            <th>Autotrading</th>
                             <th>Demo Account</th>
                             <th>Account Mode</th>
                             <th>Terminal Path</th>
@@ -3776,7 +3774,7 @@
         return `${month} ${day}, ${year} at ${hours}:${minutes}:${seconds} ${ampm}`;
     }
 
-    // Restrictions Decision & Restriction Management Functions
+    // Autotrading & Restriction Management Functions
     function loadAllUsersForAutoTrading() {
         const userListDiv = document.getElementById('autotrading-user-list');
         if (!userListDiv) return;
@@ -3877,7 +3875,7 @@
                     
                     <div class="setting-card">
                         <div class="setting-label">
-                            <label>Restrictions Decision</label>
+                            <label>Autotrading</label>
                             <span class="setting-description">Enable or disable automatic trading for this user</span>
                         </div>
                         <div class="setting-control">

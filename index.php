@@ -88,6 +88,7 @@
     $user_broker_balance = 0;
     $user_profitandloss = 0;
 
+    // ==================== FIX: REMOVED SESSION DESTROY LOGIC ====================
     if ($logged_in_email !== '') {
         $stmt = $pdo->prepare("SELECT application_status, broker, server, login, fullname, broker_balance, profitandloss FROM insiders WHERE email = ? LIMIT 1");
         $stmt->execute([strtolower($logged_in_email)]);
@@ -106,14 +107,8 @@
             } else {
                 $already_submitted = false;
             }
-        } else {
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                session_unset();
-                session_destroy();
-                header("Location: index.php");
-                exit;
-            }
         }
+        // REMOVED: The else block that was destroying session
     }
     
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_email'])) {
@@ -286,7 +281,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HarvHub – Launching April 30, 2026</title>
+<title>HarvHub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <?php include 'index_style.php' ?>
 
@@ -300,17 +295,13 @@
                         <div id="profileIcon">👤</div> 
                         <div id="profileCard" class="profile-details">
                             <div class="profile-header">
-                                <p style="font-weight:bold; color:var(--accent); font-size:1.1rem; margin-bottom:8px;">Profile Details</p>
+                                <p style="font-weight:bold; color:var(--accent); font-size:1.1rem; margin-bottom:8px;">Profile Broker Details</p>
                                 <?php if ($application_status === 'pending' && !empty($user_broker)): ?>
                                     <button class="edit-btn" onclick="openEditModal()">Edit</button>
                                 <?php endif; ?>
                             </div>
-                            <p><strong>Email:</strong> <?= htmlspecialchars($logged_in_email) ?></p>
-                            <p><strong>Status:</strong> <span id="profileStatus"><?= ucfirst($application_status ?: 'Not Submitted') ?></span>
-                            </p>
                             <?php if (!empty($user_broker)): ?>
                                 <p><strong>Broker:</strong> <?= htmlspecialchars($user_broker) ?></p>
-                                <p><strong>Full Name:</strong> <?= htmlspecialchars($user_fullname) ?></p>
                                 <p><strong>Login:</strong> <?= htmlspecialchars($user_login) ?></p>
                                 <p><strong>Server:</strong> <?= htmlspecialchars($user_server) ?></p>
                             <?php endif; ?>
@@ -332,15 +323,13 @@
                 <?php if ($logged_in_email !== ''): ?>
                     <div id="mobileProfileStatus" class="profile-details">
                         <div class="profile-header">
-                            <p style="font-weight:bold; color:var(--accent); font-size:1.1rem; margin-bottom:8px;">Your Status</p>
+                            <p style="font-weight:bold; color:var(--accent); font-size:1.1rem; margin-bottom:8px;">Your Broker</p>
                             <?php if ($application_status === 'pending' && !empty($user_broker)): ?>
                                 <button class="edit-btn" onclick="openEditModal()"> Edit</button>
                             <?php endif; ?>
                         </div>
-                        <p><strong>Email:</strong> <?= htmlspecialchars($logged_in_email) ?></p>
                         <?php if (!empty($user_broker)): ?>
                             <p><strong>Broker:</strong> <?= htmlspecialchars($user_broker) ?></p>
-                            <p><strong>Full Name:</strong> <?= htmlspecialchars($user_fullname) ?></p>
                             <p><strong>Login:</strong> <?= htmlspecialchars($user_login) ?></p>
                             <p><strong>Server:</strong> <?= htmlspecialchars($user_server) ?></p>
                         <?php endif; ?>
