@@ -24,8 +24,8 @@
     <button class="tab-btn" data-tab="verified">👥 Active Investors</button>
     <button class="tab-btn" data-tab="execution">📜 Execution History</button>
     <button class="tab-btn" data-tab="suspended">🚫 Suspended Users</button>
-    <button class="tab-btn" data-tab="bypassed">⚠️ Bypass Unauthorized Actions users</button>
-    <button class="tab-btn" data-tab="autotrading">🤖 Autotrading</button>
+    <button class="tab-btn" data-tab="bypassed">⚠️ Users that should Bypass Unauthorized actions</button>
+    <button class="tab-btn" data-tab="autotrading">🤖 Restrictions Decision</button>
 </div>
 
 
@@ -1617,76 +1617,87 @@
         
         const { oldKey, newKey, newValue } = saveData;
         
-        // If key changed, we need to delete old and create new
-        if (oldKey !== newKey) {
-            // First, delete the old entry
-            let deleteFormData = new URLSearchParams();
-            deleteFormData.append('action', 'update_config_entry');
-            deleteFormData.append('target_type', 'server');
-            deleteFormData.append('entry_key', oldKey);
-            deleteFormData.append('value', 'null');
-            deleteFormData.append('admin_password', password);
-            deleteFormData.append('login_id', '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>');
-            
-            fetch('serveraccount.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: deleteFormData
-            })
-            .then(response => response.json())
-            .then(deleteData => {
-                if (deleteData.success) {
-                    // Then create the new entry with the new key
-                    let createFormData = new URLSearchParams();
-                    createFormData.append('action', 'update_config_entry');
-                    createFormData.append('target_type', 'server');
-                    createFormData.append('entry_key', newKey);
-                    createFormData.append('value', JSON.stringify(newValue));
-                    createFormData.append('admin_password', password);
-                    createFormData.append('login_id', '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>');
-                    
-                    return fetch('serveraccount.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        body: createFormData
-                    });
-                } else {
-                    throw new Error(deleteData.error || 'Error deleting old entry');
-                }
-            })
-            .then(response => response.json())
-            .then(createData => {
-                if (createData.success) {
-                    showMessage(`Configuration renamed from "${oldKey}" to "${newKey}" and saved successfully!`, 'success');
-                    cancelConfigEntry(oldKey);
-                    loadAccountManagementConfigs();
-                } else {
-                    showMessage(createData.error || 'Error creating new entry', 'error');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showMessage('Error saving configuration: ' + error.message, 'error');
-                if (error.message === 'Invalid password') {
-                    showMessage('Password verification failed. Please try again.', 'error');
-                }
-            })
-            .finally(() => {
-                window.pendingConfigSave = null;
-            });
-        } else {
-            // Same key, just update the data
+        // Function to handle the save operation
+        function performSave(deleteOldKey, createNewKey, valueToSave) {
             let formData = new URLSearchParams();
             formData.append('action', 'update_config_entry');
             formData.append('target_type', 'server');
+            
+            if (deleteOldKey && createNewKey) {
+                // We're renaming - need to handle specially
+                // First delete the old entry
+                let deleteFormData = new URLSearchParams();
+                deleteFormData.append('action', 'update_config_entry');
+                deleteFormData.append('target_type', 'server');
+                deleteFormData.append('entry_key', deleteOldKey);
+                deleteFormData.append('value', 'null');
+                deleteFormData.append('admin_password', password);
+                deleteFormData.append('login_id', '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>');
+                
+                fetch('serveraccount.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: deleteFormData
+                })
+                .then(response => response.json())
+                .then(deleteData => {
+                    if (deleteData.success) {
+                        // Then create the new entry with the new key
+                        let createFormData = new URLSearchParams();
+                        createFormData.append('action', 'update_config_entry');
+                        createFormData.append('target_type', 'server');
+                        createFormData.append('entry_key', createNewKey);
+                        createFormData.append('value', JSON.stringify(valueToSave));
+                        createFormData.append('admin_password', password);
+                        createFormData.append('login_id', '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>');
+                        
+                        return fetch('serveraccount.php', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: createFormData
+                        });
+                    } else {
+                        throw new Error(deleteData.error || 'Error deleting old entry');
+                    }
+                })
+                .then(response => response.json())
+                .then(createData => {
+                    if (createData.success) {
+                        let message = `Configuration renamed from "${deleteOldKey}" to "${createNewKey}" and saved successfully!`;
+                        if (createData.synced_to_management) {
+                            message += ' (Synced to accountmanagement)';
+                        }
+                        showMessage(message, 'success');
+                        // Clear the editing state without showing cancel message
+                        clearConfigEntryEditState(deleteOldKey);
+                        loadAccountManagementConfigs();
+                    } else {
+                        showMessage(createData.error || 'Error creating new entry', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showMessage('Error saving configuration: ' + error.message, 'error');
+                    if (error.message === 'Invalid password') {
+                        showMessage('Password verification failed. Please try again.', 'error');
+                    }
+                })
+                .finally(() => {
+                    window.pendingConfigSave = null;
+                });
+                
+                return; // Exit early as we're handling the async differently
+            }
+            
+            // Same key, just update the data - this will sync to both columns
             formData.append('entry_key', oldKey);
-            formData.append('value', JSON.stringify(newValue));
+            formData.append('value', JSON.stringify(valueToSave));
             formData.append('admin_password', password);
             formData.append('login_id', '<?= htmlspecialchars($serverAccount['admin_login_id'] ?? 'admin') ?>');
             
@@ -1701,14 +1712,20 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    showMessage(`Configuration "${oldKey}" saved successfully!`, 'success');
-                    cancelConfigEntry(oldKey);
+                    let message = `Configuration "${oldKey}" saved successfully!`;
+                    if (data.synced_to_management) {
+                        message += ' (Synced to accountmanagement)';
+                    }
+                    showMessage(message, 'success');
+                    // Clear the editing state without showing cancel message
+                    clearConfigEntryEditState(oldKey);
                     loadAccountManagementConfigs();
                 } else {
                     showMessage(data.error || 'Error saving configuration', 'error');
                     if (data.error === 'Invalid password') {
                         showMessage('Password verification failed. Please try again.', 'error');
                     }
+                    // Don't clear the edit state on error - let user try again
                 }
             })
             .catch(error => {
@@ -1719,6 +1736,50 @@
                 window.pendingConfigSave = null;
             });
         }
+        
+        // Check if we're renaming
+        if (oldKey !== newKey) {
+            performSave(oldKey, newKey, newValue);
+        } else {
+            performSave(null, null, newValue);
+        }
+    }
+
+    // New helper function to clear config entry edit state without showing cancel message
+    function clearConfigEntryEditState(entryKey) {
+        if (!currentEditingConfigEntry || currentEditingConfigEntry !== entryKey) {
+            return;
+        }
+        
+        const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
+        const contentDiv = document.getElementById(`content-${safeKey}`);
+        const buttonsDiv = document.getElementById(`buttons-${safeKey}`);
+        
+        // Restore the content to display mode
+        if (contentDiv && originalConfigEntryBackup) {
+            contentDiv.innerHTML = `
+                <pre class="config-json-view">${escapeHtml(JSON.stringify(originalConfigEntryBackup.data, null, 2))}</pre>
+            `;
+            
+            // Keep the content expanded if it was expanded before
+            if (currentlyExpandedConfig === entryKey) {
+                contentDiv.style.display = 'block';
+                const iconSpan = document.getElementById(`icon-${safeKey}`);
+                if (iconSpan) iconSpan.textContent = '▼';
+            }
+        }
+        
+        // Restore the buttons
+        if (buttonsDiv) {
+            buttonsDiv.innerHTML = `
+                <button class="edit-config-btn" onclick="editConfigEntry('${escapeHtml(entryKey).replace(/'/g, "\\'")}')">✏️ Edit</button>
+                <button class="copy-config-btn" onclick="copyConfigEntry('${escapeHtml(entryKey).replace(/'/g, "\\'")}')">📋 Copy</button>
+                <button class="delete-config-btn" onclick="deleteConfigEntry('${escapeHtml(entryKey).replace(/'/g, "\\'")}')">🗑️ Delete</button>
+            `;
+        }
+        
+        currentEditingConfigEntry = null;
+        originalConfigEntryBackup = null;
     }
     // Cache for configuration data to avoid repeated network requests
     let configDataCache = {};
@@ -4221,23 +4282,6 @@
         return div.innerHTML;
     }
 
-    function showMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message';
-        messageDiv.innerHTML = '<span style="color:' + (type === 'error' ? '#e74c3c' : '#2ecc71') + ';">' + message + '</span>';
-        
-        const container = document.querySelector('.container');
-        if (!container) return;
-        
-        const existingMessage = container.querySelector('.message');
-        if (existingMessage) existingMessage.remove();
-        
-        container.insertBefore(messageDiv, container.firstChild);
-        
-        setTimeout(() => {
-            messageDiv.remove();
-        }, 3000);
-    }
     // Update application status for selected user
     function updateApplicationStatus() {
         if (!currentUserId || !currentSourceTable) {

@@ -128,6 +128,60 @@
         // Silently fail - don't break the page if sync fails
         // error_log("Error syncing accountmanagement to configs: " . $e->getMessage());
     }
+    // ============================================
+    // SECTION 2.5b: SYNC ACCOUNTMANAGEMENT_CONFIGS TO ACCOUNTMANAGEMENT (REVERSE SYNC)
+    // ============================================
+    // This runs on every page load to ensure accountmanagement always reflects
+    // the current data from accountmanagement_configs where keys exist in both
+
+    try {
+        // Check if accountmanagement_configs column exists and has data
+        if (isset($serverAccount['accountmanagement_configs']) && !empty($serverAccount['accountmanagement_configs'])) {
+            $configsData = json_decode($serverAccount['accountmanagement_configs'], true);
+            
+            // Only proceed if we have valid JSON data
+            if (json_last_error() === JSON_ERROR_NONE && is_array($configsData) && !empty($configsData)) {
+                
+                // Get current management data to compare
+                $currentManagementData = !empty($serverAccount['accountmanagement']) 
+                    ? json_decode($serverAccount['accountmanagement'], true) 
+                    : [];
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $currentManagementData = [];
+                }
+                
+                // Check if sync is needed - compare the data
+                $needsSync = false;
+                $mergedData = $currentManagementData;
+                
+                // For each key in configs, ensure it exists in management with the same value
+                foreach ($configsData as $key => $value) {
+                    if (!isset($mergedData[$key]) || $mergedData[$key] !== $value) {
+                        $mergedData[$key] = $value;
+                        $needsSync = true;
+                    }
+                }
+                
+                // If sync needed, update the management column
+                if ($needsSync) {
+                    $jsonData = json_encode($mergedData, JSON_PRETTY_PRINT);
+                    
+                    $updateStmt = $pdo->prepare("UPDATE {$serverAccountTable} SET accountmanagement = ? WHERE id = 1");
+                    $updateStmt->execute([$jsonData]);
+                    
+                    // Update the local $serverAccount variable with new management data
+                    $serverAccount['accountmanagement'] = $jsonData;
+                    
+                    // Optional: Log the sync (comment out if not needed)
+                    // error_log("Synced accountmanagement_configs to accountmanagement at " . date('Y-m-d H:i:s'));
+                }
+            }
+        }
+    } catch (Exception $e) {
+        // Silently fail - don't break the page if sync fails
+        // error_log("Error syncing accountmanagement_configs to accountmanagement: " . $e->getMessage());
+    }
 
     // ============================================
     // SECTION 3: HELPER FUNCTIONS
@@ -1808,30 +1862,40 @@
                 $updateTable = $serverAccountTable;
                 $updateId = 1;
                 
-                // Get current data
-                $stmt = $pdo->prepare("SELECT accountmanagement_configs FROM {$updateTable} WHERE id = ?");
+                // Get current configs data
+                $stmt = $pdo->prepare("SELECT accountmanagement_configs, accountmanagement FROM {$updateTable} WHERE id = ?");
                 $stmt->execute([$updateId]);
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                $currentData = !empty($result['accountmanagement_configs']) ? json_decode($result['accountmanagement_configs'], true) : [];
+                $configsData = !empty($result['accountmanagement_configs']) ? json_decode($result['accountmanagement_configs'], true) : [];
                 if (json_last_error() !== JSON_ERROR_NONE) {
-                    $currentData = [];
+                    $configsData = [];
                 }
                 
-                // Update the specific entry
+                $managementData = !empty($result['accountmanagement']) ? json_decode($result['accountmanagement'], true) : [];
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $managementData = [];
+                }
+                
+                // Update the specific entry in configs
                 if ($value === null) {
-                    // Delete the entry
-                    unset($currentData[$entry_key]);
+                    // Delete the entry from both
+                    unset($configsData[$entry_key]);
+                    unset($managementData[$entry_key]);
                 } else {
-                    // Update or add the entry
-                    $currentData[$entry_key] = $value;
+                    // Update or add the entry in both
+                    $configsData[$entry_key] = $value;
+                    $managementData[$entry_key] = $value;
                 }
                 
-                $jsonData = json_encode($currentData, JSON_PRETTY_PRINT);
-                $stmt = $pdo->prepare("UPDATE {$updateTable} SET accountmanagement_configs = ? WHERE id = ?");
-                $stmt->execute([$jsonData, $updateId]);
+                // Save both columns
+                $jsonConfigs = json_encode($configsData, JSON_PRETTY_PRINT);
+                $jsonManagement = json_encode($managementData, JSON_PRETTY_PRINT);
                 
-                echo json_encode(['success' => true, 'data' => $currentData]);
+                $stmt = $pdo->prepare("UPDATE {$updateTable} SET accountmanagement_configs = ?, accountmanagement = ? WHERE id = ?");
+                $stmt->execute([$jsonConfigs, $jsonManagement, $updateId]);
+                
+                echo json_encode(['success' => true, 'data' => $configsData, 'synced_to_management' => true]);
             } else {
                 echo json_encode(['error' => 'Invalid target type']);
             }

@@ -2675,18 +2675,7 @@
         div.textContent = text;
         return div.innerHTML;
     }
-    
-    function showMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message';
-        messageDiv.innerHTML = '<span style="color:' + (type === 'error' ? '#e74c3c' : '#2ecc71') + ';">' + message + '</span>';
-        const container = document.querySelector('.container');
-        if (!container) return;
-        const existingMessage = container.querySelector('.message');
-        if (existingMessage) existingMessage.remove();
-        container.insertBefore(messageDiv, container.firstChild);
-        setTimeout(() => messageDiv.remove(), 3000);
-    }
+
     
     document.addEventListener('DOMContentLoaded', function() {
         loadSystemConfig();

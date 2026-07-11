@@ -874,4 +874,178 @@
             }
         }, 30000);
     })();
+    
+    function showMessage(message, type) {
+        // Create or get the modal
+        let modal = document.getElementById('custom-message-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'custom-message-modal';
+            modal.className = 'custom-message-modal';
+            modal.innerHTML = `
+                <div class="custom-message-content">
+                    <div class="custom-message-icon" id="message-icon">✅</div>
+                    <div class="custom-message-text" id="message-text">Message</div>
+                    <button class="custom-message-btn" id="message-ok-btn">OK</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Add styles for the modal
+            if (!document.getElementById('custom-message-styles')) {
+                const style = document.createElement('style');
+                style.id = 'custom-message-styles';
+                style.textContent = `
+                    .custom-message-modal {
+                        display: none;
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        background: rgba(0,0,0,0.6);
+                        z-index: 99999;
+                        justify-content: center;
+                        align-items: center;
+                        animation: fadeIn 0.3s ease;
+                    }
+                    .custom-message-modal.show {
+                        display: flex;
+                    }
+                    .custom-message-content {
+                        background: var(--bg-secondary, #2d2d3a);
+                        border-radius: 16px;
+                        padding: 35px 45px;
+                        max-width: 450px;
+                        min-width: 320px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+                        text-align: center;
+                        border: 1px solid var(--border-color, #3a3a4a);
+                        animation: slideUp 0.3s ease;
+                    }
+                    .custom-message-icon {
+                        font-size: 48px;
+                        margin-bottom: 15px;
+                    }
+                    .custom-message-text {
+                        color: var(--text-primary, #e4e4e7);
+                        font-size: 16px;
+                        line-height: 1.6;
+                        margin-bottom: 25px;
+                        font-weight: 500;
+                    }
+                    .custom-message-btn {
+                        background: #3498db;
+                        color: white;
+                        border: none;
+                        padding: 10px 30px;
+                        border-radius: 8px;
+                        font-size: 15px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        transition: all 0.2s ease;
+                        min-width: 100px;
+                    }
+                    .custom-message-btn:hover {
+                        background: #2980b9;
+                        transform: translateY(-2px);
+                        box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+                    }
+                    .custom-message-btn:active {
+                        transform: translateY(0px);
+                    }
+                    .custom-message-modal.error .custom-message-icon {
+                        color: #e74c3c;
+                    }
+                    .custom-message-modal.error .custom-message-btn {
+                        background: #e74c3c;
+                    }
+                    .custom-message-modal.error .custom-message-btn:hover {
+                        background: #c0392b;
+                    }
+                    .custom-message-modal.success .custom-message-icon {
+                        color: #2ecc71;
+                    }
+                    .custom-message-modal.success .custom-message-btn {
+                        background: #27ae60;
+                    }
+                    .custom-message-modal.success .custom-message-btn:hover {
+                        background: #219a52;
+                    }
+                    .custom-message-modal.warning .custom-message-icon {
+                        color: #f39c12;
+                    }
+                    .custom-message-modal.warning .custom-message-btn {
+                        background: #f39c12;
+                    }
+                    .custom-message-modal.warning .custom-message-btn:hover {
+                        background: #d68910;
+                    }
+                    
+                    @keyframes fadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes slideUp {
+                        from { transform: translateY(30px); opacity: 0; }
+                        to { transform: translateY(0); opacity: 1; }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+        }
+        
+        // Set the message and icon based on type
+        const iconElement = document.getElementById('message-icon');
+        const textElement = document.getElementById('message-text');
+        const okButton = document.getElementById('message-ok-btn');
+        
+        // Determine icon and class based on type
+        let icon = '✅';
+        let modalClass = 'success';
+        if (type === 'error') {
+            icon = '❌';
+            modalClass = 'error';
+        } else if (type === 'warning') {
+            icon = '⚠️';
+            modalClass = 'warning';
+        } else {
+            icon = '✅';
+            modalClass = 'success';
+        }
+        
+        if (iconElement) iconElement.textContent = icon;
+        if (textElement) textElement.textContent = message;
+        
+        // Remove previous classes and add the appropriate one
+        modal.className = 'custom-message-modal';
+        modal.classList.add(modalClass);
+        
+        // Show the modal
+        modal.classList.add('show');
+        
+        // Remove any existing event listeners by cloning
+        const newOkButton = okButton.cloneNode(true);
+        okButton.parentNode.replaceChild(newOkButton, okButton);
+        
+        // Add click event to close modal
+        newOkButton.addEventListener('click', function() {
+            modal.classList.remove('show');
+        });
+        
+        // Also close when clicking outside the modal content
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        });
+        
+        // Auto-close after 3 seconds
+        if (window.messageTimeout) {
+            clearTimeout(window.messageTimeout);
+        }
+        window.messageTimeout = setTimeout(function() {
+            modal.classList.remove('show');
+        }, 3000);
+    }
 </script>
