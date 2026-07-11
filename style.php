@@ -1,137 +1,184 @@
-
 <style>
-    
-    :root { 
-        --bg: #fff; 
-        --text: #1c1e21; 
-        --accent: #2e8b57;
-        --input-bg: #f0f2f5; 
-        --section-bg: #fff;
-        --section-shadow: 0 4px 12px rgba(0,0,0,0.08); 
-        --header-bg: #f5f5f5; 
-        --profile-bg: #e9ebee; 
-        --profile-icon-bg: #ccc;
-        --profile-details-bg: #f9f9f9;
-        --profile-details-border: #ddd;
-        --bg-light: white;
-        --bg-dark: linear-gradient(135deg, #141e30 0%, #243b55 100%);
+    /* ===== ROOT VARIABLES - Complete Light/Dark Support ===== */
+    :root {
+        /* Light mode defaults */
+        --bg: #ffffff;
+        --bg-secondary: #f8f9fa;
+        --text: #1c1e21;
+        --text-secondary: #4a4a4a;
+        --text-muted: #6c757d;
         --text-light: #1e293b;
-        --text-dark: #f1f5f9;
-        --card-light: rgba(255, 255, 255, 0.95);
-        --card-dark: rgba(30, 41, 59, 0.95);
         --accent: #10b981;
         --accent-hover: #059669;
         --danger: #ef4444;
         --warning: #f59e0b;
         --info: #3b82f6;
         --success: #10b981;
-        --glass-border: rgba(255, 255, 255, 0.2);
+        --info-color: #3b82f6;
+        --success-color: #10b981;
+        --error-color: #dc2626;
+        --warning-color: #f59e0b;
+        --border-color: #d1d5db;
+        
+        /* Input specific */
+        --input-bg: #f0f2f5;
+        --input-border: #d1d5db;
+        --input-text: #1c1e21;
+        --input-placeholder: #9ca3af;
+        
+        /* Card & Section */
+        --section-bg: #ffffff;
+        --section-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        --card-light: rgba(255, 255, 255, 0.95);
+        --card-dark: rgba(30, 41, 59, 0.95);
+        --glass-border: rgba(0, 0, 0, 0.1);
+        
+        /* Shadows */
         --shadow-sm: 0 10px 40px rgba(0, 0, 0, 0.1);
         --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.15);
         --shadow-hover: 0 30px 70px rgba(16, 185, 129, 0.2);
         
-        /* Passkey modal original colors */
+        /* Modal specific */
+        --modal-overlay: rgba(0, 0, 0, 0.5);
+        --modal-bg: #ffffff;
+        --modal-text: #1c1e21;
+        
+        /* Passkey modal */
         --passkey-bg: rgba(255, 255, 255, 0.95);
         --passkey-text: #1c1e21;
-        --error-color: #ff6b6b;
+        
+        /* Split items */
+        --split-bg: rgba(0, 0, 0, 0.05);
+        --split-text: #1c1e21;
+        
+        /* Crypto details */
+        --crypto-details-bg: rgba(0, 0, 0, 0.05);
+        
+        /* Disconnect warning */
+        --disconnect-warning-bg: rgba(220, 38, 38, 0.08);
+        
+        /* Checkbox */
+        --checkbox-bg: rgba(0, 0, 0, 0.05);
+        
+        /* Re-enrollment */
+        --reenroll-bg: rgba(0, 0, 0, 0.05);
+        --consequence-bg: rgba(220, 38, 38, 0.08);
+        
+        /* Notifications */
+        --notification-item-bg: rgba(0, 0, 0, 0.03);
+        --notification-unread-bg: rgba(59, 130, 246, 0.08);
+        
+        /* Revenue */
+        --revenue-header-bg: rgba(0, 0, 0, 0.03);
+        --revenue-details-bg: rgba(0, 0, 0, 0.05);
+        --revenue-border: rgba(0, 0, 0, 0.05);
+        --address-bg: rgba(0, 0, 0, 0.05);
+        --history-bg: rgba(0, 0, 0, 0.05);
+        --history-border: rgba(0, 0, 0, 0.08);
+        
+        /* Text colors for specific elements */
+        --text-color: #1c1e21;
+        --profile-text: #1c1e21;
+        --profile-details-text: #1c1e21;
     }
+
+    /* ===== DARK MODE OVERRIDES ===== */
     @media (prefers-color-scheme: dark) {
-        :root { 
-            --bg: #000; 
-            --text: #e4e6eb; 
-            --accent: #2e8b57;
-            --input-bg: #1a1a1a; 
-            --section-bg: rgba(255,255,255,0.05); 
-            --section-shadow: none; 
-            --header-bg: rgba(0,0,0,0.3);
-            --profile-bg: #1a1a1a; 
-            --profile-icon-bg: #444;
-            --profile-details-bg: #0d0d0d;
-            --profile-details-border: #333;
-            --bg-light: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        :root {
+            --bg: #000000;
+            --bg-secondary: #111827;
+            --text: #e4e6eb;
+            --text-secondary: #b0b8c8;
+            --text-muted: #8b95a9;
             --text-light: #f1f5f9;
+            --input-bg: #1a1a1a;
+            --input-border: #374151;
+            --input-text: #e4e6eb;
+            --input-placeholder: #6b7280;
+            --section-bg: rgba(255,255,255,0.05);
+            --section-shadow: none;
             --card-light: rgba(37, 52, 77, 0.6);
+            --card-dark: rgba(30, 41, 59, 0.95);
             --glass-border: rgba(255, 255, 255, 0.1);
-            /* Preserve passkey dark mode colors */
-            --passkey-bg: rgba(40, 40, 40, 0.9);
+            --shadow-sm: 0 10px 40px rgba(0, 0, 0, 0.3);
+            --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.4);
+            --shadow-hover: 0 30px 70px rgba(16, 185, 129, 0.15);
+            --modal-overlay: rgba(0, 0, 0, 0.85);
+            --modal-bg: #1a1a2e;
+            --modal-text: #e4e6eb;
+            --passkey-bg: rgba(40, 40, 40, 0.95);
             --passkey-text: #e4e6eb;
+            --error-color: #ff6b6b;
+            --split-bg: rgba(255, 255, 255, 0.05);
+            --split-text: #e4e6eb;
+            --crypto-details-bg: rgba(255, 255, 255, 0.05);
+            --disconnect-warning-bg: rgba(255, 107, 107, 0.08);
+            --checkbox-bg: rgba(255, 255, 255, 0.05);
+            --reenroll-bg: rgba(255, 255, 255, 0.05);
+            --consequence-bg: rgba(255, 107, 107, 0.08);
+            --notification-item-bg: rgba(255, 255, 255, 0.03);
+            --notification-unread-bg: rgba(59, 130, 246, 0.15);
+            --revenue-header-bg: rgba(255, 255, 255, 0.03);
+            --revenue-details-bg: rgba(255, 255, 255, 0.05);
+            --revenue-border: rgba(255, 255, 255, 0.05);
+            --address-bg: rgba(255, 255, 255, 0.05);
+            --history-bg: rgba(255, 255, 255, 0.05);
+            --history-border: rgba(255, 255, 255, 0.08);
+            --text-color: #e4e6eb;
+            --profile-text: #e4e6eb;
+            --profile-details-text: #e4e6eb;
         }
     }
+
+    /* ===== BASE RESET ===== */
     * { margin:0; padding:0; box-sizing:border-box; }
-    body {
-    font-family: 'Segoe UI', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    height: 100vh;
-    overflow: hidden; /* Added: prevents vertical scroll on body */
-    position: relative;
-}
-html, body { 
-    -ms-overflow-style: none; 
-    scrollbar-width: none; 
-}
-html::-webkit-scrollbar, body::-webkit-scrollbar { 
-    display: none; 
-}
-.container, .modal-content { 
-    overflow-y: auto; 
-    -ms-overflow-style: none; 
-    scrollbar-width: none; 
-}
-.container::-webkit-scrollbar, .modal-content::-webkit-scrollbar { 
-    display: none; 
-}
-/* Background effects */
-body::before {
-    content: ""; 
-    position: absolute; 
-    inset: 0;
-    background: var(--bg-light);
-    background-size: cover, cover, 120px 120px; 
-    opacity: 0.5; 
-    pointer-events: none; 
-    z-index: -1;
-}
-@media (prefers-color-scheme: light) {
-    body::before { 
-        opacity: 0.1; 
-        background-blend-mode: multiply; 
-    }
-}
-.custom-body {
-    width: 100%;
-    height: 100%;
-    background: var(--bg-light);
-    overflow-y: auto; /* Allows vertical scroll only in custom-body */
-    -ms-overflow-style: none; /* Hides scrollbar in IE/Edge */
-    scrollbar-width: none; /* Hides scrollbar in Firefox */
-}
-.custom-body::-webkit-scrollbar {
-    display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
-}
-</style>
-<style>
     
-
-    /* Prevent pull-to-refresh reload */
-    html {
-        overscroll-behavior: none;
-    }
-
     body {
-        overscroll-behavior: none;
+        font-family: 'Segoe UI', sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        overflow: hidden;
         position: relative;
     }
 
-    /* For any scrollable containers */
-    .scrollable-container {
-        overscroll-behavior: contain;
+    html, body { 
+        -ms-overflow-style: none; 
+        scrollbar-width: none; 
     }
-    /* ===== PASSKEY MODAL - PRESERVED ORIGINAL STYLES ===== */
+    html::-webkit-scrollbar, body::-webkit-scrollbar { 
+        display: none; 
+    }
+
+    /* ===== SCROLLABLE CONTAINERS ===== */
+    .container, .modal-content, .custom-body {
+        overflow-y: auto; 
+        -ms-overflow-style: none; 
+        scrollbar-width: none; 
+    }
+    .container::-webkit-scrollbar, 
+    .modal-content::-webkit-scrollbar, 
+    .custom-body::-webkit-scrollbar { 
+        display: none; 
+    }
+
+    .custom-body {
+        width: 100%;
+        height: 100%;
+        background: var(--bg-secondary);
+        overflow-y: auto;
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    .custom-body::-webkit-scrollbar {
+        display: none;
+    }
+
+    /* ===== PASSKEY MODAL ===== */
     .passkey-overlay {
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.5);
+        background: var(--modal-overlay);
         backdrop-filter: blur(8px);
         display: flex;
         align-items: center;
@@ -150,7 +197,7 @@ body::before {
         max-width: 480px;
         text-align: center;
         box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid var(--glass-border);
     }
 
     .passkey-screen h2 {
@@ -165,24 +212,23 @@ body::before {
         margin: 1.5rem 0;
         opacity: 0.9;
         font-size: 1rem;
+        color: var(--passkey-text);
     }
 
     .passkey-screen input[type="password"] {
         width: 100%;
         padding: 16px;
         margin: 20px 0;
-        border: 1px solid rgba(255,255,255,0.2);
+        border: 1px solid var(--input-border);
         border-radius: 12px;
         font-size: 1.1rem;
         text-align: center;
-        background: rgba(0,0,0,0.05);
-        color: var(--passkey-text);
+        background: var(--input-bg);
+        color: var(--input-text);
     }
 
-    @media (prefers-color-scheme: dark) {
-        .passkey-screen input[type="password"] { 
-            background: rgba(255,255,255,0.1); 
-        }
+    .passkey-screen input[type="password"]::placeholder {
+        color: var(--input-placeholder);
     }
 
     .passkey-screen .error-message { 
@@ -221,10 +267,10 @@ body::before {
     }
 
     .passkey-screen a[href*="logout"] {
-        color: #ff6b6b;
+        color: var(--danger);
     }
-    /* ===== END PASSKEY MODAL STYLES ===== */
 
+    /* ===== DASHBOARD ===== */
     .dashboard-wrapper {
         width: 100%;
         max-width: 1300px;
@@ -237,7 +283,6 @@ body::before {
         scrollbar-width: none;
         position: relative;
     }
-
     .dashboard-wrapper::-webkit-scrollbar {
         display: none;
     }
@@ -245,7 +290,7 @@ body::before {
     h1 {
         font-size: 3.5rem;
         font-weight: 800;
-        background: linear-gradient(135deg, var(--accent) 0%, #3b82f6 100%);
+        background: linear-gradient(135deg, var(--accent) 0%, var(--info) 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -261,6 +306,7 @@ body::before {
         margin-bottom: 2rem;
         opacity: 0.9;
         animation: fadeInUp 0.6s ease 0.2s both;
+        color: var(--text);
     }
 
     .welcome strong {
@@ -282,17 +328,15 @@ body::before {
         .stats-grid {
             grid-template-columns: 1fr;
         }
-        
         h1 {
             font-size: 2.5rem;
         }
-        
         .dashboard-wrapper {
             padding: 1rem;
         }
     }
 
-    /* Enhanced Stat Cards */
+    /* ===== STAT CARDS ===== */
     .stat-card {
         position: relative;
         background: var(--card-light);
@@ -305,15 +349,12 @@ body::before {
         transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         overflow: hidden;
         animation: cardAppear 0.5s ease;
+        color: var(--text);
     }
 
     .stat-card:hover {
         transform: translateY(-10px) scale(1.02);
         box-shadow: var(--shadow-hover);
-    }
-
-    .stat-card:hover::before {
-        transform: translateX(0);
     }
 
     .stat-card h3 {
@@ -323,6 +364,7 @@ body::before {
         letter-spacing: 1px;
         opacity: 0.7;
         margin-bottom: 1rem;
+        color: var(--text-secondary);
     }
 
     .stat-card h2 {
@@ -333,6 +375,7 @@ body::before {
         transition: all 0.3s ease;
         position: relative;
         display: inline-block;
+        color: var(--text);
     }
 
     .stat-card h2::after {
@@ -352,14 +395,26 @@ body::before {
         width: 50%;
     }
 
-    /* Balance Toggle Button */
+    .stat-details-info {
+        font-size: 0.9rem;
+        opacity: 0.6;
+        padding: 0.5rem;
+        transition: all 0.3s ease;
+        color: var(--text-secondary);
+    }
+
+    .stat-card:hover .stat-details-info {
+        opacity: 0.9;
+    }
+
+    /* ===== BALANCE TOGGLE ===== */
     .balance-toggle-btn {
         position: absolute;
         top: 15px;
         right: 15px;
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.05);
         border: 1px solid var(--glass-border);
-        color: var(--text-light);
+        color: var(--text);
         font-size: 1.25rem;
         cursor: pointer;
         padding: 8px;
@@ -377,7 +432,7 @@ body::before {
         transform: rotate(15deg);
     }
 
-    /* Profit/Loss Colors with Animation */
+    /* ===== PROFIT/LOSS COLORS ===== */
     .profit-positive {
         color: var(--success) !important;
         text-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
@@ -388,25 +443,13 @@ body::before {
         text-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
     }
 
-    /* Stat Details */
-    .stat-details-info {
-        font-size: 0.9rem;
-        opacity: 0.6;
-        padding: 0.5rem;
-        transition: all 0.3s ease;
-    }
-
-    .stat-card:hover .stat-details-info {
-        opacity: 0.9;
-    }
-
-
-    /* Loyalty Card */
+    /* ===== LOYALTY CARD ===== */
     .stat-card.loyalty-card {
         grid-column: 1 / -1;
         max-width: 800px;
         margin: 2rem auto;
         background: var(--card-light);
+        color: var(--text);
     }
 
     .loyalty-status-msg {
@@ -426,17 +469,19 @@ body::before {
         opacity: 0.9;
         max-width: 600px;
         margin: 0 auto 1rem;
+        color: var(--text);
     }
 
     .contract-dates {
         display: inline-block;
         padding: 0.5rem 1.5rem;
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.05);
         border-radius: 50px;
         font-size: 0.9rem;
         font-weight: 500;
         margin: 0.5rem;
         backdrop-filter: blur(10px);
+        color: var(--text);
     }
 
     .contract-days-left {
@@ -450,7 +495,12 @@ body::before {
         margin-left: 0.5rem;
     }
 
-    /* Loyalty Buttons */
+    .loyalty-card small {
+        color: var(--text-muted);
+        opacity: 0.6;
+    }
+
+    /* ===== LOYALTY BUTTONS ===== */
     .loyalty-card button {
         margin: 1.5rem auto 0;
         padding: 1rem 3rem;
@@ -488,12 +538,67 @@ body::before {
         cursor: default !important;
     }
 
-    /* Dashboard Disclaimer */
+    .btn-loyalty-apply {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+        width: 100%;
+    }
+
+    .btn-loyalty-apply:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-loyalty-deposit {
+        background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        width: 100%;
+    }
+
+    /* ===== STATUS BADGES ===== */
+    .balance-status-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+
+    .balance-status-unverified {
+        background: var(--danger);
+        color: white;
+    }
+
+    .balance-status-pending {
+        background: var(--warning);
+        color: white;
+    }
+
+    .balance-status-verified {
+        background: var(--success);
+        color: white;
+    }
+
+    /* ===== DISCLAIMER ===== */
     .dashboard-disclaimer {
         text-align: center;
         margin: 1.5rem auto;
         padding: 1rem 2rem;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.2));
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15));
         border: 1px solid rgba(16, 185, 129, 0.3);
         border-radius: 50px;
         font-weight: 600;
@@ -501,56 +606,43 @@ body::before {
         max-width: 600px;
         backdrop-filter: blur(10px);
         animation: slideIn 0.5s ease;
-    }
-    
-
-    /* Encouragement Note */
-    /* Replace these existing styles */
-    .note-btndanger{
-        display: flex;
-        justify-content: center;
-        width: 100%;
-    }
-    .note-btndanger-block{
-        width: auto;
+        color: var(--text);
     }
 
-    /* With these updated styles */
-    .note-btndanger {
-        display: flex;
-        justify-content: center;
-        width: 100%;
-        margin: 20px 0;
+    .payment-required-badge {
+        background: var(--danger);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: bold;
+        margin-left: 10px;
     }
 
-    .note-btndanger-block {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-        max-width: 600px;
-        width: 100%;
-    }
-
-    .note {
-        opacity: 0.8;
-        line-height: 1.6;
-        font-size: 15px;
-    }
     .encouragement-note {
         text-align: center;
         margin: 1rem auto;
         padding: 1rem;
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(239, 68, 68, 0.2));
+        background: rgba(245, 158, 11, 0.1);
         border: 1px solid var(--warning);
         border-radius: 16px;
         font-style: italic;
         font-size: 1.1rem;
         max-width: 800px;
         animation: pulse 2s infinite;
+        color: var(--text);
     }
 
-    /* Danger Button */
+    .threshold-warning {
+        background: rgba(255, 193, 7, 0.1);
+        border-left: 4px solid var(--warning);
+        padding: 12px;
+        margin: 10px 0;
+        font-size: 0.9rem;
+        color: var(--text);
+    }
+
+    /* ===== DANGER BUTTON ===== */
     .btn-danger {
         display: block;
         margin-bottom: 10px;
@@ -573,30 +665,38 @@ body::before {
         box-shadow: 0 10px 30px rgba(239, 68, 68, 0.5);
     }
 
-    /* Logout Link */
-    .logout-link-p{
+    .note-btndanger {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        margin: 20px 0;
+    }
+
+    .note-btndanger-block {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        max-width: 600px;
+        width: 100%;
+    }
+
+    .logout-link-p {
         margin-top: 20px;
         margin-bottom: 70px;
     }
-    .logout-link {
-        display: block;
-        text-align: center;
-        margin-top: 1rem;
-        padding: 0.5rem;
-        color: var(--text-light);
-        text-decoration: none;
-        opacity: 0.6;
-        transition: all 0.3s ease;
-        font-size: 0.95rem;
-    }
 
-    .logout-link:hover {
-        opacity: 1;
+    .logout-link-p a {
         color: var(--danger);
-        transform: translateY(-2px);
+        text-decoration: none;
+        transition: opacity 0.3s;
     }
 
-    /* Blur Mode Effect */
+    .logout-link-p a:hover {
+        opacity: 0.8;
+    }
+
+    /* ===== BLUR MODE ===== */
     .dashboard-wrapper.blur-mode .stat-card h2 {
         filter: blur(8px);
         transition: filter 0.3s ease;
@@ -607,12 +707,41 @@ body::before {
         filter: blur(6px);
     }
 
-    /* Modal Styles (for non-passkey modals) */
+    /* ===== REVENUE HISTORY BUTTON ===== */
+    .btn-revenue-history {
+        background: none;
+        color: var(--text-secondary);
+        border: none;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        padding: 8px 16px;
+        margin-top: 8px;
+    }
+
+    .btn-revenue-history:hover {
+        color: var(--accent);
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    .invested_with-value {
+        font-size: 12px;
+        color: var(--success);
+    }
+
+    .revenue-detail-value.broker-name {
+        color: var(--accent);
+        font-weight: 500;
+    }
+
+    /* ===== MODALS ===== */
     .modal {
         display: none;
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.7);
+        background: var(--modal-overlay);
         backdrop-filter: blur(10px);
         align-items: center;
         justify-content: center;
@@ -626,7 +755,8 @@ body::before {
     }
 
     .modal-content {
-        background: var(--card-light);
+        background: var(--modal-bg);
+        color: var(--modal-text);
         backdrop-filter: blur(20px);
         padding: 2.5rem;
         border-radius: 24px;
@@ -643,19 +773,187 @@ body::before {
         font-size: 2rem;
         font-weight: 700;
         margin-bottom: 1rem;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: var(--modal-text);
+        background: none;
+        -webkit-text-fill-color: var(--modal-text);
     }
 
-    /* Split Items in Modal */
+    .modal-content p {
+        color: var(--modal-text);
+        opacity: 0.8;
+    }
+
+    .modal-content label {
+        color: var(--modal-text);
+    }
+
+    .modal-content small {
+        color: var(--text-muted);
+    }
+
+    .modal-actions {
+        display: flex;
+        gap: 1rem;
+        margin-top: 2rem;
+    }
+
+    .modal-actions button {
+        flex: 1;
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        color: white;
+    }
+
+    .modal-actions button:hover {
+        transform: translateY(-2px);
+    }
+
+    .modal-actions-vertical {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 1rem;
+    }
+
+    /* ===== DISCONNECT MODAL ===== */
+    .disconnect-verify-section {
+        margin: 1.5rem 0;
+        text-align: left;
+    }
+
+    .disconnect-verify-section label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+        color: var(--modal-text);
+    }
+
+    .disconnect-verify-section input {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid var(--input-border);
+        border-radius: 8px;
+        background: var(--input-bg);
+        color: var(--input-text);
+        font-size: 1rem;
+        margin-bottom: 1rem;
+        box-sizing: border-box;
+    }
+
+    .disconnect-verify-section input::placeholder {
+        color: var(--input-placeholder);
+    }
+
+    .disconnect-verify-section input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .disconnect-warning-note {
+        background: var(--disconnect-warning-bg);
+        border-left: 3px solid var(--danger);
+        padding: 1rem;
+        margin: 1.5rem 0;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        color: var(--modal-text);
+    }
+
+    .disconnect-warning-note strong {
+        color: var(--danger);
+    }
+
+    .disconnect-errors {
+        background: rgba(220, 38, 38, 0.1);
+        border: 1px solid var(--danger);
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .disconnect-errors ul {
+        margin: 0;
+        padding-left: 1.25rem;
+    }
+
+    .disconnect-errors li {
+        color: var(--danger);
+        font-size: 0.85rem;
+        margin: 0.25rem 0;
+    }
+
+    .btn-danger-final {
+        background: var(--danger);
+        color: white;
+        border: none;
+        padding: 14px;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .btn-danger-final:hover {
+        background: #dc2626;
+        transform: scale(1.02);
+    }
+
+    .btn-danger-final:disabled {
+        background: #555;
+        cursor: not-allowed;
+        opacity: 0.6;
+        transform: none;
+    }
+
+    .btn-cancel-final {
+        background: #6b7280;
+        color: white;
+        border: none;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .btn-cancel-final:hover {
+        background: #7b8290;
+    }
+
+    /* ===== SPLIT MODAL ===== */
+    .unpaid-warning {
+        background: rgba(220, 38, 38, 0.08);
+        border-left: 4px solid var(--danger);
+        padding: 12px;
+        margin: 10px 0;
+        font-size: 0.9rem;
+        color: var(--modal-text);
+    }
+
+    .unpaid-warning strong {
+        color: var(--danger);
+    }
+
+    .split-container {
+        display: flex;
+        gap: 1.5rem;
+        margin: 1.5rem 0;
+    }
+
     .split-item {
-        background: rgba(255, 255, 255, 0.05);
+        background: var(--split-bg);
         padding: 1.5rem;
         border-radius: 16px;
         margin: 1rem 0;
         border: 1px solid var(--glass-border);
         transition: all 0.3s ease;
+        flex: 1;
+        color: var(--split-text);
     }
 
     .split-item:hover {
@@ -668,9 +966,63 @@ body::before {
         font-size: 2rem;
         font-weight: 800;
         margin-bottom: 0.5rem;
+        color: var(--split-text);
     }
 
-    /* Coin Selector */
+    .split-item p {
+        color: var(--split-text);
+        opacity: 0.8;
+    }
+
+    .split-total {
+        font-size: 1.2rem;
+        font-weight: 600;
+        text-align: center;
+        padding: 0.5rem;
+        background: rgba(16, 185, 129, 0.1);
+        border-radius: 8px;
+        color: var(--modal-text);
+    }
+
+    .btn-withdraw {
+        background: var(--success);
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin-top: 10px;
+        display: block;
+        width: 100%;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .btn-withdraw:hover {
+        opacity: 0.85;
+        transform: translateY(-2px);
+    }
+
+    .btn-pay {
+        background: var(--info);
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin-top: 10px;
+        display: block;
+        width: 100%;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .btn-pay:hover {
+        opacity: 0.85;
+        transform: translateY(-2px);
+    }
+
+    /* ===== PAYMENT MODAL ===== */
     .coin-selector {
         display: flex;
         gap: 1rem;
@@ -681,12 +1033,17 @@ body::before {
         flex: 1;
         padding: 1rem;
         text-align: center;
-        background: rgba(255, 255, 255, 0.05);
+        background: var(--split-bg);
         border: 2px solid transparent;
         border-radius: 12px;
         cursor: pointer;
         font-weight: 600;
         transition: all 0.3s ease;
+        color: var(--modal-text);
+    }
+
+    .coin-selector input[type="radio"] {
+        display: none;
     }
 
     .coin-selector input[type="radio"]:checked + label {
@@ -697,10 +1054,42 @@ body::before {
         box-shadow: 0 5px 20px rgba(16, 185, 129, 0.3);
     }
 
-    .coin-selector input[type="radio"] {
-        display: none;
+    .crypto-details {
+        background: var(--crypto-details-bg);
+        padding: 1rem;
+        border-radius: 12px;
+        margin: 1rem 0;
     }
-    /* Payment Modal Styles */
+
+    .crypto-details p {
+        margin: 0.5rem 0;
+        font-size: 0.9rem;
+        color: var(--modal-text);
+    }
+
+    .crypto-details strong {
+        color: var(--accent);
+    }
+
+    .btc-address {
+        display: block;
+        padding: 1rem;
+        background: var(--address-bg);
+        border-radius: 12px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 0.9rem;
+        word-break: break-all;
+        border: 1px dashed var(--accent);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        color: var(--modal-text);
+    }
+
+    .btc-address:hover {
+        background: rgba(16, 185, 129, 0.1);
+        transform: scale(1.02);
+    }
+
     .btn-full {
         width: 100%;
         padding: 14px;
@@ -710,6 +1099,7 @@ body::before {
         font-size: 1rem;
         cursor: pointer;
         transition: all 0.3s ease;
+        color: white;
     }
 
     .btn-paid {
@@ -731,19 +1121,19 @@ body::before {
     }
 
     #copyAddressBtn {
-        background: rgba(255, 255, 255, 0.1);
-        color: var(--text-light);
+        background: var(--split-bg);
+        color: var(--modal-text);
         border: 1px solid var(--glass-border);
         margin: 1rem 0;
     }
 
     #copyAddressBtn:hover {
-        background: rgba(16, 185, 129, 0.2);
+        background: rgba(16, 185, 129, 0.1);
         border-color: var(--accent);
         transform: translateY(-2px);
     }
 
-    /* Checkbox Container Styles */
+    /* ===== CHECKBOX CONTAINER ===== */
     .checkbox-container {
         display: flex;
         align-items: center;
@@ -751,10 +1141,11 @@ body::before {
         gap: 10px;
         margin: 1.5rem 0;
         padding: 12px;
-        background: rgba(255, 255, 255, 0.05);
+        background: var(--checkbox-bg);
         border-radius: 12px;
         cursor: pointer;
         transition: all 0.3s ease;
+        color: var(--modal-text);
     }
 
     .checkbox-container:hover {
@@ -772,55 +1163,24 @@ body::before {
         transform: scale(1.05);
     }
 
-    /* Crypto Details Section */
-    .crypto-details {
-        background: rgba(0, 0, 0, 0.2);
-        padding: 1rem;
-        border-radius: 12px;
-        margin: 1rem 0;
-    }
-
-    .crypto-details p {
-        margin: 0.5rem 0;
-        font-size: 0.9rem;
-    }
-
-    .crypto-details strong {
-        color: var(--accent);
-    }
-
-    /* Disclaimer Text */
+    /* ===== DISCLAIMER TEXT ===== */
     .disclaimer {
         font-size: 0.75rem;
         text-align: center;
         margin-top: 1rem;
         opacity: 0.6;
         padding: 0.5rem;
+        color: var(--modal-text);
     }
 
-    /* Split Container */
-    .split-container {
-        display: flex;
-        gap: 1.5rem;
-        margin: 1.5rem 0;
-    }
-
-    .split-total {
-        font-size: 1.2rem;
-        font-weight: 600;
-        text-align: center;
-        padding: 0.5rem;
-        background: rgba(16, 185, 129, 0.1);
-        border-radius: 8px;
-    }
-    /* Hide scrollbar for modal content */
+    /* ===== HIDE SCROLLBAR FOR MODAL CONTENT ===== */
     .modal-content {
-        -ms-overflow-style: none;  /* IE and Edge */
-        scrollbar-width: none;  /* Firefox */
+        -ms-overflow-style: none;
+        scrollbar-width: none;
     }
 
     .modal-content::-webkit-scrollbar {
-        display: none;  /* Chrome, Safari, Opera */
+        display: none;
     }
 
     @media (max-width: 768px) {
@@ -828,34 +1188,18 @@ body::before {
             flex-direction: column;
             gap: 1rem;
         }
+        .coin-selector {
+            flex-direction: column;
+        }
     }
 
-    /* Crypto Address Display */
-    .btc-address {
-        display: block;
-        padding: 1rem;
-        background: rgba(0, 0, 0, 0.1);
-        border-radius: 12px;
-        font-family: 'Monaco', 'Menlo', monospace;
-        font-size: 0.9rem;
-        word-break: break-all;
-        border: 1px dashed var(--accent);
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    .btc-address:hover {
-        background: rgba(16, 185, 129, 0.1);
-        transform: scale(1.02);
-    }
-
-    /* History Section */
+    /* ===== HISTORY SECTION ===== */
     .history-section {
         margin-top: 1rem;
         max-height: 300px;
         overflow-y: auto;
         padding: 1rem;
-        background: rgba(0, 0, 0, 0.05);
+        background: var(--history-bg);
         border-radius: 12px;
     }
 
@@ -863,9 +1207,10 @@ body::before {
         display: flex;
         justify-content: space-between;
         padding: 0.75rem 1rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-bottom: 1px solid var(--history-border);
         transition: all 0.3s ease;
         border-radius: 8px;
+        color: var(--modal-text);
     }
 
     .history-item:hover {
@@ -875,6 +1220,7 @@ body::before {
 
     .history-symbol {
         font-weight: 600;
+        color: var(--modal-text);
     }
 
     .history-amount-won {
@@ -887,28 +1233,7 @@ body::before {
         font-weight: 700;
     }
 
-    /* Modal Actions */
-    .modal-actions {
-        display: flex;
-        gap: 1rem;
-        margin-top: 2rem;
-    }
-
-    .modal-actions button {
-        flex: 1;
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 12px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    .modal-actions button:hover {
-        transform: translateY(-2px);
-    }
-
-    /* Animations */
+    /* ===== ANIMATIONS ===== */
     @keyframes fadeInDown {
         from {
             opacity: 0;
@@ -982,56 +1307,7 @@ body::before {
         }
     }
 
-    /* Responsive Adjustments */
-    @media (max-width: 768px) {
-        .stat-card h2 {
-            font-size: 2rem;
-        }
-        
-        .trades-count {
-            font-size: 3rem;
-        }
-        
-        .loyalty-status-msg {
-            font-size: 1.2rem;
-        }
-        
-        .modal-content {
-            padding: 1.5rem;
-        }
-        
-        .coin-selector {
-            flex-direction: column;
-        }
-    }
-
-    /* Loading States */
-    .loading {
-        position: relative;
-        overflow: hidden;
-    }
-
-    .loading::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-        animation: loading 1.5s infinite;
-    }
-
-    @keyframes loading {
-        0% {
-            transform: translateX(-100%);
-        }
-        100% {
-            transform: translateX(100%);
-        }
-    }
-
-    /* Custom Scrollbar */
+    /* ===== CUSTOM SCROLLBAR ===== */
     ::-webkit-scrollbar {
         width: 8px;
     }
@@ -1049,176 +1325,88 @@ body::before {
     ::-webkit-scrollbar-thumb:hover {
         background: linear-gradient(135deg, var(--accent-hover), #2563eb);
     }
-    /* Additional styles for re-enrollment modal */
+
+    /* ===== RE-ENROLLMENT MODAL ===== */
     .reenroll-instructions {
-        background: rgba(255, 255, 255, 0.05);
-        border-left: 4px solid var(--info-color);
+        background: var(--reenroll-bg);
+        border-left: 4px solid var(--info);
         padding: 1.5rem;
         margin: 1.5rem 0;
         border-radius: 0 8px 8px 0;
         text-align: left;
     }
-    
+
     .reenroll-instructions h4 {
-        color: var(--info-color);
+        color: var(--info);
         margin-bottom: 1rem;
         font-size: 1.1rem;
     }
-    
+
     .reenroll-instructions ul {
         list-style: none;
         padding-left: 0;
     }
-    
+
     .reenroll-instructions ul li {
         position: relative;
         padding-left: 28px;
         margin-bottom: 12px;
-        color: #e0e0e0;
+        color: var(--modal-text);
         font-size: 0.95rem;
     }
-    
+
     .reenroll-instructions ul li::before {
         content: '⚠';
         position: absolute;
         left: 0;
         top: 0;
-        color: var(--warning-color);
+        color: var(--warning);
         font-size: 1.1rem;
     }
-    
+
     .reenroll-instructions .consequence-note {
         margin-top: 1.2rem;
         padding: 0.8rem;
-        background: rgba(255, 107, 107, 0.1);
+        background: var(--consequence-bg);
         border-radius: 6px;
         font-size: 0.9rem;
-        color: #ff6b6b;
+        color: var(--danger);
         font-weight: 500;
     }
-    
+
     .checkbox-container-legal {
         display: flex;
         align-items: flex-start;
         gap: 12px;
         margin: 1.5rem 0;
         padding: 1rem;
-        background: rgba(255, 255, 255, 0.03);
+        background: var(--checkbox-bg);
         border-radius: 8px;
         cursor: pointer;
+        color: var(--modal-text);
     }
-    
+
     .checkbox-container-legal input[type="checkbox"] {
         margin-top: 3px;
         width: 18px;
         height: 18px;
-        accent-color: var(--success-color);
+        accent-color: var(--success);
         flex-shrink: 0;
     }
-    
+
     .checkbox-container-legal label {
         font-size: 0.9rem;
-        color: #ccc;
+        color: var(--modal-text);
         line-height: 1.5;
         cursor: pointer;
     }
-    
-    .passkey-verification-overlay {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.85);
-        z-index: 10001;
-        align-items: center;
-        justify-content: center;
-    }
-    
-    .passkey-verification-overlay.active {
-        display: flex;
-    }
-    
-    .passkey-verification-box {
-        background: var(--passkey-bg);
-        padding: 2.5rem;
-        border-radius: 16px;
-        width: 90%;
-        max-width: 450px;
-        text-align: center;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    
-    .passkey-verification-box h3 {
-        margin-bottom: 1rem;
-        color: var(--accent);
-    }
-    
-    .passkey-verification-box input {
-        width: 100%;
-        padding: 12px;
-        margin: 10px 0;
-        border: 2px solid rgba(255, 255, 255, 0.2);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.05);
-        color: #fff;
-        font-size: 1rem;
-        transition: border-color 0.3s;
-    }
-    
-    .passkey-verification-box input:focus {
-        outline: none;
-        border-color: var(--accent);
-    }
-    
-    .passkey-verification-box .error-message {
-        color: #ff6b6b;
-        margin-top: 10px;
-        display: none;
-    }
-    
-    .passkey-verification-box .btn-verify-passkey {
-        width: 100%;
-        padding: 12px;
-        margin-top: 15px;
-        background: var(--info-color);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-size: 1rem;
-        background: #1ab5b2;
-        cursor: pointer;
-        transition: background 0.3s;
-    }
-    
-    .passkey-verification-box .btn-verify-passkey:hover {
-        background: #1a6fb5;
-    }
-    
-    .passkey-verification-box .btn-verify-passkey:disabled {
-        background: #555;
-        cursor: not-allowed;
-    }
-    
-    .passkey-verification-box .btn-cancel {
-        width: 100%;
-        padding: 12px;
-        margin-top: 10px;
-        background: #555;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-size: 1rem;
-        cursor: pointer;
-    }
-    
+
     .reenroll-confirm-btn {
         width: 100%;
         padding: 14px;
         margin-top: 15px;
-        background: var(--success-color);
-        color: #e0f2ffa9;
+        background: var(--success);
+        color: white;
         border: none;
         border-radius: 8px;
         font-size: 1.1rem;
@@ -1226,124 +1414,125 @@ body::before {
         cursor: pointer;
         transition: all 0.3s;
     }
-    
+
     .reenroll-confirm-btn:disabled {
         background: #555;
         color: #999;
         cursor: not-allowed;
         opacity: 0.6;
     }
-    
+
     .reenroll-confirm-btn:not(:disabled):hover {
         background: #27ae60;
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(46, 204, 113, 0.3);
     }
-    /* Enhanced Disconnect Modal Styles */
-    .disconnect-verify-section {
-        margin: 1.5rem 0;
-        text-align: left;
+
+    /* ===== PASSKEY VERIFICATION OVERLAY ===== */
+    .passkey-verification-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: var(--modal-overlay);
+        z-index: 10001;
+        align-items: center;
+        justify-content: center;
     }
-    
-    .disconnect-verify-section label {
-        display: block;
-        margin-bottom: 0.5rem;
-        font-weight: 600;
-        color: var(--text-color);
+
+    .passkey-verification-overlay.active {
+        display: flex;
     }
-    
-    .disconnect-verify-section input {
+
+    .passkey-verification-box {
+        background: var(--passkey-bg);
+        padding: 2.5rem;
+        border-radius: 16px;
+        width: 90%;
+        max-width: 450px;
+        text-align: center;
+        border: 1px solid var(--glass-border);
+    }
+
+    .passkey-verification-box h3 {
+        margin-bottom: 1rem;
+        color: var(--passkey-text);
+        font-size: 1.5rem;
+    }
+
+    .passkey-verification-box p {
+        color: var(--passkey-text);
+        opacity: 0.8;
+    }
+
+    .passkey-verification-box input {
         width: 100%;
         padding: 12px;
-        border: 1px solid var(--border-color);
+        margin: 10px 0;
+        border: 2px solid var(--input-border);
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.05);
-        color: var(--text-color);
+        background: var(--input-bg);
+        color: var(--input-text);
         font-size: 1rem;
-        margin-bottom: 1rem;
-        box-sizing: border-box;
+        transition: border-color 0.3s;
     }
-    
-    .disconnect-verify-section input:focus {
+
+    .passkey-verification-box input::placeholder {
+        color: var(--input-placeholder);
+    }
+
+    .passkey-verification-box input:focus {
         outline: none;
         border-color: var(--accent);
     }
-    
-    .disconnect-warning-note {
-        background: rgba(231, 76, 60, 0.1);
-        border-left: 3px solid #e74c3c;
-        padding: 1rem;
-        margin: 1.5rem 0;
-        border-radius: 8px;
-        font-size: 0.9rem;
-        color: #ff9f9f;
+
+    .passkey-verification-box .error-message {
+        color: var(--error-color);
+        margin-top: 10px;
+        display: none;
     }
-    
-    .disconnect-errors {
-        background: rgba(231, 76, 60, 0.2);
-        border: 1px solid #e74c3c;
-        border-radius: 8px;
-        padding: 0.75rem;
-        margin-bottom: 1rem;
-    }
-    
-    .disconnect-errors ul {
-        margin: 0;
-        padding-left: 1.25rem;
-    }
-    
-    .disconnect-errors li {
-        color: #ff9f9f;
-        font-size: 0.85rem;
-        margin: 0.25rem 0;
-    }
-    
-    .modal-actions-vertical {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        margin-top: 1rem;
-    }
-    
-    .btn-danger-final {
-        background: #e74c3c;
+
+    .passkey-verification-box .btn-verify-passkey {
+        width: 100%;
+        padding: 12px;
+        margin-top: 15px;
+        background: var(--info);
         color: white;
         border: none;
-        padding: 14px;
         border-radius: 8px;
         font-size: 1rem;
-        font-weight: 600;
         cursor: pointer;
-        transition: all 0.3s ease;
+        transition: background 0.3s;
     }
-    
-    .btn-danger-final:hover {
-        background: #c0392b;
-        transform: scale(1.02);
+
+    .passkey-verification-box .btn-verify-passkey:hover {
+        background: #2563eb;
     }
-    
-    .btn-danger-final:disabled {
+
+    .passkey-verification-box .btn-verify-passkey:disabled {
         background: #555;
         cursor: not-allowed;
-        opacity: 0.6;
-        transform: none;
     }
-    
-    .btn-cancel-final {
-        background: #555;
+
+    .passkey-verification-box .btn-cancel {
+        width: 100%;
+        padding: 12px;
+        margin-top: 10px;
+        background: #6b7280;
         color: white;
         border: none;
-        padding: 12px;
         border-radius: 8px;
-        font-size: 0.95rem;
+        font-size: 1rem;
         cursor: pointer;
-        transition: all 0.3s ease;
     }
-    
-    .btn-cancel-final:hover {
-        background: #666;
+
+    .passkey-verification-box .btn-cancel:hover {
+        background: #7b8290;
     }
-     /* Notification Bell Styles */
+
+    /* ===== NOTIFICATION SYSTEM ===== */
     .notification-container {
         position: fixed;
         top: 20px;
@@ -1376,7 +1565,7 @@ body::before {
 
     .notification-bell i {
         font-size: 20px;
-        color: var(--text-light);
+        color: var(--text);
     }
 
     .notification-badge {
@@ -1396,7 +1585,6 @@ body::before {
         animation: pulse 2s infinite;
     }
 
-    /* Fullscreen Notification Panel */
     .notification-panel {
         position: fixed;
         top: 0;
@@ -1405,7 +1593,7 @@ body::before {
         bottom: 0;
         width: 100%;
         height: 100%;
-        background: var(--card-light);
+        background: var(--modal-bg);
         backdrop-filter: blur(20px);
         z-index: 10000;
         display: none;
@@ -1429,29 +1617,24 @@ body::before {
         }
     }
 
-    /* PASSKEY OVERLAY - MUST BE HIGHER THAN NOTIFICATION PANEL */
+    /* PASSKEY OVERLAY - Higher z-index */
     .passkey-overlay {
-        z-index: 20000 !important; /* Higher than notification panel */
+        z-index: 20000 !important;
     }
 
-    /* When passkey overlay is active, ensure it's on top */
     .passkey-overlay.active {
         z-index: 20000 !important;
     }
 
-    /* Lower notification bell z-index when passkey is visible */
     body:has(.passkey-overlay) .notification-container {
         z-index: 10001 !important;
     }
-    
 
-    /* Ensure passkey screen is above everything when active */
     .passkey-overlay .passkey-screen {
         position: relative;
         z-index: 20001;
     }
 
-    /* Notification panel should be below passkey overlay */
     .passkey-overlay ~ .notification-panel,
     body:has(.passkey-overlay) .notification-panel {
         z-index: 9999 !important;
@@ -1463,7 +1646,7 @@ body::before {
         align-items: center;
         padding: 1.5rem 2rem;
         border-bottom: 1px solid var(--glass-border);
-        background: rgba(0, 0, 0, 0.05);
+        background: var(--bg-secondary);
         position: sticky;
         top: 0;
         z-index: 1;
@@ -1473,17 +1656,17 @@ body::before {
         font-size: 1.5rem;
         font-weight: 600;
         margin: 0;
-        background: linear-gradient(135deg, var(--accent), var(--info));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: var(--text);
+        background: none;
+        -webkit-text-fill-color: var(--text);
     }
 
     .close-notifications {
-        background: rgba(255, 255, 255, 0.1);
+        background: var(--split-bg);
         border: 1px solid var(--glass-border);
         font-size: 24px;
         cursor: pointer;
-        color: var(--text-light);
+        color: var(--text);
         opacity: 0.7;
         transition: all 0.3s ease;
         width: 40px;
@@ -1499,6 +1682,7 @@ body::before {
         transform: rotate(90deg);
         background: rgba(239, 68, 68, 0.2);
         border-color: var(--danger);
+        color: var(--danger);
     }
 
     .notification-list {
@@ -1512,10 +1696,11 @@ body::before {
         padding: 1.25rem 1.5rem;
         margin-bottom: 0.75rem;
         border-radius: 16px;
-        background: rgba(255, 255, 255, 0.05);
+        background: var(--notification-item-bg);
         border: 1px solid var(--glass-border);
         transition: all 0.3s ease;
         cursor: pointer;
+        color: var(--text);
     }
 
     .notification-item:hover {
@@ -1525,7 +1710,7 @@ body::before {
     }
 
     .notification-item.unread {
-        background: rgba(59, 130, 246, 0.15);
+        background: var(--notification-unread-bg);
         border-left: 4px solid var(--info);
     }
 
@@ -1548,13 +1733,14 @@ body::before {
         letter-spacing: 1px;
         margin-bottom: 0.5rem;
         font-weight: 600;
+        color: var(--text-secondary);
     }
 
     .notification-message {
         font-size: 1rem;
         line-height: 1.5;
         margin-bottom: 0.75rem;
-        color: var(--text-light);
+        color: var(--text);
     }
 
     .notification-time {
@@ -1563,11 +1749,7 @@ body::before {
         display: flex;
         align-items: center;
         gap: 5px;
-    }
-
-    .notification-time::before {
-        content: "🕐";
-        font-size: 0.7rem;
+        color: var(--text-secondary);
     }
 
     .empty-notifications {
@@ -1575,56 +1757,10 @@ body::before {
         padding: 4rem 2rem;
         opacity: 0.6;
         font-size: 1rem;
+        color: var(--text);
     }
 
-    /* Dark mode adjustments */
-    @media (prefers-color-scheme: dark) {
-        .notification-bell {
-            background: var(--card-dark);
-        }
-        
-        .notification-panel {
-            background: var(--card-dark);
-        }
-        
-        .notification-item {
-            background: rgba(255, 255, 255, 0.03);
-        }
-    }
-
-    /* Responsive adjustments */
-    @media (max-width: 768px) {
-        .notification-header {
-            padding: 1rem 1.25rem;
-        }
-        
-        .notification-header h3 {
-            font-size: 1.25rem;
-        }
-        
-        .notification-item {
-            padding: 1rem;
-        }
-        
-        .notification-message {
-            font-size: 0.9rem;
-        }
-    }
-</style>
-<style>
-    /* Revenue History Button */
-    .btn-revenue-history {
-        background: none;
-        color: rgba(79, 79, 79, 0.95);
-        border: none;
-        border-radius: 12px;
-        font-size: 0.85rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    /* Revenue History Modal */
+    /* ===== REVENUE HISTORY MODAL ===== */
     #revenueHistoryModal.modal {
         position: fixed;
         top: 0;
@@ -1633,7 +1769,7 @@ body::before {
         bottom: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.95);
+        background: var(--modal-overlay);
         backdrop-filter: blur(20px);
         z-index: 10000;
         padding: 0;
@@ -1653,17 +1789,21 @@ body::before {
         padding: 2rem;
         display: flex;
         flex-direction: column;
-        background: var(--card-light);
+        background: var(--modal-bg);
+        color: var(--modal-text);
         margin: 0;
         overflow: hidden;
+        border: none;
     }
 
     #revenueHistoryModal h2 {
         margin-bottom: 1rem;
         flex-shrink: 0;
+        color: var(--modal-text);
+        background: none;
+        -webkit-text-fill-color: var(--modal-text);
     }
 
-    /* Revenue History Container - Takes remaining space, no horizontal scroll */
     .revenue-history-container {
         flex: 1;
         overflow-y: auto;
@@ -1689,35 +1829,35 @@ body::before {
         border-radius: 10px;
     }
 
-    /* Revenue Item - Fixed width container */
     .revenue-item {
-        background: none;
+        background: var(--revenue-header-bg);
         border-radius: 5px;
         margin-bottom: 12px;
         overflow: hidden;
         transition: all 0.3s ease;
-        border: none;
+        border: 1px solid var(--revenue-border);
         width: 100%;
         box-sizing: border-box;
         display: block;
+        color: var(--modal-text);
     }
 
     .revenue-item:hover {
         border-color: var(--accent);
     }
 
-    /* Revenue Header - Fixed width container */
     .revenue-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding: 16px 20px;
         cursor: pointer;
-        background: rgba(255, 255, 255, 0.03);
+        background: var(--revenue-header-bg);
         transition: all 0.3s ease;
         width: 100%;
         box-sizing: border-box;
         gap: 15px;
+        color: var(--modal-text);
     }
 
     .revenue-header:hover {
@@ -1734,7 +1874,7 @@ body::before {
     .revenue-date-range {
         font-weight: 600;
         font-size: 0.75rem;
-        color: rgb(141, 141, 141);
+        color: var(--text-muted);
         opacity: 0.9;
         word-break: break-word;
     }
@@ -1742,10 +1882,9 @@ body::before {
     .revenue-user-share {
         font-size: 1.1rem;
         font-weight: 700;
-        color: var(--success-color);
+        color: var(--success);
     }
 
-    /* Status badge */
     .revenue-status {
         display: inline-block;
         font-size: 0.7rem;
@@ -1755,26 +1894,30 @@ body::before {
     }
 
     .revenue-status.completed {
-        color: #10b981;
+        color: var(--success);
     }
 
     .revenue-status.pending {
-        color: #f59e0b;
+        color: var(--warning);
     }
 
     .revenue-status.loss {
-        color: #ef4444;
+        color: var(--danger);
     }
 
-    /* Revenue Details section - NO horizontal scroll, preserves layout */
+    .revenue-status.active {
+        color: var(--info);
+    }
+
     .revenue-details {
         display: none;
         padding: 16px 20px;
-        background: rgba(0, 0, 0, 0.2);
+        background: var(--revenue-details-bg);
         border-top: 1px solid var(--glass-border);
         width: 100%;
         box-sizing: border-box;
         overflow-x: hidden;
+        color: var(--modal-text);
     }
 
     .revenue-details.active {
@@ -1782,7 +1925,6 @@ body::before {
         animation: slideDown 0.3s ease;
     }
 
-    /* Each detail row - flex with proper wrapping */
     .revenue-detail-row {
         display: flex;
         justify-content: space-between;
@@ -1790,7 +1932,7 @@ body::before {
         flex-wrap: wrap;
         gap: 10px;
         padding: 8px 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid var(--revenue-border);
         width: 100%;
         box-sizing: border-box;
     }
@@ -1804,6 +1946,7 @@ body::before {
         opacity: 0.7;
         font-size: 0.85rem;
         flex-shrink: 0;
+        color: var(--text-secondary);
     }
 
     .revenue-detail-value {
@@ -1812,6 +1955,7 @@ body::before {
         text-align: right;
         word-break: break-word;
         flex-shrink: 0;
+        color: var(--modal-text);
     }
 
     .revenue-detail-value.profit-positive {
@@ -1827,6 +1971,7 @@ body::before {
         padding: 60px 20px;
         opacity: 0.7;
         font-size: 1rem;
+        color: var(--modal-text);
     }
 
     #revenueHistoryModal .modal-actions {
@@ -1840,6 +1985,26 @@ body::before {
     #revenueHistoryModal .modal-actions button {
         padding: 10px 24px;
         font-size: 0.9rem;
+        background: #6b7280;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    #revenueHistoryModal .modal-actions button:hover {
+        background: #7b8290;
+    }
+
+    .revenue-item.active-contract-simplified .revenue-user-share {
+        color: var(--success);
+        font-weight: bold;
+        font-size: 0.9rem;
+    }
+
+    .revenue-item.active-contract-simplified .revenue-date-range {
+        color: var(--text-muted);
+        font-weight: 600;
     }
 
     @keyframes slideDown {
@@ -1853,8 +2018,44 @@ body::before {
         }
     }
 
-    /* Mobile responsive adjustments - no width changes on click */
+    /* ===== RESPONSIVE ===== */
     @media (max-width: 768px) {
+        .stat-card h2 {
+            font-size: 2rem;
+        }
+        
+        .trades-count {
+            font-size: 3rem;
+        }
+        
+        .loyalty-status-msg {
+            font-size: 1.2rem;
+        }
+        
+        .modal-content {
+            padding: 1.5rem;
+        }
+        
+        .coin-selector {
+            flex-direction: column;
+        }
+
+        .notification-header {
+            padding: 1rem 1.25rem;
+        }
+        
+        .notification-header h3 {
+            font-size: 1.25rem;
+        }
+        
+        .notification-item {
+            padding: 1rem;
+        }
+        
+        .notification-message {
+            font-size: 0.9rem;
+        }
+
         #revenueHistoryModal .modal-content {
             padding: 1rem;
         }
@@ -1884,53 +2085,147 @@ body::before {
             text-align: left;
         }
     }
-    /* Active Contract Card */
-    .revenue-item.active-contract {
-        background: rgba(16, 185, 129, 0.05);
-        margin-bottom: 20px;
+
+    /* ===== PREVENT PULL-TO-REFRESH ===== */
+    html {
+        overscroll-behavior: none;
     }
-    
-    .revenue-item.active-contract .revenue-header {
-        background: none;
+
+    body {
+        overscroll-behavior: none;
+        position: relative;
     }
-    
-    .revenue-item.active-contract .revenue-user-share {
-        color: var(--accent);
-        font-size: 1rem;
-        letter-spacing: 0.5px;
+
+    .scrollable-container {
+        overscroll-behavior: contain;
     }
-    
-    .revenue-item.active-contract .revenue-date-range {
-        color: var(--accent);
-        font-weight: 600;
+
+    /* ===== BACKGROUND EFFECT ===== */
+    body::before {
+        content: ""; 
+        position: absolute; 
+        inset: 0;
+        background: var(--bg-secondary);
+        background-size: cover, cover, 120px 120px; 
+        opacity: 0.5; 
+        pointer-events: none; 
+        z-index: -1;
     }
-    
-</style>
-<style>
-    /* Additional styles for unpaid-payment state */
-    .unpaid-warning {
-        background: rgba(255, 107, 107, 0.1);
-        border-left: 4px solid #ff6b6b;
-        padding: 12px;
-        margin: 10px 0;
-        font-size: 0.9rem;
+
+    @media (prefers-color-scheme: light) {
+        body::before { 
+            opacity: 0.1; 
+            background-blend-mode: multiply; 
+        }
     }
-    
-    .payment-required-badge {
-        background: #ff6b6b;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: bold;
-        margin-left: 10px;
+
+    /* ===== APPLY MODAL ===== */
+    .apply-instructions {
+        background: var(--checkbox-bg);
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
     }
-    
-    .threshold-warning {
+
+    .apply-instructions ul {
+        list-style: none;
+        padding-left: 0;
+    }
+
+    .apply-instructions ul li {
+        margin-bottom: 10px;
+        color: var(--modal-text);
+    }
+
+    .apply-warning {
         background: rgba(255, 193, 7, 0.1);
-        border-left: 4px solid #ffc107;
-        padding: 12px;
-        margin: 10px 0;
-        font-size: 0.9rem;
+        border-left: 4px solid var(--warning);
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+
+    .apply-warning strong {
+        color: var(--warning);
+    }
+
+    .apply-warning p {
+        margin-top: 0.5rem;
+        color: var(--modal-text);
+    }
+
+    /* ===== ADDITIONAL FIXES FOR LIGHT MODE ===== */
+    /* Ensure all text in modals is visible in light mode */
+    .modal-content h2,
+    .modal-content h3,
+    .modal-content h4,
+    .modal-content p,
+    .modal-content label,
+    .modal-content span,
+    .modal-content div {
+        color: var(--modal-text);
+    }
+
+    /* Fix for split items in light mode */
+    .split-item h4 {
+        color: var(--split-text);
+    }
+
+    .split-item p {
+        color: var(--split-text);
+    }
+
+    /* Fix for coin selector labels in light mode */
+    .coin-selector label {
+        color: var(--modal-text);
+    }
+
+    /* Fix for checkbox labels */
+    .checkbox-container label {
+        color: var(--modal-text);
+    }
+
+    /* Fix for crypto details in light mode */
+    .crypto-details p {
+        color: var(--modal-text);
+    }
+
+    /* Fix for disconnect section labels */
+    .disconnect-verify-section label {
+        color: var(--modal-text);
+    }
+
+    /* Fix for re-enrollment instructions */
+    .reenroll-instructions ul li {
+        color: var(--modal-text);
+    }
+
+    .reenroll-instructions .consequence-note {
+        color: var(--danger);
+    }
+
+    /* Fix for notification items */
+    .notification-item .notification-message {
+        color: var(--text);
+    }
+
+    .notification-item .notification-section {
+        color: var(--text-secondary);
+    }
+
+    .notification-item .notification-time {
+        color: var(--text-secondary);
+    }
+
+    /* Fix for revenue history */
+    .revenue-item .revenue-detail-label {
+        color: var(--text-secondary);
+    }
+
+    .revenue-item .revenue-detail-value {
+        color: var(--modal-text);
+    }
+
+    .revenue-item .revenue-date-range {
+        color: var(--text-muted);
     }
 </style>
