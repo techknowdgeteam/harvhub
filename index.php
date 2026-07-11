@@ -287,6 +287,7 @@
 
 </head>
 <body class="<?php echo ($logged_in_email !== '') ? 'logged-in' : ''; ?>">
+    <?php include 'loading.php'; ?>
     <div class="custom-body">
         <div class="container">
             <header>
@@ -310,7 +311,9 @@
                     </div>
                 <?php endif; ?>
                 
+                <div>
                 <h1>HarvHub</h1>
+                </div>
                 
                 <?php if ($logged_in_email !== ''): ?>
                     <div class="welcome-message">
@@ -887,6 +890,45 @@
                     document.getElementById('insiderModal').classList.add('active');
                 <?php endif; ?>
             });
+            // Add to your existing AJAX handling
+            function showLoadingForAjax() {
+                if (window.loadingManager) {
+                    window.loadingManager.show();
+                    window.loadingManager.startProgress();
+                    window.loadingManager.isComplete = false;
+                }
+            }
+
+            function hideLoadingForAjax() {
+                if (window.loadingManager) {
+                    window.loadingManager.completeLoading();
+                }
+            }
+
+            // Example usage with your existing fetch calls
+            async function fetchLiveUserData() {
+                showLoadingForAjax(); // Show loading before fetch
+                
+                try {
+                    const response = await fetch(window.location.href, {
+                        method: 'POST',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        credentials: 'same-origin',
+                        body: 'action=get_user_status&email=' + encodeURIComponent('<?= htmlspecialchars($logged_in_email) ?>')
+                    });
+                    
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    // ... process data
+                } catch (error) {
+                    // Handle error
+                } finally {
+                    hideLoadingForAjax(); // Hide loading after complete
+                }
+            }
         </script>
     </div>
 </body>

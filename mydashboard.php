@@ -1431,6 +1431,7 @@
         exit;
     }
 ?>
+<?php include 'loading.php'; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
