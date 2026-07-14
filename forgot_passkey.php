@@ -345,15 +345,289 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
 <title>Forgot Passkey - HarvHub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
+    /* ==================== CSS VARIABLES ==================== */
+    :root {
+        --bg-primary: #000;
+        --bg-secondary: rgba(20, 20, 30, 0.95);
+        --bg-input: #1a1a2e;
+        --bg-modal: #1a1a2e;
+        --bg-overlay-start: #1a0033;
+        --bg-overlay-end: #000033;
+        --text-primary: #e4e6eb;
+        --text-secondary: #aaa;
+        --text-muted: #888;
+        --text-dark: #555;
+        --border-color: #333;
+        --border-light: rgba(255,255,255,0.05);
+        --shadow-color: rgba(0,0,0,0.8);
+        --input-focus: #2e8b57;
+        --success-color: #90ee90;
+        --error-color: #ff6b6b;
+        --error-bg: rgba(255, 107, 107, 0.1);
+        --success-bg: rgba(46, 139, 87, 0.1);
+        --source-badge-bg: rgba(46, 139, 87, 0.2);
+        --modal-overlay: rgba(0,0,0,0.7);
+        --btn-text: #000;
+        --scrollbar-track: #1a1a2e;
+        --scrollbar-thumb: #2e8b57;
+        --scrollbar-thumb-hover: #3a9b67;
+    }
+
+    /* ==================== LIGHT MODE OVERRIDES ==================== */
+    @media (prefers-color-scheme: light) {
+        :root {
+            --bg-primary: #f0f2f5;
+            --bg-secondary: rgba(255, 255, 255, 0.95);
+            --bg-input: #ffffff;
+            --bg-modal: #ffffff;
+            --bg-overlay-start: #e8f0e8;
+            --bg-overlay-end: #d4e8d4;
+            --text-primary: #1a1a2e;
+            --text-secondary: #555;
+            --text-muted: #777;
+            --text-dark: #333;
+            --border-color: #ddd;
+            --border-light: rgba(0,0,0,0.08);
+            --shadow-color: rgba(0,0,0,0.15);
+            --input-focus: #2e8b57;
+            --success-color: #2e8b57;
+            --error-color: #dc3545;
+            --error-bg: rgba(220, 53, 69, 0.08);
+            --success-bg: rgba(46, 139, 87, 0.08);
+            --source-badge-bg: rgba(46, 139, 87, 0.15);
+            --modal-overlay: rgba(0,0,0,0.4);
+            --btn-text: #fff;
+            --scrollbar-track: #e8e8e8;
+            --scrollbar-thumb: #2e8b57;
+            --scrollbar-thumb-hover: #3a9b67;
+        }
+        
+        /* Light mode specific overrides for better contrast */
+        .container {
+            border: 1px solid rgba(0,0,0,0.08);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+        }
+        
+        input[type="email"],
+        input[type="password"] {
+            border: 1px solid #ddd;
+            background: #ffffff;
+            color: #1a1a2e;
+        }
+        
+        input[type="email"]::placeholder,
+        input[type="password"]::placeholder {
+            color: #999;
+        }
+        
+        input[type="email"]:focus,
+        input[type="password"]:focus {
+            border-color: #2e8b57;
+            box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.1);
+        }
+        
+        .btn {
+            color: #fff;
+            background: #2e8b57;
+        }
+        
+        .btn:hover {
+            background: #3a9b67;
+        }
+        
+        .btn-secondary {
+            color: #555;
+            border: 1px solid #ddd;
+            background: transparent;
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(0,0,0,0.03);
+        }
+        
+        .error-message {
+            color: #dc3545;
+            background: rgba(220, 53, 69, 0.08);
+            border-left: 3px solid #dc3545;
+        }
+        
+        .success-message {
+            color: #2e8b57;
+            background: rgba(46, 139, 87, 0.08);
+            border-left: 3px solid #2e8b57;
+        }
+        
+        .code-input-container input {
+            border: 1px solid #ddd;
+            background: #ffffff;
+            color: #1a1a2e;
+        }
+        
+        .code-input-container input:focus {
+            border-color: #2e8b57;
+            box-shadow: 0 0 15px rgba(46, 139, 87, 0.15);
+        }
+        
+        .password-toggle {
+            color: #999;
+        }
+        
+        .password-toggle:hover {
+            color: #2e8b57;
+        }
+        
+        .modal-content {
+            background: #ffffff;
+            border: 1px solid rgba(46, 139, 87, 0.2);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        
+        .modal-content h2 {
+            color: #2e8b57;
+        }
+        
+        .modal-content p {
+            color: #555;
+        }
+        
+        .source-badge {
+            background: rgba(46, 139, 87, 0.15);
+            color: #2e8b57;
+        }
+        
+        .email-display {
+            background: rgba(46, 139, 87, 0.05);
+            color: #2e8b57;
+        }
+        
+        .back-link a {
+            color: #2e8b57;
+        }
+        
+        .resend-link a {
+            color: #2e8b57;
+        }
+        
+        .footer {
+            color: #999;
+        }
+        
+        .info-text {
+            color: #777;
+        }
+        
+        label {
+            color: #555;
+        }
+        
+        .subtitle {
+            color: #777;
+        }
+        
+        .description {
+            color: #555;
+        }
+        
+        .email-prefill-hint {
+            color: #777;
+        }
+        
+        .modal-overlay {
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+        
+        /* Light mode scrollbar */
+        ::-webkit-scrollbar-track {
+            background: #f0f0f0;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2e8b57;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3a9b67;
+        }
+    }
+
+    /* ==================== DARK MODE OVERRIDES (Default) ==================== */
+    @media (prefers-color-scheme: dark) {
+        input[type="email"],
+        input[type="password"] {
+            border: 1px solid #333;
+            background: #1a1a2e;
+            color: #fff;
+        }
+        
+        input[type="email"]::placeholder,
+        input[type="password"]::placeholder {
+            color: #666;
+        }
+        
+        input[type="email"]:focus,
+        input[type="password"]:focus {
+            border-color: #2e8b57;
+            box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.15);
+        }
+        
+        .btn {
+            color: #000;
+            background: #2e8b57;
+        }
+        
+        .btn:hover {
+            background: #3a9b67;
+        }
+        
+        .btn-secondary {
+            color: #888;
+            border: 1px solid #333;
+            background: transparent;
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        
+        .code-input-container input {
+            border: 1px solid #333;
+            background: #1a1a2e;
+            color: #fff;
+        }
+        
+        .code-input-container input:focus {
+            border-color: #2e8b57;
+            box-shadow: 0 0 15px rgba(46, 139, 87, 0.2);
+        }
+        
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid rgba(46, 139, 87, 0.3);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9);
+        }
+        
+        .modal-overlay {
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+    }
+
+    /* ==================== BASE STYLES ==================== */
+    * { 
+        margin: 0; 
+        padding: 0; 
+        box-sizing: border-box; 
+    }
+    
     html, body {
         height: 100%;
         overflow: hidden;
         position: fixed;
         width: 100%;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background: #000;
-        color: #e4e6eb;
+        background: var(--bg-primary);
+        color: var(--text-primary);
         min-height: 100vh;
         display: flex;
         align-items: center;
@@ -362,178 +636,208 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
         position: relative;
         -webkit-overflow-scrolling: none;
         overscroll-behavior: none;
+        transition: background 0.3s ease, color 0.3s ease;
     }
+    
     body::before {
         content: "";
         position: absolute;
         inset: 0;
         background: 
-            radial-gradient(circle at 20% 80%, #1a0033 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, #000033 0%, transparent 50%),
-            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="white"/><circle cx="30" cy="70" r="1.5" fill="white"/><circle cx="70" cy="30" r="1" fill="white"/><circle cx="90" cy="80" r="1.2" fill="white"/><circle cx="50" cy="50" r="1.8" fill="white"/></svg>') repeat;
+            radial-gradient(circle at 20% 80%, var(--bg-overlay-start) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, var(--bg-overlay-end) 0%, transparent 50%),
+            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23666"/><circle cx="30" cy="70" r="1.5" fill="%23666"/><circle cx="70" cy="30" r="1" fill="%23666"/><circle cx="90" cy="80" r="1.2" fill="%23666"/><circle cx="50" cy="50" r="1.8" fill="%23666"/></svg>') repeat;
         background-size: cover, cover, 120px 120px;
         opacity: 0.5;
         pointer-events: none;
         z-index: 0;
+        transition: opacity 0.3s ease;
     }
-    /* Custom Scrollbar */
+    
+    @media (prefers-color-scheme: light) {
+        body::before {
+            opacity: 0.3;
+            background: 
+                radial-gradient(circle at 20% 80%, #d4e8d4 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, #e8f0e8 0%, transparent 50%),
+                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23999"/><circle cx="30" cy="70" r="1.5" fill="%23999"/><circle cx="70" cy="30" r="1" fill="%23999"/><circle cx="90" cy="80" r="1.2" fill="%23999"/><circle cx="50" cy="50" r="1.8" fill="%23999"/></svg>') repeat;
+            background-size: cover, cover, 120px 120px;
+        }
+    }
+    
+    /* ==================== SCROLLBAR ==================== */
     ::-webkit-scrollbar {
         width: 6px;
         height: 6px;
     }
     ::-webkit-scrollbar-track {
-        background: #1a1a2e;
+        background: var(--scrollbar-track);
         border-radius: 10px;
     }
     ::-webkit-scrollbar-thumb {
-        background: #2e8b57;
+        background: var(--scrollbar-thumb);
         border-radius: 10px;
     }
     ::-webkit-scrollbar-thumb:hover {
-        background: #3a9b67;
+        background: var(--scrollbar-thumb-hover);
     }
+    
+    /* ==================== CONTAINER ==================== */
     .container {
-        background: rgba(20, 20, 30, 0.95);
+        background: var(--bg-secondary);
         border-radius: 20px;
         padding: 30px 25px;
         max-width: 500px;
         width: 100%;
         position: relative;
         z-index: 1;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.8);
-        border: 1px solid rgba(255,255,255,0.05);
+        box-shadow: 0 20px 60px var(--shadow-color);
+        border: 1px solid var(--border-light);
         backdrop-filter: blur(10px);
         max-height: 95vh;
         overflow-y: auto;
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: thin;
-        scrollbar-color: #2e8b57 #1a1a2e;
+        scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+        transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     }
+    
     .subtitle {
         text-align: center;
-        color: #888;
+        color: var(--text-muted);
         margin-bottom: 20px;
         font-size: 0.9rem;
+        transition: color 0.3s ease;
     }
+    
     h2 {
         color: #2e8b57;
         margin-bottom: 8px;
         text-align: center;
         font-size: 1.2rem;
     }
+    
     .description {
         text-align: center;
-        color: #aaa;
+        color: var(--text-secondary);
         font-size: 0.9rem;
         margin-bottom: 20px;
         line-height: 1.5;
+        transition: color 0.3s ease;
     }
+    
     label {
         display: block;
         font-weight: 600;
         margin-bottom: 5px;
-        color: #ccc;
+        color: var(--text-secondary);
         font-size: 0.85rem;
+        transition: color 0.3s ease;
     }
+    
     input[type="email"],
     input[type="password"] {
         width: 100%;
         padding: 12px 14px;
-        border: 1px solid #333;
         border-radius: 10px;
-        background: #1a1a2e;
-        color: #fff;
         font-size: 0.95rem;
-        transition: border-color 0.3s;
+        transition: border-color 0.3s ease, background 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
         -webkit-appearance: none;
         appearance: none;
     }
+    
     input[type="email"]:focus,
     input[type="password"]:focus {
         outline: none;
-        border-color: #2e8b57;
+        border-color: var(--input-focus);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.1);
     }
-    input[type="email"]::placeholder,
-    input[type="password"]::placeholder {
-        color: #666;
-    }
+    
     .btn {
         width: 100%;
         padding: 12px;
-        background: #2e8b57;
-        color: #000;
         font-weight: bold;
         font-size: 0.95rem;
         border: none;
         border-radius: 10px;
         cursor: pointer;
-        transition: all 0.3s;
+        transition: all 0.3s ease;
         margin-top: 5px;
         -webkit-tap-highlight-color: transparent;
     }
+    
     .btn:hover {
-        opacity: 0.85;
         transform: scale(1.01);
+        opacity: 0.9;
     }
+    
     .btn:active {
         transform: scale(0.98);
     }
+    
     .btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
         transform: none;
     }
+    
     .btn-secondary {
-        background: transparent;
-        color: #888;
-        border: 1px solid #333;
         padding: 10px;
+        transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
     }
+    
     .btn-secondary:hover {
-        background: rgba(255,255,255,0.05);
         transform: none;
     }
+    
     .error-message {
-        color: #ff6b6b;
         text-align: center;
         margin: 10px 0;
         font-size: 0.85rem;
         padding: 8px 12px;
-        background: rgba(255, 107, 107, 0.1);
         border-radius: 8px;
-        border-left: 3px solid #ff6b6b;
+        border-left: 3px solid var(--error-color);
         word-break: break-word;
+        transition: color 0.3s ease, background 0.3s ease;
     }
+    
     .success-message {
-        color: #90ee90;
         text-align: center;
         margin: 10px 0;
         font-size: 0.85rem;
         padding: 8px 12px;
-        background: rgba(46, 139, 87, 0.1);
         border-radius: 8px;
-        border-left: 3px solid #2e8b57;
+        border-left: 3px solid var(--input-focus);
         word-break: break-word;
+        transition: color 0.3s ease, background 0.3s ease;
     }
+    
     .info-text {
-        color: #888;
+        color: var(--text-muted);
         font-size: 0.8rem;
         text-align: center;
         margin: 12px 0;
+        transition: color 0.3s ease;
     }
+    
     .back-link {
         text-align: center;
         margin-top: 15px;
     }
+    
     .back-link a {
         color: #2e8b57;
         text-decoration: none;
         font-size: 0.85rem;
+        transition: opacity 0.3s ease;
     }
+    
     .back-link a:hover {
         text-decoration: underline;
+        opacity: 0.8;
     }
+    
     .code-input-container {
         display: flex;
         gap: 8px;
@@ -541,147 +845,166 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
         margin: 15px 0 10px;
         flex-wrap: nowrap;
     }
+    
     .code-input-container input {
         width: 45px;
         height: 50px;
         text-align: center;
         font-size: 1.4rem;
         font-weight: bold;
-        border: 1px solid #333;
         border-radius: 10px;
-        background: #1a1a2e;
-        color: #fff;
-        transition: border-color 0.3s;
+        transition: border-color 0.3s ease, background 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
         padding: 0;
         -webkit-appearance: none;
         appearance: none;
         -moz-appearance: textfield;
         flex-shrink: 0;
     }
+    
     .code-input-container input::-webkit-outer-spin-button,
     .code-input-container input::-webkit-inner-spin-button {
         -webkit-appearance: none;
         margin: 0;
     }
+    
     .code-input-container input:focus {
         outline: none;
-        border-color: #2e8b57;
-        box-shadow: 0 0 15px rgba(46, 139, 87, 0.2);
+        border-color: var(--input-focus);
+        box-shadow: 0 0 15px rgba(46, 139, 87, 0.15);
     }
+    
     .code-input-container input:disabled {
         opacity: 0.5;
         cursor: not-allowed;
     }
+    
     .code-input-container input.expired {
-        border-color: #ff6b6b;
+        border-color: var(--error-color);
         opacity: 0.5;
     }
-    /* Number keyboard hint - shows on mobile */
-    .code-input-container input[type="text"] {
-        -webkit-input-placeholder: "0";
-    }
+    
     .resend-link {
         text-align: center;
         margin: 12px 0 5px;
     }
+    
     .resend-link a {
         color: #2e8b57;
         text-decoration: none;
         font-size: 0.85rem;
+        transition: opacity 0.3s ease;
     }
+    
     .resend-link a:hover {
         text-decoration: underline;
+        opacity: 0.8;
     }
+    
     .email-display {
         text-align: center;
-        color: #2e8b57;
         font-weight: bold;
         font-size: 0.95rem;
         margin: 3px 0 12px;
-        background: rgba(46, 139, 87, 0.05);
         padding: 6px 12px;
         border-radius: 8px;
         word-break: break-all;
+        transition: background 0.3s ease, color 0.3s ease;
     }
+    
     .footer {
         text-align: center;
         margin-top: 15px;
-        color: #555;
         font-size: 0.7rem;
+        transition: color 0.3s ease;
     }
-    /* Password toggle */
+    
     .password-wrapper {
         position: relative;
         margin-bottom: 10px;
     }
+    
     .password-wrapper input {
         padding-right: 55px;
     }
+    
     .password-toggle {
         position: absolute;
         right: 10px;
         top: 50%;
         transform: translateY(-50%);
         cursor: pointer;
-        color: #666;
         font-size: 0.8rem;
         user-select: none;
         background: transparent;
         border: none;
         padding: 4px 8px;
         border-radius: 5px;
-        transition: color 0.2s;
+        transition: color 0.2s ease;
         -webkit-tap-highlight-color: transparent;
     }
-    .password-toggle:hover {
-        color: #2e8b57;
-    }
+    
     .password-toggle:active {
-        color: #2e8b57;
+        color: var(--input-focus);
     }
-    /* Success modal overlay */
+    
+    .source-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        margin-bottom: 15px;
+        text-align: center;
+        width: 100%;
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    .email-prefill-hint {
+        text-align: center;
+        font-size: 0.8rem;
+        margin-bottom: 15px;
+        transition: color 0.3s ease;
+    }
+    
     .modal-overlay {
         display: none;
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.7);
-        backdrop-filter: blur(8px);
         align-items: center;
         justify-content: center;
         z-index: 1000;
         padding: 20px;
         overflow: hidden;
+        transition: background 0.3s ease, backdrop-filter 0.3s ease;
     }
+    
     .modal-overlay.active {
         display: flex;
     }
+    
     .modal-content {
-        background: #1a1a2e;
         border-radius: 20px;
         padding: 30px 25px;
         max-width: 450px;
         width: 100%;
-        border: 1px solid rgba(46, 139, 87, 0.3);
-        box-shadow: 0 20px 60px rgba(0,0,0,0.9);
         text-align: center;
         max-height: 90vh;
         overflow-y: auto;
+        transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     }
+    
     .modal-content .icon {
         font-size: 3.5rem;
         margin-bottom: 12px;
     }
-    .modal-content h2 {
-        color: #2e8b57;
-        margin-bottom: 8px;
-    }
+    
     .modal-content p {
-        color: #aaa;
         margin-bottom: 20px;
         line-height: 1.5;
         font-size: 0.95rem;
+        transition: color 0.3s ease;
     }
-    /* Responsive adjustments */
+    
+    /* ==================== RESPONSIVE ==================== */
     @media (max-width: 480px) {
         .container {
             padding: 20px 15px;
@@ -714,6 +1037,7 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
             font-size: 3rem;
         }
     }
+    
     @media (max-width: 380px) {
         .code-input-container input {
             width: 32px;
@@ -734,6 +1058,7 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
             font-size: 0.8rem;
         }
     }
+    
     @media (min-width: 768px) {
         .container {
             padding: 40px 35px;
@@ -747,32 +1072,16 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
             gap: 12px;
         }
     }
+    
     /* Prevent zoom on input focus */
     input {
         font-size: 16px !important;
     }
+    
     /* Disable text selection */
     .no-select {
         user-select: none;
         -webkit-user-select: none;
-    }
-    /* Source-specific styles */
-    .source-badge {
-        display: inline-block;
-        background: rgba(46, 139, 87, 0.2);
-        color: #2e8b57;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        margin-bottom: 15px;
-        text-align: center;
-        width: 100%;
-    }
-    .email-prefill-hint {
-        text-align: center;
-        color: #888;
-        font-size: 0.8rem;
-        margin-bottom: 15px;
     }
 </style>
 </head>
