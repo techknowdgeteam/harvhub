@@ -10,14 +10,16 @@
         left: 0;
         width: 100%;
         height: 100%;
-        background: var(--bg, #0a0a1a);
-        display: flex !important; /* Force display immediately */
+        background: rgba(0, 0, 0, 0.3); /* Semi-transparent background */
+        backdrop-filter: blur(1px); /* Reduced blur effect */
+        -webkit-backdrop-filter: blur(1px); /* For Safari */
+        display: flex !important;
         justify-content: center;
         align-items: center;
         flex-direction: column;
         z-index: 99999;
         transition: opacity 0.5s ease;
-        pointer-events: none; /* Allow clicks to pass through when fading */
+        pointer-events: none;
     }
     
     #customLoadingOverlay.fade-out {
@@ -47,15 +49,22 @@
         -webkit-text-fill-color: transparent;
         animation: colorWaveGradientDark 3s ease-in-out infinite;
         text-shadow: none;
+        opacity: 1;
+        transition: opacity 0.5s ease;
     }
     
     .letter-wave:nth-child(1) { animation-delay: 0s; }
-    .letter-wave:nth-child(2) { animation-delay: 0.2 }
+    .letter-wave:nth-child(2) { animation-delay: 0.2s; }
     .letter-wave:nth-child(3) { animation-delay: 0.3s; }
     .letter-wave:nth-child(4) { animation-delay: 0.4s; }
     .letter-wave:nth-child(5) { animation-delay: 0.5s; }
     .letter-wave:nth-child(6) { animation-delay: 0.6s; }
     .letter-wave:nth-child(7) { animation-delay: 0.7s; }
+    
+    /* Fade out the text with the overlay */
+    #customLoadingOverlay.fade-out .letter-wave {
+        opacity: 0;
+    }
     
     /* DARK MODE: White + Green gradient */
     @keyframes colorWaveGradientDark {
@@ -104,7 +113,7 @@
     /* LIGHT MODE: Black + Green gradient */
     @media (prefers-color-scheme: light) {
         #customLoadingOverlay {
-            background: #f0f0f0 !important;
+            background: rgba(255, 255, 255, 0.4);
         }
         
         .letter-wave {
@@ -291,7 +300,7 @@
                 this.overlay.classList.add('fade-out');
                 setTimeout(() => {
                     this.hide();
-                }, 400);
+                }, 500);
             }
         }
         

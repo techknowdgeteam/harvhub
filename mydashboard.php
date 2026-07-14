@@ -1431,7 +1431,6 @@
         exit;
     }
 ?>
-<?php include 'loading.php'; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1550,7 +1549,8 @@
                         <?php endif; ?>
                         <button type="submit" name="verify_passkey" class="btn-full">Enter Dashboard</button>
                     </form>
-                    <a href="mailto:support@harvhub.com" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
+                    <a href="forgot_passkey.php?source=dashboard" style="display:block; margin:20px 0; color:var(--accent); font-size:0.95rem;">Forgot passkey?</a>
+                    <p><a href="?logout=1" style="color:#ff6b6b;">← Logout</a></p>
                 </div>
             </div>
         <?php endif; ?>

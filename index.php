@@ -87,8 +87,204 @@
     $user_fullname = '';
     $user_broker_balance = 0;
     $user_profitandloss = 0;
+    $login_error = '';
+    $login_success = false;
 
-    // ==================== FIX: REMOVED SESSION DESTROY LOGIC ====================
+    // ==================== CHECK USER STATUS (EMAIL VERIFICATION FIRST - GRANDPARENT) ====================
+    if ($logged_in_email !== '') {
+        $stmt = $pdo->prepare("SELECT email_verified, application_status FROM insiders WHERE email = ? LIMIT 1");
+        $stmt->execute([strtolower($logged_in_email)]);
+        $user_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_check) {
+            // STEP 1: ALWAYS CHECK EMAIL VERIFICATION FIRST - THIS IS THE GRANDPARENT CHECK
+            // NO ONE bypasses this - not even approved users!
+            if (isset($user_check['email_verified']) && $user_check['email_verified'] == 0) {
+                // Determine where to return after verification
+                $return_to = 'index.php';
+                
+                // If user is approved, send them back to dashboard after verification
+                if (strtolower($user_check['application_status'] ?? '') === 'approved') {
+                    $return_to = 'mydashboard.php';
+                }
+                
+                // Store the email and return location for verification
+                $_SESSION['pending_verification_email'] = $logged_in_email;
+                $_SESSION['otp_step'] = 'request';
+                $_SESSION['return_after_verify'] = $return_to;
+                $_SESSION['is_approved_user'] = (strtolower($user_check['application_status'] ?? '') === 'approved') ? true : false;
+                
+                // Redirect to verify_email.php - THIS TAKES PRIORITY OVER EVERYTHING!
+                header("Location: verify_email.php");
+                exit;
+            }
+            
+            // STEP 2: ONLY AFTER EMAIL IS VERIFIED, check if user is approved
+            if (strtolower($user_check['application_status'] ?? '') === 'approved') {
+                header("Location: mydashboard.php");
+                exit;
+            }
+        }
+    }
+
+    // ==================== HANDLE LOGIN / SIGNUP ====================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_email'])) {
+        $email = trim(strtolower($_POST['login_email']));
+        
+        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            // Check if user exists
+            $stmt = $pdo->prepare("SELECT id, passkey, application_status, email_verified FROM insiders WHERE email = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($user) {
+                // STEP 1: ALWAYS CHECK EMAIL VERIFICATION FIRST - GRANDPARENT CHECK
+                if (isset($user['email_verified']) && $user['email_verified'] == 0) {
+                    // Email not verified - redirect to verify_email.php
+                    $_SESSION['pending_verification_email'] = $email;
+                    $_SESSION['otp_step'] = 'request';
+                    $_SESSION['return_after_verify'] = 'index.php';
+                    $_SESSION['is_approved_user'] = (strtolower($user['application_status'] ?? '') === 'approved') ? true : false;
+                    
+                    // If user is approved, send them back to dashboard after verification
+                    if (strtolower($user['application_status'] ?? '') === 'approved') {
+                        $_SESSION['return_after_verify'] = 'mydashboard.php';
+                    }
+                    
+                    // Store email in session so they don't need to re-enter
+                    $_SESSION['user_email'] = $email;
+                    
+                    header("Location: verify_email.php");
+                    exit;
+                }
+                
+                // STEP 2: ONLY AFTER EMAIL IS VERIFIED, check passkey and status
+                
+                // Check if user is approved - redirect directly to dashboard
+                if (strtolower($user['application_status'] ?? '') === 'approved') {
+                    // Email is verified, passkey check will happen below
+                    // Let's check passkey first
+                    if (isset($_POST['passkey']) && !empty($_POST['passkey'])) {
+                        if (password_verify($_POST['passkey'], $user['passkey'] ?? '')) {
+                            $_SESSION['user_email'] = $email;
+                            $login_success = true;
+                            header("Location: mydashboard.php");
+                            exit;
+                        } else {
+                            $login_error = "Incorrect passkey. Please try again.";
+                            $_SESSION['login_email_temp'] = $email;
+                            $_SESSION['login_error'] = $login_error;
+                            header("Location: index.php");
+                            exit;
+                        }
+                    } else {
+                        // Approved user but no passkey provided - show passkey field
+                        $_SESSION['login_email_temp'] = $email;
+                        $_SESSION['show_passkey_field'] = true;
+                        header("Location: index.php");
+                        exit;
+                    }
+                }
+                
+                // User exists but NOT approved - check passkey
+                if (isset($_POST['passkey']) && !empty($_POST['passkey'])) {
+                    if (password_verify($_POST['passkey'], $user['passkey'] ?? '')) {
+                        $_SESSION['user_email'] = $email;
+                        $login_success = true;
+                        header("Location: index.php");
+                        exit;
+                    } else {
+                        $login_error = "Incorrect passkey. Please try again.";
+                        $_SESSION['login_email_temp'] = $email;
+                        $_SESSION['login_error'] = $login_error;
+                        header("Location: index.php");
+                        exit;
+                    }
+                } else {
+                    // Passkey not provided - store email and show passkey field
+                    $_SESSION['login_email_temp'] = $email;
+                    $_SESSION['show_passkey_field'] = true;
+                    header("Location: index.php");
+                    exit;
+                }
+            } else {
+                // User doesn't exist - show signup modal
+                $_SESSION['signup_email'] = $email;
+                $_SESSION['show_signup_modal'] = true;
+                header("Location: index.php");
+                exit;
+            }
+        } else {
+            $login_error = "Invalid email address.";
+            $_SESSION['login_error'] = $login_error;
+            header("Location: index.php");
+            exit;
+        }
+    }
+    // ==================== HANDLE SIGNUP ====================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signup_submit'])) {
+        $email = trim(strtolower($_POST['signup_email']));
+        $passkey = $_POST['signup_passkey'] ?? '';
+        $confirm_passkey = $_POST['signup_confirm_passkey'] ?? '';
+        $signup_error = '';
+        
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $signup_error = "Invalid email address.";
+        } elseif (empty($passkey) || strlen($passkey) < 4) {
+            $signup_error = "Passkey must be at least 4 characters long.";
+        } elseif ($passkey !== $confirm_passkey) {
+            $signup_error = "Passkeys do not match.";
+        } else {
+            // Check if user already exists and is verified
+            $stmt = $pdo->prepare("SELECT id, email_verified FROM insiders WHERE email = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $existing = $stmt->fetch();
+            
+            if ($existing && $existing['email_verified'] == 1) {
+                $signup_error = "This email is already verified. Please login instead.";
+            } else {
+                // DON'T CREATE USER YET - just store in session for verification
+                $hashed_passkey = password_hash($passkey, PASSWORD_DEFAULT);
+                
+                // Store credentials in session (not database)
+                $_SESSION['pending_verification_email'] = $email;
+                $_SESSION['pending_verification_passkey'] = $hashed_passkey;
+                $_SESSION['otp_step'] = 'request';
+                $_SESSION['return_after_verify'] = 'index.php';
+                $_SESSION['signup_in_progress'] = true;
+                
+                // Redirect to OTP verification
+                header("Location: verify_email.php");
+                exit;
+            }
+        }
+        
+        if (!empty($signup_error)) {
+            $_SESSION['signup_error'] = $signup_error;
+            $_SESSION['signup_email'] = $email;
+            $_SESSION['show_signup_modal'] = true;
+            header("Location: index.php");
+            exit;
+        }
+    }
+
+    // Clear session flags after handling
+    $show_passkey_field = $_SESSION['show_passkey_field'] ?? false;
+    $login_email_temp = $_SESSION['login_email_temp'] ?? '';
+    $login_error = $_SESSION['login_error'] ?? '';
+    $show_signup_modal = $_SESSION['show_signup_modal'] ?? false;
+    $signup_email = $_SESSION['signup_email'] ?? '';
+    $signup_error = $_SESSION['signup_error'] ?? '';
+    
+    // Clear after reading
+    unset($_SESSION['show_passkey_field']);
+    unset($_SESSION['login_email_temp']);
+    unset($_SESSION['login_error']);
+    unset($_SESSION['show_signup_modal']);
+    unset($_SESSION['signup_email']);
+    unset($_SESSION['signup_error']);
+
+    // ==================== FETCH USER DATA ====================
     if ($logged_in_email !== '') {
         $stmt = $pdo->prepare("SELECT application_status, broker, server, login, fullname, broker_balance, profitandloss FROM insiders WHERE email = ? LIMIT 1");
         $stmt->execute([strtolower($logged_in_email)]);
@@ -107,24 +303,6 @@
             } else {
                 $already_submitted = false;
             }
-        }
-        // REMOVED: The else block that was destroying session
-    }
-    
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_email'])) {
-        $email = trim(strtolower($_POST['login_email']));
-        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $stmt = $pdo->prepare("SELECT id FROM insiders WHERE email = ? LIMIT 1");
-            $stmt->execute([$email]);
-            if (!$stmt->fetch()) {
-                $stmt = $pdo->prepare("INSERT INTO insiders (email) VALUES (?)");
-                $stmt->execute([$email]);
-            }
-            $_SESSION['user_email'] = $email;
-            header("Location: index.php");
-            exit;
-        } else {
-            echo "<script>alert('Invalid email address.');</script>";
         }
     }
     
@@ -287,11 +465,10 @@
 
 </head>
 <body class="<?php echo ($logged_in_email !== '') ? 'logged-in' : ''; ?>">
-    <?php include 'loading.php'; ?>
     <div class="custom-body">
         <div class="container">
             <header>
-                <?php if ($logged_in_email !== ''): ?>
+                <?php if ($logged_in_email !== '' && $already_submitted && $application_status !== 'approved'): ?>
                     <div class="user-profile-status">
                         <div id="profileIcon">👤</div> 
                         <div id="profileCard" class="profile-details">
@@ -315,15 +492,14 @@
                 <h1>HarvHub</h1>
                 </div>
                 
-                <?php if ($logged_in_email !== ''): ?>
+                <?php if ($logged_in_email !== '' && !empty($user_fullname) && $already_submitted && $application_status !== 'approved'): ?>
                     <div class="welcome-message">
                         Welcome, <strong><?= htmlspecialchars($user_fullname) ?></strong>
                     </div>
                 <?php endif; ?>
                 
-                
 
-                <?php if ($logged_in_email !== ''): ?>
+                <?php if ($logged_in_email !== '' && $already_submitted && $application_status !== 'approved'): ?>
                     <div id="mobileProfileStatus" class="profile-details">
                         <div class="profile-header">
                             <p style="font-weight:bold; color:var(--accent); font-size:1.1rem; margin-bottom:8px;">Your Broker</p>
@@ -341,10 +517,10 @@
                 <?php endif; ?>
             </header>
             
-            <!-- Organized Information Grid -->
             <!-- Organized Information Grid - Only show if user is NOT approved -->
             <?php if ($application_status !== 'approved'): ?>
             <div class="info-grid">
+                <?php if (!$logged_in_email || ($logged_in_email && $already_submitted)): ?>
                 <div class="info-card">
                     <h3>Investing & Harvesting</h3>
                     <ul>
@@ -387,6 +563,17 @@
                         <li>Rules & Regulations: Do not withdraw profits, place trades, modify trades, transfer or deposit funds into your MT5 during the contract period.</li>
                     </ul>
                 </div>
+                <?php else: ?>
+                <!-- ONLY show Complete Registration card when logged in but not submitted -->
+                <div class="info-card" style="border: 2px solid var(--accent); width: 100%; max-width: 600px; margin: 0 auto;">
+                    <p style="font-size: 1.1rem; margin: 15px 0; text-align: center;">
+                        <strong>Complete registration now to proceed</strong>
+                    </p>
+                    <ul style="text-align: center; list-style: none; padding: 0;">
+                        <li style="margin: 10px 0;">You need to complete your registration to access the full programme.</li>
+                    </ul>
+                </div>
+                <?php endif; ?>
             </div>
             <?php endif; ?>
             
@@ -433,13 +620,57 @@
         </div>
         
         <!-- Modal sections -->
-        <div id="emailModal" class="modal">
+        <!-- Email/Login Modal -->
+        <div id="emailModal" class="modal <?php echo ($show_passkey_field || $login_error) ? 'active' : ''; ?>">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('emailModal')">×</span>
                 <h2 style="text-align:center;">Sign up or Login</h2>
-                <form method="POST" style="margin-top:30px;">
-                    <input type="email" name="login_email" placeholder="youremail@gmail.com" required style="text-align:center; font-size:1.1rem;">
-                    <button type="submit" class="btn" style="width:100%; margin-top:15px;">Continue</button>
+                <form method="POST" style="margin-top:30px;" id="loginForm">
+                    <input type="email" name="login_email" id="loginEmailInput" placeholder="Enter your email" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($login_email_temp) ?>">
+                    
+                    <?php if ($show_passkey_field || $login_error): ?>
+                        <div id="passkeyFieldContainer" style="margin-top: 15px;">
+                            <input type="password" name="passkey" id="loginPasskeyInput" placeholder="Enter your passkey" required style="text-align:center; font-size:1.1rem;">
+                            <?php if ($login_error): ?>
+                                <p class="error-text" style="color: #ff6b6b; margin-top: 8px;"><?= htmlspecialchars($login_error) ?></p>
+                            <?php endif; ?>
+                        </div>
+                        <button type="submit" class="btn" style="width:100%; margin-top:15px;">Login</button>
+                        <p style="margin-top: 15px; text-align: center; font-size: 0.9rem; opacity: 0.7;">
+                            <a href="forgot_passkey.php" style="color: var(--accent);">Forgot Passkey?</a>
+                        </p>
+                    <?php else: ?>
+                        <button type="submit" class="btn" style="width:100%; margin-top:15px;">Continue</button>
+                    <?php endif; ?>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Signup Modal (shown when email doesn't exist) -->
+        <div id="signupModal" class="modal <?php echo $show_signup_modal ? 'active' : ''; ?>">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('signupModal')">×</span>
+                <h2 style="text-align:center;">Create Your Account</h2>
+                <p style="text-align:center; opacity:0.7; margin-bottom: 20px;">The email you entered is not registered. Create a new account below.</p>
+                <form method="POST" style="margin-top:10px;">
+                    <input type="hidden" name="signup_submit" value="1">
+                    <label style="display:block; margin-bottom: 5px; font-weight:600;">Email Address</label>
+                    <input type="email" name="signup_email" placeholder="youremail@gmail.com" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($signup_email) ?>">
+                    
+                    <label style="display:block; margin-top: 15px; margin-bottom: 5px; font-weight:600;">Set Passkey</label>
+                    <input type="password" name="signup_passkey" id="signupPasskey" placeholder="Create a strong passkey (min 4 characters)" required style="text-align:center; font-size:1.1rem;">
+                    
+                    <label style="display:block; margin-top: 10px; margin-bottom: 5px; font-weight:600;">Confirm Passkey</label>
+                    <input type="password" name="signup_confirm_passkey" id="signupConfirmPasskey" placeholder="Confirm your passkey" required style="text-align:center; font-size:1.1rem;">
+                    
+                    <?php if ($signup_error): ?>
+                        <p class="error-text" style="color: #ff6b6b; margin-top: 12px;"><?= htmlspecialchars($signup_error) ?></p>
+                    <?php endif; ?>
+                    
+                    <button type="submit" class="btn" style="width:100%; margin-top:20px;">Create Account</button>
+                    <p style="margin-top: 15px; text-align: center; font-size: 0.9rem; opacity: 0.7;">
+                        Already have an account? <a href="#" onclick="closeModal('signupModal'); openEmailModal(); return false;" style="color: var(--accent);">Login</a>
+                    </p>
                 </form>
             </div>
         </div>
@@ -754,6 +985,13 @@
                                 const currentBalance = parseFloat(data.broker_balance) + parseFloat(data.profitandloss);
                                 const profitClass = parseFloat(data.profitandloss) >= 0 ? 'profit' : 'loss';
                                 const profitSign = parseFloat(data.profitandloss) >= 0 ? '+' : '';
+                                const html = `
+                                    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:5px; padding:8px 0; border-top:1px solid rgba(255,255,255,0.1);">
+                                        <span>Balance: <strong>$${parseFloat(data.broker_balance).toFixed(2)}</strong></span>
+                                        <span>P&L: <strong class="${profitClass}">${profitSign}$${parseFloat(data.profitandloss).toFixed(2)}</strong></span>
+                                        <span style="width:100%; text-align:center; font-size:1.1rem; font-weight:bold; color:var(--accent);">Current: $${currentBalance.toFixed(2)}</span>
+                                    </div>
+                                `;
                                 if (liveDataDiv) liveDataDiv.innerHTML = html;
                                 if (mobileLiveData) mobileLiveData.innerHTML = html;
                             }
@@ -773,7 +1011,14 @@
             window.addEventListener('beforeunload', function() { if (refreshInterval) clearInterval(refreshInterval); });
             <?php endif; ?>
             
-            function openEmailModal() { document.getElementById('emailModal').classList.add('active'); }
+            function openEmailModal() { 
+                document.getElementById('emailModal').classList.add('active'); 
+                // Focus on email input
+                setTimeout(() => {
+                    const emailInput = document.getElementById('loginEmailInput');
+                    if (emailInput) emailInput.focus();
+                }, 100);
+            }
             function openBrokerModal() { document.getElementById('brokerModal').classList.add('active'); }
             function openEditModal() { document.getElementById('editModal').classList.add('active'); }
             
@@ -828,6 +1073,17 @@
                 if(id === 'editModal') {
                     document.getElementById('agreeError').style.display = 'none';
                 }
+                if(id === 'emailModal') {
+                    // Reset the form when closing
+                    const passkeyContainer = document.getElementById('passkeyFieldContainer');
+                    if (passkeyContainer) passkeyContainer.remove();
+                    const errorEl = document.querySelector('#emailModal .error-text');
+                    if (errorEl) errorEl.remove();
+                    const loginBtn = document.querySelector('#emailModal button[type="submit"]');
+                    if (loginBtn) loginBtn.textContent = 'Continue';
+                    const emailInput = document.getElementById('loginEmailInput');
+                    if (emailInput) emailInput.value = '';
+                }
             }
             
             function togglePass() {
@@ -843,6 +1099,22 @@
                 if (p.type === 'password') { p.type = 'text'; t.textContent = 'Hide'; }
                 else { p.type = 'password'; t.textContent = 'Show'; }
             }
+            
+            // Login form handling
+            document.addEventListener('DOMContentLoaded', function() {
+                const loginForm = document.getElementById('loginForm');
+                if (loginForm) {
+                    loginForm.addEventListener('submit', function(e) {
+                        const emailInput = document.getElementById('loginEmailInput');
+                        const passkeyInput = document.getElementById('loginPasskeyInput');
+                        
+                        // If passkey field exists, make sure it's required
+                        if (passkeyInput) {
+                            passkeyInput.required = true;
+                        }
+                    });
+                }
+            });
             
             window.onclick = function(e) {
                 if (e.target.classList.contains('modal')) e.target.classList.remove('active');
@@ -889,7 +1161,13 @@
                 <?php if ($just_submitted || ($logged_in_email !== '' && $application_status === 'blacklisted' && $already_submitted)): ?>
                     document.getElementById('insiderModal').classList.add('active');
                 <?php endif; ?>
+                
+                // Auto-open email modal if there's a login error or signup modal should show
+                <?php if ($show_passkey_field || $login_error): ?>
+                    openEmailModal();
+                <?php endif; ?>
             });
+            
             // Add to your existing AJAX handling
             function showLoadingForAjax() {
                 if (window.loadingManager) {

@@ -3260,7 +3260,6 @@
     <?php include 'server_script.php' ?>
 </head>
 <body>
-    <?php include 'loading.php'; ?>
     <div id="custom-body">
         <?php if ($initialSetupRequired || !$authenticated): ?>
             <!-- ============================================ -->
