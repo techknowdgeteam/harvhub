@@ -79,7 +79,11 @@
                                 average_trades_per_day: 0,
                                 lowest_trade_dates: [],
                                 highest_trade_dates: [],
-                                average_trade_dates: []
+                                average_trade_dates: [],
+                                recent_risk_reward: 0,
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             }
                         },
                         regular_data: {
@@ -90,10 +94,6 @@
                                 loss_trades: 0,
                                 profit_amount: 0,
                                 loss_amount: 0,
-                                win_rate_by_count_percentage: 0.0,
-                                loss_rate_by_count_percentage: 0.0,
-                                win_rate_by_revenue_percentage: 0.0,
-                                loss_rate_by_revenue_percentage: 0.0,
                                 all_traded_symbols: {},
                                 symbols_traded: 0,
                                 closed_deals_with_sl_tp: 0,
@@ -101,7 +101,10 @@
                                 highest_sequential_losses: {},
                                 highest_sequential_days_in_loss: {},
                                 highest_loss_per_trade: 0,
-                                daily_trades_record: {}
+                                daily_trades_record: {},
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             },
                             unauthorized: {
                                 total_trades: 0,
@@ -110,10 +113,6 @@
                                 loss_trades: 0,
                                 profit_amount: 0,
                                 loss_amount: 0,
-                                win_rate_by_count_percentage: 0.0,
-                                loss_rate_by_count_percentage: 0.0,
-                                win_rate_by_revenue_percentage: 0.0,
-                                loss_rate_by_revenue_percentage: 0.0,
                                 all_traded_symbols: {},
                                 symbols_traded: 0,
                                 closed_deals_with_sl_tp: 0,
@@ -121,7 +120,10 @@
                                 highest_sequential_losses: {},
                                 highest_sequential_days_in_loss: {},
                                 highest_loss_per_trade: 0,
-                                daily_trades_record: {}
+                                daily_trades_record: {},
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             }
                         }
                     },
@@ -137,7 +139,11 @@
                                 average_trades_per_day: 0,
                                 lowest_trade_dates: [],
                                 highest_trade_dates: [],
-                                average_trade_dates: []
+                                average_trade_dates: [],
+                                recent_risk_reward: 0,
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             }
                         },
                         regular_data: {
@@ -148,10 +154,6 @@
                                 loss_trades: 0,
                                 profit_amount: 0,
                                 loss_amount: 0,
-                                win_rate_by_count_percentage: 0.0,
-                                loss_rate_by_count_percentage: 0.0,
-                                win_rate_by_revenue_percentage: 0.0,
-                                loss_rate_by_revenue_percentage: 0.0,
                                 all_traded_symbols: {},
                                 symbols_traded: 0,
                                 closed_deals_with_sl_tp: 0,
@@ -159,7 +161,10 @@
                                 highest_sequential_losses: {},
                                 highest_sequential_days_in_loss: {},
                                 highest_loss_per_trade: 0,
-                                daily_trades_record: {}
+                                daily_trades_record: {},
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             },
                             unauthorized: {
                                 total_trades: 0,
@@ -168,10 +173,6 @@
                                 loss_trades: 0,
                                 profit_amount: 0,
                                 loss_amount: 0,
-                                win_rate_by_count_percentage: 0.0,
-                                loss_rate_by_count_percentage: 0.0,
-                                win_rate_by_revenue_percentage: 0.0,
-                                loss_rate_by_revenue_percentage: 0.0,
                                 all_traded_symbols: {},
                                 symbols_traded: 0,
                                 closed_deals_with_sl_tp: 0,
@@ -179,7 +180,10 @@
                                 highest_sequential_losses: {},
                                 highest_sequential_days_in_loss: {},
                                 highest_loss_per_trade: 0,
-                                daily_trades_record: {}
+                                daily_trades_record: {},
+                                revenue_percentage: 0.0,
+                                revenue_profit_percentage: 0.0,
+                                revenue_loss_percentage: 0.0
                             }
                         }
                     }
@@ -769,7 +773,11 @@
                 average_trades_per_day: 0,
                 lowest_trade_dates: [],
                 highest_trade_dates: [],
-                average_trade_dates: []
+                average_trade_dates: [],
+                recent_risk_reward: 0,
+                revenue_percentage: 0.0,
+                revenue_profit_percentage: 0.0,
+                revenue_loss_percentage: 0.0
             };
             
             const regularData = tradeData?.regular_data?.[this.currentAuthType] || {
@@ -779,10 +787,6 @@
                 loss_trades: 0,
                 profit_amount: 0,
                 loss_amount: 0,
-                win_rate_by_count_percentage: 0.0,
-                loss_rate_by_count_percentage: 0.0,
-                win_rate_by_revenue_percentage: 0.0,
-                loss_rate_by_revenue_percentage: 0.0,
                 all_traded_symbols: {},
                 symbols_traded: 0,
                 closed_deals_with_sl_tp: 0,
@@ -790,7 +794,10 @@
                 highest_sequential_losses: {},
                 highest_sequential_days_in_loss: {},
                 highest_loss_per_trade: 0,
-                daily_trades_record: {}
+                daily_trades_record: {},
+                revenue_percentage: 0.0,
+                revenue_profit_percentage: 0.0,
+                revenue_loss_percentage: 0.0
             };
             
             // Format dates for display
@@ -800,6 +807,9 @@
             // Check if sequential losses exist
             const hasSequentialLosses = regularData.highest_sequential_losses && regularData.highest_sequential_losses.consecutive_losses_count;
             const hasSequentialDaysLoss = regularData.highest_sequential_days_in_loss && regularData.highest_sequential_days_in_loss.consecutive_days_count;
+            
+            // Get recent risk reward
+            const recentRiskReward = summaries.recent_risk_reward || 0;
             
             container.innerHTML = `
                 <div class="analytics-header">
@@ -816,7 +826,6 @@
                         <span>📅</span> View Daily Trades Calendar
                     </button>
                 </div>
-            
                 
                 <div class="section-title">
                     ${this.currentAuthType === 'authorized' ? 'Authorized Trades' : 'Unauthorized Trades'} ${this.currentTradeType === 'trades_within_risks_config' ? 'Within Risk Configuration' : 'Outside Risk Configuration'}
@@ -832,28 +841,22 @@
                         <div class="stat-value profit">$${this.formatNumber(regularData.profit_amount || 0)}</div>
                     </div>
                     <div class="stat-card">
+                        <div class="stat-label">Risk-Reward</div>
+                        <div class="stat-value" style="color: ${recentRiskReward > 0 ? '#4CAF50' : '#888'}; font-size: 28px;">
+                            ${recentRiskReward > 0 ? `${recentRiskReward}:1` : 'N/A'}
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Win rate</div>
+                        <div class="stat-value profit">${this.formatNumber(regularData.revenue_profit_percentage || 0)}%</div>
+                    </div>
+                    <div class="stat-card">
                         <div class="stat-label">Lost Trades (Count)</div>
                         <div class="stat-value loss">${summaries.total_lost_trades || 0}</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Won Trades (Count)</div>
                         <div class="stat-value profit">${summaries.total_won_trades || 0}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Loss Rate (Count)</div>
-                        <div class="stat-value loss">${this.formatNumber(regularData.loss_rate_by_count_percentage || 0)}%</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Win Rate by Count</div>
-                        <div class="stat-value profit">${this.formatNumber(regularData.win_rate_by_count_percentage || 0)}%</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Loss Rate Revenue</div>
-                        <div class="stat-value loss">${this.formatNumber(regularData.loss_rate_by_revenue_percentage || 0)}%</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Win Rate by Revenue</div>
-                        <div class="stat-value profit">${this.formatNumber(regularData.win_rate_by_revenue_percentage || 0)}%</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Highest Loss/Trade</div>
@@ -1024,7 +1027,7 @@
                             <span class="modal-close" onclick="Analytics.closeCalendarModal()">✕</span>
                         </div>
                         <div class="modal-body">
-                            ${this.renderDailyCalendarModal(dailyRecord)}
+                            ${this.renderDailyCalendarModal(dailyRecord, regularData)}
                         </div>
                     </div>
                 </div>
@@ -1033,7 +1036,7 @@
             document.body.insertAdjacentHTML('beforeend', modalHtml);
         },
         
-        renderDailyCalendarModal: function(dailyRecord) {
+        renderDailyCalendarModal: function(dailyRecord, regularData) {
             if (!dailyRecord || Object.keys(dailyRecord).length === 0) {
                 return `
                     <div class="section-card" style="text-align: center; color: #888; padding: 40px;">
@@ -1042,6 +1045,9 @@
                     </div>
                 `;
             }
+            
+            // Get revenue percentage
+            const revenuePercentage = regularData?.revenue_percentage || 0;
             
             // Get all dates and sort them
             const dates = Object.keys(dailyRecord).sort();
@@ -1054,7 +1060,9 @@
             const dateSet = new Set(dates);
             
             // Generate calendar grid
-            let html = '<div class="calendar-grid">';
+            let html = `
+                <div class="calendar-grid">
+            `;
             
             // Day headers
             const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1122,8 +1130,14 @@
                 html += '<div class="calendar-empty"></div>';
                 dayCount++;
             }
-            
             html += '</div>';
+            html += `
+                <div style="margin-top: 10px; padding: 5px; background: var(--bg-secondary, #f5f5f5); font-size: 12px;">
+                    <span>Revenue: </span>
+                    <span class="${revenuePercentage >= 0 ? 'profit' : 'loss'}" font-weight: bold;">${revenuePercentage}%
+                    </span>
+                </div>
+            `;
             
             return html;
         },

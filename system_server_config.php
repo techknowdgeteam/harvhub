@@ -18,6 +18,8 @@
         justify-content: space-between;
         align-items: center;
         margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 10px;
     }
 
     .add-property-btn {
@@ -30,6 +32,7 @@
         font-size: 11px;
         font-weight: 600;
         transition: background 0.2s ease;
+        white-space: nowrap;
     }
 
     .add-property-btn:hover {
@@ -50,6 +53,8 @@
         justify-content: space-between;
         align-items: center;
         border: 1px solid var(--border-color);
+        flex-wrap: wrap;
+        gap: 8px;
     }
 
     .property-item:hover {
@@ -63,6 +68,7 @@
         gap: 8px;
         align-items: baseline;
         min-width: 0;
+        word-break: break-word;
     }
 
     .property-key {
@@ -70,6 +76,7 @@
         font-size: 13px;
         color: #9b59b6;
         font-family: monospace;
+        word-break: break-word;
     }
 
     .property-value {
@@ -84,6 +91,7 @@
     .property-actions {
         display: flex;
         gap: 8px;
+        flex-shrink: 0;
     }
 
     .edit-property-btn {
@@ -125,6 +133,7 @@
     .config-management-container {
         max-width: 1400px;
         margin: 0 auto;
+        padding: 0 10px;
     }
     
     .config-header-actions {
@@ -185,6 +194,7 @@
         color: var(--text-primary);
         font-size: 16px;
         padding-left: 15px;
+        box-sizing: border-box;
     }
     
     .global-search-results {
@@ -227,6 +237,7 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
         gap: 20px;
+        align-items: start;
     }
     
     .config-card {
@@ -235,6 +246,10 @@
         overflow: hidden;
         border: 1px solid var(--border-color);
         transition: all 0.3s ease;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        position: relative;
+        height: auto;
     }
     
     .config-card:hover {
@@ -249,6 +264,7 @@
         padding: 15px;
         display: none;
         overflow-x: hidden;
+        word-break: break-word;
     }
     
     .config-card.expanded .config-card-body {
@@ -265,17 +281,19 @@
         transition: background 0.2s ease;
         flex-wrap: wrap;
         gap: 8px;
+        min-height: 50px;
     }
 
     .config-address-config {
-        width: 98%;
-        word-break: break-word;
-        white-space: normal;
-        overflow-wrap: break-word;
         flex: 1;
         min-width: 0;
+        word-break: break-all;
+        white-space: normal;
+        overflow-wrap: break-word;
+        hyphens: auto;
+        max-width: 100%;
     }
-    
+
     .config-address {
         font-size: 16px;
         font-weight: 600;
@@ -287,6 +305,7 @@
         word-break: break-word;
         white-space: normal;
         overflow-wrap: break-word;
+        max-width: 100%;
     }
 
     .config-address-config span {
@@ -295,6 +314,7 @@
         overflow-wrap: break-word;
         display: inline-block;
         max-width: 100%;
+        hyphens: auto;
     }
     
     .config-badge {
@@ -304,6 +324,7 @@
         border-radius: 20px;
         font-size: 11px;
         font-weight: normal;
+        white-space: nowrap;
     }
     
     .assigned-users-section {
@@ -318,6 +339,8 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
     }
     
     .assigned-users-list {
@@ -337,21 +360,30 @@
         align-items: center;
         border: 1px solid var(--border-color);
         transition: all 0.2s ease;
+        flex-wrap: wrap;
+        gap: 10px;
     }
     
     .assigned-user-item:hover {
         border-color: var(--accent-color);
+    }
+
+    .user-info {
+        flex: 1;
+        min-width: 0;
     }
     
     .user-name {
         font-weight: 600;
         font-size: 14px;
         margin-bottom: 4px;
+        word-break: break-word;
     }
     
     .user-email {
         font-size: 12px;
         color: var(--text-secondary);
+        word-break: break-word;
     }
     
     .remove-user-btn {
@@ -363,6 +395,7 @@
         cursor: pointer;
         font-size: 11px;
         transition: background 0.2s ease;
+        flex-shrink: 0;
     }
     
     .remove-user-btn:hover {
@@ -396,6 +429,7 @@
         background: var(--bg-primary);
         color: var(--text-primary);
         font-size: 15px;
+        box-sizing: border-box;
     }
     
     .search-results {
@@ -422,6 +456,7 @@
         cursor: pointer;
         transition: background 0.2s ease;
         border-bottom: 1px solid var(--border-color);
+        word-break: break-word;
     }
     
     .search-result-item:hover {
@@ -432,12 +467,14 @@
         font-weight: 600;
         font-size: 15px;
         margin-bottom: 5px;
+        word-break: break-word;
     }
     
     .search-result-email {
         font-size: 13px;
         color: var(--text-secondary);
         margin-bottom: 5px;
+        word-break: break-word;
     }
     
     .search-result-ip-status {
@@ -446,6 +483,7 @@
         padding: 4px 8px;
         border-radius: 5px;
         display: inline-block;
+        word-break: break-word;
     }
     
     .search-result-ip-status.linked {
@@ -479,6 +517,7 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        word-break: break-word;
     }
     
     .pending-user-tag .remove-pending {
@@ -607,6 +646,7 @@
         align-items: center;
         gap: 8px;
         transition: all 0.3s ease;
+        white-space: nowrap;
     }
 
     .add-config-btn:hover {
@@ -614,80 +654,230 @@
     }
 
     /* Fix for confirm add config modal - wrap long config keys */
-    #config-add-password-modal .modal-content p strong {
-        word-break: break-word;
-        white-space: normal;
-        display: inline-block;
-        max-width: 100%;
-    }
-
-    #config-add-password-modal .modal-content p {
-        word-break: break-word;
-        white-space: normal;
-        overflow-wrap: break-word;
-    }
-
-    /* Additional fix for any other modals that might display long config keys */
+    #config-add-password-modal .modal-content p strong,
+    #config-edit-input-modal .modal-content p strong,
+    #config-edit-password-modal .modal-content p strong,
+    #config-delete-password-modal .modal-content p strong,
     .modal-content p strong,
     .modal-content p {
         word-break: break-word;
         white-space: normal;
         overflow-wrap: break-word;
+        hyphens: auto;
+        max-width: 100%;
+        display: inline-block;
     }
 
+    #config-add-password-modal .modal-content p,
+    #config-edit-input-modal .modal-content p,
+    #config-edit-password-modal .modal-content p,
+    #config-delete-password-modal .modal-content p {
+        word-break: break-word;
+        white-space: normal;
+        overflow-wrap: break-word;
+        hyphens: auto;
+    }
+
+    .modal-content {
+        max-width: 95%;
+        word-break: break-word;
+    }
+
+    /* Responsive Styles */
     @media (max-width: 768px) {
         .config-grid {
             grid-template-columns: 1fr;
+            gap: 15px;
         }
         
         .config-card-header {
             flex-direction: column;
             gap: 10px;
             align-items: flex-start;
+            padding: 12px;
+        }
+
+        .config-address-config {
+            width: 100%;
+            font-size: 14px;
+        }
+
+        .config-address {
+            font-size: 14px;
+            width: 100%;
+        }
+
+        .config-address-config span {
+            font-size: 14px;
+        }
+
+        .config-card-body {
+            padding: 12px;
+        }
+
+        .config-header-actions {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 10px;
+        }
+
+        .config-header-actions h2 {
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .config-header-actions > div {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .config-header-actions button {
+            width: 100%;
+            justify-content: center;
+        }
+
+        .config-management-container {
+            padding: 0 5px;
+        }
+
+        .property-item {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .property-info {
+            width: 100%;
+        }
+
+        .property-value {
+            max-width: 100%;
+        }
+
+        .property-actions {
+            width: 100%;
+            justify-content: flex-end;
+        }
+
+        .assigned-user-item {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .user-info {
+            width: 100%;
+        }
+
+        .remove-user-btn {
+            width: 100%;
+        }
+
+        .global-search-section {
+            padding: 15px;
+        }
+
+        .global-search-title {
+            font-size: 14px;
+        }
+
+        .global-search-input {
+            font-size: 14px;
+            padding: 12px;
+        }
+
+        .global-search-result-item {
+            padding: 12px;
+        }
+
+        .add-users-section {
+            padding-top: 12px;
+        }
+
+        .search-input-config {
+            font-size: 14px;
+            padding: 12px;
+        }
+
+        .search-results {
+            max-height: 250px;
+        }
+
+        .search-result-item {
+            padding: 12px;
+        }
+
+        .search-result-name {
+            font-size: 14px;
+        }
+
+        .modal-content {
+            max-width: 95%;
+            margin: 10px;
+            padding: 15px;
+        }
+
+        .modal-content h3 {
+            font-size: 18px;
+        }
+
+        .modal-content input {
+            font-size: 14px;
         }
     }
-    /* Ensure cards expand/collapse independently */
-    .config-card {
-        transition: all 0.3s ease;
-        height: auto;
-        min-height: fit-content;
-    }
 
-    .config-card .config-card-body {
-        display: none;
-        overflow: hidden;
-        transition: none; /* Remove transition to prevent propagation */
-    }
+    @media (max-width: 480px) {
+        .config-address-config {
+            font-size: 12px;
+        }
 
-    .config-card.expanded .config-card-body {
-        display: block;
-    }
+        .config-address {
+            font-size: 12px;
+        }
 
-    /* Prevent grid layout from affecting card heights */
-    .config-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
-        gap: 20px;
-        align-items: start; /* Changed from default stretch to start */
-    }
+        .config-address-config span {
+            font-size: 12px;
+        }
 
-    /* Ensure each card is independent */
-    .config-card {
-        break-inside: avoid;
-        page-break-inside: avoid;
-        position: relative;
-        background: var(--bg-secondary);
-        border-radius: 12px;
-        overflow: hidden;
-        border: 1px solid var(--border-color);
-        transition: box-shadow 0.3s ease;
-        height: auto;
-    }
+        .config-card-header {
+            padding: 10px;
+        }
 
-    /* Remove any potential sibling selectors that might affect other cards */
-    .config-card:has(.expanded) ~ .config-card {
-        /* Reset any unwanted styles */
-        margin-top: 0;
+        .config-card-body {
+            padding: 10px;
+        }
+
+        .property-key {
+            font-size: 12px;
+        }
+
+        .property-value {
+            font-size: 12px;
+        }
+
+        .user-name {
+            font-size: 13px;
+        }
+
+        .global-search-input {
+            font-size: 13px;
+            padding: 10px;
+        }
+
+        .search-input-config {
+            font-size: 13px;
+            padding: 10px;
+        }
+
+        .config-header-actions h2 {
+            font-size: 16px;
+        }
+
+        .refresh-config-btn,
+        .add-config-btn {
+            font-size: 13px;
+            padding: 8px 15px;
+        }
     }
 </style>
 
