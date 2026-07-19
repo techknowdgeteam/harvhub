@@ -624,7 +624,7 @@
         <div id="emailModal" class="modal <?php echo ($show_passkey_field || $login_error) ? 'active' : ''; ?>">
             <div class="modal-content">
                 <span class="close" onclick="closeModal('emailModal')">×</span>
-                <h2 style="text-align:center;">Sign up or Login</h2>
+                <h2 style="text-align:center;">Login to your account</h2>
                 <form method="POST" style="margin-top:30px;" id="loginForm">
                     <input type="email" name="login_email" id="loginEmailInput" placeholder="Enter your email" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($login_email_temp) ?>">
                     

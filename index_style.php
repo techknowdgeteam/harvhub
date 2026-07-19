@@ -1,6 +1,6 @@
 
 <style>
-    /* index_style.php MODIFIED STYLES for Light Mode (default) and Dark Mode */
+        /* index_style.php MODIFIED STYLES for Light Mode (default) and Dark Mode */
     :root { 
         --bg: #fff; 
         --text: #000000; 
@@ -107,6 +107,9 @@
         display: none; /* Hides scrollbar in Chrome/Safari/Opera for custom scroller */
     }
     .container { height: 100vh; padding: 2rem; }
+</style>
+<style>
+
     header { 
         position: relative; text-align: center; padding: 1rem 2rem 2rem; 
         background: var(--header-bg); 

@@ -794,9 +794,30 @@
         // Timeout in milliseconds (1 minute = 60,000 ms)
         const SESSION_TIMEOUT = 60 * 1000;
         let inactivityTimer;
+        let isLoggedOut = false;
+        
+        // Check if user is already logged out by checking for the login form
+        function checkIfLoggedOut() {
+            // If we see a login form, user is logged out - stop all timers
+            if (document.querySelector('.login-container')) {
+                isLoggedOut = true;
+                if (inactivityTimer) {
+                    clearTimeout(inactivityTimer);
+                    inactivityTimer = null;
+                }
+                return true;
+            }
+            return false;
+        }
         
         // Function to reset the inactivity timer
         function resetInactivityTimer() {
+            // Don't reset if already logged out
+            if (isLoggedOut) return;
+            
+            // Check if logged out again
+            if (checkIfLoggedOut()) return;
+            
             // Clear existing timer
             if (inactivityTimer) clearTimeout(inactivityTimer);
             
@@ -808,7 +829,8 @@
                     'X-Requested-With': 'XMLHttpRequest'
                 }
             }).catch(function(error) {
-                console.log('Keep-alive ping failed:', error);
+                // If fetch fails, check if we're logged out
+                checkIfLoggedOut();
             });
             
             // Set new timer for logout
@@ -817,13 +839,19 @@
         
         // Function to force logout
         function forceLogout() {
+            // Check if already logged out first
+            if (checkIfLoggedOut()) return;
+            
             // Clear timer
-            if (inactivityTimer) clearTimeout(inactivityTimer);
+            if (inactivityTimer) {
+                clearTimeout(inactivityTimer);
+                inactivityTimer = null;
+            }
             
             // Show message (optional - will disappear on redirect)
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message';
-            messageDiv.innerHTML = '';
+            messageDiv.innerHTML = '<span style="color:orange;">⏰ Session expired. Redirecting to login...</span>';
             const container = document.querySelector('.container');
             if (container) {
                 const existingMessage = container.querySelector('.message');
@@ -833,14 +861,28 @@
             
             // Redirect to logout after 1.5 seconds
             setTimeout(function() {
+                // Check again if we're already on login page
+                if (document.querySelector('.login-container')) {
+                    isLoggedOut = true;
+                    return;
+                }
                 window.location.href = 'serveraccount.php?logout=1';
             }, 1500);
         }
+        
+        // Check initial state
+        checkIfLoggedOut();
         
         // Track user activity events
         const activityEvents = ['mousemove', 'mousedown', 'click', 'keypress', 'scroll', 'touchstart', 'keydown'];
         
         function handleUserActivity() {
+            // Don't handle activity if already logged out
+            if (isLoggedOut) return;
+            
+            // Check if we're now logged out
+            if (checkIfLoggedOut()) return;
+            
             resetInactivityTimer();
         }
         
@@ -852,15 +894,26 @@
         // Also track when page becomes visible again
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden) {
+                // Check if logged out when page becomes visible
+                if (checkIfLoggedOut()) return;
                 handleUserActivity();
             }
         });
         
-        // Initialize the timer
-        resetInactivityTimer();
+        // Initialize the timer (only if not logged out)
+        if (!isLoggedOut) {
+            resetInactivityTimer();
+        }
         
-        // Optional: Periodic ping to keep session alive (every 30 seconds)
-        setInterval(function() {
+        // Periodic ping to keep session alive (every 30 seconds)
+        const pingInterval = setInterval(function() {
+            // Stop pinging if logged out
+            if (isLoggedOut || document.querySelector('.login-container')) {
+                isLoggedOut = true;
+                clearInterval(pingInterval);
+                return;
+            }
+            
             if (document.visibilityState === 'visible') {
                 fetch('serveraccount.php', {
                     method: 'HEAD',
@@ -869,183 +922,32 @@
                         'X-Requested-With': 'XMLHttpRequest'
                     }
                 }).catch(function(error) {
-                    console.log('Keep-alive ping failed:', error);
+                    // If fetch fails, check if we're logged out
+                    checkIfLoggedOut();
                 });
             }
         }, 30000);
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (inactivityTimer) {
+                clearTimeout(inactivityTimer);
+                inactivityTimer = null;
+            }
+            clearInterval(pingInterval);
+        });
+        
+        // Also check for login form on any DOM changes (in case of dynamic content)
+        const observer = new MutationObserver(function() {
+            if (document.querySelector('.login-container')) {
+                isLoggedOut = true;
+                if (inactivityTimer) {
+                    clearTimeout(inactivityTimer);
+                    inactivityTimer = null;
+                }
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        
     })();
-    
-    function showMessage(message, type) {
-        // Create or get the modal
-        let modal = document.getElementById('custom-message-modal');
-        if (!modal) {
-            modal = document.createElement('div');
-            modal.id = 'custom-message-modal';
-            modal.className = 'custom-message-modal';
-            modal.innerHTML = `
-                <div class="custom-message-content">
-                    <div class="custom-message-icon" id="message-icon">✅</div>
-                    <div class="custom-message-text" id="message-text">Message</div>
-                    <button class="custom-message-btn" id="message-ok-btn">OK</button>
-                </div>
-            `;
-            document.body.appendChild(modal);
-            
-            // Add styles for the modal
-            if (!document.getElementById('custom-message-styles')) {
-                const style = document.createElement('style');
-                style.id = 'custom-message-styles';
-                style.textContent = `
-                    .custom-message-modal {
-                        display: none;
-                        position: fixed;
-                        top: 0;
-                        left: 0;
-                        width: 100%;
-                        height: 100%;
-                        background: rgba(0,0,0,0.6);
-                        z-index: 99999;
-                        justify-content: center;
-                        align-items: center;
-                        animation: fadeIn 0.3s ease;
-                    }
-                    .custom-message-modal.show {
-                        display: flex;
-                    }
-                    .custom-message-content {
-                        background: var(--bg-secondary, #2d2d3a);
-                        border-radius: 16px;
-                        padding: 35px 45px;
-                        max-width: 450px;
-                        min-width: 320px;
-                        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-                        text-align: center;
-                        border: 1px solid var(--border-color, #3a3a4a);
-                        animation: slideUp 0.3s ease;
-                    }
-                    .custom-message-icon {
-                        font-size: 48px;
-                        margin-bottom: 15px;
-                    }
-                    .custom-message-text {
-                        color: var(--text-primary, #e4e4e7);
-                        font-size: 16px;
-                        line-height: 1.6;
-                        margin-bottom: 25px;
-                        font-weight: 500;
-                    }
-                    .custom-message-btn {
-                        background: #3498db;
-                        color: white;
-                        border: none;
-                        padding: 10px 30px;
-                        border-radius: 8px;
-                        font-size: 15px;
-                        font-weight: 600;
-                        cursor: pointer;
-                        transition: all 0.2s ease;
-                        min-width: 100px;
-                    }
-                    .custom-message-btn:hover {
-                        background: #2980b9;
-                        transform: translateY(-2px);
-                        box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
-                    }
-                    .custom-message-btn:active {
-                        transform: translateY(0px);
-                    }
-                    .custom-message-modal.error .custom-message-icon {
-                        color: #e74c3c;
-                    }
-                    .custom-message-modal.error .custom-message-btn {
-                        background: #e74c3c;
-                    }
-                    .custom-message-modal.error .custom-message-btn:hover {
-                        background: #c0392b;
-                    }
-                    .custom-message-modal.success .custom-message-icon {
-                        color: #2ecc71;
-                    }
-                    .custom-message-modal.success .custom-message-btn {
-                        background: #27ae60;
-                    }
-                    .custom-message-modal.success .custom-message-btn:hover {
-                        background: #219a52;
-                    }
-                    .custom-message-modal.warning .custom-message-icon {
-                        color: #f39c12;
-                    }
-                    .custom-message-modal.warning .custom-message-btn {
-                        background: #f39c12;
-                    }
-                    .custom-message-modal.warning .custom-message-btn:hover {
-                        background: #d68910;
-                    }
-                    
-                    @keyframes fadeIn {
-                        from { opacity: 0; }
-                        to { opacity: 1; }
-                    }
-                    @keyframes slideUp {
-                        from { transform: translateY(30px); opacity: 0; }
-                        to { transform: translateY(0); opacity: 1; }
-                    }
-                `;
-                document.head.appendChild(style);
-            }
-        }
-        
-        // Set the message and icon based on type
-        const iconElement = document.getElementById('message-icon');
-        const textElement = document.getElementById('message-text');
-        const okButton = document.getElementById('message-ok-btn');
-        
-        // Determine icon and class based on type
-        let icon = '✅';
-        let modalClass = 'success';
-        if (type === 'error') {
-            icon = '❌';
-            modalClass = 'error';
-        } else if (type === 'warning') {
-            icon = '⚠️';
-            modalClass = 'warning';
-        } else {
-            icon = '✅';
-            modalClass = 'success';
-        }
-        
-        if (iconElement) iconElement.textContent = icon;
-        if (textElement) textElement.textContent = message;
-        
-        // Remove previous classes and add the appropriate one
-        modal.className = 'custom-message-modal';
-        modal.classList.add(modalClass);
-        
-        // Show the modal
-        modal.classList.add('show');
-        
-        // Remove any existing event listeners by cloning
-        const newOkButton = okButton.cloneNode(true);
-        okButton.parentNode.replaceChild(newOkButton, okButton);
-        
-        // Add click event to close modal
-        newOkButton.addEventListener('click', function() {
-            modal.classList.remove('show');
-        });
-        
-        // Also close when clicking outside the modal content
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
-                modal.classList.remove('show');
-            }
-        });
-        
-        // Auto-close after 3 seconds
-        if (window.messageTimeout) {
-            clearTimeout(window.messageTimeout);
-        }
-        window.messageTimeout = setTimeout(function() {
-            modal.classList.remove('show');
-        }, 3000);
-    }
 </script>

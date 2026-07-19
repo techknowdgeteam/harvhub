@@ -3296,10 +3296,6 @@
         <?php else: ?>
             <div class="container">
                 <a href="?logout=1" class="logout-link">Logout</a>
-
-                <?php if ($message): ?>
-                    <p class="message"><?= $message ?></p>
-                <?php endif; ?>
                 
                 <?php if ($currentView !== 'menu'): ?>
                     <a href="serveraccount.php?view=menu" class="back-btn">← Back to Menu</a>
@@ -3310,16 +3306,52 @@
             <!-- ============================================ -->
             <!-- SECTION 10a: MENU / NAVIGATION                -->
             <!-- ============================================ -->
-                <?php if ($currentView === 'menu'): ?>
-                    <h2> Admin Navigation</h2>
-                    <div class="nav-menu">
-                        <a href="serveraccount.php?view=settings"> Server Settings & Configuration</a>
-                        <a href="serveraccount.php?view=system_config"> System Servers Config</a> 
-                        <a href="serveraccount.php?view=paid_users"> Revenue & Users Dashboard</a>
-                        <a href="serveraccount.php?view=account_management">Account Management</a>
-                        <a href="serveraccount.php?view=analytics">Analytics</a>
-                        <a href="serveraccount.php?view=manual">📚 Manual</a>
-                    </div>
+            <?php if ($currentView === 'menu'): ?>
+                <h2> Server Dashboard</h2>
+                <div class="nav-menu">
+                    <a href="serveraccount.php?view=settings">
+                        <span class="nav-icon">⚙️</span>
+                        <span class="nav-label">
+                            Server Settings
+                            <span class="sub-text">Configuration &amp; Payment</span>
+                        </span>
+                    </a>
+                    <a href="serveraccount.php?view=system_config">
+                        <span class="nav-icon">🖥️</span>
+                        <span class="nav-label">
+                            Virtual Private Servers
+                            <span class="sub-text">IP &amp; System config</span>
+                        </span>
+                    </a>
+                    <a href="serveraccount.php?view=paid_users">
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-label">
+                            Revenue Dashboard
+                            <span class="sub-text">Users &amp; Payments</span>
+                        </span>
+                    </a>
+                    <a href="serveraccount.php?view=account_management">
+                        <span class="nav-icon">👥</span>
+                        <span class="nav-label">
+                            Account Management
+                            <span class="sub-text">User Accounts &amp; Status</span>
+                        </span>
+                    </a>
+                    <a href="serveraccount.php?view=analytics">
+                        <span class="nav-icon">📈</span>
+                        <span class="nav-label">
+                            Analytics
+                            <span class="sub-text">Data &amp; Insights</span>
+                        </span>
+                    </a>
+                    <a href="serveraccount.php?view=manual">
+                        <span class="nav-icon">📚</span>
+                        <span class="nav-label">
+                            Manual
+                            <span class="sub-text">Documentation &amp; Guide</span>
+                        </span>
+                    </a>
+                </div>
                     
             <!-- ============================================ -->
             <!-- SECTION 10b: UNIFIED ACCOUNT MANAGEMENT      -->
