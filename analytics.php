@@ -842,9 +842,8 @@
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Risk-Reward</div>
-                        <div class="stat-value" style="color: ${recentRiskReward > 0 ? '#4CAF50' : '#888'}; font-size: 28px;">
-                            ${recentRiskReward > 0 ? `${recentRiskReward}:1` : 'N/A'}
-                        </div>
+                        <div class="stat-value profit">
+                            ${recentRiskReward > 0 ? `1:${recentRiskReward}` : 'N/A'}</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Win rate</div>
