@@ -119,61 +119,59 @@
     
     // Initial Balance Check
     // =========================================================================
-    // BALANCE VERIFICATION SYSTEM
+    // BALANCE VERIFICATION SYSTEM - REVERSED LOGIC: reset=1 shows reset button
     // =========================================================================
     $balance_check_failed = false;
     $balance_unverified = false;
     $balance_under_verification = false;
     $show_apply_button = false;
+    $show_reset_button = false;
+    $reset_contract_status = $user['reset_contract'] ?? 0;
     $balance_display_text = '';
     $balance_display_value = '';
 
     // Get balance verification status
     $balanceVerificationStatus = $user['balance_verification'] ?? 'not-verified';
 
+    // Check if reset is available (reset_contract = 1 means reset button should show)
+    if ($reset_contract_status == 1) {
+        $show_reset_button = true;
+    }
+
     // Handle balance based on verification status
     if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
-        // Not verified: force broker_balance to 0 and show "unverified"
-        if ($brokerBalance != 0) {
-            $updBalance = $pdo->prepare("UPDATE $tableName SET broker_balance = 0 WHERE email = ?");
-            $updBalance->execute([$email]);
-            $brokerBalance = 0;
-            $currentBalance = $brokerBalance + $profitAndLoss;
-        }
+        // Not verified: Show status but DON'T reset broker_balance
         $balance_unverified = true;
         $balance_display_text = "Unverified";
         $balance_display_value = "unverified";
-        $show_apply_button = true;
+        // Only show apply button if reset_contract is 0 AND not verified
+        if ($reset_contract_status == 0) {
+            $show_apply_button = true;
+            $show_reset_button = false; // Hide reset button when apply is shown
+        } elseif ($reset_contract_status == 1) {
+            // Show reset button when reset is available
+            $show_reset_button = true;
+        }
         
     } elseif ($balanceVerificationStatus === 'applied-for-verification') {
-        // Under verification: force broker_balance to 0 and show "under verification"
-        if ($brokerBalance != 0) {
-            $updBalance = $pdo->prepare("UPDATE $tableName SET broker_balance = 0 WHERE email = ?");
-            $updBalance->execute([$email]);
-            $brokerBalance = 0;
-            $currentBalance = $brokerBalance + $profitAndLoss;
-        }
+        // Under verification: Show status but DON'T reset broker_balance
         $balance_under_verification = true;
         $balance_display_text = "Under Verification";
         $balance_display_value = "under_verification";
         
     } elseif ($balanceVerificationStatus === 'verified') {
-        // Verified: check minimum deposit requirement
+        // Verified: Check minimum deposit requirement but DON'T reset values
         if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
-            // Revert to unverified status
-            $updBalance = $pdo->prepare("UPDATE $tableName SET balance_verification = 'not-verified', broker_balance = 0 WHERE email = ?");
-            $updBalance->execute([$email]);
-            
+            // Just show warning but don't reset
             $balance_unverified = true;
             $balance_check_failed = false;
-            $balance_display_text = "Unverified";
-            $balance_display_value = "unverified";
-            $show_apply_button = true;
-            
-            // Refresh brokerBalance to 0
-            $brokerBalance = 0;
-            $currentBalance = $brokerBalance + $profitAndLoss;
-            $balanceVerificationStatus = 'not-verified';
+            $balance_display_text = "Below Minimum Deposit";
+            $balance_display_value = "below_minimum";
+            // Only show apply if reset_contract is 0
+            if ($reset_contract_status == 0) {
+                $show_apply_button = true;
+                $show_reset_button = false;
+            }
         } else {
             $balance_display_text = "";
             $balance_display_value = number_format($brokerBalance, 2);
@@ -384,7 +382,7 @@
     $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
 
     // =========================================================================
-    // LOYALTY LOGIC WITH HIERARCHICAL CONDITIONS (UPDATED WITH VERIFICATION)
+    // LOYALTY LOGIC WITH REVERSED PRIORITY ORDER (RESET=1 FIRST)
     // =========================================================================
 
     $showProfitSplit = false;
@@ -395,6 +393,8 @@
     $show_reenroll_button = false;
     $show_payment_note = false;
     $show_apply_button = false;
+    $show_reset_button = false;
+    $show_payment_failed = false;
 
     $loyalty_btn_action = "disabled";
     $loyalty_btn_text = "Not available";
@@ -413,131 +413,59 @@
         $profitAndLoss = 0;
     }
 
-    // ===== HIERARCHICAL DECISION TREE (VERIFICATION FIRST) =====
+    // ===== CORRECTED HIERARCHICAL DECISION TREE (RESET COMES FIRST - REVERSED) =====
 
-    // PRIORITY 0: BALANCE VERIFICATION STATUS (HIGHEST PRIORITY)
-    if ($balance_unverified) {
-        // Not verified - Show Apply button ONLY, NO enroll button
-        $dashboard_disclaimer = "No Active Contract.";
-        $loyalty_text = "Your account needs to be verified before you can enroll. Before applying, ensure you have deposited funds into your broker account. Apply for verification now.";
-        $loyalties_message = "Verification Required";
+    // PRIORITY 0: RESET BUTTON STATE (HIGHEST PRIORITY)
+    // Check if reset_contract == 1 - Show Reset button FIRST
+    if ($reset_contract_status == 1) {
+        $show_reset_button = true;
+        $show_apply_button = false;
+        $show_reenroll_button = false;
+        $dashboard_disclaimer = "Time for the Next Phase!";
+        $loyalties_message = "Ready for a new Contract?";
+        $loyalty_text = "Your path is clear. Click below to embark on your next contract.";
+        $loyalty_btn_text = "Let's get started";
+        $loyalty_btn_class = "btn-loyalty-action btn-reset";
+        $loyalty_btn_action = "onclick=\"openResetModal()\"";
+    }
+    // PRIORITY 1: APPLY FOR VERIFICATION (only if reset_contract == 0 AND not verified)
+    elseif ($reset_contract_status == 0 && ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus))) {
+        $show_reset_button = false;
         $show_apply_button = true;
-        $show_reenroll_button = false;  // CRITICAL: Ensure enroll is hidden
-        $loyalty_btn_text = "Apply";
+        $show_reenroll_button = false;
+        $loyalties_message = "Balance Verification Required";
+        $loyalty_text = "Please apply for verification now if you have deposited funds.";
+        $dashboard_disclaimer = "Balance verification required. Apply if you have funded your broker account.";
+        $loyalty_btn_text = "Apply for Verification";
         $loyalty_btn_class = "btn-loyalty-action";
         $loyalty_btn_action = "onclick=\"openApplyModal()\"";
-        
-    } elseif ($balance_under_verification) {
-        // Under verification - Show pending message, NO buttons
-        $dashboard_disclaimer = "Account verification in progress.";
-        $loyalty_text = "Your account is currently under review. Once verified, you can enroll. This process technically takes 24-48 hours.";
-        $loyalties_message = "Verification Pending";
-        $show_apply_button = false;  // CRITICAL: Hide apply button
-        $show_reenroll_button = false;  // CRITICAL: Hide enroll button
+    }
+    // PRIORITY 2: UNDER VERIFICATION
+    elseif ($balanceVerificationStatus === 'applied-for-verification') {
+        $show_reset_button = false;
+        $show_apply_button = false;
+        $show_reenroll_button = false;
+        $loyalties_message = "Balance Verification Pending";
+        $loyalty_text = "Your account is pending balance review. This check usually takes between 24 and 48 hours.";
+        $dashboard_disclaimer = "Balance verification in progress.";
         $loyalty_btn_text = "Under Review";
         $loyalty_btn_class = "btn-loyalty-paid";
         $loyalty_btn_action = "";
-        
     }
-    // PRIORITY 1: Balance check failed - minimum deposit not met (Only after verified)
-    elseif ($balance_check_failed) {
-        // This should no longer happen as we revert to unverified, but keep as fallback
-        $dashboard_disclaimer = "Verification required. Minimum deposit of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " needed.";
-        $loyalty_text = "Your account balance is below the minimum requirement. Please deposit $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " then apply for verification.";
-        $loyalties_message = "Verification Required";
-        $show_apply_button = true;
-        $show_reenroll_button = false;
-        
-        $loyalty_btn_text = "Apply";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"openApplyModal()\"";
-        
-        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-        }
-    }
-    // PRIORITY 2: Payment-made or payment-confirmed states
-    elseif ($loyaltiesStatus === 'payment-made') {
-        $dashboard_disclaimer = "Payment submitted for verification.";
-        $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
-        $loyalties_message = "Payment Pending Confirmation";
-        $show_payment_note = true;
-        $loyalty_btn_text = "Awaiting Confirmation";
-        $loyalty_btn_class = "btn-loyalty-paid";
-    }
-    elseif ($loyaltiesStatus === 'payment-confirmed') {
-        if ($profitAndLoss != 0 || $executionStartDate !== null) {
-            $needs_pnl_reset = true;
-            $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
-            $upd->execute([$email]);
-            
-            $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
-            $stmt->execute([$email]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            $profitAndLoss = 0;
-            $executionStartDate = null;
-            $loyaltiesStatus = null;
-        }
-        
-        $dashboard_disclaimer = "Ready to start a new contract.";
-        $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
-        $loyalties_message = "Ready to enroll";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-    }
-    // PRIORITY 3: Just joined or no execution date
-    elseif ($loyaltiesStatus === 'justjoined') {
-        $dashboard_disclaimer = "Welcome to HarvHub!";
-        $loyalty_text = "Welcome aboard! You're now a member of the HarvHub community. Get ready to start your trading journey!";
-        $loyalties_message = "Welcome New Member!";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-    }
-    // PRIORITY 4: No execution start date OR execution date is invalid
-    elseif ($is_execution_empty) {
-        $dashboard_disclaimer = "No active contract.";
-        $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
-        $loyalties_message = "Ready to Start";
-        $show_reenroll_button = true;
-        $loyalty_btn_text = "Enroll";
-        $loyalty_btn_class = "btn-loyalty-action";
-        $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-        
-        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-        }
-    }
-    // PRIORITY 5: Contract is currently active (not ended yet)
-    elseif ($is_contract_active) {
-        $dashboard_disclaimer = "Trading is active.";
-        $loyalty_text = "{$contractDaysLeft} days left.";
-        $loyalties_message = "Contract Active";
-        $loyalty_btn_text = "Active";
-        $loyalty_btn_class = "btn-loyalty-confirmed";
-        
-        if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-        }
-    }
-    // PRIORITY 6: Contract has ended (execution_start_date exists AND contract_completed = true)
-    elseif ($contract_completed && $is_contract_valid) {
+    // PRIORITY 3: Payment-made or payment-confirmed states (only after verified, reset=0)
+    elseif ($reset_contract_status == 0 && $balanceVerificationStatus === 'verified' && $brokerBalance >= $MIN_INITIAL_DEPOSIT) {
         if ($loyaltiesStatus === 'payment-made') {
             $dashboard_disclaimer = "Payment submitted for verification.";
-            $loyalty_text = "Your payment has been recorded. Once the server confirms the payment, you will be able to enroll for a new contract.";
+            $loyalty_text = "Your payment has been recorded. Once confirmed, you can enroll for a new contract.";
             $loyalties_message = "Payment Pending Confirmation";
             $show_payment_note = true;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_reenroll_button = false;
+            $show_payment_failed = false;
             $loyalty_btn_text = "Awaiting Confirmation";
             $loyalty_btn_class = "btn-loyalty-paid";
-            $showProfitSplit = false;
-            $showWithdrawButtons = false;
+            $loyalty_btn_action = "";
         }
         elseif ($loyaltiesStatus === 'payment-confirmed') {
             if ($profitAndLoss != 0 || $executionStartDate !== null) {
@@ -555,86 +483,231 @@
             }
             
             $dashboard_disclaimer = "Ready to start a new contract.";
-            $loyalty_text = "Here we go again! Your payment has been confirmed. You can now start a new trading contract.";
+            $loyalty_text = "Your payment has been confirmed. You can now start a new trading contract.";
             $loyalties_message = "Ready to enroll";
             $show_reenroll_button = true;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_payment_failed = false;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
             $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-            $showProfitSplit = false;
-            $showWithdrawButtons = false;
         }
-        elseif ($profitAndLoss < 0) {
-            // Reset the contract immediately
-            $needs_pnl_reset = true;
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-            
-            $dashboard_disclaimer = "Contract completed with loss. You can start a new contract immediately.";
-            $loyalty_text = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new {$CONTRACT_DURATION}-day contract and bounce back stronger!";
-            $loyalties_message = "Ready for New Contract";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-            $showProfitSplit = false;
-            $showWithdrawButtons = false;
-        }
-        elseif ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
-            // For below threshold, user gets 100% of profit, server gets 0
-            // Reset the contract immediately
-            $needs_pnl_reset = true;
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-            
-            $dashboard_disclaimer = "Contract completed. Profit of $" . number_format($profitAndLoss, 2) . " is below the minimum split threshold of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . ". You keep 100% of the profit.";
-            $loyalty_text = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Since this is below the minimum requirement of $" . number_format($MIN_PROFIT_FOR_SPLIT, 2) . " for profit split, you keep the entire profit. Click Enroll to start a new {$CONTRACT_DURATION}-day contract.";
-            $loyalties_message = "Ready for New Contract";
-            $show_reenroll_button = true;
-            $loyalty_btn_text = "Enroll";
-            $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-            $showProfitSplit = false;
-            $showWithdrawButtons = false;
-        }
-        elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
-            
-            $needs_db_update = true;
-            $new_loyalties_status = 'unpaid-payment';
-            
-            $show_profit_split_ui = true;
+        // PRIORITY 3.5: PAYMENT FAILED - Payment was not received
+        elseif ($loyaltiesStatus === 'payment-failed' || $loyaltiesStatus === 'failed-payment') {
+            $dashboard_disclaimer = "⚠ Payment verification failed!";
+            $loyalty_text = "Your payment could not be verified. ";
+            $loyalties_message = "Payment Failed";
+            $show_payment_note = false;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_reenroll_button = false;
+            $show_payment_failed = true;
             $showProfitSplit = true;
-            $showWithdrawButtons = true;
-            $dashboard_disclaimer = "Contract completed - Profit split required!";
-            $loyalty_text = "Your {$CONTRACT_DURATION} days contract period has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to remain eligible.";
-            $loyalties_message = "Contract Ended - Payment Required";
-            $loyalty_btn_text = "View Profit Split";
+            $showWithdrawButtons = false;
+            $loyalty_btn_text = "Retry Payment";
             $loyalty_btn_class = "btn-loyalty-action";
-            $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
+            $loyalty_btn_action = "onclick=\"document.getElementById('paymentFailedModal').classList.add('active')\"";
         }
-        else {
-            // Reset the contract
-            $needs_pnl_reset = true;
-            $needs_db_update = true;
-            $new_loyalties_status = 'active';
-            
-            $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
-            $loyalty_text = "Your contract period has ended with no profit. Click Enroll to start a new {$CONTRACT_DURATION}-day contract.";
-            $loyalties_message = "Ready for New Contract";
+        // PRIORITY 4: Just joined or no execution date
+        elseif ($loyaltiesStatus === 'justjoined') {
+            $dashboard_disclaimer = "Welcome to HarvHub!";
+            $loyalty_text = "Enroll now to start earning.";
+            $loyalties_message = "No active contract.";
             $show_reenroll_button = true;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_payment_failed = false;
             $loyalty_btn_text = "Enroll";
             $loyalty_btn_class = "btn-loyalty-action";
             $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
-            $showProfitSplit = false;
-            $showWithdrawButtons = false;
+        }
+        // PRIORITY 5: No execution start date OR execution date is invalid
+        elseif ($is_execution_empty) {
+            // ===== ENROLL BUTTON STATE =====
+            $dashboard_disclaimer = "No active contract.";
+            $loyalty_text = "Click Enroll to start a new trading contract.";
+            $loyalties_message = "Ready to Start";
+            $show_reenroll_button = true;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_payment_failed = false;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = 'active';
+            }
+        }
+        // PRIORITY 6: Contract is currently active (not ended yet)
+        elseif ($is_contract_active) {
+            $dashboard_disclaimer = "Trading is active.";
+            $loyalty_text = $contractDaysLeft . " days left.";
+            $loyalties_message = "Contract Active";
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_reenroll_button = false;
+            $show_payment_failed = false;
+            $loyalty_btn_text = "Active";
+            $loyalty_btn_class = "btn-loyalty-confirmed";
+            $loyalty_btn_action = "";
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = 'active';
+            }
+        }
+        // PRIORITY 7: Contract has ended (execution_start_date exists AND contract_completed = true)
+        elseif ($contract_completed && $is_contract_valid) {
+            if ($loyaltiesStatus === 'payment-made') {
+                $dashboard_disclaimer = "Payment submitted for verification.";
+                $loyalty_text = "Your payment has been recorded. Once confirmed, you can enroll for a new contract.";
+                $loyalties_message = "Payment Pending Confirmation";
+                $show_payment_note = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_reenroll_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Awaiting Confirmation";
+                $loyalty_btn_class = "btn-loyalty-paid";
+                $loyalty_btn_action = "";
+                $showProfitSplit = false;
+                $showWithdrawButtons = false;
+            }
+            elseif ($loyaltiesStatus === 'payment-confirmed') {
+                if ($profitAndLoss != 0 || $executionStartDate !== null) {
+                    $needs_pnl_reset = true;
+                    $upd = $pdo->prepare("UPDATE $tableName SET execution_start_date = NULL, profitandloss = 0, loyalties = NULL WHERE email = ?");
+                    $upd->execute([$email]);
+                    
+                    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+                    $stmt->execute([$email]);
+                    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    $profitAndLoss = 0;
+                    $executionStartDate = null;
+                    $loyaltiesStatus = null;
+                }
+                
+                $dashboard_disclaimer = "Ready to start a new contract.";
+                $loyalty_text = "Your payment has been confirmed. You can now start a new trading contract.";
+                $loyalties_message = "Ready to enroll";
+                $show_reenroll_button = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+                $showProfitSplit = false;
+                $showWithdrawButtons = false;
+            }
+            elseif ($loyaltiesStatus === 'payment-failed' || $loyaltiesStatus === 'failed-payment') {
+                $dashboard_disclaimer = "⚠ Payment verification failed!";
+                $loyalty_text = "Your payment could not be verified. ";
+                $loyalties_message = "Payment Failed";
+                $show_payment_note = false;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_reenroll_button = false;
+                $show_payment_failed = true;
+                $showProfitSplit = true;
+                $showWithdrawButtons = false;
+                $loyalty_btn_text = "Retry Payment";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"document.getElementById('paymentFailedModal').classList.add('active')\"";
+            }
+            elseif ($profitAndLoss < 0) {
+                $dashboard_disclaimer = "Contract completed with loss. You can start a new contract.";
+                $loyalty_text = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new contract.";
+                $loyalties_message = "Ready for New Contract";
+                $show_reenroll_button = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+                $showProfitSplit = false;
+                $showWithdrawButtons = false;
+            }
+            elseif ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
+                $dashboard_disclaimer = "Contract completed. Profit below split threshold.";
+                $loyalty_text = "Profit of $" . number_format($profitAndLoss, 2) . " is below the split threshold. You keep 100% of the profit. Click Enroll to start a new contract.";
+                $loyalties_message = "Ready for New Contract";
+                $show_reenroll_button = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+                $showProfitSplit = false;
+                $showWithdrawButtons = false;
+            }
+            elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed' && $loyaltiesStatus !== 'payment-failed' && $loyaltiesStatus !== 'failed-payment') {
+                
+                $needs_db_update = true;
+                $new_loyalties_status = 'unpaid-payment';
+                
+                $show_profit_split_ui = true;
+                $showProfitSplit = true;
+                $showWithdrawButtons = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $dashboard_disclaimer = "Contract completed - Profit split required!";
+                $loyalty_text = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split to remain eligible.";
+                $loyalties_message = "Contract Ended - Payment Required";
+                $loyalty_btn_text = "View Profit Split";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"document.getElementById('profitSplitModal').classList.add('active')\"";
+            }
+            else {
+                $dashboard_disclaimer = "Contract completed. You can enroll for a new contract.";
+                $loyalty_text = "Ready to start a new contract. Click Enroll to begin.";
+                $loyalties_message = "Ready for New Contract";
+                $show_reenroll_button = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+                $showProfitSplit = false;
+                $showWithdrawButtons = false;
+            }
+        }
+        // PRIORITY 8: Fallback - no active contract, no special status
+        else {
+            $dashboard_disclaimer = "No active contract.";
+            $loyalty_text = "Click Enroll to start a new trading contract.";
+            $loyalties_message = "Ready to Start";
+            $show_reenroll_button = true;
+            $show_reset_button = false;
+            $show_apply_button = false;
+            $show_payment_failed = false;
+            $loyalty_btn_text = "Enroll";
+            $loyalty_btn_class = "btn-loyalty-action";
+            $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
+            
+            if ($loyaltiesStatus !== null && $loyaltiesStatus !== 'justjoined') {
+                $needs_db_update = true;
+                $new_loyalties_status = 'active';
+            }
         }
     }
-    // PRIORITY 7: Fallback - no active contract, no special status
+    // PRIORITY 9: FALLBACK - Default state when conditions don't match above
     else {
         $dashboard_disclaimer = "No active contract.";
-        $loyalty_text = "You don't have an active contract. Click enroll to start a new {$CONTRACT_DURATION}-day trading contract.";
+        $loyalty_text = "Click Enroll to start a new trading contract.";
         $loyalties_message = "Ready to Start";
         $show_reenroll_button = true;
+        $show_reset_button = false;
+        $show_apply_button = false;
+        $show_payment_failed = false;
         $loyalty_btn_text = "Enroll";
         $loyalty_btn_class = "btn-loyalty-action";
         $loyalty_btn_action = "onclick=\"openReenrollModal()\"";
@@ -643,6 +716,26 @@
             $needs_db_update = true;
             $new_loyalties_status = 'active';
         }
+    }
+    
+    // Apply database updates if needed
+    if ($needs_pnl_reset && $profitAndLoss == 0 && $profitAndLoss != ($user['profitandloss'] ?? 0)) {
+        $upd = $pdo->prepare("UPDATE $tableName SET profitandloss = 0 WHERE email = ?");
+        $upd->execute([$email]);
+        
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    if ($needs_db_update && $new_loyalties_status !== $loyaltiesStatus) {
+        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = ? WHERE email = ?");
+        $upd->execute([$new_loyalties_status, $email]);
+        
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $loyaltiesStatus = $new_loyalties_status;
     }
     
     // Apply database updates if needed
@@ -900,29 +993,18 @@
             && (time() - $_SESSION['reenroll_passkey_verified_time']) < 300) {
             
             $today = date('Y-m-d');
-            
-            // Calculate end date based on contract duration
             $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($today)));
+            
+            // Generate contract_id: sd-{startdate}-ed-{enddate}
+            $startFormatted = date('dmY', strtotime($today));
+            $endFormatted = date('dmY', strtotime($endDate));
+            $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
             
             // Get current broker balance for starting balance
             $stmt = $pdo->prepare("SELECT broker_balance FROM $tableName WHERE email = ?");
             $stmt->execute([$email]);
             $currentData = $stmt->fetch(PDO::FETCH_ASSOC);
             $startingBalance = (float)($currentData['broker_balance'] ?? 0);
-            
-            // Create new revenue history entry
-            $newRevenueEntry = [
-                'id' => time(),
-                'execution_start_date' => $today,
-                'execution_end_date' => $endDate,
-                'starting_balance' => $startingBalance,
-                'current_balance' => $startingBalance,
-                'profit' => 0,
-                'user_share' => 0,
-                'server_share' => 0,
-                'loyalties' => 'active',
-                'invested_with' => $user['invested_with'] ?? null
-            ];
             
             // Get existing revenue history
             $stmt = $pdo->prepare("SELECT revenue_history FROM $tableName WHERE email = ?");
@@ -937,15 +1019,40 @@
                 }
             }
             
+            // ===== FILTER: Remove records with empty contract_id =====
+            $filteredHistory = [];
+            foreach ($revenueHistory as $record) {
+                $recordContractId = $record['contract_id'] ?? null;
+                if (!empty($recordContractId) && $recordContractId !== 'N/A' && $recordContractId !== 'null') {
+                    $filteredHistory[] = $record;
+                }
+            }
+            $revenueHistory = $filteredHistory;
+            
+            // Create new revenue history entry with contract_id
+            $newRevenueEntry = [
+                'id' => time(),
+                'contract_id' => $contractId,
+                'execution_start_date' => $today,
+                'execution_end_date' => $endDate,
+                'starting_balance' => $startingBalance,
+                'current_balance' => $startingBalance,
+                'profit' => 0,
+                'user_share' => 0,
+                'server_share' => 0,
+                'loyalties' => 'active',
+                'invested_with' => $user['invested_with'] ?? null
+            ];
+            
             // Add new entry at the beginning
             array_unshift($revenueHistory, $newRevenueEntry);
             
             // Save updated revenue history
             $updatedRevenueHistory = json_encode($revenueHistory);
             
-            // Update user data
-            $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, revenue_history = ? WHERE email = ?");
-            $upd->execute([$today, $updatedRevenueHistory, $email]);
+            // Update user data with contract_id
+            $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, contract_id = ?, revenue_history = ? WHERE email = ?");
+            $upd->execute([$today, $contractId, $updatedRevenueHistory, $email]);
             
             unset($_SESSION['reenroll_passkey_verified']);
             unset($_SESSION['reenroll_passkey_verified_time']);
@@ -1005,11 +1112,47 @@
     // Handle Apply for Verification
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_for_verification'])) {
         // Update balance verification status to 'applied-for-verification'
-        $upd = $pdo->prepare("UPDATE $tableName SET balance_verification = 'applied-for-verification', broker_balance = 0 WHERE email = ?");
+        $upd = $pdo->prepare("UPDATE $tableName SET balance_verification = 'applied-for-verification' WHERE email = ?");
         $upd->execute([$email]);
         
         $_SESSION['prg_redirect_safe'] = true;
-        $_SESSION['apply_success_message'] = "Your application has been submitted. Our team will verify your account. Please ensure you have deposited the minimum required amount.";
+        $_SESSION['apply_success_message'] = "Your application has been submitted successfully!";
+        $_SESSION['apply_success_details'] = "Our team will verify your account. Please ensure you have deposited the minimum required amount of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
+        header("Location: mydashboard.php");
+        exit;
+    }
+    // Handle Reset Contract
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reset_contract'])) {
+        // Reset all contract-related fields
+        $resetData = [
+            'broker_balance' => 0,
+            'profitandloss' => 0,
+            'contract_id' => NULL,
+            'execution_start_date' => NULL,
+            'balance_verification' => 'not-verified',
+            'reset_contract' => 0  // Set to 0 so reset button disappears and apply can show
+            // REMOVED: 'loyalties' => 'justjoined' - Don't update loyalties
+            // REMOVED: 'revenue_history' => NULL - Keep revenue history
+        ];
+        
+        // Build the SET clause dynamically
+        $setClauses = [];
+        $params = [];
+        
+        foreach ($resetData as $key => $value) {
+            $setClauses[] = "$key = ?";
+            $params[] = $value;
+        }
+        
+        // Add email to params
+        $params[] = $email;
+        
+        // Execute the update without touching loyalties or revenue_history
+        $upd = $pdo->prepare("UPDATE $tableName SET " . implode(', ', $setClauses) . " WHERE email = ?");
+        $upd->execute($params);
+        
+        $_SESSION['prg_redirect_safe'] = true;
+        $_SESSION['reset_success_message'] = "Your contract has been reset successfully. Please apply for verification to start a new contract.";
         header("Location: mydashboard.php");
         exit;
     }
@@ -1211,7 +1354,7 @@
         
         $email = strtolower($_SESSION['user_email']);
         
-        $stmt = $pdo->prepare("SELECT broker_balance, profitandloss, loyalties, execution_start_date, broker, application_status, balance_verification FROM $tableName WHERE email = ? AND application_status = 'approved'");
+        $stmt = $pdo->prepare("SELECT broker_balance, profitandloss, loyalties, execution_start_date, broker, application_status, balance_verification, reset_contract FROM $tableName WHERE email = ? AND application_status = 'approved'");
         $stmt->execute([$email]);
         $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -1222,6 +1365,7 @@
             $loyaltiesStatus = $liveUser['loyalties'] ?? null;
             $broker = strtolower($liveUser['broker'] ?? 'unknown');
             $balanceVerificationStatus = $liveUser['balance_verification'] ?? 'not-verified';
+            $resetContractStatus = $liveUser['reset_contract'] ?? 0;
             
             $executionStartDate = $liveUser['execution_start_date'] ?? null;
             $contractDaysLeft = 0;
@@ -1230,7 +1374,6 @@
             $formatted_start_date = null;
             $formatted_end_date = null;
             
-            // Get MIN_INITIAL_DEPOSIT from server_account table
             $stmtConfig = $pdo->prepare("SELECT minimum_deposit, contract_duration, server_share_percent, user_share_percent, min_broker_balance, min_profit_for_split FROM server_account LIMIT 1");
             $stmtConfig->execute();
             $config = $stmtConfig->fetch(PDO::FETCH_ASSOC);
@@ -1238,7 +1381,6 @@
             $CONTRACT_DURATION = $config ? (int)$config['contract_duration'] : 30;
             $MIN_PROFIT_FOR_SPLIT = $config ? (float)$config['min_profit_for_split'] : 100;
             
-            // Calculate contract dates
             if ($executionStartDate && $executionStartDate !== '0000-00-00' && $executionStartDate !== null) {
                 $start = new DateTime($executionStartDate);
                 $formatted_start_date = $start->format('M d, Y');
@@ -1263,139 +1405,221 @@
                 }
             }
             
-            // ===== HIERARCHICAL DECISION TREE FOR AJAX (PRIORITY ORDER) =====
+            // ===== CORRECTED PRIORITY ORDER: RESET=1 COMES FIRST =====
             
             $loyalties_message = "";
+            $loyalty_text = "";
             $show_reenroll_button = false;
             $show_apply_button = false;
+            $show_reset_button = false;
             $show_payment_note = false;
+            $show_payment_failed = false;
             $loyalty_btn_text = "";
             $loyalty_btn_class = "";
+            $loyalty_btn_action = "";
             $dashboard_disclaimer = "";
             $balance_check_failed = false;
             
-            // PRIORITY 0: BALANCE VERIFICATION STATUS (HIGHEST PRIORITY)
-            if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
-                $loyalties_message = "Verification Required";
-                $dashboard_disclaimer = "Account verification required.";
-                $show_apply_button = true;
-                $show_reenroll_button = false;
-                $loyalty_btn_text = "Apply";
-                $loyalty_btn_class = "btn-loyalty-action";
-                $loyalty_btn_action = "apply";
-                
-            } elseif ($balanceVerificationStatus === 'applied-for-verification') {
-                $loyalties_message = "Verification Pending";
-                $dashboard_disclaimer = "Account verification in progress.";
+            // PRIORITY 0: RESET BUTTON STATE (HIGHEST PRIORITY)
+            // Check if reset_contract == 1 - Show Reset button FIRST
+            if ($resetContractStatus == 1) {
+                $show_reset_button = true;
                 $show_apply_button = false;
                 $show_reenroll_button = false;
+                $loyalties_message = "Ready for a new Contract?";
+                $loyalty_text = "Your path is clear. Click below to embark on your next contract.";
+                $dashboard_disclaimer = "Time for the Next Phase!";
+                $loyalty_btn_text = "Let's get started";
+                $loyalty_btn_class = "btn-loyalty-action btn-reset";
+                $loyalty_btn_action = "reset";
+            }
+            // PRIORITY 1: APPLY FOR VERIFICATION (only if reset_contract == 0 AND not verified)
+            elseif ($resetContractStatus == 0 && ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus))) {
+                $show_reset_button = false;
+                $show_apply_button = true;
+                $show_reenroll_button = false;
+                $loyalties_message = "Balance Verification Required";
+                $loyalty_text = "Please apply for verification now if you have deposited funds.";
+                $dashboard_disclaimer = "Balance verification required. Apply if you have funded your broker account.";
+                $loyalty_btn_text = "Apply for Verification";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "apply";
+            }
+            // PRIORITY 2: UNDER VERIFICATION
+            elseif ($balanceVerificationStatus === 'applied-for-verification') {
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_reenroll_button = false;
+                $loyalties_message = "Balance Verification Pending";
+                $loyalty_text = "Your account is pending balance review. This check usually takes between 24 and 48 hours.";
+                $dashboard_disclaimer = "Balance verification in progress.";
                 $loyalty_btn_text = "Under Review";
                 $loyalty_btn_class = "btn-loyalty-paid";
-                
-            } elseif ($balanceVerificationStatus === 'verified') {
-                // Check minimum deposit requirement
-                if ($brokerBalance < $MIN_INITIAL_DEPOSIT) {
-                    // Revert to unverified status
-                    $updBalance = $pdo->prepare("UPDATE $tableName SET balance_verification = 'not-verified', broker_balance = 0 WHERE email = ?");
-                    $updBalance->execute([$email]);
-                    
-                    $balanceVerificationStatus = 'not-verified';
-                    $balance_check_failed = false;
-                    $loyalties_message = "Verification Required";
-                    $dashboard_disclaimer = "Account verification required. Minimum deposit of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . " needed.";
-                    $show_apply_button = true;
-                    $show_reenroll_button = false;
-                    $loyalty_btn_text = "Apply";
-                    $loyalty_btn_class = "btn-loyalty-action";
-                    $loyalty_btn_action = "apply";
+                $loyalty_btn_action = "";
+            }
+            // PRIORITY 3: ENROLL (only when verified AND reset_contract == 0)
+            elseif ($resetContractStatus == 0 && $balanceVerificationStatus === 'verified' && $brokerBalance >= $MIN_INITIAL_DEPOSIT) {
+                // Check payment and contract states
+                if ($loyaltiesStatus === 'payment-made') {
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $loyalties_message = "Payment Pending Confirmation";
+                    $loyalty_text = "Your payment has been recorded. Once confirmed, you can enroll for a new contract.";
+                    $show_payment_note = true;
+                    $show_payment_failed = false;
+                    $loyalty_btn_text = "Awaiting Confirmation";
+                    $loyalty_btn_class = "btn-loyalty-paid";
+                    $loyalty_btn_action = "";
+                    $dashboard_disclaimer = "Payment submitted for verification.";
                 }
-                // Only proceed with contract logic if balance is verified AND minimum deposit is met
-                else {
-                    // PRIORITY 1: Payment-made state
-                    if ($loyaltiesStatus === 'payment-made') {
-                        $loyalties_message = "Payment Pending Confirmation";
-                        $show_payment_note = true;
-                        $loyalty_btn_text = "Awaiting Confirmation";
-                        $loyalty_btn_class = "btn-loyalty-paid";
-                        $dashboard_disclaimer = "Payment submitted for verification.";
-                        
-                    } 
-                    // PRIORITY 2: Payment-confirmed state
-                    elseif ($loyaltiesStatus === 'payment-confirmed') {
-                        $loyalties_message = "Ready to enroll";
+                elseif ($loyaltiesStatus === 'payment-confirmed') {
+                    $dashboard_disclaimer = "Ready to start a new contract.";
+                    $loyalty_text = "Your payment has been confirmed. You can now start a new trading contract.";
+                    $loyalties_message = "Ready to enroll";
+                    $show_reenroll_button = true;
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $show_payment_failed = false;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $loyalty_btn_action = "enroll";
+                }
+                elseif ($loyaltiesStatus === 'payment-failed' || $loyaltiesStatus === 'failed-payment') {
+                    $dashboard_disclaimer = "⚠ Payment verification failed!";
+                    $loyalty_text = "Your payment could not be verified. ";
+                    $loyalties_message = "Payment Failed";
+                    $show_payment_note = false;
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $show_reenroll_button = false;
+                    $show_payment_failed = true;
+                    $loyalty_btn_text = "Retry Payment";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $loyalty_btn_action = "payment-failed";
+                }
+                elseif ($loyaltiesStatus === 'justjoined') {
+                    $loyalties_message = "Welcome New Member!";
+                    $loyalty_text = "Welcome aboard! Click Enroll to start your trading journey.";
+                    $show_reenroll_button = true;
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $show_payment_failed = false;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $loyalty_btn_action = "enroll";
+                    $dashboard_disclaimer = "Welcome to HarvHub!";
+                }
+                elseif ($is_contract_active) {
+                    $loyalties_message = "Contract Active";
+                    $loyalty_text = $contractDaysLeft . " days left.";
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $show_reenroll_button = false;
+                    $show_payment_failed = false;
+                    $loyalty_btn_text = "Active";
+                    $loyalty_btn_class = "btn-loyalty-confirmed";
+                    $loyalty_btn_action = "";
+                    $dashboard_disclaimer = "Trading is active. {$contractDaysLeft} days left.";
+                }
+                elseif ($contract_completed) {
+                    if ($loyaltiesStatus === 'payment-failed' || $loyaltiesStatus === 'failed-payment') {
+                        $dashboard_disclaimer = "⚠ Payment verification failed!";
+                        $loyalty_text = "Your payment could not be verified. ";
+                        $loyalties_message = "Payment Failed";
+                        $show_payment_note = false;
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_reenroll_button = false;
+                        $show_payment_failed = true;
+                        $loyalty_btn_text = "Retry Payment";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $loyalty_btn_action = "payment-failed";
+                    }
+                    elseif ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
+                        $loyalties_message = "Contract Ended - Payment Required";
+                        $loyalty_text = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split.";
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_payment_failed = false;
+                        $loyalty_btn_text = "View Profit Split";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $loyalty_btn_action = "profitsplit";
+                        $dashboard_disclaimer = "Contract completed - Profit split required!";
+                    }
+                    elseif ($profitAndLoss < 0) {
+                        $loyalties_message = "Ready for New Contract";
+                        $loyalty_text = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new contract.";
                         $show_reenroll_button = true;
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_payment_failed = false;
                         $loyalty_btn_text = "Enroll";
                         $loyalty_btn_class = "btn-loyalty-action";
-                        $dashboard_disclaimer = "Ready to start a new contract.";
-                        
-                    } 
-                    // PRIORITY 3: Just joined
-                    elseif ($loyaltiesStatus === 'justjoined') {
-                        $loyalties_message = "Welcome New Member!";
+                        $loyalty_btn_action = "enroll";
+                        $dashboard_disclaimer = "Contract completed with loss. You can start a new contract.";
+                    }
+                    elseif ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
+                        $loyalties_message = "Ready for New Contract";
+                        $loyalty_text = "Profit of $" . number_format($profitAndLoss, 2) . " is below the split threshold. You keep 100% of the profit. Click Enroll to start a new contract.";
                         $show_reenroll_button = true;
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_payment_failed = false;
                         $loyalty_btn_text = "Enroll";
                         $loyalty_btn_class = "btn-loyalty-action";
-                        $dashboard_disclaimer = "Welcome to HarvHub!";
-                        
-                    } 
-                    // PRIORITY 4: Active contract
-                    elseif ($is_contract_active) {
-                        $loyalties_message = "Contract Active";
-                        $loyalty_btn_text = "Active";
-                        $loyalty_btn_class = "btn-loyalty-confirmed";
-                        $dashboard_disclaimer = "Trading is active. {$contractDaysLeft} days left.";
-                        
-                    } 
-                    // PRIORITY 5: Contract completed (ended)
-                    elseif ($contract_completed) {
-                        // Check if profit is above threshold AND not paid yet
-                        if ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT && $loyaltiesStatus !== 'payment-made' && $loyaltiesStatus !== 'payment-confirmed') {
-                            $loyalties_message = "Contract Ended - Payment Required";
-                            $loyalty_btn_text = "View Profit Split";
-                            $loyalty_btn_class = "btn-loyalty-action";
-                            $dashboard_disclaimer = "Contract completed - Profit split required!";
-                        } 
-                        else if ($profitAndLoss < 0) {
-                            // LOSS case - show enroll button
-                            $loyalties_message = "Ready for New Contract";
-                            $show_reenroll_button = true;
-                            $loyalty_btn_text = "Enroll";
-                            $loyalty_btn_class = "btn-loyalty-action";
-                            $dashboard_disclaimer = "Contract completed with loss. You can start a new contract.";
-                        } 
-                        else if ($profitAndLoss > 0 && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT) {
-                            // BELOW THRESHOLD case - user keeps full profit
-                            $loyalties_message = "Ready for New Contract";
-                            $show_reenroll_button = true;
-                            $loyalty_btn_text = "Enroll";
-                            $loyalty_btn_class = "btn-loyalty-action";
-                            $dashboard_disclaimer = "Contract completed. Profit below split threshold - no profit split required.";
-                        } 
-                        else if ($profitAndLoss == 0) {
-                            // ZERO PROFIT case
-                            $loyalties_message = "Ready for New Contract";
-                            $show_reenroll_button = true;
-                            $loyalty_btn_text = "Enroll";
-                            $loyalty_btn_class = "btn-loyalty-action";
-                            $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
-                        } 
-                        else {
-                            $loyalties_message = "Ready for New Contract";
-                            $show_reenroll_button = true;
-                            $loyalty_btn_text = "Enroll";
-                            $loyalty_btn_class = "btn-loyalty-action";
-                            $dashboard_disclaimer = "Ready to start a new contract.";
-                        }
-                    } 
-                    // PRIORITY 6: No active contract (fallback)
+                        $loyalty_btn_action = "enroll";
+                        $dashboard_disclaimer = "Contract completed. Profit below split threshold - no profit split required.";
+                    }
+                    elseif ($profitAndLoss == 0) {
+                        $loyalties_message = "Ready for New Contract";
+                        $loyalty_text = "Your contract has ended with no profit. Click Enroll to start a new contract.";
+                        $show_reenroll_button = true;
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_payment_failed = false;
+                        $loyalty_btn_text = "Enroll";
+                        $loyalty_btn_class = "btn-loyalty-action";
+                        $loyalty_btn_action = "enroll";
+                        $dashboard_disclaimer = "Contract completed with no profit. You can enroll for a new contract.";
+                    }
                     else {
-                        $loyalties_message = "Ready to Start";
+                        $loyalties_message = "Ready for New Contract";
+                        $loyalty_text = "Ready to start a new contract. Click Enroll to begin.";
                         $show_reenroll_button = true;
+                        $show_reset_button = false;
+                        $show_apply_button = false;
+                        $show_payment_failed = false;
                         $loyalty_btn_text = "Enroll";
                         $loyalty_btn_class = "btn-loyalty-action";
-                        $dashboard_disclaimer = "No active contract.";
+                        $loyalty_btn_action = "enroll";
+                        $dashboard_disclaimer = "Ready to start a new contract.";
                     }
                 }
+                else {
+                    $loyalties_message = "Ready to Start";
+                    $loyalty_text = "Click Enroll to start a new trading contract.";
+                    $show_reenroll_button = true;
+                    $show_reset_button = false;
+                    $show_apply_button = false;
+                    $show_payment_failed = false;
+                    $loyalty_btn_text = "Enroll";
+                    $loyalty_btn_class = "btn-loyalty-action";
+                    $loyalty_btn_action = "enroll";
+                    $dashboard_disclaimer = "No active contract.";
+                }
+            }
+            // PRIORITY 4: FALLBACK - Default state
+            else {
+                $loyalties_message = "Ready to Start";
+                $loyalty_text = "Click Enroll to start a new trading contract.";
+                $show_reenroll_button = true;
+                $show_reset_button = false;
+                $show_apply_button = false;
+                $show_payment_failed = false;
+                $loyalty_btn_text = "Enroll";
+                $loyalty_btn_class = "btn-loyalty-action";
+                $loyalty_btn_action = "enroll";
+                $dashboard_disclaimer = "No active contract.";
             }
             
             echo json_encode([
@@ -1412,13 +1636,16 @@
                 'formatted_end_date' => $formatted_end_date,
                 'loyalties_status' => $loyaltiesStatus,
                 'balance_verification_status' => $balanceVerificationStatus,
+                'reset_contract' => $resetContractStatus,
+                'show_reset_button' => $show_reset_button,
                 'loyalties_message' => $loyalties_message,
+                'loyalty_text' => $loyalty_text,
                 'show_reenroll_button' => $show_reenroll_button,
                 'show_apply_button' => $show_apply_button,
                 'show_payment_note' => $show_payment_note,
                 'loyalty_btn_text' => $loyalty_btn_text,
                 'loyalty_btn_class' => $loyalty_btn_class,
-                'loyalty_btn_action' => $loyalty_btn_action ?? '',
+                'loyalty_btn_action' => $loyalty_btn_action,
                 'dashboard_disclaimer' => $dashboard_disclaimer,
                 'broker' => $broker,
                 'profit_to_split' => number_format(max(0, $profitAndLoss), 2),
@@ -1662,24 +1889,36 @@
                     <?php endif; ?>
                     
                     <!-- ONLY SHOW ENROLL/ACTION BUTTON WHEN NOT IN APPLY MODE AND NOT IN PAYMENT NOTE MODE -->
-                    <?php if (!$show_payment_note && !$show_apply_button): ?>
+                    <!-- BUTTON ORDER: Reset -> Apply -> Enroll -->
+                    <!-- RESET BUTTON (show when reset_contract = 0) -->
+                    <?php if ($show_reset_button && !$show_payment_note): ?>
                         <button 
-                            <?= $loyalty_btn_action ?>
-                            class="<?= htmlspecialchars($loyalty_btn_class) ?>"
-                            <?= ($loyalty_btn_class === 'btn-loyalty-paid' && $loyalty_btn_text !== 'Awaiting Confirmation') ? 'disabled' : '' ?>
+                            onclick="openResetModal()"
+                            class="btn-loyalty-action btn-reset"
                         >
-                            <?= htmlspecialchars($loyalty_btn_text) ?>
+                            Let's Get Started
                         </button>
                     <?php endif; ?>
 
-                    <!-- ONLY SHOW APPLY BUTTON WHEN show_apply_button IS TRUE -->
-                    <?php if ($show_apply_button): ?>
+                    <!-- APPLY BUTTON (show when reset_contract = 1 AND unverified) -->
+                    <?php if ($show_apply_button && !$show_payment_note): ?>
                         <button 
                             onclick="openApplyModal()"
                             class="btn-loyalty-action"
                             style="margin-top: 1rem; width: 100%;"
                         >
                             Apply for Verification
+                        </button>
+                    <?php endif; ?>
+
+                    <!-- ENROLL/ACTION BUTTON (show when NOT in reset/apply mode) -->
+                    <?php if (!$show_reset_button && !$show_apply_button && !$show_payment_note): ?>
+                        <button 
+                            <?= $loyalty_btn_action ?>
+                            class="<?= htmlspecialchars($loyalty_btn_class) ?>"
+                            <?= ($loyalty_btn_class === 'btn-loyalty-paid' && $loyalty_btn_text !== 'Awaiting Confirmation') ? 'disabled' : '' ?>
+                        >
+                            <?= htmlspecialchars($loyalty_btn_text) ?>
                         </button>
                     <?php endif; ?>
                 </div>
@@ -1773,19 +2012,15 @@
             <div class="modal-content">
                 <h2 style="color:var(--info-color);">Profit Split Required</h2>
                 
+                <p style="margin-bottom: 2rem; opacity: 0.8;">
+                    Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.
+                </p>
+                
                 <?php if ($loyaltiesStatus === 'unpaid-payment'): ?>
                     <div class="unpaid-warning" style="margin-bottom: 1rem; background: rgba(255, 107, 107, 0.2);">
                         <strong>Server %:</strong> You are expected to send payment of $<?= number_format($serverShare, 2) ?> to the server.
                     </div>
                 <?php endif; ?>
-                
-                <p style="margin-bottom: 2rem; opacity: 0.8;">
-                    Your contract has ended with a profit of $<?= number_format($profitToSplit, 2) ?>.
-                </p>
-                <p class="split-total">
-                    Total Profit: $<?= number_format($profitToSplit, 2) ?>
-                </p>
-
                 <div class="split-container">
                     <div class="split-item">
                         <h4 style="color:var(--success-color);"><?= $USER_SHARE_PERCENT ?>%</h4>
@@ -1865,6 +2100,41 @@
                     <button onclick="this.closest('.modal').classList.remove('active')"
                         style="background:#555; color:white; border:none;">
                         Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- Payment Failed Modal -->
+        <div id="paymentFailedModal" class="modal">
+            <div class="modal-content">
+                <h2 style="color: #ff6b6b;">⚠ Payment Failed</h2>
+
+                <p style="margin: 1rem 0; opacity: 0.8;">
+                    Your contract ended with a profit of <strong>$<?= number_format($profitToSplit, 2) ?></strong>.
+                </p>
+                
+                <div class="payment-failed-warning" style="background: rgba(255, 107, 107, 0.15); border-left: 4px solid #ff6b6b; padding: 1rem; margin: 1rem 0;">
+                    <p style="margin-top: 0.5rem; opacity: 0.8;">
+                        The server did not receive confirmation of $<?= number_format($serverShare, 2) ?> payment you made.
+                    </p>
+                </div>
+
+                <div class="split-container">
+                    <div class="split-item">
+                        <h4 style="color:var(--success-color);"><?= $SERVER_SHARE_PERCENT ?>%</h4>
+                        <p>Server Share</p>
+                        <h4 style="color:var(--success-color);">$<?= number_format($serverShare, 2) ?></h4>
+                        <button class="btn-pay" onclick="updateServerShareAmount(); document.getElementById('paymentFailedModal').classList.remove('active'); document.getElementById('paymentModal').classList.add('active');"
+                                style="padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; display: block; width: 100%; background: #ff9800; color: white;">
+                            Retry Payment
+                        </button>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button onclick="this.closest('.modal').classList.remove('active')"
+                        style="background:#555; color:white; border:none;">
+                        Close
                     </button>
                 </div>
             </div>
@@ -2040,7 +2310,7 @@
     <!-- Apply for Verification Modal -->
 <div id="applyModal" class="modal">
     <div class="modal-content">
-        <h2 style="color: var(--info);">Apply for Verification</h2>
+        <h2 style="color: var(--info);">Balance Verification Application</h2>
         
         <p style="margin: 1.5rem 0; line-height: 1.6;">
             Before proceeding with your application, please ensure:
@@ -2071,6 +2341,49 @@
         </div>
     </div>
 </div>
+
+    <!-- Reset Contract Confirmation Modal -->
+    <div id="resetModal" class="modal">
+        <div class="modal-content">
+            <h2 style="color: #ff9800;">Start a new Journey</h2>
+            <div class="reset-note" style="background: rgba(46, 204, 113, 0.1); border-left: 4px solid #2ecc71; padding: 1rem; margin: 1rem 0;">
+                <strong style="color: #2ecc71;">✅ Important:</strong>
+                <p style="margin-top: 0.5rem;">Please ensure you have deposited funds into your broker account before applying for verification.</p>
+            </div>
+            
+            <div class="modal-actions" style="flex-direction: column; gap: 10px;">
+                <form method="POST" style="width: 100%;">
+                    <input type="hidden" name="confirm_reset_contract" value="1">
+                    <button type="submit" class="btn-full" style="background: #ff9800; color: white; width: 100%;">
+                        Continue
+                    </button>
+                </form>
+                <button onclick="closeResetModal()" style="width: 100%; padding: 12px; background: #555; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+    <!-- Apply Success Modal -->
+    <div id="applySuccessModal" class="modal">
+        <div class="modal-content">
+            <div class="success-icon">✅</div>
+            <h2 style="color: var(--success);">Application Submitted!</h2>
+            <p id="applySuccessMessage" style="margin: 1.5rem 0; font-size: 1.1rem; text-align: center;">
+                Your application has been submitted successfully!
+            </p>
+            <p id="applySuccessDetails" style="margin: 0.5rem 0 1.5rem 0; opacity: 0.8; text-align: center; font-size: 0.95rem;">
+                Our team will verify your account. Please ensure you have deposited the minimum required amount.
+            </p>
+            <div class="modal-actions" style="justify-content: center;">
+                <button onclick="closeApplySuccessModal()" 
+                        style="background: var(--success); color: white; border: none; padding: 12px 40px; border-radius: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
+                    Got it
+                </button>
+            </div>
+        </div>
+    </div>
+
 <script>
     // This function must be available globally
     function openApplyModal() {
@@ -2098,9 +2411,12 @@
     // Check for apply success message
     <?php if (isset($_SESSION['apply_success_message'])): ?>
         setTimeout(function() {
-            alert('<?= htmlspecialchars($_SESSION['apply_success_message']) ?>');
+            const message = '<?= htmlspecialchars($_SESSION['apply_success_message']) ?>';
+            const details = '<?= htmlspecialchars($_SESSION['apply_success_details'] ?? 'Our team will verify your account.') ?>';
+            openApplySuccessModal(message, details);
         }, 100);
         <?php unset($_SESSION['apply_success_message']); ?>
+        <?php unset($_SESSION['apply_success_details']); ?>
     <?php endif; ?>
 </script>
 <script>
@@ -2416,21 +2732,21 @@
     });
 </script>
 <script>
-        // ============== LIVE BALANCE UPDATES ==============
-        
-        // Store DOM elements for performance
-        const depositBalanceEl = document.querySelector('.stat-card:first-child h2');
-        const profitLossEl = document.querySelector('.stat-card:nth-child(2) h2');
-        const currentBalanceEl = document.querySelector('.stat-card:nth-child(3) h2');
-        const loyaltyDaysLeftEl = document.querySelector('.loyalty-card p');
-        const loyaltiesEl = document.querySelector('.loyalty-status-msg');
-        
-        // Track if update is in progress
-        let isUpdating = false;
-        let updateInterval = null;
-        let retryCount = 0;
-        const MAX_RETRIES = 3;
-        
+    // ============== LIVE BALANCE UPDATES ==============
+
+    // Store DOM elements for performance
+    const depositBalanceEl = document.querySelector('.stat-card:first-child h2');
+    const profitLossEl = document.querySelector('.stat-card:nth-child(2) h2');
+    const currentBalanceEl = document.querySelector('.stat-card:nth-child(3) h2');
+    const loyaltyDaysLeftEl = document.querySelector('.loyalty-card p');
+    const loyaltiesEl = document.querySelector('.loyalty-status-msg');
+
+    // Track if update is in progress
+    let isUpdating = false;
+    let updateInterval = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+
         // Function to fetch latest balances and update all UI elements
         async function fetchLiveBalances() {
             if (isUpdating) return;
@@ -2479,20 +2795,19 @@
                         contractDatesEl.style.display = 'none';
                     }
                     
-                    // Update days left text
+                    // ===== FIXED: Update loyalty text - Always use server data =====
                     const loyaltyTextEl = document.querySelector('.loyalty-card p');
-                    if (loyaltyTextEl) {
-                        if (data.is_contract_active && data.contract_days_left > 0) {
+                    if (loyaltyTextEl && data.loyalty_text) {
+                        // Simply use the server-provided text which already has the correct logic
+                        loyaltyTextEl.innerHTML = data.loyalty_text;
+                    } else if (loyaltyTextEl) {
+                        // Fallback if no data.loyalty_text
+                        if (data.show_apply_button) {
+                            loyaltyTextEl.innerHTML = 'Please apply for verification now if you have deposited funds, as this is required before enrollment.';
+                        } else if (data.is_contract_active && data.contract_days_left > 0) {
                             loyaltyTextEl.innerHTML = `${data.contract_days_left} days left.`;
-                        } else if (data.contract_completed && data.profit_loss && parseFloat(data.profit_loss) > 0) {
-                            // Keep existing profit split text, don't override
-                            if (!loyaltyTextEl.innerHTML.includes('Please complete the profit split')) {
-                                loyaltyTextEl.innerHTML = `Your contract has ended with a profit of $${data.profit_loss}.`;
-                            }
-                        } else if (data.contract_completed && data.profit_loss && parseFloat(data.profit_loss) < 0) {
-                            loyaltyTextEl.innerHTML = `Don't give up! Every loss is a learning opportunity. You can enroll for a new contract and bounce back stronger!`;
-                        } else if (!data.is_contract_active && !data.contract_completed) {
-                            loyaltyTextEl.innerHTML = `You don't have an active contract. Click enroll to start a new trading contract.`;
+                        } else {
+                            loyaltyTextEl.innerHTML = 'No active contract.';
                         }
                     }
                     
@@ -2514,13 +2829,22 @@
                                 badge.innerHTML = 'Payment Required';
                                 disclaimerEl.appendChild(badge);
                             }
+                        } else if (data.loyalties_status === 'payment-failed' || data.loyalties_status === 'failed-payment') {
+                            if (!disclaimerEl.querySelector('.payment-failed-badge')) {
+                                const badge = document.createElement('span');
+                                badge.className = 'payment-failed-badge';
+                                badge.innerHTML = '⚠ Payment Failed';
+                                badge.style.cssText = 'background: #ff6b6b; color: white; padding: 2px 10px; border-radius: 12px; font-size: 11px; margin-left: 8px;';
+                                disclaimerEl.appendChild(badge);
+                            }
                         } else {
                             const badge = disclaimerEl.querySelector('.payment-required-badge');
                             if (badge) badge.remove();
+                            const failedBadge = disclaimerEl.querySelector('.payment-failed-badge');
+                            if (failedBadge) failedBadge.remove();
                         }
                     }
-                    
-                    // Update loyalty button in the live updates
+
                     // Update loyalty button in the live updates
                     const loyaltyBtn = document.querySelector('.loyalty-card button');
                     if (loyaltyBtn && data.loyalty_btn_text) {
@@ -2531,8 +2855,12 @@
                         loyaltyBtn.removeAttribute('onclick');
                         loyaltyBtn.disabled = false;
                         
-                        // Update button action based on state from server
-                        if (data.show_apply_button) {
+                        // ADD THIS: Reset button action
+                        if (data.loyalty_btn_action === 'reset') {
+                            loyaltyBtn.setAttribute('onclick', 'openResetModal()');
+                            loyaltyBtn.disabled = false;
+                        }
+                        else if (data.show_apply_button) {
                             // Apply for verification mode
                             loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
                             loyaltyBtn.disabled = false;
@@ -2546,6 +2874,11 @@
                         else if (data.loyalty_btn_action === 'apply') {
                             // Apply for verification mode (fallback)
                             loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
+                            loyaltyBtn.disabled = false;
+                        }
+                        else if (data.loyalty_btn_action === 'payment-failed') {
+                            // Payment failed mode - open retry modal
+                            loyaltyBtn.setAttribute('onclick', "document.getElementById('paymentFailedModal').classList.add('active')");
                             loyaltyBtn.disabled = false;
                         }
                         else if (data.loyalties_status === 'unpaid-payment') {
@@ -2567,6 +2900,11 @@
                             loyaltyBtn.setAttribute('onclick', "openReenrollModal()");
                             loyaltyBtn.disabled = false;
                         }
+                        else if (data.loyalties_status === 'payment-failed' || data.loyalties_status === 'failed-payment') {
+                            // Payment failed - retry
+                            loyaltyBtn.setAttribute('onclick', "document.getElementById('paymentFailedModal').classList.add('active')");
+                            loyaltyBtn.disabled = false;
+                        }
                         else if (data.is_contract_active) {
                             // Active contract - disabled
                             loyaltyBtn.disabled = true;
@@ -2577,54 +2915,6 @@
                         }
                     }
 
-                    // Update dashboard disclaimer (remove duplicate after this)
-                    const disclaimerEl = document.querySelector('.dashboard-disclaimer');
-                    if (disclaimerEl && data.dashboard_disclaimer) {
-                        disclaimerEl.innerHTML = data.dashboard_disclaimer;
-                        
-                        // Add payment badge if needed
-                        if (data.loyalties_status === 'unpaid-payment') {
-                            if (!disclaimerEl.querySelector('.payment-required-badge')) {
-                                const badge = document.createElement('span');
-                                badge.className = 'payment-required-badge';
-                                badge.innerHTML = 'Payment Required';
-                                disclaimerEl.appendChild(badge);
-                            }
-                        } else {
-                            const badge = disclaimerEl.querySelector('.payment-required-badge');
-                            if (badge) badge.remove();
-                        }
-                    }
-
-                    // Also update the disclaimer to show balance check failed message appropriately
-                    const disclaimerEl = document.querySelector('.dashboard-disclaimer');
-                    if (disclaimerEl && data.dashboard_disclaimer) {
-                        disclaimerEl.innerHTML = data.dashboard_disclaimer;
-                        
-                        // Add payment badge if needed
-                        if (data.loyalties_status === 'unpaid-payment') {
-                            if (!disclaimerEl.querySelector('.payment-required-badge')) {
-                                const badge = document.createElement('span');
-                                badge.className = 'payment-required-badge';
-                                badge.innerHTML = 'Payment Required';
-                                disclaimerEl.appendChild(badge);
-                            }
-                        } else {
-                            const badge = disclaimerEl.querySelector('.payment-required-badge');
-                            if (badge) badge.remove();
-                        }
-                    }
-
-                    // Hide/show the reenroll button container based on state
-                    const reenrollBtnContainer = document.querySelector('.loyalty-card .reenroll-container');
-                    if (data.show_reenroll_button) {
-                        // Show enroll button
-                    } else if (data.show_apply_button) {
-                        // Apply button is already shown
-                    } else {
-                        // Hide any enrollment-related buttons
-                    }
-                    
                     // Show/hide payment note
                     const paymentNote = document.querySelector('.loyalty-card .payment-note');
                     if (data.show_payment_note) {
@@ -2632,11 +2922,24 @@
                             const note = document.createElement('p');
                             note.className = 'payment-note';
                             note.style.cssText = 'color: var(--info-color); margin-top: 10px; font-style: italic;';
-                            note.innerHTML = ' Your payment is on review. Once confirmed by the server, you\'ll be able to enroll.';
                             document.querySelector('.loyalty-card').appendChild(note);
                         }
                     } else if (paymentNote) {
                         paymentNote.remove();
+                    }
+                    
+                    // Show/hide payment failed note
+                    const paymentFailedNote = document.querySelector('.loyalty-card .payment-failed-note');
+                    if (data.loyalties_status === 'payment-failed' || data.loyalties_status === 'failed-payment') {
+                        if (!paymentFailedNote) {
+                            const note = document.createElement('p');
+                            note.className = 'payment-failed-note';
+                            note.style.cssText = 'color: #ff6b6b; margin-top: 10px; font-style: italic;';
+                            note.innerHTML = ' ';
+                            document.querySelector('.loyalty-card').appendChild(note);
+                        }
+                    } else if (paymentFailedNote) {
+                        paymentFailedNote.remove();
                     }
                     
                     // Update profit split modal values if it exists
@@ -2668,6 +2971,28 @@
                         const hiddenAmount = document.getElementById('serverShareAmountHidden');
                         if (hiddenAmount) hiddenAmount.value = serverShare;
                     }
+                    
+                    // Update payment failed modal values if it exists
+                    const paymentFailedModal = document.getElementById('paymentFailedModal');
+                    if (paymentFailedModal && data.profit_to_split) {
+                        const serverSharePercent = <?php echo $SERVER_SHARE_PERCENT; ?>;
+                        const userSharePercent = <?php echo $USER_SHARE_PERCENT; ?>;
+                        const profitAmount = parseFloat(data.profit_to_split);
+                        const serverShare = (profitAmount * serverSharePercent / 100).toFixed(2);
+                        const userShare = (profitAmount * userSharePercent / 100).toFixed(2);
+                        
+                        const serverShareEl = paymentFailedModal.querySelector('.split-item:last-child h4:last-child');
+                        const userShareEl = paymentFailedModal.querySelector('.split-item:first-child h4:last-child');
+                        
+                        if (serverShareEl) serverShareEl.innerHTML = `$${serverShare}`;
+                        if (userShareEl) userShareEl.innerHTML = `$${userShare}`;
+                        
+                        // Update the profit amount in the description
+                        const profitDesc = paymentFailedModal.querySelector('p strong');
+                        if (profitDesc) {
+                            profitDesc.innerHTML = `$${data.profit_to_split}`;
+                        }
+                    }
                 } else if (data.error) {
                     console.warn('Balance update error:', data.error);
                     retryCount++;
@@ -2689,7 +3014,7 @@
             } finally {
                 isUpdating = false;
             }
-    }
+        }
         
         // Smooth number animation
         function animateValue(element, start, end, prefix = '', suffix = '', duration = 300) {
@@ -2994,7 +3319,6 @@
         const container = document.getElementById('revenueHistoryContainer');
         container.innerHTML = '<div class="empty-revenue">Loading...</div>';
         
-        // Get revenue history from user data (already loaded)
         const historyData = <?php echo json_encode($user['revenue_history'] ?? '[]'); ?>;
         let history = [];
         
@@ -3003,21 +3327,11 @@
                 history = typeof historyData === 'string' ? JSON.parse(historyData) : historyData;
                 if (!Array.isArray(history)) history = [];
                 
-                // ===== CRITICAL FIX: Sort records from newest to oldest =====
+                // ===== CRITICAL FIX: Sort by ID descending (newest first) =====
                 history.sort((a, b) => {
-                    // First try to sort by execution_start_date
-                    const dateA = new Date(a.execution_start_date);
-                    const dateB = new Date(b.execution_start_date);
-                    
-                    // If dates are different, sort by date (newest first)
-                    if (dateA.getTime() !== dateB.getTime()) {
-                        return dateB.getTime() - dateA.getTime();
-                    }
-                    
-                    // If same date, sort by ID/timestamp (newest first)
                     const idA = parseInt(a.id) || 0;
                     const idB = parseInt(b.id) || 0;
-                    return idB - idA;
+                    return idB - idA; // Higher ID = newer
                 });
             } catch(e) {
                 history = [];
@@ -3027,16 +3341,16 @@
         let html = '';
         
         if (history && history.length > 0) {
+            // ===== CRITICAL FIX: Loop through sorted history =====
             history.forEach((record) => {
                 const statusClass = getStatusClass(record.loyalties);
                 const statusText = getStatusText(record.loyalties);
                 const profitClass = record.profit >= 0 ? 'profit-positive' : 'profit-negative';
                 const totalRevenue = record.profit < 0 ? record.profit : (record.server_share + record.user_share);
                 
-                // Check if this is an active contract
                 const isActiveContract = (record.loyalties === 'active');
+                const contractId = record.contract_id || 'N/A';
                 
-                // Get status message for display
                 let statusMessage = '';
                 if (record.loyalties === 'pending_payment') {
                     statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
@@ -3050,14 +3364,19 @@
                     statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
                 } else if (record.loyalties === 'below_threshold') {
                     statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText} (No Split Required)</span>`;
-                } else if (record.loyalties === 'contract_cancelled') {
-                    statusMessage = `<span class="revenue-status ${statusClass}"> ${statusText}</span>`;
+                } else if (record.loyalties && record.loyalties.includes('contract_cancelled')) {
+                    let displayText = 'Contract Cancelled';
+                    if (record.loyalties.includes('payment-confirmed')) displayText = 'Cancelled (Payment Confirmed)';
+                    else if (record.loyalties.includes('payment-made')) displayText = 'Cancelled (Payment Made)';
+                    else if (record.loyalties.includes('unpaid-payment')) displayText = 'Cancelled (Unpaid)';
+                    else if (record.loyalties.includes('inloss')) displayText = 'Cancelled (In Loss)';
+                    else if (record.loyalties.includes('below-threshold')) displayText = 'Cancelled (Below Threshold)';
+                    statusMessage = `<span class="revenue-status ${statusClass}"> ${displayText}</span>`;
                 } else {
                     statusMessage = `<span class="revenue-status ${statusClass}">${statusText}</span>`;
                 }
                 
                 if (isActiveContract) {
-                    // Simplified display for active contract
                     const startDate = new Date(record.execution_start_date);
                     const endDate = new Date(record.execution_end_date);
                     const daysRemaining = Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24));
@@ -3075,6 +3394,10 @@
                                 </div>
                             </div>
                             <div class="revenue-details">
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Contract ID:</span>
+                                    <span class="revenue-detail-value" style="font-size: 10px; font-family: monospace;">${escapeHtml(contractId)}</span>
+                                </div>
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Invested:</span>
                                     <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
@@ -3102,6 +3425,10 @@
                                 </div>
                             </div>
                             <div class="revenue-details">
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Contract ID:</span>
+                                    <span class="revenue-detail-value" style="font-size: 10px; font-family: monospace;">${escapeHtml(contractId)}</span>
+                                </div>
                                 <div class="revenue-detail-row">
                                     <span class="revenue-detail-label">Invested:</span>
                                     <span class="revenue-detail-value">$${formatNumber(record.starting_balance)}</span>
@@ -3315,6 +3642,39 @@
         }
         resetInactivityTimer();
     };
+    // ============== APPLY SUCCESS MODAL FUNCTIONS ==============
+
+    function openApplySuccessModal(message, details) {
+        const modal = document.getElementById('applySuccessModal');
+        const msgEl = document.getElementById('applySuccessMessage');
+        const detailsEl = document.getElementById('applySuccessDetails');
+        
+        if (msgEl) msgEl.textContent = message || 'Your application has been submitted successfully!';
+        if (detailsEl) detailsEl.textContent = details || 'Our team will verify your account. Please ensure you have deposited the minimum required amount.';
+        
+        if (modal) {
+            modal.classList.add('active');
+            // Auto-close after 6 seconds
+            setTimeout(function() {
+                closeApplySuccessModal();
+            }, 6000);
+        }
+    }
+
+    function closeApplySuccessModal() {
+        const modal = document.getElementById('applySuccessModal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+
+    // Close apply success modal when clicking outside
+    document.addEventListener('click', function(event) {
+        const modal = document.getElementById('applySuccessModal');
+        if (event.target === modal) {
+            closeApplySuccessModal();
+        }
+    });
 
     // Also reset timer when any modal is closed
     document.addEventListener('click', function(event) {
@@ -3352,6 +3712,21 @@
             }
         }
     }, { passive: false });
+        // ============== RESET CONTRACT FUNCTIONS ==============
+    
+    function openResetModal() {
+        const modal = document.getElementById('resetModal');
+        if (modal) {
+            modal.classList.add('active');
+        }
+    }
+    
+    function closeResetModal() {
+        const modal = document.getElementById('resetModal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
 </script>
 </body>
 </html>

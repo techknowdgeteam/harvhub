@@ -642,6 +642,14 @@
                     <?php else: ?>
                         <button type="submit" class="btn" style="width:100%; margin-top:15px;">Continue</button>
                     <?php endif; ?>
+                    
+                    <!-- ===== NEW: Create Account Button ===== -->
+                    <div style="margin-top: 20px; text-align: center; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px;">
+                        <button type="button" class="btn" style="width:100%; background: transparent; border: 2px solid var(--accent); color: var(--accent);" onclick="closeModal('emailModal'); openSignupModal();">
+                            Create an Account
+                        </button>
+                    </div>
+                    <!-- ===== END NEW ===== -->
                 </form>
             </div>
         </div>
@@ -1004,6 +1012,14 @@
                 if (refreshInterval) clearInterval(refreshInterval);
                 fetchLiveUserData();
                 refreshInterval = setInterval(() => { if (isPageActive) fetchLiveUserData(); }, intervalSeconds * 1000);
+            }
+            function openSignupModal() {
+                document.getElementById('signupModal').classList.add('active');
+                // Focus on the email input in signup modal
+                setTimeout(() => {
+                    const emailInput = document.querySelector('#signupModal input[name="signup_email"]');
+                    if (emailInput) emailInput.focus();
+                }, 100);
             }
             
             <?php if ($logged_in_email !== '' && !$already_submitted): ?>

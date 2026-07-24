@@ -1,4 +1,7 @@
 <script>
+    // Add this flag at the top of your script (after the DOMContentLoaded event)
+    var isLiveUpdateRunning = false;
+
     document.addEventListener('DOMContentLoaded', function() {
         var credentialsSection = document.getElementById('credentials-section');
         var toggleButton = document.getElementById('toggle-credentials');
@@ -189,9 +192,6 @@
                     
                     // Re-apply current filter
                     filterAndSearchUsers();
-                    
-                    // Update summary totals if needed (optional - could do a separate summary API call)
-                    updateSummaryTotals();
                 }
             } catch (error) {
                 console.error(`Failed to fetch live data for user ${userId}:`, error);
@@ -236,12 +236,6 @@
             return div.innerHTML;
         }
         
-        // Function to update summary totals (simplified - could fetch from API)
-        // Update summary totals function - now calls the recalculation
-        function updateSummaryTotals() {
-            recalculateSummaryTotals();
-        }
-        
         // Function to recalculate summary totals from visible rows
         // Store original dashboard totals from PHP (these represent ALL users)
         var originalDashboardTotals = {
@@ -255,118 +249,6 @@
             usersWithProfit: <?= $revenueSummary['users_with_profit'] ?? 0 ?>
         };
 
-        function recalculateSummaryTotals() {
-            // IMPORTANT: Dashboard totals should ALWAYS show ALL users, not just filtered ones
-            // We only update the dashboard if we have fresh data from live updates
-            // Otherwise, keep the original PHP totals
-            
-            var allRows = document.querySelectorAll('.user-row');
-            var hasLiveData = false;
-            
-            var totals = {
-                brokerBalance: 0,
-                profitLoss: 0,
-                currentBalance: 0,
-                userShare: 0,
-                expectedPayments: 0,
-                paymentsMade: 0,
-                paymentsConfirmed: 0,
-                usersWithProfit: 0
-            };
-            
-            // Calculate totals from ALL rows (not just visible/filtered ones)
-            allRows.forEach(row => {
-                // Get live values from cells if they exist
-                var brokerBalanceCell = row.querySelector('.broker-balance-cell');
-                var profitLossCell = row.querySelector('.profit-loss-cell');
-                var currentBalanceCell = row.querySelector('.current-balance-cell');
-                var userShareCell = row.querySelector('.user-share-cell');
-                var expectedPaymentCell = row.querySelector('.expected-payment-cell');
-                var displayStatus = row.dataset.displayStatus;
-                
-                // Check if this row has live data (not just placeholder)
-                if (brokerBalanceCell && brokerBalanceCell.innerText !== '-' && brokerBalanceCell.innerText !== '$0.00') {
-                    hasLiveData = true;
-                }
-                
-                // Add broker balance (ALWAYS add regardless of should_show)
-                if (brokerBalanceCell && brokerBalanceCell.innerText !== '-') {
-                    var brokerValue = parseFloat(brokerBalanceCell.innerText.replace(/[^0-9.-]/g, '')) || 0;
-                    totals.brokerBalance += brokerValue;
-                }
-                
-                // Add profit/loss (ALWAYS add regardless of should_show)
-                if (profitLossCell && profitLossCell.innerText !== '-') {
-                    var profitValue = parseFloat(profitLossCell.innerText.replace(/[^0-9.-]/g, '')) || 0;
-                    totals.profitLoss += profitValue;
-                }
-                
-                // Add current balance (ALWAYS add regardless of should_show)
-                if (currentBalanceCell && currentBalanceCell.innerText !== '-') {
-                    var currentValue = parseFloat(currentBalanceCell.innerText.replace(/[^0-9.-]/g, '')) || 0;
-                    totals.currentBalance += currentValue;
-                }
-                
-                // Add user share (ALWAYS add regardless of should_show)
-                if (userShareCell && userShareCell.innerText !== '-') {
-                    var userShareValue = parseFloat(userShareCell.innerText.replace(/[^0-9.-]/g, '')) || 0;
-                    totals.userShare += userShareValue;
-                }
-                
-                // Add expected payment and track payment statuses
-                if (expectedPaymentCell && expectedPaymentCell.innerText !== '-') {
-                    var expectedValue = parseFloat(expectedPaymentCell.innerText.replace(/[^0-9.-]/g, '')) || 0;
-                    
-                    if (displayStatus === 'payment-confirmed') {
-                        totals.paymentsConfirmed += expectedValue;
-                    } else if (displayStatus === 'payment-made') {
-                        totals.paymentsMade += expectedValue;
-                    } else if (displayStatus === 'unpaid-payment') {
-                        totals.expectedPayments += expectedValue;
-                    }
-                    
-                    // Count users with profit (where expected payment > 0)
-                    if (expectedValue > 0) {
-                        totals.usersWithProfit++;
-                    }
-                }
-            });
-            
-            // If we have live data, update the summary cards with calculated totals
-            // Otherwise, keep the original PHP totals
-            if (hasLiveData && (totals.brokerBalance > 0 || totals.profitLoss !== 0 || totals.currentBalance > 0)) {
-                updateSummaryCard('total-broker-balance', totals.brokerBalance);
-                updateSummaryCard('total-profit', totals.profitLoss);
-                updateSummaryCard('total-current-balance', totals.currentBalance);
-                updateSummaryCard('total-user-share', totals.userShare);
-                updateSummaryCard('total-expected-payments', totals.expectedPayments);
-                updateSummaryCard('total-payments-made', totals.paymentsMade);
-                updateSummaryCard('total-payments-received', totals.paymentsConfirmed);
-                updateSummaryCard('users-with-profit', totals.usersWithProfit);
-                
-                // Update profit color
-                var profitElement = document.getElementById('total-profit');
-                if (profitElement) {
-                    profitElement.style.color = totals.profitLoss >= 0 ? 'var(--profit-color)' : 'var(--loss-color)';
-                }
-            } else {
-                // Restore original dashboard totals if no live data
-                updateSummaryCard('total-broker-balance', originalDashboardTotals.brokerBalance);
-                updateSummaryCard('total-profit', originalDashboardTotals.profitLoss);
-                updateSummaryCard('total-current-balance', originalDashboardTotals.currentBalance);
-                updateSummaryCard('total-user-share', originalDashboardTotals.userShare);
-                updateSummaryCard('total-expected-payments', originalDashboardTotals.expectedPayments);
-                updateSummaryCard('total-payments-made', originalDashboardTotals.paymentsMade);
-                updateSummaryCard('total-payments-received', originalDashboardTotals.paymentsConfirmed);
-                updateSummaryCard('users-with-profit', originalDashboardTotals.usersWithProfit);
-                
-                // Update profit color
-                var profitElement = document.getElementById('total-profit');
-                if (profitElement) {
-                    profitElement.style.color = originalDashboardTotals.profitLoss >= 0 ? 'var(--profit-color)' : 'var(--loss-color)';
-                }
-            }
-        }
 
         // Alternative: Create a separate function for server-side summary refresh via AJAX
         // This can be called periodically to get fresh totals from the server
@@ -551,7 +433,6 @@
 
         // Enhanced Filter and Search functionality for user directory
         var filterButtons = document.querySelectorAll('.filter-btn');
-        var searchInput = document.getElementById('user-search');
         var resetSearchBtn = document.getElementById('reset-search');
         var userCountSpan = document.getElementById('user-count');
 
@@ -576,8 +457,13 @@
             });
         }
 
-        // Enhanced filter logic for All Users, Confirmed, Payment Made, Unpaid, and Eligible
+        // Modify the filterAndSearchUsers function
         function filterAndSearchUsers() {
+            // Skip if this is triggered by a live update
+            if (isLiveUpdateRunning) {
+                return;
+            }
+            
             var activeFilter = document.querySelector('.filter-btn.active').dataset.filter;
             var searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
             var visibleCount = 0;
@@ -609,8 +495,8 @@
                 var matchesSearch = true;
                 if (searchTerm !== '') {
                     matchesSearch = id.includes(searchTerm) || 
-                                   email.includes(searchTerm) || 
-                                   fullname.includes(searchTerm);
+                                email.includes(searchTerm) || 
+                                fullname.includes(searchTerm);
                 }
                 
                 if (matchesFilter && matchesSearch) {
@@ -624,7 +510,6 @@
             if (userCountSpan) {
                 userCountSpan.textContent = visibleCount;
             }
-            recalculateSummaryTotals();
         }
 
         // Toggle credentials section

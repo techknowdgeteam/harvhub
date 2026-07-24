@@ -1072,6 +1072,83 @@
     .crypto-details strong {
         color: var(--accent);
     }
+    /* ===== RESET BUTTON - EXACTLY MATCHES EXISTING BUTTON STYLES ===== */
+    .btn-reset {
+        background: linear-gradient(135deg, var(--accent), var(--info)) !important;
+        color: white !important;
+    }
+
+    .btn-reset:hover {
+        transform: translateY(-3px) scale(1.05);
+        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.5) !important;
+    }
+    /* Failed Payment Styles */
+    .btn-loyalty-failed {
+        background: rgba(231, 76, 60, 0.15);
+        color: #e74c3c;
+        border: 2px solid #e74c3c;
+    }
+    .btn-loyalty-failed:hover {
+        background: rgba(231, 76, 60, 0.25);
+    }
+    /* ===== SUCCESS MODAL ===== */
+    .success-icon {
+        font-size: 4rem;
+        text-align: center;
+        margin-bottom: 0.5rem;
+        animation: bounceIn 0.6s ease;
+    }
+
+    @keyframes bounceIn {
+        0% { transform: scale(0); opacity: 0; }
+        50% { transform: scale(1.3); }
+        70% { transform: scale(0.9); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+
+    #applySuccessModal .modal-content h2 {
+        text-align: center;
+    }
+
+    #applySuccessModal .modal-content p {
+        text-align: center;
+    }
+
+    #applySuccessModal .modal-actions button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+    }
+    .btn-pay-failed {
+        background: #e74c3c !important;
+        color: white !important;
+    }
+    .btn-pay-failed:hover {
+        background: #c0392b !important;
+    }
+
+    .failed-warning {
+        border-left: 4px solid #e74c3c;
+        padding: 0.8rem 1rem;
+        background: rgba(231, 76, 60, 0.1);
+        border-radius: 4px;
+    }
+
+    /* Status badge for failed */
+    .status-failed {
+        background: rgba(231, 76, 60, 0.15);
+        color: #e74c3c;
+        border: 1px solid rgba(231, 76, 60, 0.3);
+    }
+
+    .status-badge-modern.status-failed {
+        background: rgba(231, 76, 60, 0.15);
+        color: #e74c3c;
+    }
+
+    /* In the revenue summary cards */
+    .summary-card.failed {
+        border-left: 4px solid #e74c3c;
+    }
 
     .btc-address {
         display: block;

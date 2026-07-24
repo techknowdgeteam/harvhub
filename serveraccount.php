@@ -250,22 +250,30 @@
             'unpaidpayment' => 'unpaid-payment',
             'unpaid_payment' => 'unpaid-payment',
             'unpaid-payment' => 'unpaid-payment',
-            'unpaid payment' => 'unpaid-payment'
+            'unpaid payment' => 'unpaid-payment',
+            'failedpayment' => 'failed-payment',
+            'failed_payment' => 'failed-payment',
+            'failed-payment' => 'failed-payment',
+            'failed payment' => 'failed-payment',
+            'paymentfailed' => 'failed-payment',
+            'payment_failed' => 'failed-payment',
+            'payment-failed' => 'failed-payment'
         ];
         
         return $statusMap[$status] ?? $status;
     }
-    // Add this after calculateUnpaidAge() or normalizePaymentStatus()
     function calculatePaymentSummaryFromHistory($history) {
         $summary = [
             'total_unpaid_revenue' => 0,
             'total_payment_made' => 0,
             'total_payment_confirmed' => 0,
             'total_cancelled_contracts' => 0,
+            'total_failed_payments' => 0,
             'unpaid_count' => 0,
             'payment_made_count' => 0,
             'payment_confirmed_count' => 0,
-            'cancelled_count' => 0
+            'cancelled_count' => 0,
+            'failed_count' => 0
         ];
         
         if (!is_array($history)) {
@@ -274,7 +282,13 @@
         
         foreach ($history as $record) {
             $loyalties = strtolower($record['loyalties'] ?? '');
+            // FIX: Use server_share from the record
             $serverShare = (float)($record['server_share'] ?? 0);
+            
+            // Check if this is an active contract (should be excluded from totals)
+            if (strpos($loyalties, 'active') !== false) {
+                continue; // Skip active contracts
+            }
             
             if (in_array($loyalties, ['unpaid-payment', 'unpaid_payment', 'unpaid payment', 'unpaid'])) {
                 $summary['total_unpaid_revenue'] += $serverShare;
@@ -288,6 +302,12 @@
             } elseif (in_array($loyalties, ['contract_cancelled', 'contract-cancelled', 'contract cancelled'])) {
                 $summary['total_cancelled_contracts'] += $serverShare;
                 $summary['cancelled_count']++;
+            } elseif (in_array($loyalties, ['failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'])) {
+                $summary['total_failed_payments'] += $serverShare;
+                $summary['failed_count']++;
+            } elseif (in_array($loyalties, ['loss_completed', 'below_threshold', 'contract_ended'])) {
+                // These don't have server_share, so they don't add to totals
+                // But we might want to count them
             }
         }
         
@@ -298,6 +318,7 @@
         $executionStartDate = $user['execution_start_date'] ?? null;
         $profitAndLoss = (float)($user['profitandloss'] ?? 0);
         $currentLoyalties = normalizePaymentStatus($user['loyalties'] ?? '');
+        $contractId = $user['contract_id'] ?? null;
         
         $is_execution_empty = ($executionStartDate === null || $executionStartDate === '0000-00-00');
         
@@ -317,78 +338,80 @@
             $has_valid_execution = true;
         }
         
-        if ($is_execution_empty) {
-            return [
-                'status' => null,
-                'should_show_in_revenue' => false,
-                'server_share' => 0,
-                'user_share' => 0,
-                'expected_payment' => 0,
-                'has_eligible_profit' => false,
-                'reason' => 'No execution start date'
-            ];
+        // Check if contract is cancelled
+        $isCancelled = false;
+        if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
+            $isCancelled = true;
         }
         
+        // Check if payment failed
+        $isFailedPayment = ($currentLoyalties === 'failed-payment');
+        
+        // ===== SIMPLIFIED: Enable dropdown for ANY user with profit > threshold =====
+        // Only disable if contract is active (not ended yet) or no profit
         if ($is_contract_active) {
             return [
-                'status' => $currentLoyalties,
+                'status' => $currentLoyalties ?: 'active',
                 'should_show_in_revenue' => false,
                 'server_share' => 0,
                 'user_share' => 0,
                 'expected_payment' => 0,
                 'has_eligible_profit' => false,
-                'reason' => 'Contract active'
+                'reason' => 'Contract active - no updates allowed'
             ];
         }
         
-        if ($contract_completed && $has_valid_execution) {
-            if ($profitAndLoss < 0) {
-                return [
-                    'status' => null,
-                    'should_show_in_revenue' => false,
-                    'server_share' => 0,
-                    'user_share' => 0,
-                    'expected_payment' => 0,
-                    'has_eligible_profit' => false,
-                    'reason' => 'Contract ended with loss'
-                ];
-            }
-            
-            if ($profitAndLoss <= $minProfitForSplit) {
-                return [
-                    'status' => null,
-                    'should_show_in_revenue' => false,
-                    'server_share' => 0,
-                    'user_share' => 0,
-                    'expected_payment' => 0,
-                    'has_eligible_profit' => false,
-                    'reason' => 'Profit below split threshold'
-                ];
-            }
-            
-            if ($profitAndLoss > $minProfitForSplit) {
-                $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
-                $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
-                $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
-                $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
-                
-                $normalizedCurrent = normalizePaymentStatus($currentLoyalties);
-                $shouldShowInRevenue = true;
-                
-                return [
-                    'status' => $normalizedCurrent ?: 'unpaid-payment',
-                    'should_show_in_revenue' => $shouldShowInRevenue,
-                    'server_share' => $serverShare,
-                    'user_share' => $userShare,
-                    'expected_payment' => $serverShare,
-                    'has_eligible_profit' => true,
-                    'reason' => 'Valid profit split'
-                ];
-            }
+        // If no profit, disable dropdown
+        if ($profitAndLoss <= 0) {
+            return [
+                'status' => $currentLoyalties ?: 'inactive',
+                'should_show_in_revenue' => false,
+                'server_share' => 0,
+                'user_share' => 0,
+                'expected_payment' => 0,
+                'has_eligible_profit' => false,
+                'reason' => 'No profit to split'
+            ];
         }
         
+        // If profit below threshold, disable dropdown
+        if ($profitAndLoss <= $minProfitForSplit) {
+            return [
+                'status' => $currentLoyalties ?: 'below_threshold',
+                'should_show_in_revenue' => false,
+                'server_share' => 0,
+                'user_share' => 0,
+                'expected_payment' => 0,
+                'has_eligible_profit' => false,
+                'reason' => 'Profit below split threshold'
+            ];
+        }
+        
+        // ===== PROFIT > THRESHOLD = ENABLE DROPDOWN =====
+        if ($profitAndLoss > $minProfitForSplit) {
+            // Get shares from global or use defaults
+            $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
+            $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
+            $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
+            $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
+            
+            $normalizedCurrent = normalizePaymentStatus($currentLoyalties);
+            
+            // ENABLED: always show in revenue when profit > threshold
+            return [
+                'status' => $normalizedCurrent ?: 'unpaid-payment',
+                'should_show_in_revenue' => true,  // ENABLES the dropdown
+                'server_share' => $serverShare,
+                'user_share' => $userShare,
+                'expected_payment' => $serverShare,
+                'has_eligible_profit' => true,     // ENABLES the dropdown
+                'reason' => 'Eligible for profit split'
+            ];
+        }
+        
+        // Fallback - disabled
         return [
-            'status' => $currentLoyalties,
+            'status' => $currentLoyalties ?: 'inactive',
             'should_show_in_revenue' => false,
             'server_share' => 0,
             'user_share' => 0,
@@ -404,6 +427,286 @@
 
     function format_currency($amount) {
         return '$' . number_format($amount, 2);
+    }
+    
+    // ============================================
+    // SECTION 3b: REVENUE HISTORY SYNC FUNCTION (UPDATED)
+    // ============================================
+
+    function syncUserRevenueHistory($userId, $sourceTable, $pdo, $serverAccount) {
+        try {
+            // Get user data with all relevant fields
+            $stmt = $pdo->prepare("SELECT * FROM {$sourceTable} WHERE id = ?");
+            $stmt->execute([$userId]);
+            $userData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$userData) {
+                return ['success' => false, 'message' => 'User not found'];
+            }
+            
+            // Get configuration
+            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
+            $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
+            $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
+            
+            // Get user values
+            $executionStartDate = $userData['execution_start_date'] ?? null;
+            $brokerBalance = (float)($userData['broker_balance'] ?? 0);
+            $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
+            $currentBalance = $brokerBalance + $profitAndLoss;
+            $currentLoyalties = normalizePaymentStatus($userData['loyalties'] ?? '');
+            $contractId = $userData['contract_id'] ?? null;
+            $investedWith = $userData['invested_with'] ?? null;
+            
+            // ===== CRITICAL: Determine if contract is active =====
+            $isContractActive = false;
+            $executionEndDate = null;
+            
+            if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00') {
+                $start = new DateTime($executionStartDate);
+                $end = clone $start;
+                $end->modify("+{$contractDuration} days");
+                $executionEndDate = $end->format('Y-m-d');
+                
+                $today = new DateTime();
+                $today->setTime(0, 0, 0);
+                $isContractActive = ($today <= $end);
+            }
+            
+            // Calculate shares if profit is eligible
+            $serverShare = 0;
+            $userShare = 0;
+            $isEligible = false;
+            if ($profitAndLoss > $minProfitForSplit) {
+                $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
+                $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
+                $isEligible = true;
+            }
+            
+            // Ensure revenue_history column exists
+            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$sourceTable} LIKE 'revenue_history'");
+            if ($checkColumn->rowCount() == 0) {
+                $pdo->exec("ALTER TABLE {$sourceTable} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
+            }
+            
+            // Get current revenue history
+            $stmt = $pdo->prepare("SELECT revenue_history FROM {$sourceTable} WHERE id = ?");
+            $stmt->execute([$userId]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $history = [];
+            if ($result && !empty($result['revenue_history'])) {
+                $history = json_decode($result['revenue_history'], true);
+                if (!is_array($history)) {
+                    $history = [];
+                }
+            }
+            
+            // ============================================================
+            // STEP 1: CLEAN INVALID RECORDS (remove records with no contract_id)
+            // ============================================================
+            $invalidRecordsRemoved = 0;
+            $validHistory = [];
+            foreach ($history as $record) {
+                $recordContractId = $record['contract_id'] ?? null;
+                if (!empty($recordContractId) && $recordContractId !== 'N/A' && $recordContractId !== 'null') {
+                    $validHistory[] = $record;
+                } else {
+                    $invalidRecordsRemoved++;
+                }
+            }
+            $history = $validHistory;
+            
+            // ============================================================
+            // STEP 2: FIND OR CREATE RECORD USING CONTRACT_ID
+            // ============================================================
+            $existingRecordIndex = -1;
+            $recordFound = false;
+            
+            // Check if current loyalties is failed-payment - we should still update the record
+            $isFailedPayment = ($currentLoyalties === 'failed-payment');
+            
+            if (!empty($contractId) && $contractId !== 'N/A' && $contractId !== 'null') {
+                foreach ($history as $index => $record) {
+                    $recordContractId = $record['contract_id'] ?? null;
+                    if (!empty($recordContractId) && $recordContractId === $contractId) {
+                        $existingRecordIndex = $index;
+                        $recordFound = true;
+                        break;
+                    }
+                }
+            }
+            
+            // ============================================================
+            // STEP 3: DETERMINE FINAL STATUS
+            // ============================================================
+            $finalStatus = $currentLoyalties;
+            
+            // Check if contract is cancelled (based on loyalties)
+            $isContractCancelled = false;
+            if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
+                $isContractCancelled = true;
+            }
+            
+            // If contract is cancelled, append the status for clarity
+            if ($isContractCancelled) {
+                if ($currentLoyalties === 'payment-confirmed') {
+                    $finalStatus = 'contract_cancelled_payment-confirmed';
+                } elseif ($currentLoyalties === 'payment-made') {
+                    $finalStatus = 'contract_cancelled_payment-made';
+                } elseif ($currentLoyalties === 'unpaid-payment') {
+                    $finalStatus = 'contract_cancelled_unpaid-payment';
+                } elseif ($currentLoyalties === 'failed-payment') {
+                    $finalStatus = 'contract_cancelled_failed-payment';
+                } elseif ($profitAndLoss <= 0) {
+                    $finalStatus = 'contract_cancelled_inloss';
+                } elseif ($profitAndLoss < $minProfitForSplit) {
+                    $finalStatus = 'contract_cancelled_below-threshold';
+                } else {
+                    $finalStatus = 'contract_cancelled';
+                }
+            }
+            
+            // ============================================================
+            // STEP 4: GENERATE CONTRACT_ID IF MISSING
+            // ============================================================
+            if (empty($contractId) || $contractId === 'N/A' || $contractId === 'null') {
+                if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00' && !empty($executionEndDate)) {
+                    $startFormatted = date('dmY', strtotime($executionStartDate));
+                    $endFormatted = date('dmY', strtotime($executionEndDate));
+                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+                    
+                    $updateContractId = $pdo->prepare("UPDATE {$sourceTable} SET contract_id = ? WHERE id = ?");
+                    $updateContractId->execute([$contractId, $userId]);
+                } else if ($isFailedPayment) {
+                    // For failed payments without a contract_id, generate one based on current date
+                    $now = new DateTime();
+                    $executionStartDate = $now->format('Y-m-d');
+                    $start = clone $now;
+                    $end = clone $start;
+                    $end->modify("+{$contractDuration} days");
+                    $executionEndDate = $end->format('Y-m-d');
+                    $startFormatted = date('dmY', strtotime($executionStartDate));
+                    $endFormatted = date('dmY', strtotime($executionEndDate));
+                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+                    
+                    $updateContractId = $pdo->prepare("UPDATE {$sourceTable} SET contract_id = ? WHERE id = ?");
+                    $updateContractId->execute([$contractId, $userId]);
+                } else {
+                    return ['success' => true, 'message' => 'No valid contract_id or dates available'];
+                }
+            }
+            
+            // ============================================================
+            // STEP 5: UPDATE EXISTING RECORD OR CREATE NEW
+            // ============================================================
+            $now = date('Y-m-d H:i:s');
+            
+            if ($recordFound && $existingRecordIndex !== -1) {
+                // ===== UPDATE EXISTING RECORD =====
+                $history[$existingRecordIndex]['contract_id'] = $contractId;
+                $history[$existingRecordIndex]['loyalties'] = $finalStatus;
+                $history[$existingRecordIndex]['server_share'] = $serverShare;
+                $history[$existingRecordIndex]['user_share'] = $userShare;
+                $history[$existingRecordIndex]['current_balance'] = $currentBalance;
+                $history[$existingRecordIndex]['profit'] = $profitAndLoss;
+                $history[$existingRecordIndex]['updated_at'] = $now;
+                $history[$existingRecordIndex]['execution_start_date'] = $executionStartDate;
+                $history[$existingRecordIndex]['execution_end_date'] = $executionEndDate;
+                $history[$existingRecordIndex]['starting_balance'] = $brokerBalance;
+                
+                if (!isset($history[$existingRecordIndex]['invested_with']) && !empty($investedWith)) {
+                    $history[$existingRecordIndex]['invested_with'] = $investedWith;
+                }
+                
+                // If status is payment-confirmed, add confirmation details
+                if ($currentLoyalties === 'payment-confirmed') {
+                    $history[$existingRecordIndex]['confirmed_at'] = $now;
+                }
+                
+                // If status is failed-payment, add failure details
+                if ($currentLoyalties === 'failed-payment' || $isFailedPayment) {
+                    $history[$existingRecordIndex]['failed_at'] = $now;
+                    $history[$existingRecordIndex]['failed_reason'] = 'Payment verification failed';
+                }
+                
+            } else {
+                // ===== CREATE NEW RECORD =====
+                $newId = time();
+                if (!empty($history)) {
+                    foreach ($history as $item) {
+                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] >= $newId) {
+                            $newId = (int)$item['id'] + 1;
+                        }
+                    }
+                }
+                
+                if (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
+                    $executionStartDate = date('Y-m-d');
+                    $start = new DateTime($executionStartDate);
+                    $end = clone $start;
+                    $end->modify("+{$contractDuration} days");
+                    $executionEndDate = $end->format('Y-m-d');
+                }
+                
+                $newRecord = [
+                    'id' => $newId,
+                    'contract_id' => $contractId,
+                    'execution_start_date' => $executionStartDate,
+                    'execution_end_date' => $executionEndDate,
+                    'starting_balance' => $brokerBalance,
+                    'current_balance' => $currentBalance,
+                    'profit' => $profitAndLoss,
+                    'user_share' => $userShare,
+                    'server_share' => $serverShare,
+                    'loyalties' => $finalStatus,
+                    'recorded_at' => $now,
+                    'invested_with' => $investedWith
+                ];
+                
+                if ($currentLoyalties === 'payment-confirmed') {
+                    $newRecord['confirmed_at'] = $now;
+                }
+                
+                if ($currentLoyalties === 'failed-payment' || $isFailedPayment) {
+                    $newRecord['failed_at'] = $now;
+                    $newRecord['failed_reason'] = 'Payment verification failed';
+                }
+                
+                $history[] = $newRecord;
+            }
+            
+            // ============================================================
+            // STEP 6: SORT NEWEST FIRST BY ID
+            // ============================================================
+            usort($history, function($a, $b) {
+                $idA = isset($a['id']) ? (int)$a['id'] : 0;
+                $idB = isset($b['id']) ? (int)$b['id'] : 0;
+                return $idB - $idA;
+            });
+            
+            // ============================================================
+            // STEP 7: SAVE UPDATED HISTORY
+            // ============================================================
+            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+            $updateStmt = $pdo->prepare("UPDATE {$sourceTable} SET revenue_history = ? WHERE id = ?");
+            $updateStmt->execute([$jsonHistory, $userId]);
+            
+            $message = $recordFound ? 'Revenue history updated' : 'New revenue record created';
+            if ($invalidRecordsRemoved > 0) {
+                $message .= " (removed {$invalidRecordsRemoved} invalid record(s) with no contract_id)";
+            }
+            
+            if ($isFailedPayment) {
+                $message .= " - Payment marked as failed";
+            }
+            
+            return ['success' => true, 'message' => $message];
+            
+        } catch (Exception $e) {
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
     }
 
     // ============================================
@@ -513,6 +816,15 @@
                 $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
                 
+                // Helper function to check if user is completed
+                function isCompletedUser($userId, $sourceTable, $pdo) {
+                    $stmt = $pdo->prepare("SELECT loyalties FROM {$sourceTable} WHERE id = ?");
+                    $stmt->execute([$userId]);
+                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $loyalties = strtolower($result['loyalties'] ?? '');
+                    return strpos($loyalties, 'payment-confirmed') !== false;
+                }
+                
                 // Get from insiders_server table
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
@@ -523,12 +835,12 @@
                             WHERE execution_start_date IS NOT NULL 
                             AND execution_start_date != '0000-00-00'
                             AND execution_start_date <= ?
+                            AND (loyalties IS NULL OR loyalties NOT LIKE '%payment-confirmed%')
                             ORDER BY id DESC
                         ");
                         $stmt1->execute([$contractDuration, $today]);
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         
-                        // Filter for active contracts
                         foreach ($results as $user) {
                             if (!empty($user['execution_start_date'])) {
                                 $start = new DateTime($user['execution_start_date']);
@@ -553,6 +865,7 @@
                             WHERE execution_start_date IS NOT NULL 
                             AND execution_start_date != '0000-00-00'
                             AND execution_start_date <= ?
+                            AND (loyalties IS NULL OR loyalties NOT LIKE '%payment-confirmed%')
                             ORDER BY id DESC
                         ");
                         $stmt2->execute([$contractDuration, $today]);
@@ -584,93 +897,195 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // ===== FIX: Get ALL users from both tables, not just those with history =====
+                
+                // Get from insiders_server table - ALL users
                 try {
-                    $checkColumn1 = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'revenue_history'");
-                    if ($checkColumn1->rowCount() > 0) {
+                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
+                    if ($checkTable1->rowCount() > 0) {
+                        // Check if revenue_history column exists
+                        $hasHistoryColumn = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'revenue_history'")->rowCount() > 0;
+                        
                         $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, revenue_history, loyalties, '{$insidersServerTable}' as source
+                            SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
+                                profitandloss, broker_balance, 
+                                '{$insidersServerTable}' as source
                             FROM {$insidersServerTable} 
-                            WHERE revenue_history IS NOT NULL 
-                            AND revenue_history != ''
-                            AND revenue_history != '[]'
                             ORDER BY id DESC
                         ");
                         $stmt1->execute();
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            $history = json_decode($user['revenue_history'], true);
-                            $user['history_count'] = is_array($history) ? count($history) : 0;
-                            $user['current_loyalties'] = $user['loyalties'] ?? null;
-
-                            // Also add invested_with to the history records if missing
-                            if (is_array($history) && !empty($history)) {
+                            $history = [];
+                            $hasHistory = false;
+                            
+                            // Try to get revenue history if column exists
+                            if ($hasHistoryColumn) {
+                                $stmtHistory = $pdo->prepare("SELECT revenue_history FROM {$insidersServerTable} WHERE id = ?");
+                                $stmtHistory->execute([$user['id']]);
+                                $historyResult = $stmtHistory->fetch(PDO::FETCH_ASSOC);
+                                
+                                if ($historyResult && !empty($historyResult['revenue_history']) && $historyResult['revenue_history'] !== '[]') {
+                                    $history = json_decode($historyResult['revenue_history'], true);
+                                    if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
+                                        $hasHistory = true;
+                                    } else {
+                                        $history = [];
+                                    }
+                                }
+                            }
+                            
+                            // Build user data with or without history
+                            $userData = [
+                                'id' => $user['id'],
+                                'source' => $user['source'],
+                                'fullname' => $user['fullname'] ?? 'N/A',
+                                'email' => $user['email'] ?? 'N/A',
+                                'has_history' => $hasHistory,
+                                'history_count' => $hasHistory ? count($history) : 0,
+                                'current_loyalties' => $user['loyalties'] ?? null,
+                                'payment_summary' => $hasHistory ? calculatePaymentSummaryFromHistory($history) : [
+                                    'total_unpaid_revenue' => 0,
+                                    'total_payment_made' => 0,
+                                    'total_payment_confirmed' => 0,
+                                    'total_cancelled_contracts' => 0,
+                                    'unpaid_count' => 0,
+                                    'payment_made_count' => 0,
+                                    'payment_confirmed_count' => 0,
+                                    'cancelled_count' => 0
+                                ],
+                                'invested_with' => $user['invested_with'] ?? null,
+                                'execution_start_date' => $user['execution_start_date'] ?? null,
+                                'profitandloss' => (float)($user['profitandloss'] ?? 0),
+                                'broker_balance' => (float)($user['broker_balance'] ?? 0)
+                            ];
+                            
+                            // Add invested_with to history records if missing
+                            // Add invested_with to history records if missing
+                            if ($hasHistory && is_array($history) && !empty($history) && isset($user['invested_with'])) {
+                                // Sort history NEWEST FIRST before saving
+                                usort($history, function($a, $b) {
+                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                                    return $dateB - $dateA;
+                                });
+                                
+                                $needsUpdate = false;
                                 foreach ($history as &$record) {
                                     if (!isset($record['invested_with']) && isset($user['invested_with'])) {
                                         $record['invested_with'] = $user['invested_with'];
+                                        $needsUpdate = true;
                                     }
                                 }
-                                // Save back if changes were made
-                                $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
-                                if ($updatedHistory !== $user['revenue_history']) {
+                                if ($needsUpdate) {
+                                    $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
                                     $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
                                     $updateStmt->execute([$updatedHistory, $user['id']]);
+                                    // Recalculate summary
+                                    $userData['payment_summary'] = calculatePaymentSummaryFromHistory($history);
                                 }
                             }
-
-                            // Calculate payment summaries from history
-                            $paymentSummary = calculatePaymentSummaryFromHistory($history);
-                            $user['payment_summary'] = $paymentSummary;
                             
-                            $users[] = $user;
+                            $users[] = $userData;
                         }
                     }
-                } catch (Exception $e) { }
+                } catch (Exception $e) {
+                    error_log("Error in get_completed_investors (insiders_server): " . $e->getMessage());
+                }
                 
-                // Get from insiders table
+                // Get from insiders table - ALL users
                 try {
-                    $checkColumn2 = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'revenue_history'");
-                    if ($checkColumn2->rowCount() > 0) {
+                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
+                    if ($checkTable2->rowCount() > 0) {
+                        $hasHistoryColumn = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'revenue_history'")->rowCount() > 0;
+                        
                         $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, revenue_history, loyalties, '{$insidersTable}' as source
+                            SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
+                                profitandloss, broker_balance, 
+                                '{$insidersTable}' as source
                             FROM {$insidersTable} 
-                            WHERE revenue_history IS NOT NULL 
-                            AND revenue_history != ''
-                            AND revenue_history != '[]'
                             ORDER BY id DESC
                         ");
                         $stmt2->execute();
                         $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            $history = json_decode($user['revenue_history'], true);
-                            $user['history_count'] = is_array($history) ? count($history) : 0;
-                            $user['current_loyalties'] = $user['loyalties'] ?? null;
-
-                            // Also add invested_with to the history records if missing
-                            if (is_array($history) && !empty($history)) {
+                            $history = [];
+                            $hasHistory = false;
+                            
+                            // Try to get revenue history if column exists
+                            if ($hasHistoryColumn) {
+                                $stmtHistory = $pdo->prepare("SELECT revenue_history FROM {$insidersTable} WHERE id = ?");
+                                $stmtHistory->execute([$user['id']]);
+                                $historyResult = $stmtHistory->fetch(PDO::FETCH_ASSOC);
+                                
+                                if ($historyResult && !empty($historyResult['revenue_history']) && $historyResult['revenue_history'] !== '[]') {
+                                    $history = json_decode($historyResult['revenue_history'], true);
+                                    if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
+                                        $hasHistory = true;
+                                    } else {
+                                        $history = [];
+                                    }
+                                }
+                            }
+                            
+                            // Build user data with or without history
+                            $userData = [
+                                'id' => $user['id'],
+                                'source' => $user['source'],
+                                'fullname' => $user['fullname'] ?? 'N/A',
+                                'email' => $user['email'] ?? 'N/A',
+                                'has_history' => $hasHistory,
+                                'history_count' => $hasHistory ? count($history) : 0,
+                                'current_loyalties' => $user['loyalties'] ?? null,
+                                'payment_summary' => $hasHistory ? calculatePaymentSummaryFromHistory($history) : [
+                                    'total_unpaid_revenue' => 0,
+                                    'total_payment_made' => 0,
+                                    'total_payment_confirmed' => 0,
+                                    'total_cancelled_contracts' => 0,
+                                    'unpaid_count' => 0,
+                                    'payment_made_count' => 0,
+                                    'payment_confirmed_count' => 0,
+                                    'cancelled_count' => 0
+                                ],
+                                'invested_with' => $user['invested_with'] ?? null,
+                                'execution_start_date' => $user['execution_start_date'] ?? null,
+                                'profitandloss' => (float)($user['profitandloss'] ?? 0),
+                                'broker_balance' => (float)($user['broker_balance'] ?? 0)
+                            ];
+                            
+                            // Add invested_with to history records if missing
+                            if ($hasHistory && is_array($history) && !empty($history) && isset($user['invested_with'])) {
+                                // Sort history NEWEST FIRST before saving
+                                usort($history, function($a, $b) {
+                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                                    return $dateB - $dateA;
+                                });
+                                
+                                $needsUpdate = false;
                                 foreach ($history as &$record) {
                                     if (!isset($record['invested_with']) && isset($user['invested_with'])) {
                                         $record['invested_with'] = $user['invested_with'];
+                                        $needsUpdate = true;
                                     }
                                 }
-                                // Save back if changes were made
-                                $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
-                                if ($updatedHistory !== $user['revenue_history']) {
+                                if ($needsUpdate) {
+                                    $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
                                     $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
                                     $updateStmt->execute([$updatedHistory, $user['id']]);
+                                    // Recalculate summary
+                                    $userData['payment_summary'] = calculatePaymentSummaryFromHistory($history);
                                 }
                             }
-
-                            // Calculate payment summaries from history
-                            $paymentSummary = calculatePaymentSummaryFromHistory($history);
-                            $user['payment_summary'] = $paymentSummary;
                             
-                            $users[] = $user;
+                            $users[] = $userData;
                         }
                     }
-                } catch (Exception $e) { }
+                } catch (Exception $e) {
+                    error_log("Error in get_completed_investors (insiders): " . $e->getMessage());
+                }
                 
                 echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
@@ -706,6 +1121,14 @@
                     $history = json_decode($result['revenue_history'], true);
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         $history = [];
+                    }
+                    // Sort NEWEST FIRST
+                    if (is_array($history) && !empty($history)) {
+                        usort($history, function($a, $b) {
+                            $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
+                            $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
+                            return $dateB - $dateA;
+                        });
                     }
                 }
 
@@ -1971,6 +2394,34 @@
             
             // Get contract duration from server account
             $contractDuration = (int)($adminData['contract_duration'] ?? 30);
+            $contractId = $userData['contract_id'] ?? null;
+            
+            // Get current profit and loss
+            $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
+            $brokerBalance = (float)($userData['broker_balance'] ?? 0);
+            $currentBalance = $brokerBalance + $profitAndLoss;
+            $executionStartDate = $userData['execution_start_date'] ?? null;
+            
+            // Calculate shares based on current profit
+            $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
+            $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
+            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
+            
+            $serverShare = 0;
+            $userShare = 0;
+            if ($profitAndLoss > $minProfitForSplit) {
+                $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
+                $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
+            }
+            
+            // Calculate execution end date
+            $executionEndDate = null;
+            if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00') {
+                $start = new DateTime($executionStartDate);
+                $end = clone $start;
+                $end->modify("+{$contractDuration} days");
+                $executionEndDate = $end->format('Y-m-d');
+            }
             
             // Get current revenue history
             $history = [];
@@ -1987,33 +2438,94 @@
                 }
             }
             
-            // Sort history to find the latest record
-            usort($history, function($a, $b) {
-                $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                return $dateB - $dateA;
-            });
-            
-            $latestRecord = !empty($history) ? $history[0] : null;
-            $latestLoyalties = strtolower($latestRecord['loyalties'] ?? '');
-            
-            // Check if latest record has 'active' status
-            if (!$latestRecord || strpos($latestLoyalties, 'active') === false) {
-                echo json_encode(['error' => 'Cannot cancel contract: No active record found or active is not the latest record']);
-                exit;
+            // ===== FIND RECORD BY CONTRACT_ID =====
+            $existingRecordIndex = -1;
+            if (!empty($contractId)) {
+                foreach ($history as $index => $record) {
+                    if (isset($record['contract_id']) && $record['contract_id'] === $contractId) {
+                        $existingRecordIndex = $index;
+                        break;
+                    }
+                }
             }
             
-            // Update the latest active record to contract_cancelled
-            $history[0]['loyalties'] = 'contract_cancelled';
-            $history[0]['cancelled_at'] = date('Y-m-d H:i:s');
-            $history[0]['cancelled_by'] = $login_id;
-            // Preserve invested_with
-            if (!isset($history[0]['invested_with']) && isset($userData['invested_with'])) {
-                $history[0]['invested_with'] = $userData['invested_with'];
+            // If not found by contract_id, try by dates (fallback)
+            if ($existingRecordIndex === -1 && !empty($executionStartDate) && !empty($executionEndDate)) {
+                foreach ($history as $index => $record) {
+                    if (($record['execution_start_date'] ?? '') === $executionStartDate && 
+                        ($record['execution_end_date'] ?? '') === $executionEndDate) {
+                        $existingRecordIndex = $index;
+                        break;
+                    }
+                }
             }
-            // ALSO: Reset balance_verification to 'not-verified' when contract is cancelled
-            $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
-            $resetBalance->execute([$user_id]);
+            
+            if ($existingRecordIndex !== -1) {
+                // Update existing record to cancelled
+                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled';
+                $history[$existingRecordIndex]['cancelled_at'] = date('Y-m-d H:i:s');
+                $history[$existingRecordIndex]['cancelled_by'] = $login_id;
+                $history[$existingRecordIndex]['profit'] = $profitAndLoss;
+                $history[$existingRecordIndex]['server_share'] = $serverShare;
+                $history[$existingRecordIndex]['user_share'] = $userShare;
+                $history[$existingRecordIndex]['current_balance'] = $currentBalance;
+                $history[$existingRecordIndex]['ending_balance'] = $currentBalance;
+                $history[$existingRecordIndex]['updated_at'] = date('Y-m-d H:i:s');
+                $history[$existingRecordIndex]['contract_id'] = $contractId;
+                
+                if (!isset($history[$existingRecordIndex]['invested_with']) && isset($userData['invested_with'])) {
+                    $history[$existingRecordIndex]['invested_with'] = $userData['invested_with'];
+                }
+            } else {
+                // Create new cancelled record
+                $newId = 1;
+                if (!empty($history)) {
+                    $maxId = 0;
+                    foreach ($history as $item) {
+                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
+                            $maxId = (int)$item['id'];
+                        }
+                    }
+                    $newId = $maxId + 1;
+                }
+                
+                // Generate contract_id if not exists
+                if (empty($contractId) && !empty($executionStartDate) && !empty($executionEndDate)) {
+                    $startFormatted = date('dmY', strtotime($executionStartDate));
+                    $endFormatted = date('dmY', strtotime($executionEndDate));
+                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+                } elseif (empty($contractId)) {
+                    $now = new DateTime();
+                    $executionStartDate = $now->format('Y-m-d');
+                    $start = clone $now;
+                    $end = clone $start;
+                    $end->modify("+{$contractDuration} days");
+                    $executionEndDate = $end->format('Y-m-d');
+                    $startFormatted = date('dmY', strtotime($executionStartDate));
+                    $endFormatted = date('dmY', strtotime($executionEndDate));
+                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+                }
+                
+                $cancelledRecord = [
+                    'id' => $newId,
+                    'contract_id' => $contractId,
+                    'execution_start_date' => $executionStartDate,
+                    'execution_end_date' => $executionEndDate,
+                    'starting_balance' => $brokerBalance,
+                    'current_balance' => $currentBalance,
+                    'ending_balance' => $currentBalance,
+                    'profit' => $profitAndLoss,
+                    'user_share' => $userShare,
+                    'server_share' => $serverShare,
+                    'loyalties' => 'contract_cancelled',
+                    'recorded_at' => date('Y-m-d H:i:s'),
+                    'cancelled_at' => date('Y-m-d H:i:s'),
+                    'cancelled_by' => $login_id,
+                    'invested_with' => $userData['invested_with'] ?? null
+                ];
+                
+                $history[] = $cancelledRecord;
+            }
             
             // Save updated history
             $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
@@ -2029,6 +2541,11 @@
             $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = 'contract_cancelled' WHERE id = ?");
             $updateLoyalties->execute([$user_id]);
             
+            // ===== CRITICAL: SET reset_contract = 1 FOR CANCELLED CONTRACTS =====
+            // Contract cancellation should always set reset_contract = 1
+            $updateReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
+            $updateReset->execute([$user_id]);
+            
             // Calculate new execution start date that makes the contract expired
             $today = new DateTime();
             $newExecutionDate = clone $today;
@@ -2042,8 +2559,12 @@
             
             echo json_encode([
                 'success' => true,
-                'message' => "Contract cancelled successfully. Active record updated to contract_cancelled.",
-                'new_execution_date' => $newExecutionDateStr
+                'message' => "Contract cancelled successfully. Profit and loss of $".number_format($profitAndLoss, 2)." recorded. reset_contract set to 1.",
+                'new_execution_date' => $newExecutionDateStr,
+                'profit_recorded' => $profitAndLoss,
+                'server_share_recorded' => $serverShare,
+                'user_share_recorded' => $userShare,
+                'reset_contract_set_to' => 1
             ]);
             exit;
         }
@@ -2163,309 +2684,7 @@
             }
             exit;
         }
-        // 5z2: Update revenue history record status (for payment-made -> payment-confirmed)
-        if ($action === 'update_revenue_status') {
-            $record_id = $_POST['record_id'] ?? '';
-            $new_status = $_POST['new_status'] ?? '';
-            $admin_password = $_POST['admin_password'] ?? '';
-            $login_id = $_POST['login_id'] ?? '';
-            $user_id = $_POST['user_id'] ?? '';
-            $source_table = $_POST['source_table'] ?? '';
-            
-            // Verify admin credentials
-            if (empty($admin_password)) {
-                echo json_encode(['error' => 'Password is required']);
-                exit;
-            }
-            
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
-            $stmt->execute();
-            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$adminData || 
-                $login_id !== ($adminData['admin_login_id'] ?? '') || 
-                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
-                echo json_encode(['error' => 'Invalid password']);
-                exit;
-            }
-            
-            // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
-                echo json_encode(['error' => 'Invalid user selection']);
-                exit;
-            }
-            
-            try {
-                // Get current revenue history
-                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                $stmt->execute([$user_id]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if (!$result || empty($result['revenue_history'])) {
-                    echo json_encode(['error' => 'No revenue history found']);
-                    exit;
-                }
-                
-                $history = json_decode($result['revenue_history'], true);
-                if (!is_array($history)) {
-                    echo json_encode(['error' => 'Invalid revenue history format']);
-                    exit;
-                }
-                
-                // FIRST: Sort history by recorded_at DESCENDING (newest FIRST)
-                usort($history, function($a, $b) {
-                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                    return $dateB - $dateA; // Descending - newest first
-                });
-                
-                $updated = false;
-                $latestPaymentMadeIndex = -1;
-                
-                // Find the FIRST (newest) record with 'payment-made' in loyalties
-                for ($i = 0; $i < count($history); $i++) {
-                    $loyalties = strtolower($history[$i]['loyalties'] ?? '');
-                    if (strpos($loyalties, 'payment-made') !== false) {
-                        $latestPaymentMadeIndex = $i;
-                        break; // Stop at the first one (which is the newest after sorting)
-                    }
-                }
-                // Get user data for invested_with
-                $stmt2 = $pdo->prepare("SELECT invested_with FROM {$source_table} WHERE id = ?");
-                $stmt2->execute([$user_id]);
-                $userData = $stmt2->fetch(PDO::FETCH_ASSOC);
-                
-                if ($latestPaymentMadeIndex !== -1) {
-                    // Update the latest payment-made record
-                    $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
-                    // Preserve invested_with if it exists in the record
-                    if (!isset($history[$latestPaymentMadeIndex]['invested_with']) && isset($userData['invested_with'])) {
-                        $history[$latestPaymentMadeIndex]['invested_with'] = $userData['invested_with'];
-                    }
-                    $updated = true;
-                    
-                    // ALSO: Reset balance_verification to 'not-verified' for this user
-                    $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
-                    $resetBalance->execute([$user_id]);
-                } else {
-                    echo json_encode(['error' => 'No payment-made record found to update']);
-                    exit;
-                }
-                
-                if ($updated) {
-                    // Save updated history (maintain original order or resort by recorded_at)
-                    usort($history, function($a, $b) {
-                        $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                        $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                        return $dateA - $dateB; // Ascending for storage
-                    });
-                    
-                    $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-                    $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-                    $updateStmt->execute([$jsonHistory, $user_id]);
-                    
-                    echo json_encode(['success' => true, 'message' => 'Revenue history updated successfully']);
-                } else {
-                    echo json_encode(['error' => 'No changes made']);
-                }
-                
-            } catch (Exception $e) {
-                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
-            }
-            exit;
-        }
-        // 5z3: Update user's current loyalties status (for current revenue table)
-        if ($action === 'update_user_loyalties') {
-            $user_id = $_POST['user_id'] ?? '';
-            $source_table = $_POST['source_table'] ?? '';
-            $new_status = $_POST['new_status'] ?? '';
-            $admin_password = $_POST['admin_password'] ?? '';
-            $login_id = $_POST['login_id'] ?? '';
-            
-            // Verify admin credentials
-            if (empty($admin_password)) {
-                echo json_encode(['error' => 'Password is required']);
-                exit;
-            }
-            
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
-            $stmt->execute();
-            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$adminData || 
-                $login_id !== ($adminData['admin_login_id'] ?? '') || 
-                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
-                echo json_encode(['error' => 'Invalid password']);
-                exit;
-            }
-            
-            // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
-                echo json_encode(['error' => 'Invalid user selection']);
-                exit;
-            }
-            
-            $allowed_statuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
-            if (!in_array($new_status, $allowed_statuses)) {
-                echo json_encode(['error' => 'Invalid status value']);
-                exit;
-            }
-            
-            try {
-                $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
-                $stmt->execute([$new_status, $user_id]);
-                
-                echo json_encode(['success' => true, 'message' => 'User status updated successfully']);
-            } catch (Exception $e) {
-                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
-            }
-            exit;
-        }
-        // 5z4: Check and create active contract record in revenue history
-        if ($action === 'ensure_active_contract_record') {
-            $user_id = $_POST['user_id'] ?? '';
-            $source_table = $_POST['source_table'] ?? '';
-            
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
-                echo json_encode(['error' => 'Invalid user selection']);
-                exit;
-            }
-            
-            try {
-                // Get user data
-                $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
-                $stmt->execute([$user_id]);
-                $userData = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if (!$userData) {
-                    echo json_encode(['error' => 'User not found']);
-                    exit;
-                }
-                
-                // Check if contract is active
-                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
-                $executionStartDate = $userData['execution_start_date'] ?? null;
-                
-                if (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
-                    echo json_encode(['error' => 'No execution start date set']);
-                    exit;
-                }
-                
-                $start = new DateTime($executionStartDate);
-                $end = clone $start;
-                $end->modify("+{$contractDuration} days");
-                $today = new DateTime();
-                $today->setTime(0, 0, 0);
-                
-                // Check if contract is still active
-                if ($today > $end) {
-                    echo json_encode(['error' => 'Contract is not active anymore']);
-                    exit;
-                }
-                
-                // Get current revenue history
-                $history = [];
-                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
-                if ($checkColumn->rowCount() > 0) {
-                    $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                    $stmt->execute([$user_id]);
-                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    if ($result && !empty($result['revenue_history'])) {
-                        $history = json_decode($result['revenue_history'], true);
-                        if (!is_array($history)) {
-                            $history = [];
-                        }
-                    }
-                }
-                
-                // Sort history by recorded_at or id to find the latest
-                usort($history, function($a, $b) {
-                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                    return $dateB - $dateA;
-                });
-                
-                $latestRecord = !empty($history) ? $history[0] : null;
-                $latestLoyalties = strtolower($latestRecord['loyalties'] ?? '');
-                
-                // Check if latest record is already 'active'
-                if ($latestRecord && strpos($latestLoyalties, 'active') !== false) {
-                    echo json_encode(['success' => true, 'message' => 'Active record already exists as latest', 'already_active' => true]);
-                    exit;
-                }
-                
-                // Create new active record
-                $brokerBalance = (float)($userData['broker_balance'] ?? 0);
-                $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
-                $currentBalance = $brokerBalance + $profitAndLoss;
-                
-                $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
-                $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
-                $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
-                
-                $serverShare = 0;
-                $userShare = 0;
-                if ($profitAndLoss > $minProfitForSplit) {
-                    $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
-                    $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
-                }
-                
-                // Generate new ID
-                $newId = 1;
-                if (!empty($history)) {
-                    $maxId = 0;
-                    foreach ($history as $item) {
-                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
-                            $maxId = (int)$item['id'];
-                        }
-                    }
-                    $newId = $maxId + 1;
-                }
-                
-                $executionEndDate = clone $start;
-                $executionEndDate->modify("+{$contractDuration} days");
-                
-                $activeRecord = [
-                    'id' => $newId,
-                    'execution_start_date' => $executionStartDate,
-                    'execution_end_date' => $executionEndDate->format('Y-m-d'),
-                    'starting_balance' => $brokerBalance,
-                    'current_balance' => $currentBalance,
-                    'profit' => $profitAndLoss,
-                    'user_share' => $userShare,
-                    'server_share' => $serverShare,
-                    'loyalties' => 'active',
-                    'recorded_at' => date('Y-m-d H:i:s'),
-                    'invested_with' => $userData['invested_with'] ?? null
-                ];
-                
-                // Add to history (as latest)
-                $history[] = $activeRecord;
-                
-                // Sort to ensure active is latest (by recorded_at)
-                usort($history, function($a, $b) {
-                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : 0;
-                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : 0;
-                    return $dateB - $dateA;
-                });
-                
-                // Save updated history
-                $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-                
-                if ($checkColumn->rowCount() == 0) {
-                    $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
-                }
-                
-                $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-                $updateStmt->execute([$jsonHistory, $user_id]);
-                
-                echo json_encode(['success' => true, 'message' => 'Active contract record created successfully', 'record' => $activeRecord]);
-                
-            } catch (Exception $e) {
-                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
-            }
-            exit;
-        }
+        
         // 5z5: Get System Server IP Configuration
         if ($action === 'get_system_config') {
             try {
@@ -2929,65 +3148,33 @@
                         $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                         $decision = determineUserStatus($targetUser, $contractDuration, $minProfitForSplit);
                         
-                        if ($decision['has_eligible_profit'] && $decision['should_show_in_revenue']) {
+                        // ===== SPECIAL CASE: failed-payment can be set on any eligible user =====
+                        // This allows admins to mark payments as failed without restrictions
+                        $isFailedPayment = ($normalizedStatus === 'failed-payment');
+                        
+                        // Allow failed-payment to be set even if not eligible (for manual correction)
+                        if ($isFailedPayment || ($decision['has_eligible_profit'] && $decision['should_show_in_revenue'])) {
                             // Update the main loyalties field
                             $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
                             $stmt->execute([$normalizedStatus, $user_id]);
-                            // If confirming payment, also update the revenue history
-                            if ($normalizedStatus === 'payment-confirmed') {
-                                // Get current revenue history
-                                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
-                                if ($checkColumn->rowCount() > 0) {
-                                    $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                                    $stmt->execute([$user_id]);
-                                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                                    
-                                    if ($result && !empty($result['revenue_history'])) {
-                                        $history = json_decode($result['revenue_history'], true);
-                                        if (is_array($history)) {
-                                            // FIRST: Sort by recorded_at DESCENDING (newest first)
-                                            usort($history, function($a, $b) {
-                                                $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                                                $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                                                return $dateB - $dateA;
-                                            });
-                                            
-                                            // Find the FIRST (newest) payment-made record
-                                            $latestPaymentMadeIndex = -1;
-                                            for ($i = 0; $i < count($history); $i++) {
-                                                $loyalties = strtolower($history[$i]['loyalties'] ?? '');
-                                                if (strpos($loyalties, 'payment-made') !== false) {
-                                                    $latestPaymentMadeIndex = $i;
-                                                    break; // Stop at first (newest)
-                                                }
-                                            }
-                                            
-                                            // Update if found
-                                            if ($latestPaymentMadeIndex !== -1) {
-                                                $history[$latestPaymentMadeIndex]['loyalties'] = 'payment-confirmed';
-                                                // Preserve invested_with if it exists in the record or from user data
-                                                if (!isset($history[$latestPaymentMadeIndex]['invested_with']) && isset($targetUser['invested_with'])) {
-                                                    $history[$latestPaymentMadeIndex]['invested_with'] = $targetUser['invested_with'];
-                                                }
-                                                // Resort by ID or recorded_at for storage
-                                                usort($history, function($a, $b) {
-                                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                                                    return $dateA - $dateB;
-                                                });
-                                                $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-                                                $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-                                                $updateStmt->execute([$jsonHistory, $user_id]);
-                                                // ALSO: Reset balance_verification to 'not-verified' for this user
-                                                $resetBalance = $pdo->prepare("UPDATE {$source_table} SET balance_verification = 'not-verified' WHERE id = ?");
-                                                $resetBalance->execute([$user_id]);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                             
-                            $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment status updated to '{$normalizedStatus}' for User ID {$user_id}!</span>";
+                            // ===== CRITICAL: Only set reset_contract for payment-confirmed =====
+                            // reset_contract should only be set to 1 when payment is confirmed
+                            // DO NOT set reset_contract for failed-payment
+                            if ($normalizedStatus === 'payment-confirmed') {
+                                $stmtReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
+                                $stmtReset->execute([$user_id]);
+                            }
+                            // For failed-payment, we do NOT change reset_contract
+                            
+                            // Call the sync function to update revenue history
+                            $syncResult = syncUserRevenueHistory($user_id, $source_table, $pdo, $serverAccount);
+                            
+                            if ($syncResult['success']) {
+                                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment status updated to '{$normalizedStatus}' for User ID {$user_id}!</span>";
+                            } else {
+                                $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Status updated but revenue history sync failed: {$syncResult['message']}</span>";
+                            }
                         } else {
                             $_SESSION['admin_message'] = "<span style='color:red;'>❌ Cannot update status: User does not have an eligible profit split scenario. Reason: {$decision['reason']}</span>";
                         }
@@ -3127,19 +3314,14 @@
         $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
         $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30.00);
 
-        // ========== FETCH ONLY USERS WITH ACTIVE CONTRACTS ==========
-        // Build query with active contract filter
-        $activeContractFilter = "execution_start_date IS NOT NULL 
-                                AND execution_start_date != '0000-00-00' 
-                                AND DATE_ADD(execution_start_date, INTERVAL {$contractDuration} DAY) >= CURDATE()";
-        
-        // Fetch from insiders table - only active contracts
-        $stmt1 = $pdo->prepare("SELECT {$selectFields}, '{$insidersTable}' AS source FROM {$insidersTable} WHERE {$activeContractFilter}");
+        // ========== FETCH ALL USERS (Active, Inactive, Completed) ==========
+        // Fetch ALL users from insiders table - no filter
+        $stmt1 = $pdo->prepare("SELECT {$selectFields}, '{$insidersTable}' AS source FROM {$insidersTable}");
         $stmt1->execute();
         $allUsers = array_merge($allUsers, $stmt1->fetchAll(PDO::FETCH_ASSOC));
 
-        // Fetch from insiders_server table - only active contracts
-        $stmt2 = $pdo->prepare("SELECT {$selectFields}, '{$insidersServerTable}' AS source FROM {$insidersServerTable} WHERE {$activeContractFilter}");
+        // Fetch ALL users from insiders_server table - no filter
+        $stmt2 = $pdo->prepare("SELECT {$selectFields}, '{$insidersServerTable}' AS source FROM {$insidersServerTable}");
         $stmt2->execute();
         $allUsers = array_merge($allUsers, $stmt2->fetchAll(PDO::FETCH_ASSOC));
         
@@ -3191,6 +3373,51 @@
             $user['determined_status'] = $decision['status'];
             $user['decision_reason'] = $decision['reason'];
             
+            // Determine current status for each user
+            $rawStatus = $user['loyalties'] ?? '';
+            $normalizedStatus = normalizePaymentStatus($rawStatus);
+            $user['loyalties_normalized'] = $normalizedStatus;
+
+            // Check if contract is active based on execution_start_date and contract duration
+            $isContractActive = false;
+            $executionStartDate = $user['execution_start_date'] ?? null;
+            if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00') {
+                $start = new DateTime($executionStartDate);
+                $end = clone $start;
+                $end->modify("+{$contractDuration} days");
+                $today = new DateTime();
+                $today->setTime(0, 0, 0);
+                $isContractActive = ($today <= $end);
+            }
+
+            // Determine user's current status category
+            if ($normalizedStatus === 'payment-confirmed') {
+                $user['current_status'] = 'completed';
+                $user['status_label'] = '✅ Completed (Payment Confirmed)';
+                $user['should_show_in_revenue'] = true; // Show but don't add to active totals
+            } elseif ($normalizedStatus === 'payment-made' || $normalizedStatus === 'unpaid-payment') {
+                $user['current_status'] = 'active';
+                $user['status_label'] = '📈 Active (' . $normalizedStatus . ')';
+                $user['should_show_in_revenue'] = true;
+            } elseif ($isContractActive) {
+                $user['current_status'] = 'active';
+                $user['status_label'] = '📈 Active (Contract Running)';
+                $user['should_show_in_revenue'] = false; // Contract active but no profit split yet
+            } else {
+                // Inactive users - contract ended with no profit or no contract
+                $user['current_status'] = 'inactive';
+                if ($profitAndLoss < 0) {
+                    $user['status_label'] = '⏹️ Inactive (Loss)';
+                } elseif ($profitAndLoss > 0 && $profitAndLoss <= $minProfitForSplit) {
+                    $user['status_label'] = '⏹️ Inactive (Below Min Profit)';
+                } elseif (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
+                    $user['status_label'] = '⏹️ Inactive (No Contract)';
+                } else {
+                    $user['status_label'] = '⏹️ Inactive (Contract Ended)';
+                }
+                $user['should_show_in_revenue'] = false;
+            }
+            
             $unpaidAge = ['ended_on' => null, 'age' => null, 'is_ended' => false];
             if ($user['has_eligible_profit'] && !empty($user['execution_start_date']) && $contractDuration > 0) {
                 $unpaidAge = calculateUnpaidAge($user['execution_start_date'], $contractDuration);
@@ -3221,8 +3448,8 @@
             }
             $user['display_status'] = $displayStatus;
             
-            // Add to table summary if should show
-            if ($user['should_show_in_revenue']) {
+            // Add to table summary ONLY for active users (not completed or inactive)
+            if ($user['current_status'] === 'active' && $user['should_show_in_revenue']) {
                 $tableSummary['total_broker_balance'] += $brokerBalance;
                 $tableSummary['total_profit'] += $profitAndLoss;
                 $tableSummary['total_current_balance'] += $currentBalance;
@@ -3542,4 +3769,3 @@
 
 </body>
 </html>
-
