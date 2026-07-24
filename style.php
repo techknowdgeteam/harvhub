@@ -1098,7 +1098,119 @@
         margin-bottom: 0.5rem;
         animation: bounceIn 0.6s ease;
     }
+    /* ===== REVENUE ICON ===== */
+    .revenue-icon-wrapper {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 48px;
+        width: 48px;
+        height: 48px;
+        flex-shrink: 0;
+        margin-right: 14px;
+        transition: all 0.3s ease;
+        /* Remove any background */
+        background: transparent !important;
+        /* Remove any border */
+        border: none !important;
+        /* Remove any box shadow */
+        box-shadow: none !important;
+    }
 
+    /* Remove hover background completely */
+    .revenue-item:hover .revenue-icon-wrapper {
+        transform: scale(1.1);
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    .revenue-icon-wrapper .revenue-icon {
+        font-size: 32px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        /* Remove any background from the icon itself */
+        background: transparent !important;
+    }
+
+    /* Remove background from active contract icon wrapper */
+    .revenue-item.active-contract-simplified .revenue-icon-wrapper {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        animation: pulseIcon 2s infinite;
+    }
+
+    @keyframes pulseIcon {
+        0%, 100% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.1);
+        }
+    }
+
+    /* Make sure the revenue header also has no background issues */
+    .revenue-header {
+        background: transparent !important;
+    }
+
+    .revenue-item {
+        background: var(--revenue-header-bg);
+        /* This is the background you're seeing - change it to match text background */
+    }
+
+    /* If you want it to match the text background, use this: */
+    .revenue-item {
+        background: transparent !important;
+        border: 1px solid var(--glass-border);
+    }
+
+    /* Dark mode - ensure transparency */
+    @media (prefers-color-scheme: dark) {
+        .revenue-icon-wrapper {
+            background: transparent !important;
+        }
+        
+        .revenue-item:hover .revenue-icon-wrapper {
+            background: transparent !important;
+        }
+    }
+
+    @keyframes pulseIcon {
+        0%, 100% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.08);
+        }
+    }
+
+    /* Dark mode adjustments */
+    @media (prefers-color-scheme: dark) {
+        .revenue-icon-wrapper {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .revenue-item:hover .revenue-icon-wrapper {
+            background: rgba(16, 185, 129, 0.2);
+        }
+    }
+
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+        .revenue-icon-wrapper {
+            min-width: 40px;
+            width: 40px;
+            height: 40px;
+            margin-right: 10px;
+        }
+        
+        .revenue-icon-wrapper .revenue-icon {
+            font-size: 17px;
+        }
+    }
     @keyframes bounceIn {
         0% { transform: scale(0); opacity: 0; }
         50% { transform: scale(1.3); }

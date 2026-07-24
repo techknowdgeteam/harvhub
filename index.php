@@ -224,12 +224,15 @@
     // ==================== HANDLE SIGNUP ====================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signup_submit'])) {
         $email = trim(strtolower($_POST['signup_email']));
+        $fullname = trim($_POST['signup_fullname'] ?? '');
         $passkey = $_POST['signup_passkey'] ?? '';
         $confirm_passkey = $_POST['signup_confirm_passkey'] ?? '';
         $signup_error = '';
         
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $signup_error = "Invalid email address.";
+        } elseif (empty($fullname)) {
+            $signup_error = "Please enter your full name.";
         } elseif (empty($passkey) || strlen($passkey) < 4) {
             $signup_error = "Passkey must be at least 4 characters long.";
         } elseif ($passkey !== $confirm_passkey) {
@@ -248,6 +251,7 @@
                 
                 // Store credentials in session (not database)
                 $_SESSION['pending_verification_email'] = $email;
+                $_SESSION['pending_verification_fullname'] = $fullname; // Store fullname
                 $_SESSION['pending_verification_passkey'] = $hashed_passkey;
                 $_SESSION['otp_step'] = 'request';
                 $_SESSION['return_after_verify'] = 'index.php';
@@ -262,6 +266,7 @@
         if (!empty($signup_error)) {
             $_SESSION['signup_error'] = $signup_error;
             $_SESSION['signup_email'] = $email;
+            $_SESSION['signup_fullname'] = $fullname; // Store for re-population
             $_SESSION['show_signup_modal'] = true;
             header("Location: index.php");
             exit;
@@ -294,7 +299,7 @@
             $user_broker = $row['broker'] ?? '';
             $user_server = $row['server'] ?? '';
             $user_login = $row['login'] ?? '';
-            $user_fullname = $row['fullname'] ?? '';
+            $user_fullname = $row['fullname'] ?? ''; // KEEP THIS
             $user_broker_balance = (float)($row['broker_balance'] ?? 0);
             $user_profitandloss = (float)($row['profitandloss'] ?? 0);
 
@@ -309,14 +314,13 @@
     // ==================== EDIT BROKER DETAILS ====================
     if (empty($error) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_insider']) && $logged_in_email !== '' && $application_status === 'pending') {
         $broker = $_POST['broker'] ?? '';
-        $fullname = trim($_POST['fullname'] ?? '');
         $server = trim($_POST['server'] ?? '');
         $login = trim($_POST['login'] ?? ''); 
         $password = $_POST['password'] ?? '';
         
         if (!in_array($broker, $allowed_brokers)) { 
             $error = "Invalid broker selected.";
-        } elseif (empty($fullname) || empty($server) || empty($login) || empty($password)) {
+        } elseif (empty($server) || empty($login) || empty($password)) {
             $error = "All fields are required.";
         } else {
             try {
@@ -341,10 +345,10 @@
             try {
                 $stmt = $pdo->prepare("
                     UPDATE insiders 
-                    SET broker = ?, fullname = ?, server = ?, login = ?, password = ?, application_status = 'pending'
+                    SET broker = ?, server = ?, login = ?, password = ?, application_status = 'pending'
                     WHERE email = ?
                 ");
-                $stmt->execute([$broker, $fullname, $server, $login, $password, strtolower($logged_in_email)]);
+                $stmt->execute([$broker, $server, $login, $password, strtolower($logged_in_email)]);
                 
                 $_SESSION['just_submitted'] = true;
                 header("Location: index.php");
@@ -358,14 +362,13 @@
     // ==================== SUBMIT BROKER DETAILS ====================
     if (empty($error) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_insider']) && $logged_in_email !== '') {
         $broker = $_POST['broker'] ?? '';
-        $fullname = trim($_POST['fullname'] ?? '');
         $server = trim($_POST['server'] ?? '');
         $login = trim($_POST['login'] ?? ''); 
         $password = $_POST['password'] ?? '';
         
         if (!in_array($broker, $allowed_brokers)) { 
             $error = "Invalid broker selected.";
-        } elseif (empty($fullname) || empty($server) || empty($login) || empty($password)) {
+        } elseif (empty($server) || empty($login) || empty($password)) {
             $error = "All fields are required.";
         } else {
             try {
@@ -394,10 +397,10 @@
             try {
                 $stmt = $pdo->prepare("
                     UPDATE insiders 
-                    SET broker = ?, fullname = ?, server = ?, login = ?, password = ?, application_status = 'pending'
+                    SET broker = ?, server = ?, login = ?, password = ?, application_status = 'pending'
                     WHERE email = ?
                 ");
-                $stmt->execute([$broker, $fullname, $server, $login, $password, strtolower($logged_in_email)]);
+                $stmt->execute([$broker, $server, $login, $password, strtolower($logged_in_email)]);
                 
                 $_SESSION['just_submitted'] = true;
                 header("Location: index.php");
@@ -662,7 +665,11 @@
                 <p style="text-align:center; opacity:0.7; margin-bottom: 20px;">The email you entered is not registered. Create a new account below.</p>
                 <form method="POST" style="margin-top:10px;">
                     <input type="hidden" name="signup_submit" value="1">
-                    <label style="display:block; margin-bottom: 5px; font-weight:600;">Email Address</label>
+                    
+                    <label style="display:block; margin-bottom: 5px; font-weight:600;">Full Name</label>
+                    <input type="text" name="signup_fullname" placeholder="Enter your full name" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($_SESSION['signup_fullname'] ?? '') ?>">
+                    
+                    <label style="display:block; margin-top: 15px; margin-bottom: 5px; font-weight:600;">Email Address</label>
                     <input type="email" name="signup_email" placeholder="youremail@gmail.com" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($signup_email) ?>">
                     
                     <label style="display:block; margin-top: 15px; margin-bottom: 5px; font-weight:600;">Set Passkey</label>
@@ -806,11 +813,6 @@
                     </div>
                     
                     <div class="form-group">
-                        <label>Full Name (as registered with broker)</label>
-                        <input type="text" name="fullname" id="edit_fullname" value="<?= htmlspecialchars($user_fullname) ?>" required>
-                    </div>
-                    
-                    <div class="form-group">
                         <label>Server</label>
                         <input type="text" name="server" id="edit_server" value="<?= htmlspecialchars($user_server) ?>" required>
                     </div>
@@ -885,8 +887,6 @@
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <label>Fullname in broker</label>
-                        <input type="text" name="fullname" value="<?= htmlspecialchars($_POST['fullname'] ?? '') ?>" required>
                         <label>Server</label>
                         <input type="text" name="server" value="<?= htmlspecialchars($_POST['server'] ?? '') ?>" required>
                         <label>Login No.</label>

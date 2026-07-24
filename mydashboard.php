@@ -2354,7 +2354,7 @@
             <div class="modal-actions" style="flex-direction: column; gap: 10px;">
                 <form method="POST" style="width: 100%;">
                     <input type="hidden" name="confirm_reset_contract" value="1">
-                    <button type="submit" class="btn-full" style="background: #ff9800; color: white; width: 100%;">
+                    <button type="submit" class="btn-loyalty-action" style="background: #ff9800; color: white; width: 100%;">
                         Continue
                     </button>
                 </form>
@@ -3417,12 +3417,17 @@
                     html += `
                         <div class="revenue-item" data-id="${record.id || Math.random()}">
                             <div class="revenue-header" onclick="toggleRevenueDetails(this)">
-                                <div class="revenue-header-left">
-                                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 8px;">
-                                        <div class="revenue-user-share">$${formatNumber(record.user_share)}</div>
+                                    <div style="display: flex; align-items: stretch; width: 100%; background: transparent !important;">
+                                        <div class="revenue-icon-wrapper" style="background: transparent !important;">
+                                            <span class="revenue-icon" style="background: transparent !important;">💰</span>
+                                        </div>
+                                        <div class="revenue-header-left" style="flex: 1; display: flex; flex-direction: column; justify-content: center;">
+                                            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; flex-wrap: wrap; gap: 8px;">
+                                                <div class="revenue-user-share">$${formatNumber(record.user_share)}</div>
+                                            </div>
+                                            <div class="revenue-date-range">${formatDateRange(record.execution_start_date, record.execution_end_date)}</div>
+                                        </div>
                                     </div>
-                                    <div class="revenue-date-range">${formatDateRange(record.execution_start_date, record.execution_end_date)}</div>
-                                </div>
                             </div>
                             <div class="revenue-details">
                                 <div class="revenue-detail-row">
