@@ -229,6 +229,7 @@
         hideCustomAlert: function() {
             document.getElementById('custom-alert').style.display = 'none';
         },
+
         
         init: function() {
             this.loadUsers();
@@ -518,7 +519,7 @@
                             <span>All Trades (${uniqueTrades.length})</span>
                             <span class="modal-close" onclick="Analytics.closeTradesModal()">✕</span>
                         </div>
-                        <div class="modal-body">
+                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoTrades ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">📭</div>
@@ -598,7 +599,7 @@
                             <span>Highest Sequential Losses</span>
                             <span class="modal-close" onclick="Analytics.closeLossesModal()">✕</span>
                         </div>
-                        <div class="modal-body">
+                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoData ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">✅</div>
@@ -684,7 +685,7 @@
                             <span>Highest Sequential Days in Loss</span>
                             <span class="modal-close" onclick="Analytics.closeDaysLossModal()">✕</span>
                         </div>
-                        <div class="modal-body">
+                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoData ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">✅</div>
@@ -932,7 +933,7 @@
                             <span>Traded Symbols (${Object.keys(symbols).length})</span>
                             <span class="modal-close" onclick="Analytics.closeSymbolsModal()">✕</span>
                         </div>
-                        <div class="modal-body">
+                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoSymbols ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">📊</div>
@@ -1025,7 +1026,7 @@
                             <span>📅 Trades from ${startDate} to ${endDate}</span>
                             <span class="modal-close" onclick="Analytics.closeCalendarModal()">✕</span>
                         </div>
-                        <div class="modal-body">
+                        <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                             ${this.renderDailyCalendarModal(dailyRecord, regularData)}
                         </div>
                     </div>
@@ -1058,7 +1059,7 @@
             // Create a set of dates that have data
             const dateSet = new Set(dates);
             
-            // Generate calendar grid
+            // Generate calendar grid - FIXED: proper day alignment
             let html = `
                 <div class="calendar-grid">
             `;
@@ -1089,30 +1090,32 @@
             
             // Add each day
             for (let i = 0; i < totalDays; i++) {
-                const dateStr = currentDate.toISOString().split('T')[0];
+                const year = currentDate.getFullYear();
+                const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                const day = String(currentDate.getDate()).padStart(2, '0');
+                const dateStr = `${year}-${month}-${day}`;
                 const hasData = dateSet.has(dateStr);
+                const dayOfWeek = currentDate.getDay(); // 0 = Sunday
+                const monthName = currentDate.toLocaleString('default', { month: 'short' });
+                const dayNumber = currentDate.getDate();
                 
                 if (hasData) {
                     const data = dailyRecord[dateStr];
-                    const month = currentDate.toLocaleString('default', { month: 'short' });
-                    const day = currentDate.getDate();
                     const pnl = data.profit_and_loss || 0;
                     const tradesCount = data.trades_count || 0;
                     const pnlClass = pnl >= 0 ? 'calendar-profit' : 'calendar-loss';
                     
                     html += `
                         <div class="calendar-day ${pnlClass}" onclick="Analytics.showDayDetailModal('${dateStr}')">
-                            <div class="calendar-day-date">${month} ${day}</div>
+                            <div class="calendar-day-date">${monthName} ${dayNumber}</div>
                             <div class="calendar-day-pnl">$${this.formatNumber(pnl)}</div>
                             <div class="calendar-day-trades">${tradesCount} ${tradesCount > 1 ? 'trades' : 'trade'}</div>
                         </div>
                     `;
                 } else {
-                    const month = currentDate.toLocaleString('default', { month: 'short' });
-                    const day = currentDate.getDate();
                     html += `
                         <div class="calendar-day calendar-empty-day">
-                            <div class="calendar-day-date">${month} ${day}</div>
+                            <div class="calendar-day-date">${monthName} ${dayNumber}</div>
                             <div class="calendar-day-pnl" style="color: #888;">—</div>
                             <div class="calendar-day-trades" style="color: #888;">📊 0</div>
                         </div>
@@ -1184,46 +1187,98 @@
             const pnl = dayData.profit_and_loss || 0;
             const tradesCount = dayData.trades_count || 0;
             const tradeSummary = dayData.trade_summary || {};
+            const allTrades = dayData.all_trades || {};
             const pnlClass = pnl >= 0 ? 'profit' : 'loss';
+            
+            // Flatten all trades from all symbols into a single list
+            let allTradesList = [];
+            for (const symbol in allTrades) {
+                if (Array.isArray(allTrades[symbol])) {
+                    // Add the symbol to each trade object
+                    const tradesWithSymbol = allTrades[symbol].map(trade => ({
+                        ...trade,
+                        symbol: symbol  // Add the symbol from the parent key
+                    }));
+                    allTradesList = allTradesList.concat(tradesWithSymbol);
+                }
+            }
+            
+            // Sort trades by time (newest first)
+            allTradesList.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
             
             let modalHtml = `
                 <div class="modal-overlay" id="daydetail-modal-overlay" onclick="Analytics.closeModalIfClickOutsideDayDetail(event)">
-                    <div class="modal-container modal-large" onclick="event.stopPropagation()">
+                    <div class="modal-container" onclick="event.stopPropagation()">
                         <div class="modal-header">
                             <span>📅 ${dayOfWeek}, ${month} ${day}, ${year}</span>
                             <span class="modal-close" onclick="Analytics.closeDayDetailModal()">✕</span>
                         </div>
-                        <div class="modal-body">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
-                                <div class="stat-card">
+                        <div class="modal-body" style="max-height: 70vh; overflow-y: auto; padding: 20px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                                <div class="stat-card" style="padding: 15px;">
                                     <div class="stat-label">Daily P&L</div>
-                                    <div class="stat-value ${pnlClass}" style="font-size: 36px;">$${this.formatNumber(pnl)}</div>
+                                    <div class="stat-value ${pnlClass}" style="font-size: 28px;">$${this.formatNumber(pnl)}</div>
                                 </div>
-                                <div class="stat-card">
+                                <div class="stat-card" style="padding: 15px;">
                                     <div class="stat-label">Total Trades</div>
-                                    <div class="stat-value" style="font-size: 36px;">${tradesCount}</div>
+                                    <div class="stat-value" style="font-size: 28px;">${tradesCount}</div>
                                 </div>
                             </div>
                             
-                            <div class="section-title">Trade Summary by Symbol</div>
-                            <div class="contest-grid">
+                            <div class="section-title" style="margin-bottom: 10px;">Trade Summary by Symbol</div>
+                            <div class="contest-grid" style="margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                                 ${Object.entries(tradeSummary).map(([symbol, pnlValue]) => `
-                                    <div class="contest-card" style="padding: 15px;">
-                                        <h4 style="margin-bottom: 10px;">${this.escapeHtml(symbol)}</h4>
-                                        <div class="symbol-info">
+                                    <div class="contest-card" style="padding: 12px;">
+                                        <h4 style="margin-bottom: 5px; font-size: 14px;">${this.escapeHtml(symbol)}</h4>
+                                        <div class="symbol-info" style="font-size: 13px;">
                                             <span>P&L:</span>
-                                            <span class="${pnlValue >= 0 ? 'profit' : 'loss'}" style="font-size: 18px; font-weight: bold;">
+                                            <span class="${pnlValue >= 0 ? 'profit' : 'loss'}" style="font-size: 16px; font-weight: bold;">
                                                 $${this.formatNumber(pnlValue)}
                                             </span>
+                                        </div>
+                                        <div class="symbol-info" style="font-size: 12px;">
+                                            <span>Trades:</span>
+                                            <span>${(allTrades[symbol] || []).length}</span>
                                         </div>
                                     </div>
                                 `).join('')}
                                 ${Object.keys(tradeSummary).length === 0 ? `
-                                    <div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 20px;">
+                                    <div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 10px;">
                                         No symbol data available for this day
                                     </div>
                                 ` : ''}
                             </div>
+                            
+                            <div class="section-title" style="margin-bottom: 10px;">📊 Individual Trades (${allTradesList.length})</div>
+                            ${allTradesList.length > 0 ? `
+                                <div style="display: flex; flex-direction: column; gap: 10px;">
+                                    ${allTradesList.map(trade => {
+                                        const isProfit = (trade.pnl || 0) >= 0;
+                                        return `
+                                            <div style="background: var(--bg-secondary, #f5f5f5); border-radius: 8px; padding: 12px 15px; border-left: 4px solid ${isProfit ? '#4caf50' : '#f44336'};">
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                                    <span style="font-weight: bold; font-size: 16px;">${this.escapeHtml(trade.symbol || 'N/A')}</span>
+                                                    <span style="font-size: 13px; color: #888;">${trade.order_type || trade.type || 'N/A'}</span>
+                                                    <span style="font-size: 13px; color: #888;">1:${trade.risk_reward || 'N/A'}</span>
+                                                </div>
+                                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 15px; font-size: 13px;">
+                                                    <div><span style="color: #888;">Exit:</span> ${trade.exit_price || 'N/A'}</div>
+                                                    <div><span style="color: #888;">Entry:</span> ${trade.entry_price || 'N/A'}</div>
+                                                    <div><span style="color: #888;">TP:</span> ${trade.take_profit || trade.tp || 'N/A'}</div>
+                                                    <div><span style="color: #888;">Volume:</span> ${trade.volume || 'N/A'}</div>
+                                                    <div style="grid-column: 1 / -1; margin-top: 3px; font-weight: bold; font-size: 15px; color: ${isProfit ? '#4caf50' : '#f44336'};">
+                                                        PnL: $${this.formatNumber(trade.pnl || 0)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            ` : `
+                                <div style="text-align: center; color: #888; padding: 20px; background: #f9f9f9; border-radius: 8px;">
+                                    No individual trade data available for this day
+                                </div>
+                            `}
                         </div>
                     </div>
                 </div>
@@ -1284,4 +1339,3 @@
         Analytics.init();
     });
 </script>
-
