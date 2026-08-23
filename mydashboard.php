@@ -1130,7 +1130,9 @@
             'contract_id' => NULL,
             'execution_start_date' => NULL,
             'balance_verification' => 'not-verified',
-            'reset_contract' => 0  // Set to 0 so reset button disappears and apply can show
+            'reset_contract' => 0,  // Set to 0 so reset button disappears and apply can show
+            'recent_highest_balance' => NULL,  // <-- ADDED: Reset highest balance
+            'recent_highest_balance_last_update' => NULL  // <-- ADDED: Reset last update date
             // REMOVED: 'loyalties' => 'justjoined' - Don't update loyalties
             // REMOVED: 'revenue_history' => NULL - Keep revenue history
         ];

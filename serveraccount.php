@@ -829,8 +829,9 @@
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
                     if ($checkTable1->rowCount() > 0) {
+                        // FIX: Added broker_balance to SELECT
                         $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, execution_start_date, profitandloss, '{$insidersServerTable}' as source, ? as contract_duration
+                            SELECT id, fullname, email, execution_start_date, profitandloss, broker_balance, '{$insidersServerTable}' as source, ? as contract_duration
                             FROM {$insidersServerTable} 
                             WHERE execution_start_date IS NOT NULL 
                             AND execution_start_date != '0000-00-00'
@@ -859,8 +860,9 @@
                 try {
                     $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
                     if ($checkTable2->rowCount() > 0) {
+                        // FIX: Added broker_balance to SELECT
                         $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, execution_start_date, profitandloss, '{$insidersTable}' as source, ? as contract_duration
+                            SELECT id, fullname, email, execution_start_date, profitandloss, broker_balance, '{$insidersTable}' as source, ? as contract_duration
                             FROM {$insidersTable} 
                             WHERE execution_start_date IS NOT NULL 
                             AND execution_start_date != '0000-00-00'
@@ -3550,8 +3552,15 @@
                             <span class="sub-text">IP &amp; System config</span>
                         </span>
                     </a>
+                    <a href="serveraccount.php?view=paid_users" style="display: none;">
+                        <span class="nav-icon">💰</span>
+                        <span class="nav-label">
+                            Revenue Dashboard
+                            <span class="sub-text">Users &amp; Payments</span>
+                        </span>
+                    </a>
                     <a href="serveraccount.php?view=paid_users">
-                        <span class="nav-icon">📊</span>
+                        <span class="nav-icon">💰</span>
                         <span class="nav-label">
                             Revenue Dashboard
                             <span class="sub-text">Users &amp; Payments</span>
