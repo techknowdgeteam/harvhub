@@ -3780,1082 +3780,6 @@
 </style>
 
 <style>
-    /* Revenue Summary Cards */
-    .revenue-summary {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
-        margin: 20px 0;
-    }
-    .summary-card {
-        background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(76, 175, 80, 0.05));
-        border: 1px solid var(--border-color);
-        border-radius: 14px;
-        padding: 16px;
-        text-align: center;
-    }
-    .summary-card.warning {
-        background: linear-gradient(135deg, rgba(255, 152, 0, 0.1), rgba(255, 152, 0, 0.05));
-    }
-    .summary-card .label {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #888;
-        margin-bottom: 5px;
-    }
-    .summary-card .value {
-        font-size: 1.6rem;
-        font-weight: bold;
-        color: var(--header-color);
-    }
-    .summary-card .value.profit {
-        color: #27ae60;
-    }
-    .summary-card .value.loss {
-        color: #e74c3c;
-    }
-    .summary-card .sub {
-        font-size: 0.8rem;
-        color: #888;
-        margin-top: 5px;
-    }
-
-    /* Filter Toggle Buttons */
-    .filter-section {
-        margin: 20px 0;
-    }
-    .filter-toggles {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-bottom: 15px;
-    }
-    .filter-btn {
-        flex: 1;
-        min-width: 100px;
-        padding: 12px 20px;
-        background-color: var(--input-bg);
-        color: var(--text-color);
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: bold;
-        transition: all 0.2s;
-        margin: 0;
-    }
-    .filter-btn.active {
-        background-color: var(--primary-color);
-        color: white;
-        border-color: var(--primary-color);
-    }
-    /* Current Status Badges */
-    .status-badge-modern.status-active {
-        background: rgba(46, 204, 113, 0.15);
-        color: #27ae60;
-    }
-
-    .status-badge-modern.status-completed {
-        background: rgba(52, 152, 219, 0.15);
-        color: #3498db;
-    }
-
-    .status-badge-modern.status-inactive {
-        background: rgba(149, 165, 166, 0.15);
-        color: #7f8c8d;
-    }
-
-    .status-badge-modern {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 10px;
-        font-weight: 500;
-        white-space: nowrap;
-    }
-    .filter-btn:hover {
-        border-color: var(--primary-color);
-    }
-    .search-container {
-        display: flex;
-        gap: 10px;
-        margin-top: 15px;
-    }
-    .search-input {
-        flex: 1;
-        padding: 12px;
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        background-color: var(--input-bg);
-        color: var(--text-color);
-        font-size: 14px;
-    }
-    .search-input::placeholder {
-        color: #888;
-    }
-    .reset-btn {
-        width: auto;
-        padding: 12px 20px;
-        background-color: var(--accent-color);
-        margin: 0;
-    }
-
-    /* Additional styles for revenue history */
-    .filter-section {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 15px;
-        margin-bottom: 20px;
-        padding: 15px;
-        background: var(--bg-secondary);
-        border-radius: 12px;
-    }
-
-    .filter-toggles {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    .filter-btn {
-        padding: 6px 12px;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-        background: var(--bg-primary);
-        color: var(--text-secondary);
-        white-space: nowrap;
-    }
-
-    .filter-btn.active {
-        background: var(--accent-color);
-        color: white;
-    }
-
-    .filter-btn:hover:not(.active) {
-        background: var(--border-color);
-    }
-
-    .revenue-tabs {
-        display: flex;
-        gap: 5px;
-        margin-bottom: 20px;
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 8px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: thin;
-    }
-
-    .revenue-tab-btn {
-        padding: 6px;
-        padding-top: 20px;
-        padding-bottom: 20px;
-        border: none;
-        background: transparent;
-        color: var(--text-secondary);
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-        border-radius: 6px 6px 0 0;
-        white-space: nowrap;
-    }
-
-    .revenue-tab-btn.active {
-        color: var(--accent-color);
-        background: var(--bg-secondary);
-        border-bottom: 2px solid var(--accent-color);
-        border-top: 2px solid var(--accent-color);
-        margin-bottom: -2px;
-    }
-
-    .revenue-tab-btn:hover:not(.active) {
-        color: var(--text-primary);
-        background: var(--bg-hover);
-    }
-
-    .revenue-tab {
-        display: none;
-    }
-
-    .revenue-tab.active-tab {
-        display: block;
-    }
-
-    /* Split view for revenue history */
-    .revenue-split-view {
-        display: flex;
-        gap: 16px;
-        min-height: 500px;
-    }
-
-    .revenue-user-list-panel {
-        flex: 0 0 280px;
-        background: var(--bg-secondary);
-        border-radius: 10px;
-        overflow-y: auto;
-        max-height: 550px;
-    }
-
-    .revenue-user-list-panel h3 {
-        padding: 12px;
-        margin: 0;
-        font-size: 14px;
-        border-bottom: 1px solid var(--border-color);
-        position: sticky;
-        top: 0;
-        background: var(--bg-secondary);
-    }
-
-    .revenue-user-items {
-        padding: 8px;
-    }
-
-    .revenue-user-item {
-        padding: 10px;
-        margin-bottom: 6px;
-        background: var(--bg-primary);
-        border-radius: 8px;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        border: 1px solid transparent;
-    }
-
-    .revenue-user-item:hover {
-        background: var(--bg-hover);
-        transform: translateX(3px);
-    }
-
-    .revenue-user-item.active {
-        border-color: var(--accent-color);
-        background: var(--bg-hover);
-    }
-
-    .revenue-user-item-name {
-        font-weight: 600;
-        margin-bottom: 3px;
-        font-size: 13px;
-        word-break: break-word;
-    }
-
-    .revenue-user-item-email {
-        font-size: 10px;
-        opacity: 0.7;
-        word-break: break-all;
-    }
-
-    .revenue-user-item-id {
-        font-size: 9px;
-        opacity: 0.5;
-        margin-top: 3px;
-    }
-
-    .revenue-history-panel {
-        flex: 1;
-        background: var(--bg-secondary);
-        border-radius: 10px;
-        padding: 16px;
-        overflow-x: auto;
-    }
-
-    .revenue-history-header {
-        margin-bottom: 16px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--border-color);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-    }
-
-    .revenue-history-header h3 {
-        margin: 0;
-        font-size: 14px;
-        word-break: break-word;
-    }
-
-    .refresh-history-btn {
-        padding: 5px 12px;
-        background: #3498db;
-        color: white;
-        border: none;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 11px;
-        white-space: nowrap;
-    }
-
-    .refresh-history-btn:hover {
-        background: #2980b9;
-    }
-
-    /* Horizontal flex grid for investor details */
-    .investor-details-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-
-    .detail-card {
-        flex: 1 1 auto;
-        min-width: 130px;
-        background: var(--bg-primary);
-        border-radius: 10px;
-        padding: 12px 10px;
-        text-align: center;
-        transition: transform 0.2s, box-shadow 0.2s;
-        border: 1px solid var(--border-color);
-    }
-
-    .detail-card:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    }
-
-    .detail-label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-weight: 600;
-        color: var(--text-secondary);
-        margin-bottom: 6px;
-    }
-
-    .detail-value {
-        font-size: 15px;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.3;
-    }
-
-    .status-badge-modern {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 11px;
-        font-weight: 600;
-    }
-
-    .status-active {
-        background: rgba(52, 152, 219, 0.15);
-        color: #3498db;
-    }
-
-    .status-ended {
-        background: rgba(230, 126, 34, 0.15);
-        color: #e67e22;
-    }
-
-    .status-completed {
-        background: rgba(39, 174, 96, 0.15);
-        color: #27ae60;
-    }
-    
-    .status-recent {
-        background: rgba(155, 89, 182, 0.15);
-        color: #9b59b6;
-    }
-
-    /* Horizontal stats row for completed investors */
-    .completed-stats-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-
-    .completed-stat-card {
-        flex: 1 1 auto;
-        min-width: 120px;
-        background: var(--bg-primary);
-        border-radius: 10px;
-        padding: 12px;
-        text-align: center;
-        border: 1px solid var(--border-color);
-    }
-
-    .completed-stat-label {
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-secondary);
-        margin-bottom: 6px;
-    }
-
-    .completed-stat-value {
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--accent-color);
-    }
-
-    .profit-positive {
-        color: #27ae60;
-    }
-
-    .profit-negative {
-        color: #e74c3c;
-    }
-
-    /* Cancel button styles */
-    .cancel-contract-btn {
-        background: #e74c3c;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 6px 12px;
-        font-size: 11px;
-        cursor: pointer;
-        margin-top: 10px;
-        transition: background 0.2s ease;
-    }
-
-    .cancel-contract-btn:hover {
-        background: #c0392b;
-    }
-
-    .cancel-contract-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
-
-    /* History table improvements */
-    .revenue-history-table {
-        width: 100%;
-        overflow-x: auto;
-        margin-top: 8px;
-    }
-
-    .revenue-history-table table {
-        width: 100%;
-        min-width: 700px;
-        border-collapse: collapse;
-        font-size: 12px;
-    }
-
-    .revenue-history-table th,
-    .revenue-history-table td {
-        padding: 10px 8px;
-        text-align: left;
-        border-bottom: 1px solid var(--border-color);
-    }
-
-    .revenue-history-table th {
-        background: var(--bg-primary);
-        font-weight: 600;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-
-    .revenue-history-table tr:hover {
-        background: var(--bg-hover);
-    }
-
-    /* Search input smaller */
-    .search-input {
-        padding: 6px 10px;
-        font-size: 12px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        background: var(--bg-primary);
-        color: var(--text-primary);
-        width: 200px;
-    }
-    
-    .reset-btn {
-        padding: 6px 12px;
-        font-size: 12px;
-        border-radius: 6px;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        cursor: pointer;
-    }
-    
-    .reset-btn:hover {
-        background: var(--bg-hover);
-    }
-
-    /* Section divider for completed investors */
-    .completed-sections {
-        margin-top: 15px;
-    }
-    
-    .section-divider-small {
-        margin: 20px 0 15px 0;
-        text-align: center;
-        position: relative;
-    }
-    
-    .section-divider-small span {
-        background: var(--bg-primary);
-        padding: 0 15px;
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text-secondary);
-        position: relative;
-        z-index: 1;
-    }
-    
-    .section-divider-small::before {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background: var(--border-color);
-        z-index: 0;
-    }
-
-    /* Mobile responsive */
-    @media (max-width: 768px) {
-        .revenue-split-view {
-            flex-direction: column;
-        }
-        
-        .revenue-user-list-panel {
-            flex: none;
-            width: 100%;
-            max-height: 280px;
-        }
-        
-        .revenue-history-panel {
-            width: 100%;
-        }
-        
-        .detail-card {
-            min-width: 110px;
-        }
-        
-        .detail-value {
-            font-size: 13px;
-        }
-        
-        .completed-stat-value {
-            font-size: 16px;
-        }
-        
-        .search-input {
-            width: 160px;
-        }
-    }
-    /* Add to your existing styles */
-    .clickable-filter {
-        cursor: pointer;
-        transition: all 0.2s ease;
-        position: relative;
-    }
-
-    .clickable-filter:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    }
-
-    .clickable-filter:active {
-        transform: translateY(0);
-    }
-        /* Action select styles */
-    .status-action-select {
-        padding: 2px;
-        border-radius: 5px;
-        border: 1px solid var(--border-color);
-        background: var(--bg-primary);
-        color: var(--text-primary);
-        font-size: 11px;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }
-    .status-action-select option{
-        color: black
-    }
-
-    .status-action-select:hover {
-        border-color: var(--accent-color);
-    }
-
-    .status-action-select:focus {
-        outline: none;
-        border-color: var(--accent-color);
-        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-    }
-
-    .status-action-select:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .update-status-btn-inline {
-        margin-left: 8px;
-        padding: 5px 10px;
-        background: #3498db;
-        color: white;
-        border: none;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 11px;
-        transition: background 0.2s ease;
-    }
-
-    .update-status-btn-inline:hover {
-        background: #2980b9;
-    }
-
-    /* Modal styles for inline updates */
-    .modal {
-        display: none;
-        position: fixed;
-        z-index: 1000;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background-color: rgba(0, 0, 0, 0.5);
-        align-items: center;
-        justify-content: center;
-    }
-
-    .modal.show {
-        display: flex;
-    }
-
-    .modal-content {
-        background: var(--bg-secondary);
-        border-radius: 12px;
-        padding: 20px;
-        max-width: 400px;
-        width: 90%;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    }
-
-    .modal-content h3 {
-        margin: 0 0 15px 0;
-        font-size: 18px;
-    }
-
-    .modal-cancel-btn {
-        padding: 8px 16px;
-        background: var(--bg-primary);
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-    }
-
-    .modal-confirm-btn {
-        padding: 8px 16px;
-        background: #e74c3c;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-    }
-
-    .modal-confirm-btn:hover {
-        background: #c0392b;
-    }
-
-    .json-password-input {
-        width: 100%;
-        padding: 8px;
-        border-radius: 5px;
-        border: 1px solid var(--border-color);
-        background: var(--bg-primary);
-        color: var(--text-primary);
-        font-size: 13px;
-    }
-    .status-failed {
-        background: rgba(231, 76, 60, 0.15);
-        color: #e74c3c;
-    }
-    /* Search and filter styles */
-    .filter-history-btn {
-        padding: 5px 12px;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 11px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-        background: var(--bg-secondary);
-        color: var(--text-secondary);
-    }
-
-    .filter-history-btn.active {
-        background: var(--accent-color);
-        color: white;
-    }
-
-    .filter-history-btn:hover:not(.active) {
-        background: var(--border-color);
-    }
-
-    /* Scrollable list styles */
-    .revenue-user-items {
-        max-height: 450px;
-        overflow-y: auto;
-        scrollbar-width: thin;
-    }
-
-    .revenue-user-items::-webkit-scrollbar {
-        width: 5px;
-    }
-
-    .revenue-user-items::-webkit-scrollbar-track {
-        background: var(--bg-primary);
-        border-radius: 3px;
-    }
-
-    .revenue-user-items::-webkit-scrollbar-thumb {
-        background: var(--border-color);
-        border-radius: 3px;
-    }
-
-    /* Search input focus styles */
-    .search-input:focus {
-        outline: none;
-        border-color: var(--accent-color);
-        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-    }
-
-    .table-wrapper {
-        width: 100%;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        margin-top: 20px;
-        margin-bottom: 100px;
-        border-radius: 12px;
-    }
-    .user-list-table { 
-        width: 100%; 
-        border-collapse: collapse; 
-        font-size: 13px; 
-        min-width: 1100px;
-        margin-bottom: 20px;
-    }
-    .user-list-table th, .user-list-table td { 
-        border: 1px solid var(--border-color); 
-        padding: 12px 8px; 
-        text-align: left; 
-        vertical-align: middle;
-    }
-    .user-list-table th { 
-        background-color: var(--table-header-bg); 
-        color: var(--header-color); 
-        font-weight: 600;
-        white-space: nowrap;
-    }
-    .user-list-table tr:nth-child(even) { background-color: var(--table-even-row-bg); }
-    .user-list-table button { width: auto; padding: 8px 14px; margin: 0; font-size: 13px; }
-    .confirm-btn { background-color: var(--primary-color); margin-top: 0; }
-    
-    .profit { color: var(--profit-color); font-weight: bold; }
-    .loss { color: var(--loss-color); font-weight: bold; }
-    .status-badge { 
-        padding: 4px 10px; 
-        border-radius: 20px; 
-        font-weight: bold; 
-        font-size: 11px;
-        color: white;
-        white-space: nowrap;
-        display: inline-block;
-    }
-    .loyalty-paid { background-color: #f39c12; }
-    .loyalty-paymentconfirmed { background-color: var(--primary-color); }
-    .loyalty-unpaid { background-color: #7f8c8d; }
-    .eligible-badge {
-        background-color: var(--primary-color);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 10px;
-        margin-left: 5px;
-    }
-
-    /* Payment Status Styles */
-    .payment-status-select {
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        background: white;
-        color: black;
-        font-size: 12px;
-        cursor: pointer;
-    }
-    
-    .payment-status-select:focus {
-        outline: none;
-        border-color: var(--accent-color);
-    }
-    
-    .update-status-btn {
-        padding: 6px 12px;
-        background: var(--accent-color);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        font-size: 11px;
-        cursor: pointer;
-        margin-left: 5px;
-        transition: all 0.3s ease;
-    }
-    
-    .update-status-btn:hover {
-        background: var(--accent-hover);
-        transform: translateY(-1px);
-    }
-    
-    .status-cell {
-        min-width: 180px;
-    }
-    
-    .status-badge-payment-confirmed {
-        background: #27ae60;
-        color: white;
-    }
-    
-    .status-badge-payment-rejected {
-        background: #e74c3c;
-        color: white;
-    }
-    
-    .status-badge-payment-not-received {
-        background: #f39c12;
-        color: white;
-    }
-    
-    .status-badge-payment-failed {
-        background: #c0392b;
-        color: white;
-    }
-    
-    /* Server Decision Styles */
-    .server-decision-select {
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        background: white;
-        color: black;
-        font-size: 12px;
-        cursor: pointer;
-    }
-    
-    .server-decision-select:focus {
-        outline: none;
-        border-color: var(--accent-color);
-    }
-    
-    .update-decision-btn {
-        padding: 6px 12px;
-        background: #9b59b6;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        font-size: 11px;
-        cursor: pointer;
-        margin-left: 5px;
-        transition: all 0.3s ease;
-    }
-    
-    .update-decision-btn:hover {
-        background: #8e44ad;
-        transform: translateY(-1px);
-    }
-    
-    .unpaid-age-cell {
-        font-size: 11px;
-        line-height: 1.4;
-    }
-    
-    .unpaid-age-ended {
-        color: #e74c3c;
-        font-weight: bold;
-    }
-    
-    .unpaid-age-not-ended {
-        color: #f39c12;
-    }
-    
-    .expected-payment-badge {
-        background: #e74c3c;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 10px;
-        margin-left: 5px;
-    }
-    
-    .server-decision-badge {
-        display: inline-block;
-        padding: 3px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: bold;
-    }
-    
-    .server-decision-blacklisted {
-        background: #2c3e50;
-        color: white;
-    }
-    
-    .server-decision-re-instate {
-        background: #27ae60;
-        color: white;
-    }
-    
-    .server-decision-suspend {
-        background: #e74c3c;
-        color: white;
-    }
-
-    /* Live update indicator styles */
-    .updating {
-        animation: highlightPulse 0.3s ease-out;
-    }
-    
-    @keyframes highlightPulse {
-        0% { background-color: rgba(52, 152, 219, 0); }
-        50% { background-color: rgba(52, 152, 219, 0.3); }
-        100% { background-color: rgba(52, 152, 219, 0); }
-    }
-    
-    .live-badge {
-        display: inline-block;
-        width: 8px;
-        height: 8px;
-        background-color: #2ecc71;
-        border-radius: 50%;
-        margin-left: 8px;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { opacity: 0.5; transform: scale(1); }
-        50% { opacity: 1; transform: scale(1.2); }
-        100% { opacity: 0.5; transform: scale(1); }
-    }
-    
-    .user-row.updating-row {
-        background-color: rgba(52, 152, 219, 0.1);
-        transition: background-color 0.3s;
-    }
-    
-    .filter-section {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 15px;
-        margin-bottom: 20px;
-        padding: 15px;
-        background: var(--bg-secondary);
-        border-radius: 12px;
-    }
-    
-    .filter-toggles {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-    
-    .filter-btn {
-        padding: 8px 16px;
-        background: var(--bg-tertiary);
-        border: 1px solid var(--border-color);
-        border-radius: 20px;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    
-    .filter-btn.active {
-        background: var(--accent-color);
-        color: white;
-        border-color: var(--accent-color);
-    }
-    
-    .search-container {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-    }
-    
-    .search-input {
-        padding: 8px 12px;
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        width: 250px;
-    }
-    
-    .reset-btn {
-        padding: 8px 16px;
-        background: #e74c3c;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-    }
-    
-    .reset-btn:hover {
-        background: #c0392b;
-    }
-    
-    .status-update-form.disabled-form {
-        opacity: 0.5;
-        pointer-events: none;
-    }
-    
-    .status-badge-not-eligible {
-        background: #7f8c8d;
-        color: white;
-    }
-    
-    /* Active Investors Summary Cards */
-    .active-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-    .active-summary-card {
-        background: var(--bg-primary);
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        padding: 14px;
-        text-align: center;
-    }
-    .active-summary-card .label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-secondary);
-        margin-bottom: 4px;
-    }
-    .active-summary-card .value {
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-    
-    @media (max-width: 600px) {
-        .revenue-summary { grid-template-columns: repeat(2, 1fr); }
-        .summary-card .value { font-size: 1.3rem; }
-        .filter-toggles { flex-direction: column; }
-        .filter-btn { width: 100%; }
-        .table-wrapper { margin-bottom: 100px; }
-    }
-</style>
-
-<style>
     /* ============================================
     REVENUE DASHBOARD STYLES - Mobile First
     ============================================ */
@@ -4949,6 +3873,10 @@
         flex: 0 0 auto;
     }
 
+    .sub-sub-tabs-wrapper {
+        margin-top: -5px;
+    }
+
     @media (min-width: 768px) {
         .sub-tabs .sub-tab-btn {
             font-size: 12px;
@@ -4969,6 +3897,26 @@
     @keyframes fadeIn {
         from { opacity: 0; transform: translateY(10px); }
         to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ============================================
+    SEARCH BAR - Clickable for Revenue History
+    ============================================ */
+    .search-bar-clickable {
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .search-bar-clickable:hover {
+        border-color: var(--accent-color);
+        background: var(--bg-tertiary);
+    }
+
+    .search-bar-clickable .search-placeholder {
+        flex: 1;
+        padding: 12px 0;
+        color: #999;
+        font-size: 14px;
     }
 
     /* ============================================
@@ -5008,18 +3956,11 @@
         box-shadow: 0 6px 20px rgba(0,0,0,0.10);
     }
 
-    .summary-cube .cube-icon {
-        font-size: 24px;
-        font-weight: 700;
-        color: var(--accent-color);
-        margin-bottom: 4px;
-    }
-
     .summary-cube .cube-value {
         font-size: 20px;
         font-weight: 700;
-        color: var(--accent-color);
         margin-bottom: 2px;
+        transition: color 0.3s ease;
     }
 
     @media (min-width: 768px) {
@@ -5091,6 +4032,39 @@
     }
 
     /* ============================================
+    REVENUE HISTORY USER HEADER
+    ============================================ */
+    .revenue-history-user-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        border-radius: 10px;
+        border: 1px solid var(--border-color);
+    }
+
+    .revenue-history-user-header h3 {
+        margin: 0;
+        font-size: 16px;
+    }
+
+    .close-user-btn {
+        background: transparent;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: #888;
+        padding: 0 8px;
+        transition: color 0.2s;
+    }
+
+    .close-user-btn:hover {
+        color: var(--text-color);
+    }
+
+    /* ============================================
     TABLES
     ============================================ */
     .users-table-container {
@@ -5116,7 +4090,7 @@
     }
 
     .revenue-table th {
-        padding: 12px 14px;
+        padding: 10px 15px;
         text-align: left;
         font-weight: 700;
         font-size: 11px;
@@ -5139,6 +4113,7 @@
 
     .revenue-table tbody tr {
         transition: background 0.15s;
+        cursor: pointer;
     }
 
     .revenue-table tbody tr:hover {
@@ -5149,7 +4124,6 @@
         border-bottom: none;
     }
 
-    /* User Cell */
     .user-cell .user-name {
         font-weight: 600;
         font-size: 14px;
@@ -5166,18 +4140,16 @@
         margin-top: 2px;
     }
 
-    /* Profit/Loss Colors */
     .revenue-table .profit {
-        color: var(--profit-color, #4caf50);
+        color: #4caf50;
         font-weight: 600;
     }
 
     .revenue-table .loss {
-        color: var(--loss-color, #f44336);
+        color: #f44336;
         font-weight: 600;
     }
 
-    /* Status Badges */
     .status-badge {
         display: inline-block;
         padding: 4px 12px;
@@ -5232,14 +4204,9 @@
         color: #616161;
     }
 
-    .status-justjoined {
-        background: #e3f2fd;
-        color: #1565c0;
-    }
-
-    .status-below {
-        background: #fff3e0;
-        color: #e65100;
+    .status-normal {
+        background: #e8f5e9;
+        color: #2e7d32;
     }
 
     .status-default {
@@ -5247,23 +4214,483 @@
         color: #616161;
     }
 
-    /* View History Button */
-    .view-history-btn {
-        padding: 5px 14px;
-        background: var(--accent-color);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
+    .status-unusual {
+        background: #fff3e0;
+        color: #e65100;
+        border: 1px solid #ff9800;
+    }
+
+    .status-cancelled {
+        background: #f3e5f5;
+        color: #7b1fa2;
+    }
+
+    .status-below {
+        background: #e3f2fd;
+        color: #0d47a1;
+    }
+
+    .action-select {
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-color);
         font-size: 12px;
-        font-weight: 500;
+        cursor: pointer;
+        min-width: 120px;
+    }
+
+    .action-select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+
+    .status-select {
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        font-size: 12px;
+        cursor: pointer;
+        min-width: 130px;
+    }
+
+    .status-select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+
+    .clickable-row {
+        cursor: pointer;
+    }
+
+    .clickable-row:hover td {
+        background: var(--bg-tertiary);
+    }
+
+    /* ============================================
+    USER DETAIL OVERLAY - Full Screen
+    ============================================ */
+    .detail-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--bg-color);
+        z-index: 3000;
+        overflow-y: auto;
+        padding: 20px;
+    }
+
+    .detail-overlay-content {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .detail-overlay-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 0 20px 0;
+        border-bottom: 2px solid var(--border-color);
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .detail-overlay-header h2 {
+        margin: 0;
+        font-size: 1.3rem;
+        color: var(--text-color);
+        flex: 1;
+        text-align: center;
+    }
+
+    .back-btn {
+        padding: 8px 20px;
+        border: none;
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
         transition: all 0.2s;
+        border: 1px solid var(--border-color);
+    }
+
+    .back-btn:hover {
+        background: var(--bg-tertiary);
+    }
+
+    /* ============================================
+    USER DETAIL GRID
+    ============================================ */
+    .user-detail-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    .detail-card-full {
+        background: var(--container-bg);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid var(--border-color);
+    }
+
+    .detail-user-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .detail-user-header h3 {
+        margin: 0 0 4px 0;
+        font-size: 1.2rem;
+        color: var(--text-color);
+    }
+
+    .detail-user-email {
+        margin: 2px 0;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+
+    .detail-user-id {
+        margin: 2px 0;
+        font-size: 12px;
+        color: #888;
+    }
+
+    .detail-user-status {
+        flex-shrink: 0;
+    }
+
+    /* Stats Grid */
+    .detail-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+    }
+
+    .detail-stat-card {
+        background: var(--container-bg);
+        border-radius: 10px;
+        padding: 14px 16px;
+        border: 1px solid var(--border-color);
+        text-align: center;
+    }
+
+    .detail-stat-card .stat-label {
+        font-size: 11px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .detail-stat-card .stat-value {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--text-color);
+        margin-top: 4px;
+    }
+
+    .detail-stat-card .stat-value.profit {
+        color: #4caf50;
+    }
+
+    .detail-stat-card .stat-value.loss {
+        color: #f44336;
+    }
+
+    .detail-stat-card .stat-value.unusual {
+        color: #e65100;
+    }
+
+    /* ============================================
+    DETAIL TABS
+    ============================================ */
+    .detail-tabs-wrapper {
+        margin-top: 4px;
+    }
+
+    .detail-tabs {
+        display: flex;
+        gap: 4px;
+        background: var(--bg-secondary);
+        border-radius: 10px;
+        padding: 4px;
+        border: 1px solid var(--border-color);
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    .detail-tabs::-webkit-scrollbar {
+        display: none;
+    }
+
+    .detail-tab-btn {
+        flex: 1;
+        padding: 10px 16px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
         white-space: nowrap;
     }
 
-    .view-history-btn:hover {
-        background: var(--accent-hover);
-        transform: scale(1.04);
+    .detail-tab-btn.active {
+        background: var(--accent-color);
+        color: white;
+    }
+
+    .detail-tab-btn:hover:not(.active) {
+        background: var(--bg-tertiary);
+    }
+
+    .detail-tab-content {
+        display: none;
+        animation: fadeIn 0.3s ease;
+    }
+
+    .detail-tab-content.active {
+        display: block;
+    }
+
+    /* ============================================
+    DAILY TARGET LIST
+    ============================================ */
+    .daily-target-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .daily-target-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        border-left: 3px solid var(--border-color);
+        transition: all 0.2s;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .daily-target-item.unusual {
+        border-left-color: #ff9800;
+        background: #fff8e1;
+    }
+
+    .daily-target-item .target-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .daily-target-item .target-day {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--text-color);
+        min-width: 80px;
+    }
+
+    .daily-target-item .target-date {
+        font-size: 12px;
+        color: #888;
+        min-width: 100px;
+    }
+
+    .daily-target-item .target-value {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--accent-color);
+        margin-left: auto;
+        padding: 4px 12px;
+        background: var(--bg-color);
+        border-radius: 4px;
+    }
+
+    /* ============================================
+    BALANCE LOG LIST
+    ============================================ */
+    .balance-log-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .balance-log-item {
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        border-left: 3px solid var(--border-color);
+        overflow: hidden;
+        transition: all 0.2s;
+    }
+
+    .balance-log-item.unusual {
+        border-left-color: #ff9800;
+        background: #fff8e1;
+    }
+
+    .balance-log-item .log-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        cursor: pointer;
+        transition: background 0.2s;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .balance-log-item .log-header:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .balance-log-item .log-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .balance-log-item .log-day {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--text-color);
+        min-width: 80px;
+    }
+
+    .balance-log-item .log-date {
+        font-size: 12px;
+        color: #888;
+        min-width: 100px;
+    }
+
+    .balance-log-item .log-toggle {
+        font-size: 14px;
+        color: #888;
+        cursor: pointer;
+        padding: 0 4px;
+        transition: transform 0.2s;
+        flex-shrink: 0;
+    }
+
+    .balance-log-item .log-details {
+        display: none;
+        padding: 12px 16px 16px 16px;
+        border-top: 1px solid var(--border-color);
+        background: var(--bg-color);
+    }
+
+    .balance-log-item .log-details .log-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 0;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.08);
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .balance-log-item .log-details .log-row:last-child {
+        border-bottom: none;
+    }
+
+    .balance-log-item .log-details .log-label {
+        font-size: 13px;
+        color: #888;
+        min-width: 180px;
+    }
+
+    .balance-log-item .log-details .log-value {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-color);
+        text-align: right;
+    }
+
+    .balance-log-item .log-details .log-value.profit {
+        color: #4caf50;
+    }
+
+    .balance-log-item .log-details .log-value.loss {
+        color: #f44336;
+    }
+
+    .balance-log-item .log-details .log-value.unusual {
+        color: #e65100;
+    }
+
+    /* Unauthorized Trades Section */
+    .unauthorized-trades-section {
+        margin-top: 10px;
+        padding: 10px 14px;
+        background: var(--bg-secondary);
+        border-radius: 6px;
+        border-left: 3px solid #ff9800;
+    }
+
+    .unauthorized-trades-section .log-label {
+        font-size: 12px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        margin-bottom: 6px;
+        display: block;
+    }
+
+    .trade-row-detail {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 13px;
+        flex-wrap: wrap;
+    }
+
+    .trade-row-detail:last-child {
+        border-bottom: none;
+    }
+
+    .trade-row-detail .trade-symbol {
+        font-weight: 600;
+        min-width: 60px;
+    }
+
+    .trade-row-detail .trade-pnl {
+        font-weight: 600;
+    }
+
+    .trade-row-detail .trade-pnl.profit {
+        color: #4caf50;
+    }
+
+    .trade-row-detail .trade-pnl.loss {
+        color: #f44336;
+    }
+
+    .trade-row-detail .trade-meta {
+        font-size: 11px;
+        color: #888;
+        margin-left: auto;
     }
 
     /* ============================================
@@ -5277,7 +4704,7 @@
         bottom: 0;
         background: rgba(0, 0, 0, 0.7);
         backdrop-filter: blur(8px);
-        z-index: 2000;
+        z-index: 4000;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -5288,7 +4715,7 @@
         background: var(--container-bg);
         border-radius: 12px;
         max-width: 95%;
-        width: 800px;
+        width: 450px;
         max-height: 90vh;
         display: flex;
         flex-direction: column;
@@ -5296,6 +4723,15 @@
         box-shadow: 0 20px 60px rgba(0,0,0,0.4);
         overflow: hidden;
         animation: modalSlideIn 0.3s ease;
+    }
+
+    .modal-container.modal-large {
+        width: 550px;
+    }
+
+    .modal-container.modal-small {
+        width: 450px;
+        max-width: 95%;
     }
 
     @keyframes modalSlideIn {
@@ -5313,10 +4749,9 @@
         flex-shrink: 0;
     }
 
-    .modal-header h3 {
-        margin: 0;
-        font-size: 16px;
+    .modal-header span {
         font-weight: 700;
+        font-size: 16px;
     }
 
     .modal-close {
@@ -5345,73 +4780,123 @@
         flex: 1;
     }
 
-    /* History Modal Content */
-    .history-summary {
-        display: flex;
-        gap: 12px;
-        margin-bottom: 16px;
-        flex-wrap: wrap;
+    .modal-body p {
+        margin: 0 0 12px 0;
+        font-size: 14px;
+        color: var(--text-secondary);
     }
 
-    .history-card {
-        background: var(--bg-tertiary);
-        border-radius: 8px;
-        padding: 12px 20px;
-        text-align: center;
-        flex: 1;
-        min-width: 100px;
-    }
-
-    .history-card .history-label {
-        display: block;
-        font-size: 10px;
-        text-transform: uppercase;
-        color: #888;
-        letter-spacing: 0.3px;
-    }
-
-    .history-card .history-value {
-        display: block;
-        font-size: 22px;
-        font-weight: 700;
-        color: var(--accent-color);
-    }
-
-    .history-table-wrapper {
-        overflow-x: auto;
-    }
-
-    .history-table {
+    .modal-body input {
         width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        font-size: 14px;
+        box-sizing: border-box;
     }
 
-    .history-table th {
-        padding: 10px 12px;
-        text-align: left;
-        background: var(--table-header-bg);
-        font-size: 11px;
-        text-transform: uppercase;
-        color: #888;
-        font-weight: 700;
-        border-bottom: 2px solid var(--border-color);
+    .modal-body input:focus {
+        outline: none;
+        border-color: var(--accent-color);
     }
 
-    .history-table td {
-        padding: 10px 12px;
+    .modal-buttons {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 16px;
+    }
+
+    .modal-buttons button {
+        padding: 8px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .modal-buttons .btn-cancel {
+        border: 1px solid var(--border-color);
+        background: transparent;
+        color: var(--text-color);
+    }
+
+    .modal-buttons .btn-cancel:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .modal-buttons .btn-confirm {
+        border: none;
+        background: var(--accent-color);
+        color: white;
+    }
+
+    .modal-buttons .btn-confirm:hover {
+        background: var(--accent-hover);
+    }
+
+    /* Users Modal List */
+    .modal-user-item {
+        padding: 12px 16px;
+        cursor: pointer;
+        transition: background 0.2s;
         border-bottom: 1px solid var(--border-color);
     }
 
-    .history-table .contract-id {
-        font-family: monospace;
-        font-size: 11px;
-        background: var(--bg-secondary);
-        padding: 2px 8px;
-        border-radius: 4px;
+    .modal-user-item:last-child {
+        border-bottom: none;
     }
 
-    /* Loading Spinner */
+    .modal-user-item:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .modal-user-item.selected {
+        background: var(--accent-color);
+        color: white;
+    }
+
+    .modal-user-item .modal-user-name {
+        font-weight: 600;
+        font-size: 14px;
+    }
+
+    .modal-user-item .modal-user-email {
+        font-size: 12px;
+        opacity: 0.6;
+    }
+
+    .modal-user-item .modal-user-id {
+        font-size: 10px;
+        opacity: 0.4;
+    }
+
+    .users-modal-search {
+        margin-bottom: 12px;
+    }
+
+    .user-search-input {
+        width: 100%;
+        padding: 10px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+
+    .user-search-input:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+
+    /* ============================================
+    LOADING & EMPTY STATES
+    ============================================ */
     .loading-spinner {
         text-align: center;
         padding: 40px;
@@ -5432,7 +4917,6 @@
         100% { transform: rotate(360deg); }
     }
 
-    /* Empty State */
     .empty-state {
         text-align: center;
         padding: 40px 20px;
@@ -5458,90 +4942,18 @@
     }
 
     /* ============================================
-    RESPONSIVE
+    DARK MODE SUPPORT
     ============================================ */
-    @media (max-width: 480px) {
-        .revenue-table {
-            font-size: 12px;
-        }
-        
-        .revenue-table th,
-        .revenue-table td {
-            padding: 8px 10px;
-        }
-        
-        .revenue-table .user-cell .user-name {
-            font-size: 13px;
-        }
-        
-        .summary-cubes {
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-        }
-        
-        .summary-cube {
-            padding: 12px 8px;
-        }
-        
-        .summary-cube .cube-value {
-            font-size: 16px;
-        }
-        
-        .summary-cube .cube-icon {
-            font-size: 18px;
-        }
-        
-        .modal-container {
-            max-width: 100%;
-            margin: 10px;
-            border-radius: 8px;
-            max-height: 95vh;
-        }
-        
-        .modal-body {
-            padding: 12px;
-        }
-        
-        .history-table {
-            font-size: 11px;
-        }
-        
-        .history-table th,
-        .history-table td {
-            padding: 6px 8px;
-        }
-    }
-
-    @media (max-width: 360px) {
-        .summary-cubes {
-            grid-template-columns: 1fr 1fr;
-            gap: 6px;
-        }
-        
-        .revenue-tabs .tab-btn {
-            font-size: 10px;
-            padding: 5px 10px;
-        }
-        
-        .sub-tabs .sub-tab-btn {
-            font-size: 9px;
-            padding: 4px 8px;
-        }
-        
-        .revenue-table {
-            font-size: 10px;
-        }
-        
-        .revenue-table th,
-        .revenue-table td {
-            padding: 5px 6px;
-        }
-    }
-
-    /* Dark mode support */
     @media (prefers-color-scheme: dark) {
-        .summary-cube {
-            background: var(--container-bg);
+        .daily-target-item.unusual,
+        .balance-log-item.unusual {
+            background: #2a1a0a;
+        }
+        
+        .status-unusual {
+            background: #3a2a0a;
+            color: #ffa726;
+            border-color: #ff9800;
         }
         
         .status-active {
@@ -5550,7 +4962,8 @@
         }
         
         .status-above,
-        .status-profit {
+        .status-profit,
+        .status-normal {
             background: #1b3a1b;
             color: #81c784;
         }
@@ -5585,14 +4998,189 @@
             color: #bdbdbd;
         }
         
-        .status-justjoined {
-            background: #1a3a5c;
-            color: #64b5f6;
+        .status-cancelled {
+            background: #2a1a3a;
+            color: #ce93d8;
         }
         
         .status-below {
-            background: #3a2a0a;
-            color: #ffa726;
+            background: #1a2a3a;
+            color: #64b5f6;
+        }
+    }
+
+    /* ============================================
+    RESPONSIVE
+    ============================================ */
+    @media (max-width: 768px) {
+        .detail-stats-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+        
+        .detail-overlay {
+            padding: 10px;
+        }
+        
+        .detail-overlay-header h2 {
+            font-size: 1rem;
+        }
+        
+        .detail-user-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .detail-tab-btn {
+            font-size: 11px;
+            padding: 8px 12px;
+        }
+        
+        .daily-target-item {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .daily-target-item .target-value {
+            margin-left: 0;
+            align-self: flex-start;
+        }
+        
+        .balance-log-item .log-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .balance-log-item .log-left {
+            width: 100%;
+        }
+        
+        .balance-log-item .log-toggle {
+            align-self: flex-end;
+            margin-top: -24px;
+        }
+        
+        .balance-log-item .log-details .log-row {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 2px;
+        }
+        
+        .balance-log-item .log-details .log-value {
+            text-align: left;
+        }
+        
+        .trade-row-detail {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
+        
+        .trade-row-detail .trade-meta {
+            margin-left: 0;
+        }
+        
+        .modal-container {
+            width: 100%;
+            margin: 10px;
+            border-radius: 8px;
+            max-height: 95vh;
+        }
+        
+        .modal-container.modal-large {
+            width: 100%;
+        }
+        
+        .revenue-table {
+            font-size: 11px;
+        }
+        
+        .revenue-table th,
+        .revenue-table td {
+            padding: 6px 8px;
+        }
+        
+        .user-cell .user-name {
+            font-size: 12px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .detail-stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        
+        .summary-cubes {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        
+        .summary-cube {
+            padding: 12px 8px;
+        }
+        
+        .summary-cube .cube-value {
+            font-size: 16px;
+        }
+        
+        .revenue-tabs .tab-btn {
+            font-size: 10px;
+            padding: 5px 10px;
+        }
+        
+        .sub-tabs .sub-tab-btn {
+            font-size: 9px;
+            padding: 4px 8px;
+        }
+        
+        .detail-tab-btn {
+            font-size: 10px;
+            padding: 6px 10px;
+        }
+        
+        .revenue-table {
+            font-size: 10px;
+        }
+        
+        .revenue-table th,
+        .revenue-table td {
+            padding: 5px 6px;
+        }
+        
+        .daily-target-item .target-day {
+            min-width: 60px;
+            font-size: 12px;
+        }
+        
+        .daily-target-item .target-date {
+            min-width: 80px;
+            font-size: 10px;
+        }
+        
+        .balance-log-item .log-day {
+            min-width: 60px;
+            font-size: 12px;
+        }
+        
+        .balance-log-item .log-date {
+            min-width: 80px;
+            font-size: 10px;
+        }
+        
+        .balance-log-item .log-details .log-label {
+            min-width: 120px;
+            font-size: 11px;
+        }
+        
+        .action-select {
+            font-size: 10px;
+            min-width: 80px;
+            padding: 2px 6px;
+        }
+        
+        .status-select {
+            font-size: 10px;
+            min-width: 90px;
+            padding: 2px 6px;
         }
     }
 </style>

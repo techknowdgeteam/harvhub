@@ -893,6 +893,243 @@
             }
             exit;
         }
+        // 5aa2: Get Unusual Users (with daily_balance_log analysis)
+        if ($action === 'get_unusual_users') {
+            try {
+                $search = trim($_POST['search'] ?? '');
+                $users = [];
+                $today = date('Y-m-d');
+                
+                function checkUnusualActivity($dailyLog) {
+                    if (empty($dailyLog)) return false;
+                    $log = json_decode($dailyLog, true);
+                    if (json_last_error() !== JSON_ERROR_NONE || !is_array($log)) return false;
+                    foreach ($log as $dayData) {
+                        if (isset($dayData['unusual_activity']) && $dayData['unusual_activity'] === true) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                
+                function getUnusualSummary($dailyLog) {
+                    if (empty($dailyLog)) return ['withdrawal_count' => 0, 'unauthorized_trade_count' => 0, 'unauthorized_balance' => 0];
+                    $log = json_decode($dailyLog, true);
+                    if (json_last_error() !== JSON_ERROR_NONE || !is_array($log)) {
+                        return ['withdrawal_count' => 0, 'unauthorized_trade_count' => 0, 'unauthorized_balance' => 0];
+                    }
+                    $withdrawalCount = 0;
+                    $unauthorizedTradeCount = 0;
+                    $unauthorizedBalance = 0;
+                    foreach ($log as $dayData) {
+                        if (isset($dayData['unusual_activity']) && $dayData['unusual_activity'] === true) {
+                            if (isset($dayData['day_unauthorized_withdrawals']) && $dayData['day_unauthorized_withdrawals'] > 0) {
+                                $withdrawalCount++;
+                                $unauthorizedBalance += $dayData['day_unauthorized_withdrawals'];
+                            }
+                            $unauthorizedTradeCount += $dayData['unauthorized_trades_count'] ?? 0;
+                        }
+                    }
+                    return [
+                        'withdrawal_count' => $withdrawalCount,
+                        'unauthorized_trade_count' => $unauthorizedTradeCount,
+                        'unauthorized_balance' => $unauthorizedBalance
+                    ];
+                }
+                
+                // Get from insiders_server table
+                try {
+                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
+                    if ($checkTable1->rowCount() > 0) {
+                        $sql = "SELECT id, fullname, email, broker_balance, profitandloss, daily_balance_log, '{$insidersServerTable}' as source FROM {$insidersServerTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                        if (!empty($search)) {
+                            $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
+                        }
+                        $sql .= " ORDER BY id DESC";
+                        $stmt1 = $pdo->prepare($sql);
+                        if (!empty($search)) {
+                            $searchTerm = '%' . $search . '%';
+                            $stmt1->execute([$today, $searchTerm, $searchTerm, $searchTerm]);
+                        } else {
+                            $stmt1->execute([$today]);
+                        }
+                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        foreach ($results as $user) {
+                            if (checkUnusualActivity($user['daily_balance_log'] ?? '')) {
+                                $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
+                                $user['withdrawal_count'] = $summary['withdrawal_count'];
+                                $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
+                                $user['unauthorized_balance'] = $summary['unauthorized_balance'];
+                                $users[] = $user;
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log("Error in get_unusual_users (insiders_server): " . $e->getMessage());
+                }
+                
+                // Get from insiders table
+                try {
+                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
+                    if ($checkTable2->rowCount() > 0) {
+                        $sql = "SELECT id, fullname, email, broker_balance, profitandloss, daily_balance_log, '{$insidersTable}' as source FROM {$insidersTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                        if (!empty($search)) {
+                            $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
+                        }
+                        $sql .= " ORDER BY id DESC";
+                        $stmt2 = $pdo->prepare($sql);
+                        if (!empty($search)) {
+                            $searchTerm = '%' . $search . '%';
+                            $stmt2->execute([$today, $searchTerm, $searchTerm, $searchTerm]);
+                        } else {
+                            $stmt2->execute([$today]);
+                        }
+                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+                        foreach ($results as $user) {
+                            if (checkUnusualActivity($user['daily_balance_log'] ?? '')) {
+                                $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
+                                $user['withdrawal_count'] = $summary['withdrawal_count'];
+                                $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
+                                $user['unauthorized_balance'] = $summary['unauthorized_balance'];
+                                $users[] = $user;
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log("Error in get_unusual_users (insiders): " . $e->getMessage());
+                }
+                
+                echo json_encode(['success' => true, 'users' => $users]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5aa3: Get User Daily Balance Log
+        if ($action === 'get_user_daily_log') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            try {
+                $stmt = $pdo->prepare("SELECT daily_balance_log, daily_target_met, fullname, email, broker_balance, profitandloss FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $log = [];
+                $dailyTarget = [];
+                $userData = [];
+                
+                if ($result) {
+                    if (!empty($result['daily_balance_log'])) {
+                        $log = json_decode($result['daily_balance_log'], true);
+                        if (json_last_error() !== JSON_ERROR_NONE) {
+                            $log = [];
+                        }
+                    }
+                    if (!empty($result['daily_target_met'])) {
+                        $dailyTarget = $result['daily_target_met'];
+                        $parsed = json_decode($dailyTarget, true);
+                        if (json_last_error() === JSON_ERROR_NONE) {
+                            $dailyTarget = $parsed;
+                        }
+                    }
+                    $userData = [
+                        'id' => $user_id,
+                        'fullname' => $result['fullname'] ?? 'N/A',
+                        'email' => $result['email'] ?? 'N/A',
+                        'broker_balance' => $result['broker_balance'] ?? 0,
+                        'profitandloss' => $result['profitandloss'] ?? 0,
+                        'source' => $source_table
+                    ];
+                }
+                
+                echo json_encode([
+                    'success' => true, 
+                    'log' => $log,
+                    'daily_target' => $dailyTarget,
+                    'user' => $userData
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5aa4: Get User Data (for detail modal)
+        if ($action === 'get_user_data') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            try {
+                $stmt = $pdo->prepare("SELECT id, fullname, email, broker_balance, profitandloss, invested_with, execution_start_date FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                echo json_encode([
+                    'success' => true,
+                    'user' => $result ?: []
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5aa5: Update Payment Status (for completed tab)
+        if ($action === 'update_payment_status') {
+            $user_id = $_POST['user_id'] ?? '';
+            $new_status = trim($_POST['payment_status'] ?? '');
+            $source_table = $_POST['source_table'] ?? '';
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            $normalizedStatus = normalizePaymentStatus($new_status);
+            
+            if (!empty($user_id) && !empty($new_status) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                try {
+                    $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
+                    $stmt->execute([$normalizedStatus, $user_id]);
+                    if ($normalizedStatus === 'payment-confirmed') {
+                        $stmtReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
+                        $stmtReset->execute([$user_id]);
+                    }
+                    $syncResult = syncUserRevenueHistory($user_id, $source_table, $pdo, $serverAccount);
+                    echo json_encode(['success' => true, 'message' => 'Status updated successfully']);
+                } catch (Exception $e) {
+                    echo json_encode(['error' => $e->getMessage()]);
+                }
+            } else {
+                echo json_encode(['error' => 'Invalid request']);
+            }
+            exit;
+        }
 
         // 5ab: Get Completed Investors with enhanced data
         if ($action === 'get_completed_investors') {
@@ -3556,14 +3793,14 @@
                         <span class="nav-icon">💰</span>
                         <span class="nav-label">
                             Revenue Dashboard
-                            <span class="sub-text">Users &amp; Payments</span>
+                            <span class="sub-text">Investors Revenue Share</span>
                         </span>
                     </a>
                     <a href="serveraccount.php?view=paid_users">
                         <span class="nav-icon">💰</span>
                         <span class="nav-label">
                             Revenue Dashboard
-                            <span class="sub-text">Users &amp; Payments</span>
+                            <span class="sub-text">Investors Revenue Share</span>
                         </span>
                     </a>
                     <a href="serveraccount.php?view=account_management">
