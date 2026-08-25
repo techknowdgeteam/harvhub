@@ -877,7 +877,225 @@
             padding: 12px;
         }
     }
+    /* ============================================
+   PASSWORD MODAL STYLES
+   ============================================ */
+    #settings-password-modal {
+        display: none;
+        position: fixed;
+        z-index: 9999;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: var(--modal-overlay);
+        backdrop-filter: blur(5px);
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+    }
+
+    #settings-password-modal .modal-content {
+        background-color: var(--container-bg);
+        padding: 30px;
+        border-radius: 20px;
+        box-shadow: 0 10px 40px var(--shadow-light);
+        width: 100%;
+        max-width: 400px;
+        text-align: center;
+        transform: scale(0.9);
+        transition: transform 0.3s ease;
+        border: 1px solid var(--border-color);
+    }
+
+    #settings-password-modal .modal-content h3 {
+        color: var(--accent-color);
+        margin-bottom: 8px;
+        margin-top: 0;
+        font-size: 1.2rem;
+    }
+
+    #settings-password-modal .modal-content p {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-bottom: 15px;
+        line-height: 1.5;
+    }
+
+    #settings-password-modal .modal-content input[type="password"] {
+        width: 100%;
+        padding: 12px 15px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        font-size: 16px;
+        margin: 10px 0 20px;
+        box-sizing: border-box;
+        transition: border-color 0.3s;
+    }
+
+    #settings-password-modal .modal-content input[type="password"]:focus {
+        border-color: var(--accent-color);
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.15);
+    }
+
+    #settings-password-modal .modal-buttons {
+        display: flex;
+        gap: 12px;
+    }
+
+    #settings-password-modal .modal-buttons button {
+        width: 48%;
+        padding: 12px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 15px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+        margin-top: 0;
+    }
+
+    #settings-password-modal .modal-buttons #settings-modal-cancel {
+        background-color: #7f8c8d;
+        color: white;
+    }
+
+    #settings-password-modal .modal-buttons #settings-modal-cancel:hover {
+        background-color: #6a7a7a;
+        transform: none;
+        box-shadow: none;
+    }
+
+    #settings-password-modal .modal-buttons #settings-modal-confirm {
+        background-color: var(--primary-color);
+        color: white;
+    }
+
+    #settings-password-modal .modal-buttons #settings-modal-confirm:hover {
+        background-color: var(--primary-hover);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+    }
+
+    #settings-password-modal .modal-buttons #settings-modal-confirm:active {
+        transform: scale(0.97);
+    }
+
+    /* Custom Modal (Success/Error) Styles */
+    .modal-overlay#custom-modal-overlay {
+        display: flex;
+        position: fixed;
+        z-index: 10000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: var(--modal-overlay);
+        backdrop-filter: blur(4px);
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+
+    .modal-overlay#custom-modal-overlay .custom-modal {
+        max-width: 450px;
+        animation: modalSlideIn 0.3s ease;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-header {
+        padding: 15px 20px;
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        font-size: 1.1rem;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-body {
+        padding: 25px 20px;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-close {
+        cursor: pointer;
+        font-size: 20px;
+        opacity: 0.7;
+        transition: opacity 0.2s;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-close:hover {
+        opacity: 1;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-confirm-btn,
+    .modal-overlay#custom-modal-overlay .modal-cancel-btn {
+        padding: 10px 24px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-confirm-btn {
+        background-color: var(--primary-color);
+        color: white;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-confirm-btn:hover {
+        background-color: var(--primary-hover);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-cancel-btn {
+        background-color: #7f8c8d;
+        color: white;
+    }
+
+    .modal-overlay#custom-modal-overlay .modal-cancel-btn:hover {
+        background-color: #6a7a7a;
+    }
+
+    @keyframes modalSlideIn {
+        from {
+            transform: scale(0.8) translateY(20px);
+            opacity: 0;
+        }
+        to {
+            transform: scale(1) translateY(0);
+            opacity: 1;
+        }
+    }
+
+    /* Mobile responsiveness for modals */
+    @media (max-width: 600px) {
+        #settings-password-modal .modal-content {
+            padding: 20px;
+            margin: 10px;
+        }
+        
+        #settings-password-modal .modal-buttons {
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        #settings-password-modal .modal-buttons button {
+            width: 100%;
+        }
+        
+        .modal-overlay#custom-modal-overlay .custom-modal {
+            margin: 10px;
+            max-width: 100%;
+        }
+    }
 </style>
+
 <style>
     /* Account Management Styles */
     .account-management-container,

@@ -3117,6 +3117,29 @@
             }
             exit;
         }
+        // 5z11: Verify Admin Password (for column removal)
+        if ($action === 'verify_password') {
+            $password = $_POST['password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            if (empty($password) || empty($login_id)) {
+                echo json_encode(['success' => false, 'error' => 'Missing credentials']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($adminData && 
+                $login_id === ($adminData['admin_login_id'] ?? '') && 
+                password_verify($password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['success' => false]);
+            }
+            exit;
+        }
     }
 
     // ============================================
@@ -3196,94 +3219,8 @@
             }
         }
         
-        // 5zz: Verify Admin Password (for column removal)
-        if ($action === 'verify_password') {
-            $password = $_POST['password'] ?? '';
-            $login_id = $_POST['login_id'] ?? '';
-            
-            if (empty($password) || empty($login_id)) {
-                echo json_encode(['success' => false, 'error' => 'Missing credentials']);
-                exit;
-            }
-            
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
-            $stmt->execute();
-            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($adminData && 
-                $login_id === ($adminData['admin_login_id'] ?? '') && 
-                password_verify($password, $adminData['admin_password_hash'] ?? '')) {
-                echo json_encode(['success' => true]);
-            } else {
-                echo json_encode(['success' => false]);
-            }
-            exit;
-        }
 
-        // 6z: Save Columns to Reset (separate action)
-        if (isset($_POST['save_columns_to_reset']) && $authenticated) {
-            try {
-                // Get the columns_to_reset data from POST
-                $columns_to_reset_raw = $_POST['columns_to_reset'] ?? '[]';
-                
-                // Parse the JSON data
-                $columns_data = json_decode($columns_to_reset_raw, true);
-                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_data)) {
-                    $columns_data = [];
-                }
-                
-                // Validate and sanitize each entry
-                $validated_columns = [];
-                foreach ($columns_data as $entry) {
-                    if (is_array($entry) && isset($entry['column']) && !empty(trim($entry['column']))) {
-                        $column_name = trim($entry['column']);
-                        
-                        // Handle value - store as string or int based on input
-                        $value = $entry['value'] ?? null;
-                        if ($value !== null) {
-                            // Check if it's numeric
-                            if (is_numeric($value)) {
-                                // Store as integer if it's a whole number, float if decimal
-                                if (strpos($value, '.') !== false) {
-                                    $value = (float)$value;
-                                } else {
-                                    $value = (int)$value;
-                                }
-                            } else {
-                                // Store as string
-                                $value = (string)$value;
-                            }
-                        }
-                        
-                        $validated_columns[] = [
-                            'column' => $column_name,
-                            'value' => $value
-                        ];
-                    }
-                }
-                
-                // Remove duplicates by column name
-                $unique_columns = [];
-                $seen_columns = [];
-                foreach ($validated_columns as $entry) {
-                    if (!in_array($entry['column'], $seen_columns)) {
-                        $seen_columns[] = $entry['column'];
-                        $unique_columns[] = $entry;
-                    }
-                }
-                
-                $columns_to_reset_json = json_encode($unique_columns, JSON_UNESCAPED_UNICODE);
-                
-                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET columns_to_reset = ? WHERE id = 1");
-                $stmt->execute([$columns_to_reset_json]);
-                
-                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Columns to reset updated successfully! (" . count($unique_columns) . " columns configured)</span>";
-            } catch (Exception $e) {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating columns to reset: " . htmlspecialchars($e->getMessage()) . "</span>";
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
+
         
         // 6b: Update Admin Credentials
         if (isset($_POST['update_credentials']) && $re_authenticated_for_action) {
@@ -3535,6 +3472,70 @@
                 $_SESSION['admin_message'] = "<span style='color:red;'>❌ Invalid update request. Please fill all fields.</span>";
             }
             header("Location: serveraccount.php?view=account_management");
+            exit;
+        }
+        // 6z: Save Columns to Reset (separate action)
+        if (isset($_POST['save_columns_to_reset']) && $re_authenticated_for_action) {
+            try {
+                // Get the columns_to_reset data from POST
+                $columns_to_reset_raw = $_POST['columns_to_reset'] ?? '[]';
+                
+                // Parse the JSON data
+                $columns_data = json_decode($columns_to_reset_raw, true);
+                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_data)) {
+                    $columns_data = [];
+                }
+                
+                // Validate and sanitize each entry
+                $validated_columns = [];
+                foreach ($columns_data as $entry) {
+                    if (is_array($entry) && isset($entry['column']) && !empty(trim($entry['column']))) {
+                        $column_name = trim($entry['column']);
+                        
+                        // Handle value - store as string or int based on input
+                        $value = $entry['value'] ?? null;
+                        if ($value !== null) {
+                            // Check if it's numeric
+                            if (is_numeric($value)) {
+                                // Store as integer if it's a whole number, float if decimal
+                                if (strpos($value, '.') !== false) {
+                                    $value = (float)$value;
+                                } else {
+                                    $value = (int)$value;
+                                }
+                            } else {
+                                // Store as string
+                                $value = (string)$value;
+                            }
+                        }
+                        
+                        $validated_columns[] = [
+                            'column' => $column_name,
+                            'value' => $value
+                        ];
+                    }
+                }
+                
+                // Remove duplicates by column name
+                $unique_columns = [];
+                $seen_columns = [];
+                foreach ($validated_columns as $entry) {
+                    if (!in_array($entry['column'], $seen_columns)) {
+                        $seen_columns[] = $entry['column'];
+                        $unique_columns[] = $entry;
+                    }
+                }
+                
+                $columns_to_reset_json = json_encode($unique_columns, JSON_UNESCAPED_UNICODE);
+                
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET columns_to_reset = ? WHERE id = 1");
+                $stmt->execute([$columns_to_reset_json]);
+                
+                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Columns to reset updated successfully! (" . count($unique_columns) . " columns configured)</span>";
+            } catch (Exception $e) {
+                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating columns to reset: " . htmlspecialchars($e->getMessage()) . "</span>";
+            }
+            header("Location: serveraccount.php?view=settings");
             exit;
         }
         
