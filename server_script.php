@@ -1,3 +1,7 @@
+<?php
+// server_script.php
+// This file is included in serveraccount.php 
+?>
 <script>
     // Add this flag at the top of your script (after the DOMContentLoaded event)
     var isLiveUpdateRunning = false;

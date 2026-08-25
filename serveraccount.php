@@ -1136,18 +1136,18 @@
             try {
                 $users = array();
                 
-                // ===== FIX: Get ALL users from both tables, not just those with history =====
-                
-                // Get from insiders_server table - ALL users
+                // Get from insiders_server table - ALL users with revenue_history
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
                     if ($checkTable1->rowCount() > 0) {
                         // Check if revenue_history column exists
                         $hasHistoryColumn = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'revenue_history'")->rowCount() > 0;
                         
+                        // ===== FIX: Include revenue_history in SELECT =====
                         $stmt1 = $pdo->prepare("
                             SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
                                 profitandloss, broker_balance, 
+                                revenue_history,
                                 '{$insidersServerTable}' as source
                             FROM {$insidersServerTable} 
                             ORDER BY id DESC
@@ -1159,23 +1159,17 @@
                             $history = [];
                             $hasHistory = false;
                             
-                            // Try to get revenue history if column exists
-                            if ($hasHistoryColumn) {
-                                $stmtHistory = $pdo->prepare("SELECT revenue_history FROM {$insidersServerTable} WHERE id = ?");
-                                $stmtHistory->execute([$user['id']]);
-                                $historyResult = $stmtHistory->fetch(PDO::FETCH_ASSOC);
-                                
-                                if ($historyResult && !empty($historyResult['revenue_history']) && $historyResult['revenue_history'] !== '[]') {
-                                    $history = json_decode($historyResult['revenue_history'], true);
-                                    if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
-                                        $hasHistory = true;
-                                    } else {
-                                        $history = [];
-                                    }
+                            // ===== FIX: Always try to get revenue history =====
+                            if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
+                                $history = json_decode($user['revenue_history'], true);
+                                if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
+                                    $hasHistory = true;
+                                } else {
+                                    $history = [];
                                 }
                             }
                             
-                            // Build user data with or without history
+                            // Build user data with history
                             $userData = [
                                 'id' => $user['id'],
                                 'source' => $user['source'],
@@ -1197,34 +1191,10 @@
                                 'invested_with' => $user['invested_with'] ?? null,
                                 'execution_start_date' => $user['execution_start_date'] ?? null,
                                 'profitandloss' => (float)($user['profitandloss'] ?? 0),
-                                'broker_balance' => (float)($user['broker_balance'] ?? 0)
+                                'broker_balance' => (float)($user['broker_balance'] ?? 0),
+                                // ===== FIX: Include the actual revenue_history data =====
+                                'revenue_history' => $history
                             ];
-                            
-                            // Add invested_with to history records if missing
-                            // Add invested_with to history records if missing
-                            if ($hasHistory && is_array($history) && !empty($history) && isset($user['invested_with'])) {
-                                // Sort history NEWEST FIRST before saving
-                                usort($history, function($a, $b) {
-                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                                    return $dateB - $dateA;
-                                });
-                                
-                                $needsUpdate = false;
-                                foreach ($history as &$record) {
-                                    if (!isset($record['invested_with']) && isset($user['invested_with'])) {
-                                        $record['invested_with'] = $user['invested_with'];
-                                        $needsUpdate = true;
-                                    }
-                                }
-                                if ($needsUpdate) {
-                                    $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
-                                    $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
-                                    $updateStmt->execute([$updatedHistory, $user['id']]);
-                                    // Recalculate summary
-                                    $userData['payment_summary'] = calculatePaymentSummaryFromHistory($history);
-                                }
-                            }
                             
                             $users[] = $userData;
                         }
@@ -1233,15 +1203,15 @@
                     error_log("Error in get_completed_investors (insiders_server): " . $e->getMessage());
                 }
                 
-                // Get from insiders table - ALL users
+                // Get from insiders table - ALL users with revenue_history
                 try {
                     $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
                     if ($checkTable2->rowCount() > 0) {
-                        $hasHistoryColumn = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'revenue_history'")->rowCount() > 0;
-                        
+                        // ===== FIX: Include revenue_history in SELECT =====
                         $stmt2 = $pdo->prepare("
                             SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
                                 profitandloss, broker_balance, 
+                                revenue_history,
                                 '{$insidersTable}' as source
                             FROM {$insidersTable} 
                             ORDER BY id DESC
@@ -1253,23 +1223,17 @@
                             $history = [];
                             $hasHistory = false;
                             
-                            // Try to get revenue history if column exists
-                            if ($hasHistoryColumn) {
-                                $stmtHistory = $pdo->prepare("SELECT revenue_history FROM {$insidersTable} WHERE id = ?");
-                                $stmtHistory->execute([$user['id']]);
-                                $historyResult = $stmtHistory->fetch(PDO::FETCH_ASSOC);
-                                
-                                if ($historyResult && !empty($historyResult['revenue_history']) && $historyResult['revenue_history'] !== '[]') {
-                                    $history = json_decode($historyResult['revenue_history'], true);
-                                    if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
-                                        $hasHistory = true;
-                                    } else {
-                                        $history = [];
-                                    }
+                            // ===== FIX: Always try to get revenue history =====
+                            if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
+                                $history = json_decode($user['revenue_history'], true);
+                                if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
+                                    $hasHistory = true;
+                                } else {
+                                    $history = [];
                                 }
                             }
                             
-                            // Build user data with or without history
+                            // Build user data with history
                             $userData = [
                                 'id' => $user['id'],
                                 'source' => $user['source'],
@@ -1291,33 +1255,10 @@
                                 'invested_with' => $user['invested_with'] ?? null,
                                 'execution_start_date' => $user['execution_start_date'] ?? null,
                                 'profitandloss' => (float)($user['profitandloss'] ?? 0),
-                                'broker_balance' => (float)($user['broker_balance'] ?? 0)
+                                'broker_balance' => (float)($user['broker_balance'] ?? 0),
+                                // ===== FIX: Include the actual revenue_history data =====
+                                'revenue_history' => $history
                             ];
-                            
-                            // Add invested_with to history records if missing
-                            if ($hasHistory && is_array($history) && !empty($history) && isset($user['invested_with'])) {
-                                // Sort history NEWEST FIRST before saving
-                                usort($history, function($a, $b) {
-                                    $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                                    $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                                    return $dateB - $dateA;
-                                });
-                                
-                                $needsUpdate = false;
-                                foreach ($history as &$record) {
-                                    if (!isset($record['invested_with']) && isset($user['invested_with'])) {
-                                        $record['invested_with'] = $user['invested_with'];
-                                        $needsUpdate = true;
-                                    }
-                                }
-                                if ($needsUpdate) {
-                                    $updatedHistory = json_encode($history, JSON_PRETTY_PRINT);
-                                    $updateStmt = $pdo->prepare("UPDATE {$insidersServerTable} SET revenue_history = ? WHERE id = ?");
-                                    $updateStmt->execute([$updatedHistory, $user['id']]);
-                                    // Recalculate summary
-                                    $userData['payment_summary'] = calculatePaymentSummaryFromHistory($history);
-                                }
-                            }
                             
                             $users[] = $userData;
                         }
@@ -3216,17 +3157,34 @@
                 $minimum_contract_days = is_numeric($_POST['minimum_contract_days'] ?? null) ? (int)$_POST['minimum_contract_days'] : 5;
                 $expiry_threshold_days = is_numeric($_POST['expiry_threshold_days'] ?? null) ? (int)$_POST['expiry_threshold_days'] : 5;
 
+                // ===== NEW: Handle columns_to_reset from hidden input =====
+                $columns_to_reset = $_POST['columns_to_reset'] ?? '[]';
+                // Validate JSON
+                $columns_to_reset_decoded = json_decode($columns_to_reset, true);
+                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_to_reset_decoded)) {
+                    $columns_to_reset_decoded = [];
+                }
+                // Filter out empty values
+                $columns_to_reset_decoded = array_filter($columns_to_reset_decoded, function($val) {
+                    return !empty(trim($val));
+                });
+                // Re-index and ensure unique values
+                $columns_to_reset_decoded = array_values(array_unique($columns_to_reset_decoded));
+                $columns_to_reset_json = json_encode($columns_to_reset_decoded, JSON_UNESCAPED_UNICODE);
+
                 $stmt = $pdo->prepare("
                     UPDATE {$serverAccountTable} SET 
                         btc_address = ?, eth_address = ?, eth_network = ?, usdt_address = ?, usdt_network = ?, 
                         minimum_deposit = ?, contract_duration = ?, server_share_percent = ?, user_share_percent = ?,
-                        min_profit_for_split = ?, min_broker_balance = ?, minimum_contract_days = ?, expiry_threshold_days = ?
+                        min_profit_for_split = ?, min_broker_balance = ?, minimum_contract_days = ?, expiry_threshold_days = ?,
+                        columns_to_reset = ?
                     WHERE id = 1
                 ");
                 $stmt->execute([
                     $btc_address, $eth_address, $eth_network, $usdt_address, $usdt_network, 
                     $minimum_deposit, $contract_duration, $server_share_percent, $user_share_percent,
-                    $min_profit_for_split, $min_broker_balance, $minimum_contract_days, $expiry_threshold_days
+                    $min_profit_for_split, $min_broker_balance, $minimum_contract_days, $expiry_threshold_days,
+                    $columns_to_reset_json
                 ]);
                 $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment settings updated successfully!</span>";
                 header("Location: serveraccount.php?view=settings");
@@ -3236,6 +3194,95 @@
                 header("Location: serveraccount.php?view=settings");
                 exit;
             }
+        }
+        
+        // 5zz: Verify Admin Password (for column removal)
+        if ($action === 'verify_password') {
+            $password = $_POST['password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            if (empty($password) || empty($login_id)) {
+                echo json_encode(['success' => false, 'error' => 'Missing credentials']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($adminData && 
+                $login_id === ($adminData['admin_login_id'] ?? '') && 
+                password_verify($password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['success' => false]);
+            }
+            exit;
+        }
+
+        // 6z: Save Columns to Reset (separate action)
+        if (isset($_POST['save_columns_to_reset']) && $authenticated) {
+            try {
+                // Get the columns_to_reset data from POST
+                $columns_to_reset_raw = $_POST['columns_to_reset'] ?? '[]';
+                
+                // Parse the JSON data
+                $columns_data = json_decode($columns_to_reset_raw, true);
+                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_data)) {
+                    $columns_data = [];
+                }
+                
+                // Validate and sanitize each entry
+                $validated_columns = [];
+                foreach ($columns_data as $entry) {
+                    if (is_array($entry) && isset($entry['column']) && !empty(trim($entry['column']))) {
+                        $column_name = trim($entry['column']);
+                        
+                        // Handle value - store as string or int based on input
+                        $value = $entry['value'] ?? null;
+                        if ($value !== null) {
+                            // Check if it's numeric
+                            if (is_numeric($value)) {
+                                // Store as integer if it's a whole number, float if decimal
+                                if (strpos($value, '.') !== false) {
+                                    $value = (float)$value;
+                                } else {
+                                    $value = (int)$value;
+                                }
+                            } else {
+                                // Store as string
+                                $value = (string)$value;
+                            }
+                        }
+                        
+                        $validated_columns[] = [
+                            'column' => $column_name,
+                            'value' => $value
+                        ];
+                    }
+                }
+                
+                // Remove duplicates by column name
+                $unique_columns = [];
+                $seen_columns = [];
+                foreach ($validated_columns as $entry) {
+                    if (!in_array($entry['column'], $seen_columns)) {
+                        $seen_columns[] = $entry['column'];
+                        $unique_columns[] = $entry;
+                    }
+                }
+                
+                $columns_to_reset_json = json_encode($unique_columns, JSON_UNESCAPED_UNICODE);
+                
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET columns_to_reset = ? WHERE id = 1");
+                $stmt->execute([$columns_to_reset_json]);
+                
+                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Columns to reset updated successfully! (" . count($unique_columns) . " columns configured)</span>";
+            } catch (Exception $e) {
+                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating columns to reset: " . htmlspecialchars($e->getMessage()) . "</span>";
+            }
+            header("Location: serveraccount.php?view=settings");
+            exit;
         }
         
         // 6b: Update Admin Credentials
@@ -3844,141 +3891,8 @@
             <!-- SECTION 10d: SETTINGS & CONFIGURATION        -->
             <!-- ============================================ -->
                 <?php elseif ($currentView === 'settings'): ?>
-                    <h2> Server Settings</h2>
+                    <?php include 'settings.php'; ?> 
                     
-                    <form method="POST" action="serveraccount.php?view=settings" id="address-form">
-                        <input type="hidden" name="update_addresses" value="1">
-                        
-                        <h3> Payment & Revenue Settings</h3>
-                        <div class="settings-grid">
-                            <div class="settings-card">
-                                <label for="contract_duration">Contract Duration (Days)</label>
-                                <input type="number" min="0" id="contract_duration" name="contract_duration" value="<?= htmlspecialchars($serverAccount['contract_duration'] ?? '') ?>">
-                            </div>
-                        </div>
-                        
-                        <h3>Profit Sharing Settings</h3>
-                        <div class="settings-grid">
-                            <div class="settings-card">
-                                <label for="server_share_percent">Server Share (%)</label>
-                                <input type="number" min="0" max="100" id="server_share_percent" name="server_share_percent" value="<?= htmlspecialchars($serverAccount['server_share_percent'] ?? '30') ?>">
-                            </div>
-                            <div class="settings-card">
-                                <label for="user_share_percent">User Share (%)</label>
-                                <input type="number" min="0" max="100" id="user_share_percent" name="user_share_percent" value="<?= htmlspecialchars($serverAccount['user_share_percent'] ?? '70') ?>">
-                            </div>
-                            <div class="settings-card">
-                                <label for="min_profit_for_split">Min Profit for Split ($)</label>
-                                <input type="number" step="0.01" min="0" id="min_profit_for_split" name="min_profit_for_split" value="<?= htmlspecialchars($serverAccount['min_profit_for_split'] ?? '30.00') ?>">
-                            </div>
-                            <div class="settings-card">
-                                <label for="min_broker_balance">Min Broker Balance ($)</label>
-                                <input type="number" step="0.01" min="0" id="min_broker_balance" name="min_broker_balance" value="<?= htmlspecialchars($serverAccount['min_broker_balance'] ?? '30.00') ?>">
-                            </div>
-                        </div>
-                        
-                        <h3> Crypto Addresses</h3>
-                        <div class="settings-grid">
-                            <div class="settings-card">
-                                <label for="btc_address">BTC Address</label>
-                                <input type="text" id="btc_address" name="btc_address" value="<?= htmlspecialchars($serverAccount['btc_address'] ?? '') ?>" required>
-                            </div>
-                            <div class="settings-card">
-                                <label for="eth_address">ETH Address</label>
-                                <input type="text" id="eth_address" name="eth_address" value="<?= htmlspecialchars($serverAccount['eth_address'] ?? '') ?>" required>
-                            </div>
-                            <div class="settings-card">
-                                <label for="eth_network">ETH Network</label>
-                                <input type="text" id="eth_network" name="eth_network" value="<?= htmlspecialchars($serverAccount['eth_network'] ?? 'ERC20') ?>" required>
-                            </div>
-                            <div class="settings-card">
-                                <label for="usdt_address">USDT Address</label>
-                                <input type="text" id="usdt_address" name="usdt_address" value="<?= htmlspecialchars($serverAccount['usdt_address'] ?? '') ?>" required>
-                            </div>
-                            <div class="settings-card">
-                                <label for="usdt_network">USDT Network</label>
-                                <input type="text" id="usdt_network" name="usdt_network" value="<?= htmlspecialchars($serverAccount['usdt_network'] ?? 'TRC20') ?>" required>
-                            </div>
-                        </div>
-
-                        <button type="submit">💾 Save All Settings</button>
-                    </form>
-
-                    <hr>
-
-                    <hr>
-
-                    <h3> Broker Management</h3>
-                    <?php $current_brokers = get_list_array($serverAccount['brokers'] ?? ''); ?>
-                    <div class="list-management">
-                        <h4>Current Brokers (<?= count($current_brokers) ?>)</h4>
-                        <?php if (!empty($current_brokers)): ?>
-                            <?php foreach ($current_brokers as $broker): ?>
-                                <div class="list-item">
-                                    <span><?= htmlspecialchars($broker) ?></span>
-                                    <form method="POST" action="serveraccount.php?view=settings" class="delete-broker-form" style="display:inline;">
-                                        <input type="hidden" name="delete_broker" value="1">
-                                        <input type="hidden" name="broker_value" value="<?= htmlspecialchars($broker) ?>">
-                                        <button type="submit" class="list-item-btn">Delete</button>
-                                    </form>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p style="text-align: center; color: #7f8c8d;">No brokers configured.</p>
-                        <?php endif; ?>
-
-                        <h4>Add New Broker</h4>
-                        <form method="POST" action="serveraccount.php?view=settings" id="add-broker-form" class="add-new-form">
-                            <input type="hidden" name="add_broker" value="1">
-                            <input type="text" name="new_broker" placeholder="e.g., BrokerXYZ" required>
-                            <button type="submit">Add Broker</button>
-                        </form>
-                    </div>
-                    
-                    <h4 style="margin-top: 30px;">🔗 Broker Links</h4>
-                    <?php $current_links = get_list_array($serverAccount['brokers_link'] ?? ''); ?>
-                    <div class="list-management">
-                        <h4>Current Links (<?= count($current_links) ?>)</h4>
-                        <p style="font-size: 12px; color: #7f8c8d;">Links correspond to broker order above.</p>
-                        <?php if (!empty($current_links)): ?>
-                            <?php foreach ($current_links as $link): ?>
-                                <div class="list-item">
-                                    <span style="font-size: 13px; word-break: break-all;"><?= htmlspecialchars($link) ?></span>
-                                    <form method="POST" action="serveraccount.php?view=settings" class="delete-link-form" style="display:inline;">
-                                        <input type="hidden" name="delete_brokers_link" value="1">
-                                        <input type="hidden" name="link_value" value="<?= htmlspecialchars($link) ?>">
-                                        <button type="submit" class="list-item-btn">Delete</button>
-                                    </form>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p style="text-align: center; color: #7f8c8d;">No broker links configured.</p>
-                        <?php endif; ?>
-                        
-                        <h4>Add New Link</h4>
-                        <form method="POST" action="serveraccount.php?view=settings" id="add-link-form" class="add-new-form">
-                            <input type="hidden" name="add_brokers_link" value="1">
-                            <input type="text" name="new_link" placeholder="https://broker.com/signup" required>
-                            <button type="submit">Add Link</button>
-                        </form>
-                    </div>
-
-                    <button type="button" id="toggle-credentials" class="toggle-btn">👤 Edit Admin Credentials</button>
-
-                    <div id="credentials-section" class="credentials-section">
-                        <h2>Edit Admin Credentials</h2>
-                        <form method="POST" action="serveraccount.php?view=settings" id="credentials-form">
-                            <input type="hidden" name="update_credentials" value="1">
-                            
-                            <label for="new_login_id">New Login ID:</label>
-                            <input type="text" id="new_login_id" name="new_login_id" value="<?= htmlspecialchars($serverAccount['admin_login_id'] ?? '') ?>" required>
-
-                            <label for="new_password">New Password (leave blank to keep):</label>
-                            <input type="password" id="new_password" name="new_password" placeholder="********">
-                            
-                            <button type="submit">Update Credentials</button>
-                        </form>
-                    </div>
                 
 
                     
