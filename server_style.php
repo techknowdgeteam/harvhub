@@ -4683,7 +4683,7 @@
     }
 
     .summary-cube {
-        flex: 1 0 calc(16.66% - 12px); /* 6 cards per row max */
+        flex: 1 0 calc(16.66% - 12px);
         min-width: 120px;
         background: var(--container-bg);
         border-radius: 12px;
@@ -4701,14 +4701,14 @@
 
     @media (max-width: 992px) {
         .summary-cube {
-            flex: 1 0 calc(33.33% - 12px); /* 3 cards per row */
+            flex: 1 0 calc(33.33% - 12px);
             min-width: 100px;
         }
     }
 
     @media (max-width: 768px) {
         .summary-cube {
-            flex: 1 0 calc(50% - 10px); /* 2 cards per row */
+            flex: 1 0 calc(50% - 10px);
             min-width: 80px;
             padding: 12px 8px;
             min-height: 70px;
@@ -5224,25 +5224,25 @@
     }
 
     /* ============================================
-    DAILY TARGET LIST
+    DAILY TARGET LIST - Updated for left/right layout
     ============================================ */
     .daily-target-list {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 6px;
     }
 
     .daily-target-item {
         display: flex;
         justify-content: space-between;
-        align-items: center;
+        align-items: stretch;
         padding: 12px 16px;
         background: var(--bg-secondary);
         border-radius: 8px;
         border-left: 3px solid var(--border-color);
         transition: all 0.2s;
-        flex-wrap: wrap;
-        gap: 8px;
+        gap: 12px;
+        flex-wrap: nowrap;
     }
 
     .daily-target-item.unusual {
@@ -5253,7 +5253,9 @@
     .daily-target-item .target-left {
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
+        flex: 1;
+        min-width: 180px;
         flex-wrap: wrap;
     }
 
@@ -5261,23 +5263,116 @@
         font-weight: 600;
         font-size: 14px;
         color: var(--text-color);
-        min-width: 80px;
+        min-width: 90px;
     }
 
     .daily-target-item .target-date {
-        font-size: 12px;
+        font-size: 11px;
         color: #888;
         min-width: 100px;
     }
 
+    .daily-target-item .target-right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+        flex-shrink: 0;
+        min-width: 120px;
+    }
+
+    .daily-target-item .target-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        width: 100%;
+        font-size: 12px;
+    }
+
+    .daily-target-item .target-label {
+        color: #888;
+        font-weight: 400;
+        min-width: 70px;
+        text-align: left;
+    }
+
     .daily-target-item .target-value {
-        font-size: 15px;
         font-weight: 600;
-        color: var(--accent-color);
-        margin-left: auto;
-        padding: 4px 12px;
-        background: var(--bg-color);
-        border-radius: 4px;
+        color: var(--text-color);
+        text-align: right;
+        min-width: 60px;
+    }
+
+    .daily-target-item .target-value.remaining {
+        color: #ff9800;
+    }
+
+    .daily-target-item .target-value .status-badge {
+        font-size: 10px;
+        padding: 2px 10px;
+    }
+
+    /* Week Container */
+    .week-container {
+        margin: 16px 0;
+        padding: 12px;
+        background: var(--container-bg);
+        border-radius: 10px;
+        border: 1px solid var(--border-color);
+    }
+
+    .week-container:first-child {
+        margin-top: 0;
+    }
+
+    .week-container:last-child {
+        margin-bottom: 0;
+    }
+
+    .week-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0 12px 0;
+        border-bottom: 2px solid var(--border-color);
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .week-label {
+        font-weight: 700;
+        font-size: 15px;
+        color: var(--text-color);
+        letter-spacing: 0.5px;
+    }
+
+    .week-summary {
+        font-size: 12px;
+        color: #888;
+        font-weight: 500;
+    }
+
+    /* Status badges for daily target */
+    .status-met {
+        background: #e8f5e9;
+        color: #2e7d32;
+    }
+
+    .status-owed {
+        background: #fff3e0;
+        color: #e65100;
+    }
+
+    .status-pending {
+        background: #e3f2fd;
+        color: #0d47a1;
+    }
+
+    .status-not-listed {
+        background: #f5f5f5;
+        color: #888;
     }
 
     /* ============================================
@@ -5761,6 +5856,26 @@
             background: #1a2a3a;
             color: #64b5f6;
         }
+
+        .status-met {
+            background: #1b3a1b;
+            color: #81c784;
+        }
+
+        .status-owed {
+            background: #3a2a0a;
+            color: #ffa726;
+        }
+
+        .status-pending {
+            background: #1a2a3a;
+            color: #64b5f6;
+        }
+
+        .status-not-listed {
+            background: #2a2a2a;
+            color: #888;
+        }
     }
 
     /* ============================================
@@ -5799,13 +5914,42 @@
         .daily-target-item {
             flex-direction: column;
             align-items: flex-start;
+            gap: 8px;
+            padding: 12px 14px;
         }
-        
+
+        .daily-target-item .target-left {
+            min-width: unset;
+            width: 100%;
+            gap: 8px;
+        }
+
+        .daily-target-item .target-right {
+            min-width: unset;
+            width: 100%;
+            align-items: stretch;
+        }
+
+        .daily-target-item .target-row {
+            gap: 12px;
+        }
+
+        .daily-target-item .target-label {
+            min-width: 60px;
+            font-size: 11px;
+        }
+
         .daily-target-item .target-value {
-            margin-left: 0;
-            align-self: flex-start;
+            font-size: 12px;
+            min-width: 50px;
         }
-        
+
+        .week-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
+
         .balance-log-item .log-header {
             flex-direction: column;
             align-items: flex-start;
@@ -5918,6 +6062,16 @@
             font-size: 10px;
         }
         
+        .daily-target-item .target-label {
+            min-width: 50px;
+            font-size: 10px;
+        }
+
+        .daily-target-item .target-value {
+            font-size: 11px;
+            min-width: 45px;
+        }
+        
         .balance-log-item .log-day {
             min-width: 60px;
             font-size: 12px;
@@ -5943,6 +6097,10 @@
             font-size: 10px;
             min-width: 90px;
             padding: 2px 6px;
+        }
+
+        .week-label {
+            font-size: 13px;
         }
     }
 </style>

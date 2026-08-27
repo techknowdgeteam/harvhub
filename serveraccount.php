@@ -182,6 +182,7 @@
         // Silently fail - don't break the page if sync fails
         // error_log("Error syncing accountmanagement_configs to accountmanagement: " . $e->getMessage());
     }
+        
 
     // ============================================
     // SECTION 3: HELPER FUNCTIONS
@@ -325,6 +326,7 @@
         $contract_completed = false;
         $is_contract_active = false;
         $has_valid_execution = false;
+        $isContractExpiredWithProfit = false;
         
         if (!$is_execution_empty) {
             $start = new DateTime($executionStartDate);
@@ -336,6 +338,11 @@
             $contract_completed = ($contractDaysLeft <= 0);
             $is_contract_active = ($contractDaysLeft > 0);
             $has_valid_execution = true;
+            
+            // ===== Check if contract expired with profit > threshold =====
+            if ($contract_completed && $profitAndLoss > $minProfitForSplit) {
+                $isContractExpiredWithProfit = true;
+            }
         }
         
         // Check if contract is cancelled
@@ -346,6 +353,40 @@
         
         // Check if payment failed
         $isFailedPayment = ($currentLoyalties === 'failed-payment');
+        
+        // ===== SPECIAL: Check for expired contract with profit > threshold =====
+        // Even if loyalties is not set, we should show this in revenue
+        // ===== SPECIAL: Check for expired contract with profit > threshold =====
+        // ===== SPECIAL: Check for expired contract with profit > threshold =====
+        if ($isContractExpiredWithProfit && !$isCancelled) {
+            $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
+            $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
+            $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
+            $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
+            
+            // Check if already has a valid status
+            $validStatuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
+            $statusAlreadySet = false;
+            foreach ($validStatuses as $validStatus) {
+                if (strpos(strtolower($currentLoyalties), $validStatus) !== false) {
+                    $statusAlreadySet = true;
+                    break;
+                }
+            }
+            
+            // If no valid status, use unpaid-payment (Section 2.5c will handle the database save)
+            $statusToSet = $statusAlreadySet ? $currentLoyalties : 'unpaid-payment';
+            
+            return [
+                'status' => $statusToSet,
+                'should_show_in_revenue' => true,
+                'server_share' => $serverShare,
+                'user_share' => $userShare,
+                'expected_payment' => $serverShare,
+                'has_eligible_profit' => true,
+                'reason' => 'Contract expired with profit above threshold'
+            ];
+        }
         
         // ===== SIMPLIFIED: Enable dropdown for ANY user with profit > threshold =====
         // Only disable if contract is active (not ended yet) or no profit
@@ -400,11 +441,11 @@
             // ENABLED: always show in revenue when profit > threshold
             return [
                 'status' => $normalizedCurrent ?: 'unpaid-payment',
-                'should_show_in_revenue' => true,  // ENABLES the dropdown
+                'should_show_in_revenue' => true,
                 'server_share' => $serverShare,
                 'user_share' => $userShare,
                 'expected_payment' => $serverShare,
-                'has_eligible_profit' => true,     // ENABLES the dropdown
+                'has_eligible_profit' => true,
                 'reason' => 'Eligible for profit split'
             ];
         }
@@ -539,33 +580,23 @@
             }
             
             // ============================================================
+            // ============================================================
             // STEP 3: DETERMINE FINAL STATUS
             // ============================================================
             $finalStatus = $currentLoyalties;
-            
+
             // Check if contract is cancelled (based on loyalties)
             $isContractCancelled = false;
             if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
                 $isContractCancelled = true;
             }
-            
-            // If contract is cancelled, append the status for clarity
+
+            // ===== CRITICAL: If contract is cancelled, FORCE the history status to 'contract_cancelled' =====
+            // The revenue_history record should ALWAYS show 'contract_cancelled' regardless of column changes
+            // This means even if the main loyalties column is updated to 'unpaid-payment', 'payment-made', etc.
+            // the history record remains 'contract_cancelled'
             if ($isContractCancelled) {
-                if ($currentLoyalties === 'payment-confirmed') {
-                    $finalStatus = 'contract_cancelled_payment-confirmed';
-                } elseif ($currentLoyalties === 'payment-made') {
-                    $finalStatus = 'contract_cancelled_payment-made';
-                } elseif ($currentLoyalties === 'unpaid-payment') {
-                    $finalStatus = 'contract_cancelled_unpaid-payment';
-                } elseif ($currentLoyalties === 'failed-payment') {
-                    $finalStatus = 'contract_cancelled_failed-payment';
-                } elseif ($profitAndLoss <= 0) {
-                    $finalStatus = 'contract_cancelled_inloss';
-                } elseif ($profitAndLoss < $minProfitForSplit) {
-                    $finalStatus = 'contract_cancelled_below-threshold';
-                } else {
-                    $finalStatus = 'contract_cancelled';
-                }
+                $finalStatus = 'contract_cancelled';
             }
             
             // ============================================================
@@ -742,7 +773,90 @@
     }
 
     $authenticated = ($_SESSION['admin_logged_in'] ?? false) && !$initialSetupRequired;
+    
+    // ============================================
+    // SECTION 4.5: AUTO-MARK EXPIRED CONTRACTS AS UNPAID
+    // ============================================
+    // This runs on every page load to automatically mark expired contracts
+    // with profit above threshold as 'unpaid-payment'
 
+    if ($authenticated) {
+        try {
+            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
+            $today = new DateTime();
+            $today->setTime(0, 0, 0);
+            
+            // Valid statuses that should NOT be overwritten
+            $validStatuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
+            
+            // Check both tables
+            foreach ([$insidersTable, $insidersServerTable] as $table) {
+                try {
+                    // Get all users with execution_start_date
+                    $stmt = $pdo->prepare("
+                        SELECT id, execution_start_date, profitandloss, loyalties 
+                        FROM {$table} 
+                        WHERE execution_start_date IS NOT NULL 
+                        AND execution_start_date != '0000-00-00'
+                        AND execution_start_date != ''
+                    ");
+                    $stmt->execute();
+                    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    foreach ($users as $user) {
+                        $executionStartDate = $user['execution_start_date'];
+                        $profitAndLoss = (float)($user['profitandloss'] ?? 0);
+                        $currentLoyalties = strtolower(trim($user['loyalties'] ?? ''));
+                        
+                        // Check if contract is expired
+                        try {
+                            $start = new DateTime($executionStartDate);
+                            $end = clone $start;
+                            $end->modify("+{$contractDuration} days");
+                            $end->setTime(0, 0, 0);
+                            
+                            // Skip if contract is still active
+                            if ($today <= $end) {
+                                continue;
+                            }
+                        } catch (Exception $e) {
+                            continue;
+                        }
+                        
+                        // Skip if profit is not above threshold
+                        if ($profitAndLoss <= $minProfitForSplit) {
+                            continue;
+                        }
+                        
+                        // Check if loyalties already has a valid status
+                        $statusAlreadySet = false;
+                        foreach ($validStatuses as $validStatus) {
+                            if (strpos($currentLoyalties, $validStatus) !== false) {
+                                $statusAlreadySet = true;
+                                break;
+                            }
+                        }
+                        
+                        // If no valid status, auto-mark as unpaid-payment
+                        if (!$statusAlreadySet) {
+                            $updateStmt = $pdo->prepare("UPDATE {$table} SET loyalties = 'unpaid-payment' WHERE id = ?");
+                            $updateStmt->execute([$user['id']]);
+                            
+                            // Sync revenue history
+                            if (function_exists('syncUserRevenueHistory')) {
+                                syncUserRevenueHistory($user['id'], $table, $pdo, $serverAccount);
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    // Skip this table on error
+                }
+            }
+        } catch (Exception $e) {
+            // Silent fail - don't break the page
+        }
+    }
     // ============================================
     // SECTION 5: AJAX ENDPOINTS (Live Updates & Account Management)
     // ============================================
@@ -815,42 +929,107 @@
                 $users = array();
                 $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
+                $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                 
-                // Helper function to check if user is completed
-                function isCompletedUser($userId, $sourceTable, $pdo) {
-                    $stmt = $pdo->prepare("SELECT loyalties FROM {$sourceTable} WHERE id = ?");
-                    $stmt->execute([$userId]);
-                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $loyalties = strtolower($result['loyalties'] ?? '');
-                    return strpos($loyalties, 'payment-confirmed') !== false;
+                // ===== FIX: Function to check if user should be in active list =====
+                function shouldBeActive($user, $contractDuration, $minProfitForSplit) {
+                    // MUST have application_status containing 'approved'
+                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
+                    if (strpos($appStatus, 'approved') === false) {
+                        return false; // Not approved = skip
+                    }
+                    
+                    // MUST have login (not empty)
+                    $login = trim($user['login'] ?? '');
+                    if (empty($login)) {
+                        return false; // No login = skip
+                    }
+                    
+                    $loyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    
+                    // ============================================================
+                    // FIRST: Check if contract is still active based on dates
+                    // ============================================================
+                    $execDate = $user['execution_start_date'] ?? null;
+                    $isContractActive = false;
+                    
+                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
+                        try {
+                            $start = new DateTime($execDate);
+                            $end = clone $start;
+                            $end->modify("+{$contractDuration} days");
+                            $end->setTime(0, 0, 0);
+                            
+                            $todayObj = new DateTime();
+                            $todayObj->setTime(0, 0, 0);
+                            
+                            // If contract end date is >= today, contract is ACTIVE
+                            if ($end >= $todayObj) {
+                                $isContractActive = true;
+                            }
+                        } catch (Exception $e) {
+                            $isContractActive = false;
+                        }
+                    }
+                    
+                    // ============================================================
+                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
+                    // ============================================================
+                    if ($isContractActive) {
+                        return true; // ACTIVE - contract still running
+                    }
+                    
+                    // ============================================================
+                    // RULE 2: Contract is EXPIRED - check loyalties
+                    // ============================================================
+                    
+                    // ACTIVE STATUSES (these users are active even after contract expired)
+                    $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
+                    
+                    // Check if loyalties matches any active status
+                    foreach ($activeStatuses as $status) {
+                        if (strpos($loyalties, $status) !== false) {
+                            return true; // ACTIVE
+                        }
+                    }
+                    
+                    // If loyalties is payment-confirmed, user is NOT active
+                    if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
+                        return false;
+                    }
+                    
+                    // If loyalties contains 'cancelled', user is NOT active
+                    if (strpos($loyalties, 'cancelled') !== false) {
+                        return false;
+                    }
+                    
+                    // If loyalties is null or empty AND contract is expired, user is NOT active
+                    if (empty($loyalties)) {
+                        return false;
+                    }
+                    
+                    // ANY other loyalties value with expired contract = NOT active
+                    return false;
                 }
                 
                 // Get from insiders_server table
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
                     if ($checkTable1->rowCount() > 0) {
-                        // FIX: Added broker_balance to SELECT
                         $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, execution_start_date, profitandloss, broker_balance, '{$insidersServerTable}' as source, ? as contract_duration
+                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$insidersServerTable}' as source, ? as contract_duration
                             FROM {$insidersServerTable} 
-                            WHERE execution_start_date IS NOT NULL 
-                            AND execution_start_date != '0000-00-00'
-                            AND execution_start_date <= ?
-                            AND (loyalties IS NULL OR loyalties NOT LIKE '%payment-confirmed%')
+                            WHERE application_status LIKE '%approved%'
+                            AND login IS NOT NULL 
+                            AND login != ''
                             ORDER BY id DESC
                         ");
-                        $stmt1->execute([$contractDuration, $today]);
+                        $stmt1->execute([$contractDuration]);
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            if (!empty($user['execution_start_date'])) {
-                                $start = new DateTime($user['execution_start_date']);
-                                $end = clone $start;
-                                $end->modify("+{$contractDuration} days");
-                                $todayDT = new DateTime();
-                                if ($todayDT <= $end) {
-                                    $users[] = $user;
-                                }
+                            if (shouldBeActive($user, $contractDuration, $minProfitForSplit)) {
+                                $users[] = $user;
                             }
                         }
                     }
@@ -860,28 +1039,20 @@
                 try {
                     $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
                     if ($checkTable2->rowCount() > 0) {
-                        // FIX: Added broker_balance to SELECT
                         $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, execution_start_date, profitandloss, broker_balance, '{$insidersTable}' as source, ? as contract_duration
+                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$insidersTable}' as source, ? as contract_duration
                             FROM {$insidersTable} 
-                            WHERE execution_start_date IS NOT NULL 
-                            AND execution_start_date != '0000-00-00'
-                            AND execution_start_date <= ?
-                            AND (loyalties IS NULL OR loyalties NOT LIKE '%payment-confirmed%')
+                            WHERE application_status LIKE '%approved%'
+                            AND login IS NOT NULL 
+                            AND login != ''
                             ORDER BY id DESC
                         ");
-                        $stmt2->execute([$contractDuration, $today]);
+                        $stmt2->execute([$contractDuration]);
                         $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            if (!empty($user['execution_start_date'])) {
-                                $start = new DateTime($user['execution_start_date']);
-                                $end = clone $start;
-                                $end->modify("+{$contractDuration} days");
-                                $todayDT = new DateTime();
-                                if ($todayDT <= $end) {
-                                    $users[] = $user;
-                                }
+                            if (shouldBeActive($user, $contractDuration, $minProfitForSplit)) {
+                                $users[] = $user;
                             }
                         }
                     }
@@ -893,12 +1064,14 @@
             }
             exit;
         }
-        // 5aa2: Get Unusual Users (with daily_balance_log analysis)
+        // 5aa2: Get Unusual Users (with daily_balance_log analysis) - FIXED to only show active users
         if ($action === 'get_unusual_users') {
             try {
                 $search = trim($_POST['search'] ?? '');
                 $users = [];
                 $today = date('Y-m-d');
+                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                 
                 function checkUnusualActivity($dailyLog) {
                     if (empty($dailyLog)) return false;
@@ -936,12 +1109,70 @@
                         'unauthorized_balance' => $unauthorizedBalance
                     ];
                 }
+
+                // ===== Helper function to check if user is ACTIVE =====
+                function isUserActive($user, $contractDuration) {
+                    // MUST have application_status containing 'approved'
+                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
+                    if (strpos($appStatus, 'approved') === false) {
+                        return false; // Not approved = skip
+                    }
+                    
+                    // MUST have login (not empty)
+                    $login = trim($user['login'] ?? '');
+                    if (empty($login)) {
+                        return false; // No login = skip
+                    }
+                    
+                    $loyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    
+                    // FIRST: Check if contract is still active based on dates
+                    $execDate = $user['execution_start_date'] ?? null;
+                    $isContractActive = false;
+                    
+                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
+                        try {
+                            $start = new DateTime($execDate);
+                            $end = clone $start;
+                            $end->modify("+{$contractDuration} days");
+                            $end->setTime(0, 0, 0);
+                            
+                            $todayObj = new DateTime();
+                            $todayObj->setTime(0, 0, 0);
+                            
+                            // If contract end date is >= today, contract is ACTIVE
+                            if ($end >= $todayObj) {
+                                $isContractActive = true;
+                            }
+                        } catch (Exception $e) {
+                            $isContractActive = false;
+                        }
+                    }
+                    
+                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
+                    if ($isContractActive) {
+                        return true; // ACTIVE - contract still running
+                    }
+                    
+                    // RULE 2: Contract is EXPIRED - check loyalties
+                    $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
+                    
+                    // Check if loyalties matches any active status
+                    foreach ($activeStatuses as $status) {
+                        if (strpos($loyalties, $status) !== false) {
+                            return true; // ACTIVE
+                        }
+                    }
+                    
+                    // NOT active
+                    return false;
+                }
                 
                 // Get from insiders_server table
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
                     if ($checkTable1->rowCount() > 0) {
-                        $sql = "SELECT id, fullname, email, broker_balance, profitandloss, daily_balance_log, '{$insidersServerTable}' as source FROM {$insidersServerTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$insidersServerTable}' as source FROM {$insidersServerTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
                         if (!empty($search)) {
                             $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
                         }
@@ -955,7 +1186,8 @@
                         }
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         foreach ($results as $user) {
-                            if (checkUnusualActivity($user['daily_balance_log'] ?? '')) {
+                            // ===== CRITICAL: Only include if user is ACTIVE =====
+                            if (isUserActive($user, $contractDuration) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
                                 $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
                                 $user['withdrawal_count'] = $summary['withdrawal_count'];
                                 $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
@@ -972,7 +1204,7 @@
                 try {
                     $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
                     if ($checkTable2->rowCount() > 0) {
-                        $sql = "SELECT id, fullname, email, broker_balance, profitandloss, daily_balance_log, '{$insidersTable}' as source FROM {$insidersTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$insidersTable}' as source FROM {$insidersTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
                         if (!empty($search)) {
                             $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
                         }
@@ -986,7 +1218,8 @@
                         }
                         $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
                         foreach ($results as $user) {
-                            if (checkUnusualActivity($user['daily_balance_log'] ?? '')) {
+                            // ===== CRITICAL: Only include if user is ACTIVE =====
+                            if (isUserActive($user, $contractDuration) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
                                 $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
                                 $user['withdrawal_count'] = $summary['withdrawal_count'];
                                 $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
@@ -1135,31 +1368,30 @@
         if ($action === 'get_completed_investors') {
             try {
                 $users = array();
+                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 
                 // Get from insiders_server table - ALL users with revenue_history
                 try {
                     $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
                     if ($checkTable1->rowCount() > 0) {
-                        // Check if revenue_history column exists
-                        $hasHistoryColumn = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'revenue_history'")->rowCount() > 0;
-                        
-                        // ===== FIX: Include revenue_history in SELECT =====
+                        // ===== FIX: Include broker and login in SELECT =====
                         $stmt1 = $pdo->prepare("
                             SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
                                 profitandloss, broker_balance, 
+                                broker, login,
                                 revenue_history,
+                                ? as contract_duration,
                                 '{$insidersServerTable}' as source
                             FROM {$insidersServerTable} 
                             ORDER BY id DESC
                         ");
-                        $stmt1->execute();
+                        $stmt1->execute([$contractDuration]);
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
                             $history = [];
                             $hasHistory = false;
                             
-                            // ===== FIX: Always try to get revenue history =====
                             if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
                                 $history = json_decode($user['revenue_history'], true);
                                 if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
@@ -1169,12 +1401,13 @@
                                 }
                             }
                             
-                            // Build user data with history
                             $userData = [
                                 'id' => $user['id'],
                                 'source' => $user['source'],
                                 'fullname' => $user['fullname'] ?? 'N/A',
                                 'email' => $user['email'] ?? 'N/A',
+                                'broker' => $user['broker'] ?? 'N/A',
+                                'login' => $user['login'] ?? 'N/A',
                                 'has_history' => $hasHistory,
                                 'history_count' => $hasHistory ? count($history) : 0,
                                 'current_loyalties' => $user['loyalties'] ?? null,
@@ -1183,17 +1416,19 @@
                                     'total_payment_made' => 0,
                                     'total_payment_confirmed' => 0,
                                     'total_cancelled_contracts' => 0,
+                                    'total_failed_payments' => 0,
                                     'unpaid_count' => 0,
                                     'payment_made_count' => 0,
                                     'payment_confirmed_count' => 0,
-                                    'cancelled_count' => 0
+                                    'cancelled_count' => 0,
+                                    'failed_count' => 0
                                 ],
                                 'invested_with' => $user['invested_with'] ?? null,
                                 'execution_start_date' => $user['execution_start_date'] ?? null,
                                 'profitandloss' => (float)($user['profitandloss'] ?? 0),
                                 'broker_balance' => (float)($user['broker_balance'] ?? 0),
-                                // ===== FIX: Include the actual revenue_history data =====
-                                'revenue_history' => $history
+                                'revenue_history' => $history,
+                                'contract_duration' => $user['contract_duration'] ?? $contractDuration
                             ];
                             
                             $users[] = $userData;
@@ -1207,23 +1442,24 @@
                 try {
                     $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
                     if ($checkTable2->rowCount() > 0) {
-                        // ===== FIX: Include revenue_history in SELECT =====
+                        // ===== FIX: Include broker and login in SELECT =====
                         $stmt2 = $pdo->prepare("
                             SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
                                 profitandloss, broker_balance, 
+                                broker, login,
                                 revenue_history,
+                                ? as contract_duration,
                                 '{$insidersTable}' as source
                             FROM {$insidersTable} 
                             ORDER BY id DESC
                         ");
-                        $stmt2->execute();
+                        $stmt2->execute([$contractDuration]);
                         $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
                             $history = [];
                             $hasHistory = false;
                             
-                            // ===== FIX: Always try to get revenue history =====
                             if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
                                 $history = json_decode($user['revenue_history'], true);
                                 if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
@@ -1233,12 +1469,13 @@
                                 }
                             }
                             
-                            // Build user data with history
                             $userData = [
                                 'id' => $user['id'],
                                 'source' => $user['source'],
                                 'fullname' => $user['fullname'] ?? 'N/A',
                                 'email' => $user['email'] ?? 'N/A',
+                                'broker' => $user['broker'] ?? 'N/A',
+                                'login' => $user['login'] ?? 'N/A',
                                 'has_history' => $hasHistory,
                                 'history_count' => $hasHistory ? count($history) : 0,
                                 'current_loyalties' => $user['loyalties'] ?? null,
@@ -1247,17 +1484,19 @@
                                     'total_payment_made' => 0,
                                     'total_payment_confirmed' => 0,
                                     'total_cancelled_contracts' => 0,
+                                    'total_failed_payments' => 0,
                                     'unpaid_count' => 0,
                                     'payment_made_count' => 0,
                                     'payment_confirmed_count' => 0,
-                                    'cancelled_count' => 0
+                                    'cancelled_count' => 0,
+                                    'failed_count' => 0
                                 ],
                                 'invested_with' => $user['invested_with'] ?? null,
                                 'execution_start_date' => $user['execution_start_date'] ?? null,
                                 'profitandloss' => (float)($user['profitandloss'] ?? 0),
                                 'broker_balance' => (float)($user['broker_balance'] ?? 0),
-                                // ===== FIX: Include the actual revenue_history data =====
-                                'revenue_history' => $history
+                                'revenue_history' => $history,
+                                'contract_duration' => $user['contract_duration'] ?? $contractDuration
                             ];
                             
                             $users[] = $userData;
@@ -2545,7 +2784,7 @@
                 exit;
             }
             
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, contract_duration FROM {$serverAccountTable} WHERE id = 1");
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, contract_duration, min_profit_for_split FROM {$serverAccountTable} WHERE id = 1");
             $stmt->execute();
             $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -2574,6 +2813,7 @@
             
             // Get contract duration from server account
             $contractDuration = (int)($adminData['contract_duration'] ?? 30);
+            $minProfitForSplit = (float)($adminData['min_profit_for_split'] ?? 30);
             $contractId = $userData['contract_id'] ?? null;
             
             // Get current profit and loss
@@ -2582,10 +2822,19 @@
             $currentBalance = $brokerBalance + $profitAndLoss;
             $executionStartDate = $userData['execution_start_date'] ?? null;
             
+            // ================================================================
+            // ===== CRITICAL FIX: Determine loyalties based on profit =====
+            // ================================================================
+            $loyaltiesToSet = 'contract_cancelled';
+            if ($profitAndLoss > $minProfitForSplit) {
+                // Profit above threshold - user owes payment
+                $loyaltiesToSet = 'unpaid-payment';
+            }
+            // else: profit is zero, negative, or below threshold - just cancelled
+            
             // Calculate shares based on current profit
             $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
             $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
-            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
             
             $serverShare = 0;
             $userShare = 0;
@@ -2628,7 +2877,7 @@
                     }
                 }
             }
-            
+
             // If not found by contract_id, try by dates (fallback)
             if ($existingRecordIndex === -1 && !empty($executionStartDate) && !empty($executionEndDate)) {
                 foreach ($history as $index => $record) {
@@ -2639,10 +2888,11 @@
                     }
                 }
             }
-            
+
             if ($existingRecordIndex !== -1) {
-                // Update existing record to cancelled
-                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled';
+                // ===== UPDATE EXISTING RECORD =====
+                // CRITICAL: loyalty in history ALWAYS remains 'contract_cancelled' for cancelled contracts
+                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled'; // FORCE this value
                 $history[$existingRecordIndex]['cancelled_at'] = date('Y-m-d H:i:s');
                 $history[$existingRecordIndex]['cancelled_by'] = $login_id;
                 $history[$existingRecordIndex]['profit'] = $profitAndLoss;
@@ -2657,7 +2907,7 @@
                     $history[$existingRecordIndex]['invested_with'] = $userData['invested_with'];
                 }
             } else {
-                // Create new cancelled record
+                // ===== CREATE NEW CANCELLED RECORD =====
                 $newId = 1;
                 if (!empty($history)) {
                     $maxId = 0;
@@ -2697,7 +2947,7 @@
                     'profit' => $profitAndLoss,
                     'user_share' => $userShare,
                     'server_share' => $serverShare,
-                    'loyalties' => 'contract_cancelled',
+                    'loyalties' => 'contract_cancelled', // ALWAYS contract_cancelled in history
                     'recorded_at' => date('Y-m-d H:i:s'),
                     'cancelled_at' => date('Y-m-d H:i:s'),
                     'cancelled_by' => $login_id,
@@ -2717,12 +2967,15 @@
             $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
             $updateStmt->execute([$jsonHistory, $user_id]);
             
-            // Set loyalties to contract_cancelled
-            $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = 'contract_cancelled' WHERE id = ?");
-            $updateLoyalties->execute([$user_id]);
+            // ================================================================
+            // ===== SET LOYALTIES BASED ON PROFIT =====
+            // ================================================================
+            // If profit > threshold: set to 'unpaid-payment' so user owes
+            // If profit <= threshold: set to 'contract_cancelled'
+            $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
+            $updateLoyalties->execute([$loyaltiesToSet, $user_id]);
             
-            // ===== CRITICAL: SET reset_contract = 1 FOR CANCELLED CONTRACTS =====
-            // Contract cancellation should always set reset_contract = 1
+            // ===== SET reset_contract = 1 FOR ALL CANCELLED CONTRACTS =====
             $updateReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
             $updateReset->execute([$user_id]);
             
@@ -2739,11 +2992,12 @@
             
             echo json_encode([
                 'success' => true,
-                'message' => "Contract cancelled successfully. Profit and loss of $".number_format($profitAndLoss, 2)." recorded. reset_contract set to 1.",
+                'message' => "Contract cancelled successfully. Profit of $".number_format($profitAndLoss, 2)." recorded. Loyalties set to '{$loyaltiesToSet}'. reset_contract set to 1.",
                 'new_execution_date' => $newExecutionDateStr,
                 'profit_recorded' => $profitAndLoss,
                 'server_share_recorded' => $serverShare,
                 'user_share_recorded' => $userShare,
+                'loyalties_set_to' => $loyaltiesToSet,
                 'reset_contract_set_to' => 1
             ]);
             exit;
@@ -3027,7 +3281,155 @@
             echo json_encode(['success' => true, 'users' => $uniqueUsers]);
             exit;
         }
+        // 5z8: Get Inactive Users (FIXED - Proper active/inactive logic)
+        if ($action === 'get_inactive_users') {
+            try {
+                $users = array();
+                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $today = date('Y-m-d');
 
+                // Helper function to check if user is inactive
+                function isUserInactive($user, $contractDuration, $today) {
+                    // MUST have application_status containing 'approved'
+                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
+                    if (strpos($appStatus, 'approved') === false) {
+                        return false; // Not approved = skip
+                    }
+                    
+                    // MUST have login (not empty)
+                    $login = trim($user['login'] ?? '');
+                    if (empty($login)) {
+                        return false; // No login = skip
+                    }
+                    
+                    $loyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    
+                    // FIRST: Check if contract is still active based on dates
+                    $execDate = $user['execution_start_date'] ?? null;
+                    $isContractActive = false;
+                    
+                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
+                        try {
+                            $start = new DateTime($execDate);
+                            $end = clone $start;
+                            $end->modify("+{$contractDuration} days");
+                            $end->setTime(0, 0, 0);
+                            
+                            $todayObj = new DateTime($today);
+                            $todayObj->setTime(0, 0, 0);
+                            
+                            // If contract end date is >= today, contract is ACTIVE
+                            if ($end >= $todayObj) {
+                                $isContractActive = true;
+                            }
+                        } catch (Exception $e) {
+                            // If date parsing fails, treat as inactive
+                            $isContractActive = false;
+                        }
+                    }
+                    
+                    // ============================================================
+                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
+                    // ============================================================
+                    if ($isContractActive) {
+                        return false; // NOT inactive - contract still running
+                    }
+                    
+                    // ============================================================
+                    // RULE 2: Contract is EXPIRED - check loyalties
+                    // ============================================================
+                    
+                    // ACTIVE STATUSES (these users are active even after contract expired)
+                    $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
+                    
+                    // If loyalties matches any active status, user is ACTIVE
+                    foreach ($activeStatuses as $status) {
+                        if (strpos($loyalties, $status) !== false) {
+                            return false; // NOT inactive
+                        }
+                    }
+                    
+                    // If loyalties is payment-confirmed, user is INACTIVE (contract completed)
+                    if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
+                        return true; // INACTIVE
+                    }
+                    
+                    // If loyalties contains 'cancelled', user is INACTIVE
+                    if (strpos($loyalties, 'cancelled') !== false) {
+                        return true; // INACTIVE
+                    }
+                    
+                    // If loyalties is null or empty AND contract is expired, user is INACTIVE
+                    if (empty($loyalties)) {
+                        return true; // INACTIVE
+                    }
+                    
+                    // ANY other loyalties value with expired contract = INACTIVE
+                    return true;
+                }
+
+                // Get from insiders_server table
+                try {
+                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
+                    if ($checkTable1->rowCount() > 0) {
+                        $stmt1 = $pdo->prepare("
+                            SELECT id, fullname, email, broker, login, broker_balance, profitandloss, 
+                                loyalties, execution_start_date, invested_with, application_status,
+                                '{$insidersServerTable}' as source 
+                            FROM {$insidersServerTable} 
+                            WHERE application_status LIKE '%approved%'
+                            AND login IS NOT NULL 
+                            AND login != ''
+                            ORDER BY id DESC
+                        ");
+                        $stmt1->execute();
+                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($results as $user) {
+                            if (isUserInactive($user, $contractDuration, $today)) {
+                                $user['contract_duration'] = $contractDuration;
+                                $users[] = $user;
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log("Error in get_inactive_users (insiders_server): " . $e->getMessage());
+                }
+
+                // Get from insiders table
+                try {
+                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
+                    if ($checkTable2->rowCount() > 0) {
+                        $stmt2 = $pdo->prepare("
+                            SELECT id, fullname, email, broker, login, broker_balance, profitandloss, 
+                                loyalties, execution_start_date, invested_with, application_status,
+                                '{$insidersTable}' as source 
+                            FROM {$insidersTable} 
+                            WHERE application_status LIKE '%approved%'
+                            AND login IS NOT NULL 
+                            AND login != ''
+                            ORDER BY id DESC
+                        ");
+                        $stmt2->execute();
+                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($results as $user) {
+                            if (isUserInactive($user, $contractDuration, $today)) {
+                                $user['contract_duration'] = $contractDuration;
+                                $users[] = $user;
+                            }
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log("Error in get_inactive_users (insiders): " . $e->getMessage());
+                }
+
+                echo json_encode(['success' => true, 'users' => $users]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
         // 5z8: Get User Details by IDs
         if ($action === 'get_users_by_ids') {
             $user_ids = json_decode($_POST['user_ids'] ?? '[]', true);
@@ -3077,7 +3479,154 @@
             }
             exit;
         }
-
+        // 5z9: Initialize Enrollment (Admin-initiated enrollment for inactive users)
+        if ($action === 'initialize_enrollment') {
+            $user_id = $_POST['user_id'] ?? '';
+            $source_table = $_POST['source_table'] ?? '';
+            $broker_balance = (float)($_POST['broker_balance'] ?? 0);
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+            $minBrokerBalance = (float)($serverAccount['min_broker_balance'] ?? 30);
+            
+            // Verify admin credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            // Validate input
+            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                echo json_encode(['error' => 'Invalid user selection']);
+                exit;
+            }
+            
+            // Validate broker balance
+            if ($broker_balance < $minBrokerBalance) {
+                echo json_encode(['error' => 'Broker balance must be at least $' . number_format($minBrokerBalance, 2)]);
+                exit;
+            }
+            
+            // Check if user exists
+            $checkUser = $pdo->prepare("SELECT id, fullname FROM {$source_table} WHERE id = ?");
+            $checkUser->execute([$user_id]);
+            if ($checkUser->rowCount() === 0) {
+                echo json_encode(['error' => 'User does not exist']);
+                exit;
+            }
+            
+            // Get today's date
+            $today = date('Y-m-d');
+            $endDate = date('Y-m-d', strtotime("+{$contractDuration} days", strtotime($today)));
+            $startFormatted = date('dmY', strtotime($today));
+            $endFormatted = date('dmY', strtotime($endDate));
+            $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+            
+            // Update the user - initialize enrollment
+            // ===== FIX: Set daily_balance_log and daily_target_met to NULL =====
+            $updateStmt = $pdo->prepare("
+                UPDATE {$source_table} SET 
+                    broker_balance = ?,
+                    balance_verification = 'verified',
+                    loyalties = NULL,
+                    execution_start_date = ?,
+                    profitandloss = 0,
+                    reset_contract = 0,
+                    contract_id = ?,
+                    daily_balance_log = NULL,
+                    daily_target_met = NULL
+                WHERE id = ?
+            ");
+            $updateStmt->execute([$broker_balance, $today, $contractId, $user_id]);
+            
+            // Also update revenue_history to add a new active contract record
+            $history = [];
+            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
+            if ($checkColumn->rowCount() > 0) {
+                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($result && !empty($result['revenue_history'])) {
+                    $history = json_decode($result['revenue_history'], true);
+                    if (!is_array($history)) {
+                        $history = [];
+                    }
+                }
+            }
+            
+            // Filter out records with empty contract_id
+            $filteredHistory = [];
+            foreach ($history as $record) {
+                $recordContractId = $record['contract_id'] ?? null;
+                if (!empty($recordContractId) && $recordContractId !== 'N/A' && $recordContractId !== 'null') {
+                    $filteredHistory[] = $record;
+                }
+            }
+            $history = $filteredHistory;
+            
+            // Create new revenue entry
+            $newId = time();
+            if (!empty($history)) {
+                foreach ($history as $item) {
+                    if (isset($item['id']) && is_numeric($item['id']) && $item['id'] >= $newId) {
+                        $newId = (int)$item['id'] + 1;
+                    }
+                }
+            }
+            
+            $newRecord = [
+                'id' => $newId,
+                'contract_id' => $contractId,
+                'execution_start_date' => $today,
+                'execution_end_date' => $endDate,
+                'starting_balance' => $broker_balance,
+                'current_balance' => $broker_balance,
+                'profit' => 0,
+                'user_share' => 0,
+                'server_share' => 0,
+                'loyalties' => 'active',
+                'recorded_at' => date('Y-m-d H:i:s'),
+                'invested_with' => null // Will be updated from user data if available
+            ];
+            
+            $history[] = $newRecord;
+            
+            // Sort newest first
+            usort($history, function($a, $b) {
+                $idA = isset($a['id']) ? (int)$a['id'] : 0;
+                $idB = isset($b['id']) ? (int)$b['id'] : 0;
+                return $idB - $idA;
+            });
+            
+            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
+            
+            if ($checkColumn->rowCount() == 0) {
+                $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
+            }
+            
+            $updateHistoryStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
+            $updateHistoryStmt->execute([$jsonHistory, $user_id]);
+            
+            echo json_encode([
+                'success' => true,
+                'message' => 'Enrollment initialized successfully',
+                'contract_id' => $contractId,
+                'execution_start_date' => $today,
+                'broker_balance' => $broker_balance
+            ]);
+            exit;
+        }
         // 5z10: Update Manual Content
         if ($action === 'update_manual_content') {
             $manual = json_decode($_POST['manual'] ?? '[]', true);
