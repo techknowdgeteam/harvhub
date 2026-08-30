@@ -936,21 +936,35 @@
                     // MUST have application_status containing 'approved'
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
-                        return false; // Not approved = skip
+                        return false;
                     }
                     
                     // MUST have login (not empty)
                     $login = trim($user['login'] ?? '');
                     if (empty($login)) {
-                        return false; // No login = skip
+                        return false;
+                    }
+                    
+                    // ============================================================
+                    // CHECK 0: If execution_start_date is NULL/empty → NOT ACTIVE
+                    // ============================================================
+                    $execDate = $user['execution_start_date'] ?? null;
+                    if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
+                        return false; // No active contract
                     }
                     
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     
                     // ============================================================
-                    // FIRST: Check if contract is still active based on dates
+                    // CHECK 1: If loyalties contains 'cancelled' → NOT ACTIVE
                     // ============================================================
-                    $execDate = $user['execution_start_date'] ?? null;
+                    if (strpos($loyalties, 'cancelled') !== false) {
+                        return false; // CANCELLED - NOT ACTIVE
+                    }
+                    
+                    // ============================================================
+                    // CHECK 2: Check if contract is still active based on dates
+                    // ============================================================
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -963,7 +977,6 @@
                             $todayObj = new DateTime();
                             $todayObj->setTime(0, 0, 0);
                             
-                            // If contract end date is >= today, contract is ACTIVE
                             if ($end >= $todayObj) {
                                 $isContractActive = true;
                             }
@@ -973,42 +986,29 @@
                     }
                     
                     // ============================================================
-                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
+                    // CHECK 3: If contract is ACTIVE (not expired) → ACTIVE
                     // ============================================================
                     if ($isContractActive) {
-                        return true; // ACTIVE - contract still running
+                        return true;
                     }
                     
                     // ============================================================
-                    // RULE 2: Contract is EXPIRED - check loyalties
+                    // CHECK 4: Contract is EXPIRED - check loyalties
                     // ============================================================
-                    
-                    // ACTIVE STATUSES (these users are active even after contract expired)
                     $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
                     
-                    // Check if loyalties matches any active status
                     foreach ($activeStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
-                            return true; // ACTIVE
+                            return true; // ACTIVE - still needs attention
                         }
                     }
                     
-                    // If loyalties is payment-confirmed, user is NOT active
+                    // If loyalties is payment-confirmed → NOT ACTIVE
                     if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
                         return false;
                     }
                     
-                    // If loyalties contains 'cancelled', user is NOT active
-                    if (strpos($loyalties, 'cancelled') !== false) {
-                        return false;
-                    }
-                    
-                    // If loyalties is null or empty AND contract is expired, user is NOT active
-                    if (empty($loyalties)) {
-                        return false;
-                    }
-                    
-                    // ANY other loyalties value with expired contract = NOT active
+                    // ANY other loyalties value with expired contract = NOT ACTIVE
                     return false;
                 }
                 
@@ -1111,6 +1111,7 @@
                 }
 
                 // ===== Helper function to check if user is ACTIVE =====
+                // ===== Helper function to check if user is ACTIVE =====
                 function isUserActive($user, $contractDuration) {
                     // MUST have application_status containing 'approved'
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
@@ -1124,10 +1125,17 @@
                         return false; // No login = skip
                     }
                     
+                    // ============================================================
+                    // CRITICAL: If execution_start_date is NULL → NOT ACTIVE
+                    // ============================================================
+                    $execDate = $user['execution_start_date'] ?? null;
+                    if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
+                        return false; // No active contract
+                    }
+                    
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     
                     // FIRST: Check if contract is still active based on dates
-                    $execDate = $user['execution_start_date'] ?? null;
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -2784,7 +2792,7 @@
                 exit;
             }
             
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, contract_duration, min_profit_for_split FROM {$serverAccountTable} WHERE id = 1");
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, contract_duration, min_profit_for_split, server_share_percent, user_share_percent FROM {$serverAccountTable} WHERE id = 1");
             $stmt->execute();
             $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -2814,6 +2822,8 @@
             // Get contract duration from server account
             $contractDuration = (int)($adminData['contract_duration'] ?? 30);
             $minProfitForSplit = (float)($adminData['min_profit_for_split'] ?? 30);
+            $serverSharePercent = (int)($adminData['server_share_percent'] ?? 30);
+            $userSharePercent = (int)($adminData['user_share_percent'] ?? 70);
             $contractId = $userData['contract_id'] ?? null;
             
             // Get current profit and loss
@@ -2823,22 +2833,21 @@
             $executionStartDate = $userData['execution_start_date'] ?? null;
             
             // ================================================================
-            // ===== CRITICAL FIX: Determine loyalties based on profit =====
+            // ===== DETERMINE LOYALTIES BASED ON PROFIT =====
             // ================================================================
             $loyaltiesToSet = 'contract_cancelled';
-            if ($profitAndLoss > $minProfitForSplit) {
+            $isAboveThreshold = ($profitAndLoss > $minProfitForSplit);
+            
+            if ($isAboveThreshold) {
                 // Profit above threshold - user owes payment
                 $loyaltiesToSet = 'unpaid-payment';
             }
             // else: profit is zero, negative, or below threshold - just cancelled
             
             // Calculate shares based on current profit
-            $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
-            $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
-            
             $serverShare = 0;
             $userShare = 0;
-            if ($profitAndLoss > $minProfitForSplit) {
+            if ($isAboveThreshold) {
                 $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
                 $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
             }
@@ -2889,10 +2898,13 @@
                 }
             }
 
+            // ================================================================
+            // ===== HISTORY RECORD ALWAYS GETS 'contract_cancelled' =====
+            // ================================================================
             if ($existingRecordIndex !== -1) {
                 // ===== UPDATE EXISTING RECORD =====
                 // CRITICAL: loyalty in history ALWAYS remains 'contract_cancelled' for cancelled contracts
-                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled'; // FORCE this value
+                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled';
                 $history[$existingRecordIndex]['cancelled_at'] = date('Y-m-d H:i:s');
                 $history[$existingRecordIndex]['cancelled_by'] = $login_id;
                 $history[$existingRecordIndex]['profit'] = $profitAndLoss;
@@ -2975,30 +2987,35 @@
             $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
             $updateLoyalties->execute([$loyaltiesToSet, $user_id]);
             
-            // ===== SET reset_contract = 1 FOR ALL CANCELLED CONTRACTS =====
+            // ===== Set reset_contract = 1 =====
             $updateReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
             $updateReset->execute([$user_id]);
             
-            // Calculate new execution start date that makes the contract expired
-            $today = new DateTime();
-            $newExecutionDate = clone $today;
-            $daysToSubtract = $contractDuration + 2;
-            $newExecutionDate->modify("-{$daysToSubtract} days");
-            $newExecutionDateStr = $newExecutionDate->format('Y-m-d');
+            // ================================================================
+            // ===== CRITICAL: Clear execution_start_date and contract_id =====
+            // ===== This removes the user from the Active tab          =====
+            // ================================================================
+            $updateExecDate = $pdo->prepare("UPDATE {$source_table} SET execution_start_date = NULL, contract_id = NULL WHERE id = ?");
+            $updateExecDate->execute([$user_id]);
             
-            // Update the user's execution_start_date
-            $updateStmt = $pdo->prepare("UPDATE {$source_table} SET execution_start_date = ? WHERE id = ?");
-            $updateStmt->execute([$newExecutionDateStr, $user_id]);
+            // ================================================================
+            // ===== OPTIONAL: Also clear daily_balance_log and daily_target_met =====
+            // ===== This ensures clean state for future enrollments      =====
+            // ================================================================
+            $updateCleanup = $pdo->prepare("UPDATE {$source_table} SET daily_balance_log = NULL, daily_target_met = NULL WHERE id = ?");
+            $updateCleanup->execute([$user_id]);
             
             echo json_encode([
                 'success' => true,
-                'message' => "Contract cancelled successfully. Profit of $".number_format($profitAndLoss, 2)." recorded. Loyalties set to '{$loyaltiesToSet}'. reset_contract set to 1.",
-                'new_execution_date' => $newExecutionDateStr,
+                'message' => "Contract cancelled successfully. User moved to inactive tab.",
                 'profit_recorded' => $profitAndLoss,
                 'server_share_recorded' => $serverShare,
                 'user_share_recorded' => $userShare,
                 'loyalties_set_to' => $loyaltiesToSet,
-                'reset_contract_set_to' => 1
+                'history_loyalties_set_to' => 'contract_cancelled',
+                'is_above_threshold' => $isAboveThreshold,
+                'reset_contract_set_to' => 1,
+                'execution_start_date_set_to' => null
             ]);
             exit;
         }
@@ -3050,6 +3067,7 @@
             }
             exit;
         }
+        
         // Add this AJAX endpoint to get investor details including revenue history (add to SECTION 5)
         if ($action === 'get_investor_details') {
             $user_id = $_POST['user_id'] ?? '';
@@ -3290,22 +3308,51 @@
 
                 // Helper function to check if user is inactive
                 function isUserInactive($user, $contractDuration, $today) {
-                    // MUST have application_status containing 'approved'
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
-                        return false; // Not approved = skip
+                        return false;
                     }
                     
-                    // MUST have login (not empty)
                     $login = trim($user['login'] ?? '');
                     if (empty($login)) {
-                        return false; // No login = skip
+                        return false;
                     }
                     
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     
-                    // FIRST: Check if contract is still active based on dates
+                    // ============================================================
+                    // CRITICAL: Users with payment statuses go to COMPLETED tab, NOT inactive
+                    // ============================================================
+                    $paymentStatuses = [
+                        'cancelled_contract', 'cancelled-contract',
+                        'contract-cancelled', 'contract_cancelled',
+                        'payment-made', 'payment_made',
+                        'unpaid-payment', 'unpaid_payment', 'unpaid',
+                        'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
+                    ];
+                    
+                    foreach ($paymentStatuses as $status) {
+                        if (strpos($loyalties, $status) !== false) {
+                            return false; // NOT INACTIVE - belongs in COMPLETED tab
+                        }
+                    }
+                    
+                    // ============================================================
+                    // CRITICAL: If execution_start_date is NULL → INACTIVE
+                    // ============================================================
                     $execDate = $user['execution_start_date'] ?? null;
+                    if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
+                        return true; // No active contract = INACTIVE
+                    }
+                    
+                    // ============================================================
+                    // CHECK 1: If loyalties contains 'cancelled' → INACTIVE
+                    // ============================================================
+                    if (strpos($loyalties, 'cancelled') !== false) {
+                        return true; // CANCELLED = INACTIVE
+                    }
+                    
+                    // Check contract dates
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -3318,53 +3365,19 @@
                             $todayObj = new DateTime($today);
                             $todayObj->setTime(0, 0, 0);
                             
-                            // If contract end date is >= today, contract is ACTIVE
                             if ($end >= $todayObj) {
                                 $isContractActive = true;
                             }
                         } catch (Exception $e) {
-                            // If date parsing fails, treat as inactive
                             $isContractActive = false;
                         }
                     }
                     
-                    // ============================================================
-                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
-                    // ============================================================
                     if ($isContractActive) {
-                        return false; // NOT inactive - contract still running
+                        return false; // ACTIVE - not inactive
                     }
                     
-                    // ============================================================
-                    // RULE 2: Contract is EXPIRED - check loyalties
-                    // ============================================================
-                    
-                    // ACTIVE STATUSES (these users are active even after contract expired)
-                    $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
-                    
-                    // If loyalties matches any active status, user is ACTIVE
-                    foreach ($activeStatuses as $status) {
-                        if (strpos($loyalties, $status) !== false) {
-                            return false; // NOT inactive
-                        }
-                    }
-                    
-                    // If loyalties is payment-confirmed, user is INACTIVE (contract completed)
-                    if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
-                        return true; // INACTIVE
-                    }
-                    
-                    // If loyalties contains 'cancelled', user is INACTIVE
-                    if (strpos($loyalties, 'cancelled') !== false) {
-                        return true; // INACTIVE
-                    }
-                    
-                    // If loyalties is null or empty AND contract is expired, user is INACTIVE
-                    if (empty($loyalties)) {
-                        return true; // INACTIVE
-                    }
-                    
-                    // ANY other loyalties value with expired contract = INACTIVE
+                    // Contract is expired, no payment status, not cancelled → INACTIVE
                     return true;
                 }
 
@@ -4386,13 +4399,6 @@
                             <span class="sub-text">IP &amp; System config</span>
                         </span>
                     </a>
-                    <a href="serveraccount.php?view=paid_users" style="display: none;">
-                        <span class="nav-icon">💰</span>
-                        <span class="nav-label">
-                            Revenue Dashboard
-                            <span class="sub-text">Investors Revenue Share</span>
-                        </span>
-                    </a>
                     <a href="serveraccount.php?view=paid_users">
                         <span class="nav-icon">💰</span>
                         <span class="nav-label">
@@ -4412,6 +4418,14 @@
                         <span class="nav-label">
                             Analytics
                             <span class="sub-text">Data &amp; Insights</span>
+                        </span>
+                    </a>
+                    <!-- In the menu navigation section (around line ~1600) -->
+                    <a href="serveraccount.php?view=risk_dictionary">
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-label">
+                            Risk Dictionary
+                            <span class="sub-text">Risk Management &amp; Definitions</span>
                         </span>
                     </a>
                     <a href="serveraccount.php?view=manual">
@@ -4440,18 +4454,16 @@
             <!-- ============================================ -->
             <!-- SECTION 10d: SETTINGS & CONFIGURATION        -->
             <!-- ============================================ -->
-                <?php elseif ($currentView === 'settings'): ?>
-                    <?php include 'settings.php'; ?> 
-                    
-                
-
-                    
+            <?php elseif ($currentView === 'settings'): ?>
+                <?php include 'settings.php'; ?> 
             <!-- ============================================ -->
             <!-- SECTION 10e: REVENUE DASHBOARD               -->
             <!-- ============================================ -->
-                <?php elseif ($currentView === 'paid_users'): ?>
-                    <?php include 'revenue.php'; ?>  
-                <?php endif; ?>
+            <?php elseif ($currentView === 'paid_users'): ?>
+                <?php include 'revenue.php'; ?>  
+            <?php elseif ($currentView === 'risk_dictionary'): ?>
+                <?php include 'risk_dictionary.php'; ?>
+            <?php endif; ?>
                 
             </div>
             

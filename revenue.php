@@ -1845,47 +1845,45 @@
                 return today > end;
             };
 
+            // Helper to check if user has a payment status
+            const hasPaymentStatus = (user) => {
+                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
+                const paymentStatuses = [
+                    'payment-confirmed', 'payment_confirmed',
+                    'payment-made', 'payment_made',
+                    'unpaid-payment', 'unpaid_payment', 'unpaid',
+                    'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
+                ];
+                return paymentStatuses.some(status => l === status || l.includes(status));
+            };
+
             switch(subTab) {
                 case 'inactive-above':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        const isPaymentStatus = l === 'payment-confirmed' || l === 'payment_confirmed' || 
-                                            l === 'payment-made' || l === 'payment_made' || 
-                                            l === 'unpaid-payment' || l === 'unpaid_payment' || 
-                                            l === 'unpaid' || l === 'failed-payment' || 
-                                            l === 'failed_payment' || l === 'payment-failed' || 
-                                            l === 'payment_failed';
-                        
+                        const profit = parseFloat(u.profitandloss) || 0;
                         return isContractEnded(u) && 
-                            (parseFloat(u.profitandloss) || 0) > this.minProfitForSplit && 
-                            !isPaymentStatus;
+                            profit > this.minProfitForSplit && 
+                            !hasPaymentStatus(u) &&
+                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
                     });
                     break;
                 case 'inactive-below':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        const isPaymentStatus = l === 'payment-confirmed' || l === 'payment_confirmed' || 
-                                            l === 'payment-made' || l === 'payment_made' || 
-                                            l === 'unpaid-payment' || l === 'unpaid_payment' || 
-                                            l === 'unpaid' || l === 'failed-payment' || 
-                                            l === 'failed_payment' || l === 'payment-failed' || 
-                                            l === 'payment_failed';
-                        
                         const profit = parseFloat(u.profitandloss) || 0;
-                        return isContractEnded(u) && profit > 0 && profit <= this.minProfitForSplit && !isPaymentStatus;
+                        return isContractEnded(u) && 
+                            profit > 0 && 
+                            profit <= this.minProfitForSplit && 
+                            !hasPaymentStatus(u) &&
+                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
                     });
                     break;
                 case 'inactive-loss':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        const isPaymentStatus = l === 'payment-confirmed' || l === 'payment_confirmed' || 
-                                            l === 'payment-made' || l === 'payment_made' || 
-                                            l === 'unpaid-payment' || l === 'unpaid_payment' || 
-                                            l === 'unpaid' || l === 'failed-payment' || 
-                                            l === 'failed_payment' || l === 'payment-failed' || 
-                                            l === 'payment_failed';
-                        
-                        return isContractEnded(u) && (parseFloat(u.profitandloss) || 0) < 0 && !isPaymentStatus;
+                        const profit = parseFloat(u.profitandloss) || 0;
+                        return isContractEnded(u) && 
+                            profit < 0 && 
+                            !hasPaymentStatus(u) &&
+                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
                     });
                     break;
                 case 'unpaid':
@@ -2483,6 +2481,9 @@
         // ============================================
         // CANCEL CONTRACT
         // ============================================
+        // ============================================
+        // CANCEL CONTRACT (FIXED)
+        // ============================================
         cancelContract: function(userId, source) {
             const self = this;
             
@@ -2520,11 +2521,16 @@
                                 confirmBtn.disabled = false;
                                 
                                 if (data.success) {
-                                    self.showNotification('Contract cancelled successfully!', 'Success', false);
+                                    self.showNotification('Contract cancelled successfully! User moved to inactive tab.', 'Success', false);
+                                    // RELOAD ALL DATA
                                     self.loadActiveUsers();
                                     self.loadCompletedUsers();
                                     self.loadRevenueHistoryUsers();
                                     self.loadInactiveUsers();
+                                    // Also reload unusual users if active
+                                    if (self.currentActiveSubTab === 'unusual') {
+                                        self.loadUnusualUsers();
+                                    }
                                 } else {
                                     if (data.error === 'Invalid password') {
                                         self.showNotification('Password verification failed. Please try again.', 'Error', true);

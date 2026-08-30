@@ -189,8 +189,13 @@
         gap: 16px;
         margin: 20px 0;
     }
-    
-    .nav-menu a {
+
+    /* Target the last child when it's alone in the last row */
+    .nav-menu > a:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
+    }
+
+    .nav-menu > a {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -210,8 +215,8 @@
         overflow: hidden;
         border: 1px solid rgba(255,255,255,0.1);
     }
-    
-    .nav-menu a::before {
+
+    .nav-menu > a::before {
         content: '';
         position: absolute;
         top: 0;
@@ -221,17 +226,17 @@
         background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, transparent 100%);
         pointer-events: none;
     }
-    
-    .nav-menu a:hover {
+
+    .nav-menu > a:hover {
         transform: translateY(-4px) scale(1.02);
         box-shadow: 0 8px 25px rgba(255, 152, 0, 0.4);
         border-color: rgba(255,255,255,0.3);
     }
-    
-    .nav-menu a:active {
+
+    .nav-menu > a:active {
         transform: scale(0.97);
     }
-    
+
     .nav-icon {
         font-size: 2.2rem;
         margin-bottom: 8px;
@@ -240,7 +245,7 @@
         position: relative;
         z-index: 1;
     }
-    
+
     .nav-label {
         font-size: 0.85rem;
         line-height: 1.3;
@@ -250,7 +255,7 @@
         max-width: 100%;
         text-shadow: 0 1px 3px var(--shadow-color);
     }
-    
+
     .nav-label .sub-text {
         display: block;
         font-size: 0.65rem;
@@ -259,20 +264,21 @@
         margin-top: 3px;
         letter-spacing: 0.3px;
     }
-    
-    .nav-menu a:nth-child(1) .nav-icon { color: #ffd700; }
-    .nav-menu a:nth-child(2) .nav-icon { color: #00bcd4; }
-    .nav-menu a:nth-child(3) .nav-icon { color: #4caf50; }
-    .nav-menu a:nth-child(4) .nav-icon { color: #9c27b0; }
-    .nav-menu a:nth-child(5) .nav-icon { color: #ff6b6b; }
-    .nav-menu a:nth-child(6) .nav-icon { color: #ffb74d; }
-    
+
+    .nav-menu > a:nth-child(1) .nav-icon { color: #ffd700; }
+    .nav-menu > a:nth-child(2) .nav-icon { color: #00bcd4; }
+    .nav-menu > a:nth-child(3) .nav-icon { color: #4caf50; }
+    .nav-menu > a:nth-child(4) .nav-icon { color: #9c27b0; }
+    .nav-menu > a:nth-child(5) .nav-icon { color: #ff6b6b; }
+    .nav-menu > a:nth-child(6) .nav-icon { color: #ffb74d; }
+    .nav-menu > a:nth-child(7) .nav-icon { color: #ffd700; }
+
     @media (max-width: 480px) {
         .nav-menu {
             grid-template-columns: 1fr;
             gap: 12px;
         }
-        .nav-menu a {
+        .nav-menu > a {
             min-height: 100px;
             height: 100px;
             padding: 16px;
@@ -290,14 +296,18 @@
         .nav-label .sub-text {
             font-size: 0.7rem;
         }
+        /* In mobile view (1 column), the last item already takes full width */
+        .nav-menu > a:last-child:nth-child(odd) {
+            grid-column: auto;
+        }
     }
-    
+
     @media (min-width: 481px) and (max-width: 768px) {
         .nav-menu {
             grid-template-columns: repeat(2, 1fr);
             gap: 14px;
         }
-        .nav-menu a {
+        .nav-menu > a {
             min-height: 120px;
             height: 120px;
             padding: 18px 12px;
@@ -308,14 +318,18 @@
         .nav-label {
             font-size: 0.8rem;
         }
+        /* Tablet view - odd last item spans full width */
+        .nav-menu > a:last-child:nth-child(odd) {
+            grid-column: 1 / -1;
+        }
     }
-    
+
     @media (min-width: 769px) {
         .nav-menu {
             grid-template-columns: repeat(2, 1fr);
             gap: 20px;
         }
-        .nav-menu a {
+        .nav-menu > a {
             min-height: 150px;
             height: 150px;
             padding: 22px 18px;
@@ -329,15 +343,19 @@
         .nav-label .sub-text {
             font-size: 0.7rem;
         }
+        /* Desktop view - odd last item spans full width */
+        .nav-menu > a:last-child:nth-child(odd) {
+            grid-column: 1 / -1;
+        }
     }
-    
-    .nav-menu:has(a:only-child) {
+
+    .nav-menu:has(> a:only-child) {
         grid-template-columns: 1fr;
         max-width: 400px;
         margin-left: auto;
         margin-right: auto;
     }
-    .nav-menu:has(a:only-child) a {
+    .nav-menu:has(> a:only-child) > a {
         min-height: 120px;
         height: 120px;
     }
@@ -6101,6 +6119,342 @@
 
         .week-label {
             font-size: 13px;
+        }
+    }
+</style>
+
+<style>
+    /* ============================================
+    RISK DICTIONARY STYLES
+    ============================================ */
+
+    .risk-tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 10px;
+        flex-wrap: wrap;
+    }
+
+    .risk-tab-btn {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        color: var(--text-color);
+        cursor: pointer;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: bold;
+        border-radius: 8px 8px 0 0;
+        transition: all 0.3s ease;
+        margin: 0;
+        width: auto;
+    }
+
+    .risk-tab-btn:hover {
+        background: var(--bg-tertiary);
+        transform: translateY(-2px);
+    }
+
+    .risk-tab-btn.active {
+        background: var(--accent-color);
+        color: white;
+        border-color: var(--accent-color);
+    }
+
+    .risk-tab-content {
+        display: none;
+    }
+
+    .risk-tab-content.active {
+        display: block;
+    }
+
+    /* Recovery Table Styles */
+    .recovery-generator-container {
+        padding: 15px 20px;
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        margin-top: 15px;
+    }
+
+    .recovery-form-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px 20px;
+        align-items: end;
+    }
+
+    .recovery-form-group {
+        margin-bottom: 0;
+    }
+
+    .recovery-form-group .form-label {
+        font-weight: bold;
+        margin-bottom: 4px;
+        display: block;
+        font-size: 12px;
+        opacity: 0.8;
+    }
+
+    .recovery-form-group .form-select,
+    .recovery-form-group .form-input {
+        width: 100%;
+        padding: 6px 10px;
+        border: 1px solid var(--border-color);
+        background: var(--input-bg);
+        color: var(--text-color);
+        border-radius: 4px;
+        font-size: 13px;
+        box-sizing: border-box;
+        height: 34px;
+    }
+
+    .recovery-form-group .form-select:focus,
+    .recovery-form-group .form-input:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+
+    .recovery-form-group small {
+        display: none;
+    }
+
+    .recovery-table-wrapper {
+        margin-top: 15px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--bg-secondary);
+        overflow-x: auto;
+    }
+
+    .recovery-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        min-width: 600px;
+    }
+
+    .recovery-table th,
+    .recovery-table td {
+        padding: 8px 12px;
+        text-align: center;
+        border-bottom: 1px solid var(--border-color);
+        min-width: 60px;
+        vertical-align: middle;
+    }
+
+    .recovery-table th {
+        background: var(--table-header-bg);
+        font-weight: bold;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        font-size: 11px;
+    }
+
+    .recovery-table tr:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .recovery-table td:first-child {
+        font-weight: bold;
+    }
+
+    /* Trade Cell Styles */
+    .trade-cell {
+        text-align: left !important;
+        padding: 10px 12px !important;
+        min-width: 180px;
+        vertical-align: top;
+    }
+
+    .trade-data {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 11px;
+        line-height: 1.5;
+    }
+
+    .trade-row {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+
+    .trade-label {
+        font-weight: bold;
+        opacity: 0.7;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .trade-value {
+        font-weight: 600;
+        color: var(--text-color);
+    }
+
+    .trade-sequence {
+        font-family: 'Courier New', monospace;
+        font-size: 10px;
+        color: #f39c12;
+        font-weight: bold;
+        padding: 4px 0 4px 8px;
+        border-left: 2px solid #f39c12;
+        margin: 2px 0 4px 0;
+        line-height: 1.6;
+        word-break: break-word;
+    }
+
+    .trade-sequence br {
+        display: block;
+        content: '';
+    }
+
+    .risk-cap-value {
+        color: #e74c3c;
+        font-weight: bold;
+        font-size: 12px;
+    }
+
+    .management-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 20px;
+        background: var(--table-header-bg);
+        border-bottom: 1px solid var(--border-color);
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .management-header h3 {
+        margin: 0;
+        font-size: 16px;
+    }
+
+    .header-buttons {
+        display: flex;
+        gap: 8px;
+    }
+
+    .refresh-risk-btn {
+        padding: 6px 14px;
+        background: #3498db;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.2s;
+        height: 32px;
+    }
+
+    .refresh-risk-btn:hover {
+        background: #2980b9;
+        transform: translateY(-1px);
+    }
+
+    /* Responsive */
+    @media (max-width: 992px) {
+        .recovery-form-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px 15px;
+        }
+
+        .trade-cell {
+            min-width: 150px;
+            padding: 8px 10px !important;
+        }
+
+        .trade-sequence {
+            font-size: 9px;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .recovery-form-grid {
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .recovery-table {
+            font-size: 10px;
+            min-width: 500px;
+        }
+        
+        .recovery-table th,
+        .recovery-table td {
+            padding: 4px 6px;
+            min-width: 40px;
+        }
+
+        .trade-cell {
+            min-width: 120px;
+            padding: 6px 8px !important;
+        }
+
+        .trade-data {
+            font-size: 10px;
+        }
+
+        .trade-sequence {
+            font-size: 8px;
+            padding: 2px 0 2px 6px;
+        }
+
+        .trade-label {
+            font-size: 9px;
+        }
+
+        .recovery-form-group .form-select,
+        .recovery-form-group .form-input {
+            height: 30px;
+            font-size: 12px;
+            padding: 4px 8px;
+        }
+
+        .recovery-form-group .form-label {
+            font-size: 11px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .recovery-table {
+            font-size: 9px;
+            min-width: 400px;
+        }
+        
+        .recovery-table th,
+        .recovery-table td {
+            padding: 3px 4px;
+            min-width: 30px;
+        }
+
+        .trade-cell {
+            min-width: 100px;
+            padding: 4px 6px !important;
+        }
+
+        .trade-data {
+            font-size: 9px;
+        }
+
+        .trade-sequence {
+            font-size: 7px;
+            padding: 2px 0 2px 4px;
+        }
+
+        .trade-label {
+            font-size: 8px;
+        }
+
+        .management-header h3 {
+            font-size: 14px;
         }
     }
 </style>
