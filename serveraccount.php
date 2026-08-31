@@ -3299,15 +3299,16 @@
             echo json_encode(['success' => true, 'users' => $uniqueUsers]);
             exit;
         }
-        // 5z8: Get Inactive Users (FIXED - Proper active/inactive logic)
+        // 5z8: Get Inactive Users (FIXED - Proper active/inactive logic with cancelled contracts)
         if ($action === 'get_inactive_users') {
             try {
                 $users = array();
                 $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
+                $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
 
                 // Helper function to check if user is inactive
-                function isUserInactive($user, $contractDuration, $today) {
+                function isUserInactive($user, $contractDuration, $today, $minProfitForSplit) {
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
                         return false;
@@ -3319,13 +3320,24 @@
                     }
                     
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    $profitAndLoss = (float)($user['profitandloss'] ?? 0);
                     
                     // ============================================================
-                    // CRITICAL: Users with payment statuses go to COMPLETED tab, NOT inactive
+                    // RULE 1: If contract is CANCELLED
+                    // ============================================================
+                    if (strpos($loyalties, 'cancelled') !== false) {
+                        // If profit > threshold, show in COMPLETED tab (not inactive)
+                        if ($profitAndLoss > $minProfitForSplit) {
+                            return false; // NOT INACTIVE - belongs in COMPLETED tab
+                        }
+                        // If profit <= threshold, show in INACTIVE tab
+                        return true; // INACTIVE
+                    }
+                    
+                    // ============================================================
+                    // RULE 2: Payment statuses go to COMPLETED tab (not inactive)
                     // ============================================================
                     $paymentStatuses = [
-                        'cancelled_contract', 'cancelled-contract',
-                        'contract-cancelled', 'contract_cancelled',
                         'payment-made', 'payment_made',
                         'unpaid-payment', 'unpaid_payment', 'unpaid',
                         'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
@@ -3338,7 +3350,7 @@
                     }
                     
                     // ============================================================
-                    // CRITICAL: If execution_start_date is NULL → INACTIVE
+                    // RULE 3: If execution_start_date is NULL → INACTIVE
                     // ============================================================
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
@@ -3346,13 +3358,8 @@
                     }
                     
                     // ============================================================
-                    // CHECK 1: If loyalties contains 'cancelled' → INACTIVE
+                    // RULE 4: Check if contract is still active
                     // ============================================================
-                    if (strpos($loyalties, 'cancelled') !== false) {
-                        return true; // CANCELLED = INACTIVE
-                    }
-                    
-                    // Check contract dates
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -3377,7 +3384,9 @@
                         return false; // ACTIVE - not inactive
                     }
                     
-                    // Contract is expired, no payment status, not cancelled → INACTIVE
+                    // ============================================================
+                    // RULE 5: Contract is expired, no payment status → INACTIVE
+                    // ============================================================
                     return true;
                 }
 
@@ -3399,7 +3408,7 @@
                         $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            if (isUserInactive($user, $contractDuration, $today)) {
+                            if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit)) {
                                 $user['contract_duration'] = $contractDuration;
                                 $users[] = $user;
                             }
@@ -3427,7 +3436,7 @@
                         $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
-                            if (isUserInactive($user, $contractDuration, $today)) {
+                            if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit)) {
                                 $user['contract_duration'] = $contractDuration;
                                 $users[] = $user;
                             }
@@ -4422,16 +4431,16 @@
                     </a>
                     <!-- In the menu navigation section (around line ~1600) -->
                     <a href="serveraccount.php?view=risk_dictionary">
-                        <span class="nav-icon">📊</span>
+                        <span class="nav-icon">💹</span>
                         <span class="nav-label">
-                            Risk Dictionary
-                            <span class="sub-text">Risk Management &amp; Definitions</span>
+                            Risks Dictionary
+                            <span class="sub-text">Risk Recovery Generator</span>
                         </span>
                     </a>
                     <a href="serveraccount.php?view=manual">
                         <span class="nav-icon">📚</span>
                         <span class="nav-label">
-                            Manual
+                            Manuals
                             <span class="sub-text">Documentation &amp; Guide</span>
                         </span>
                     </a>

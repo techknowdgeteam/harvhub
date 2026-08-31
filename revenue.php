@@ -1845,6 +1845,12 @@
                 return today > end;
             };
 
+            // Helper to check if contract is cancelled
+            const isCancelled = (user) => {
+                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
+                return l === 'contract-cancelled' || l === 'contract_cancelled' || l.includes('cancelled');
+            };
+
             // Helper to check if user has a payment status
             const hasPaymentStatus = (user) => {
                 const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
@@ -1861,10 +1867,11 @@
                 case 'inactive-above':
                     users = users.filter(u => {
                         const profit = parseFloat(u.profitandloss) || 0;
+                        // Contract ended AND profit > threshold
+                        // AND (no payment status OR contract is cancelled with profit > threshold)
                         return isContractEnded(u) && 
                             profit > this.minProfitForSplit && 
-                            !hasPaymentStatus(u) &&
-                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
+                            !hasPaymentStatus(u);
                     });
                     break;
                 case 'inactive-below':
@@ -1874,7 +1881,7 @@
                             profit > 0 && 
                             profit <= this.minProfitForSplit && 
                             !hasPaymentStatus(u) &&
-                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
+                            !isCancelled(u); // Exclude cancelled from below
                     });
                     break;
                 case 'inactive-loss':
@@ -1883,7 +1890,7 @@
                         return isContractEnded(u) && 
                             profit < 0 && 
                             !hasPaymentStatus(u) &&
-                            !(u.current_loyalties || u.loyalties || '').toLowerCase().includes('cancelled');
+                            !isCancelled(u); // Exclude cancelled from loss
                     });
                     break;
                 case 'unpaid':
@@ -3369,20 +3376,45 @@
                 return today > end;
             };
 
+            const isCancelled = (user) => {
+                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
+                return l === 'contract-cancelled' || l === 'contract_cancelled' || l.includes('cancelled');
+            };
+
+            const hasPaymentStatus = (user) => {
+                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
+                const paymentStatuses = [
+                    'payment-confirmed', 'payment_confirmed',
+                    'payment-made', 'payment_made',
+                    'unpaid-payment', 'unpaid_payment', 'unpaid',
+                    'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
+                ];
+                return paymentStatuses.some(status => l === status || l.includes(status));
+            };
+
             users.forEach(u => {
                 const profit = parseFloat(u.profitandloss) || 0;
                 const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
                 
+                // Check if contract is ended (not active)
                 if (isContractEnded(u)) {
-                    if (profit > this.minProfitForSplit) {
+                    // If cancelled with profit > threshold, show in above
+                    if (isCancelled(u) && profit > this.minProfitForSplit) {
                         counts['inactive-above']++;
-                    } else if (profit > 0 && profit <= this.minProfitForSplit) {
-                        counts['inactive-below']++;
-                    } else if (profit < 0) {
-                        counts['inactive-loss']++;
+                    }
+                    // Otherwise, normal inactive logic
+                    else if (!hasPaymentStatus(u) && !isCancelled(u)) {
+                        if (profit > this.minProfitForSplit) {
+                            counts['inactive-above']++;
+                        } else if (profit > 0 && profit <= this.minProfitForSplit) {
+                            counts['inactive-below']++;
+                        } else if (profit < 0) {
+                            counts['inactive-loss']++;
+                        }
                     }
                 }
                 
+                // Payment statuses
                 if (l === 'unpaid-payment' || l === 'unpaid_payment' || l === 'unpaid' || l === 'unpaidpayment') {
                     counts.unpaid++;
                 } else if (l === 'payment-made' || l === 'payment_made' || l === 'paymentmade') {
