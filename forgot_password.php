@@ -1,12 +1,6 @@
 <?php
 session_start();
 
-// ==================== ENABLE DEBUGGING ====================
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-ini_set('log_errors', 1);
-ini_set('error_log', 'error_log.txt');
-
 // ==================== DATABASE CONNECTION ====================
 try {
     $pdo = new PDO(
@@ -16,7 +10,7 @@ try {
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
     );
 } catch (Exception $e) {
-    die("Database connection failed: " . $e->getMessage());
+    die("Database connection failed.");
 }
 
 // ==================== FETCH MAILER CREDENTIALS FROM server_account ====================
@@ -44,15 +38,37 @@ if (empty($mailer_password)) {
     $mailer_password = 'rqcrossbioujepda';
 }
 
-// ==================== SMTP CONFIGURATION ====================
-require_once 'PHPMailer/src/PHPMailer.php';
-require_once 'PHPMailer/src/SMTP.php';
-require_once 'PHPMailer/src/Exception.php';
+// ==================== DETERMINE SOURCE ====================
+// Check if request came from mydashboard.php
+$source = isset($_GET['source']) ? $_GET['source'] : (isset($_SESSION['reset_source']) ? $_SESSION['reset_source'] : 'index');
+// If source is not explicitly set but user is logged in, assume dashboard
+if ($source === 'index' && isset($_SESSION['user_email']) && !empty($_SESSION['user_email'])) {
+    $source = 'dashboard';
+}
+// Store in session for persistence
+$_SESSION['reset_source'] = $source;
 
-function sendOTPEmail($email, $code, $mailer_email, $mailer_password) {
+// If source is 'dashboard' and we have a logged-in email, pre-fill it
+$prefill_email = '';
+if ($source === 'dashboard' && isset($_SESSION['user_email'])) {
+    $prefill_email = $_SESSION['user_email'];
+}
+
+// ==================== FUNCTIONS ====================
+function generateResetCode() {
+    return str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+}
+
+function sendResetEmail($email, $code, $mailer_email, $mailer_password) {
+    // PHPMailer setup - make sure the paths are correct
+    require_once 'PHPMailer/src/PHPMailer.php';
+    require_once 'PHPMailer/src/SMTP.php';
+    require_once 'PHPMailer/src/Exception.php';
+    
     $mail = new PHPMailer\PHPMailer\PHPMailer(true);
     
     try {
+        // Server settings
         $mail->isSMTP();
         $mail->Host       = 'smtp.gmail.com';
         $mail->SMTPAuth   = true;
@@ -61,11 +77,13 @@ function sendOTPEmail($email, $code, $mailer_email, $mailer_password) {
         $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
         $mail->Port       = 587;
         
+        // Recipients
         $mail->setFrom($mailer_email, 'HarvHub Support');
-        $mail->addAddress($email);
+        $mail->addAddress($email); // Sends to the user requesting reset
         
+        // Content
         $mail->isHTML(true);
-        $mail->Subject = 'Verify Your Email - HarvHub';
+        $mail->Subject = 'Password Reset Code - HarvHub';
         $mail->Body    = "
             <html>
             <head>
@@ -79,15 +97,16 @@ function sendOTPEmail($email, $code, $mailer_email, $mailer_password) {
             <body>
                 <div class='container'>
                     <h2 style='text-align:center; color:#2e8b57;'>HarvHub</h2>
-                    <h3 style='text-align:center;'>Email Verification</h3>
-                    <p>Thank you for creating an account with HarvHub. Please verify your email address by entering the following code:</p>
+                    <h3 style='text-align:center;'>Password Reset Request</h3>
+                    <p>We received a request to reset your password. Enter the following verification code:</p>
                     <div class='code'>$code</div>
+                    <p>If you didn't request this, please ignore this email.</p>
                     <div class='footer'>HarvHub Security</div>
                 </div>
             </body>
             </html>
         ";
-        $mail->AltBody = "Your email verification code is: $code\n\nHarvHub Security";
+        $mail->AltBody = "Your password reset code is: $code\n\nHarvHub Security";
         
         $mail->send();
         return true;
@@ -97,71 +116,51 @@ function sendOTPEmail($email, $code, $mailer_email, $mailer_password) {
     }
 }
 
-function generateOTP() {
-    return str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+function storeResetCode($pdo, $email, $code) {
+    // Delete any existing reset codes for this email
+    $stmt = $pdo->prepare("DELETE FROM password_resets WHERE email = ?");
+    $stmt->execute([$email]);
+    
+    // Insert new reset code with no expiry
+    $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 YEAR))");
+    return $stmt->execute([$email, $code]);
 }
 
-function storeOTP($pdo, $email, $code) {
-    try {
-        // Delete any existing OTPs for this email
-        $stmt = $pdo->prepare("DELETE FROM email_verifications WHERE email = ?");
-        $stmt->execute([$email]);
-        
-        // Insert new OTP with expiration (15 minutes)
-        $expires_at = date('Y-m-d H:i:s', strtotime('+15 minutes'));
-        $stmt = $pdo->prepare("INSERT INTO email_verifications (email, otp_code, expires_at) VALUES (?, ?, ?)");
-        return $stmt->execute([$email, $code, $expires_at]);
-    } catch (PDOException $e) {
-        error_log("storeOTP Error: " . $e->getMessage());
-        return false;
+function verifyResetCode($pdo, $email, $code) {
+    $stmt = $pdo->prepare("
+        SELECT id, reset_code, expires_at, used 
+        FROM password_resets 
+        WHERE email = ? 
+        ORDER BY created_at DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$email]);
+    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$record) {
+        return ['valid' => false, 'message' => 'No reset request found.'];
     }
+    
+    if ($record['used'] == 1) {
+        return ['valid' => false, 'message' => 'This code has already been used.'];
+    }
+    
+    if ($record['reset_code'] !== $code) {
+        return ['valid' => false, 'message' => 'Invalid verification code. Please try again.'];
+    }
+    
+    return ['valid' => true, 'message' => 'Code verified successfully.'];
 }
 
-function verifyOTP($pdo, $email, $code) {
-    try {
-        $stmt = $pdo->prepare("
-            SELECT id, otp_code, verified, expires_at 
-            FROM email_verifications 
-            WHERE email = ? 
-            ORDER BY created_at DESC 
-            LIMIT 1
-        ");
-        $stmt->execute([$email]);
-        $record = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if (!$record) {
-            return ['valid' => false, 'message' => 'No verification request found. Please request a new code.'];
-        }
-        
-        if ($record['verified'] == 1) {
-            return ['valid' => false, 'message' => 'This email has already been verified.'];
-        }
-        
-        // Check if OTP has expired
-        $expires_at = strtotime($record['expires_at']);
-        if ($expires_at < time()) {
-            return ['valid' => false, 'message' => 'Verification code has expired. Please request a new code.'];
-        }
-        
-        if ($record['otp_code'] !== $code) {
-            return ['valid' => false, 'message' => 'Invalid verification code. Please try again.'];
-        }
-        
-        return ['valid' => true, 'message' => 'Email verified successfully!'];
-    } catch (PDOException $e) {
-        error_log("verifyOTP Error: " . $e->getMessage());
-        return ['valid' => false, 'message' => 'Database error occurred. Please try again.'];
-    }
+function markCodeAsUsed($pdo, $email) {
+    $stmt = $pdo->prepare("UPDATE password_resets SET used = 1 WHERE email = ? ORDER BY created_at DESC LIMIT 1");
+    return $stmt->execute([$email]);
 }
 
-function markEmailVerified($pdo, $email) {
-    try {
-        $stmt = $pdo->prepare("UPDATE email_verifications SET verified = 1 WHERE email = ? ORDER BY created_at DESC LIMIT 1");
-        return $stmt->execute([$email]);
-    } catch (PDOException $e) {
-        error_log("markEmailVerified Error: " . $e->getMessage());
-        return false;
-    }
+function updatePassword($pdo, $email, $new_password) {
+    $hashed = password_hash($new_password, PASSWORD_DEFAULT);
+    $stmt = $pdo->prepare("UPDATE harvhub SET password = ? WHERE email = ?");
+    return $stmt->execute([$hashed, $email]);
 }
 
 function maskEmail($email) {
@@ -178,313 +177,193 @@ function maskEmail($email) {
     return $masked . '@' . $domain;
 }
 
-// ==================== GET SOURCE ====================
-$source = isset($_GET['source']) ? $_GET['source'] : (isset($_SESSION['verify_source']) ? $_SESSION['verify_source'] : 'index');
-$_SESSION['verify_source'] = $source;
+// ==================== HANDLE ACTIONS ====================
+$email = $_SESSION['reset_email'] ?? $prefill_email;
+$step = $_SESSION['reset_step'] ?? 'request'; // request, verify, reset
+$error = $_SESSION['reset_error'] ?? '';
+$success = $_SESSION['reset_success'] ?? '';
 
-// Determine return URL based on source
-if ($source === 'dev_login') {
-    $return_url = 'dev_login.php';
-} elseif ($source === 'app') {
-    $return_url = 'app.php';
-} elseif ($source === 'mydashboard') {
-    $return_url = 'mydashboard.php';
-} else {
-    $return_url = 'index.php';
-}
-
-// ==================== GET SESSION DATA ====================
-$email = $_SESSION['pending_verification_email'] ?? '';
-$step = $_SESSION['otp_step'] ?? 'request';
-$error = $_SESSION['otp_error'] ?? '';
-$success = $_SESSION['otp_success'] ?? '';
-$return_to = $_SESSION['return_after_verify'] ?? $return_url;
-
-// ==================== HANDLE REQUEST OTP ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_otp') {
-    $email = trim(strtolower($_POST['email'] ?? ''));
+// ==================== HANDLE REQUEST CODE ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_reset') {
+    $email = trim(strtolower($_POST['reset_email'] ?? ''));
     
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $_SESSION['otp_error'] = 'Please enter a valid email address.';
-        header('Location: verify_email.php?source=' . $source);
+        $_SESSION['reset_error'] = 'Please enter a valid email address.';
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     }
     
-    // Check if user already exists
-    $stmt = $pdo->prepare("SELECT id, email_verified FROM harvhub WHERE email = ? LIMIT 1");
+    // Check if user exists
+    $stmt = $pdo->prepare("SELECT id, email FROM harvhub WHERE email = ? LIMIT 1");
     $stmt->execute([$email]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if ($user && $user['email_verified'] == 1) {
-        $_SESSION['otp_error'] = 'This email is already verified. Please login.';
-        header('Location: verify_email.php?source=' . $source);
+    if (!$user) {
+        $_SESSION['reset_error'] = 'No account found with this email address.';
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     }
     
-    // Generate and store OTP
-    $code = generateOTP();
-    $maskedEmail = maskEmail($email);
+    // Generate and store reset code
+    $code = generateResetCode();
     
-    if (!storeOTP($pdo, $email, $code)) {
-        $_SESSION['otp_error'] = 'Failed to generate verification code. Please try again.';
-        header('Location: verify_email.php?source=' . $source);
+    if (!storeResetCode($pdo, $email, $code)) {
+        $_SESSION['reset_error'] = 'Failed to generate reset code. Please try again.';
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     }
     
     // Send email using credentials from server_account
-    if (sendOTPEmail($email, $code, $mailer_email, $mailer_password)) {
-        $_SESSION['pending_verification_email'] = $email;
-        $_SESSION['otp_step'] = 'verify';
-        $_SESSION['otp_success'] = "A verification code has been sent to {$maskedEmail}.";
-        unset($_SESSION['otp_error']);
+    if (sendResetEmail($email, $code, $mailer_email, $mailer_password)) {
+        $_SESSION['reset_email'] = $email;
+        $_SESSION['reset_step'] = 'verify';
+        $_SESSION['reset_success'] = 'A verification code has been sent to your email.';
     } else {
-        $_SESSION['otp_error'] = 'Failed to send verification email. Please try again or contact support.';
+        $_SESSION['reset_error'] = 'Failed to send email. Please try again or contact support.';
     }
     
-    header('Location: verify_email.php?source=' . $source);
+    header('Location: forgot_password.php?source=' . $source);
     exit;
 }
 
-// ==================== HANDLE VERIFY OTP ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'verify_otp') {
-    $code = trim($_POST['otp_code'] ?? '');
-    $email = $_SESSION['pending_verification_email'] ?? '';
-    
-    // Debug logging
-    error_log("=== VERIFICATION ATTEMPT ===");
-    error_log("Email: " . $email);
-    error_log("Code: " . $code);
-    error_log("Session data: " . print_r($_SESSION, true));
+// ==================== HANDLE VERIFY CODE ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'verify_code') {
+    $code = trim($_POST['reset_code'] ?? '');
+    $email = $_SESSION['reset_email'] ?? '';
     
     if (empty($email)) {
-        $_SESSION['otp_error'] = 'Session expired. Please start over.';
-        $_SESSION['otp_step'] = 'request';
-        unset($_SESSION['pending_verification_email']);
-        header('Location: verify_email.php?source=' . $source);
+        $_SESSION['reset_error'] = 'Session expired. Please start over.';
+        $_SESSION['reset_step'] = 'request';
+        unset($_SESSION['reset_email']);
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     }
     
     if (empty($code) || strlen($code) !== 6) {
-        $_SESSION['otp_error'] = 'Please enter the complete 6-digit verification code.';
-        header('Location: verify_email.php?source=' . $source);
+        $_SESSION['reset_error'] = 'Please enter the complete 6-digit verification code.';
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     }
     
-    $result = verifyOTP($pdo, $email, $code);
-    error_log("Verification result: " . print_r($result, true));
+    $result = verifyResetCode($pdo, $email, $code);
     
     if ($result['valid']) {
-        try {
-            // Start transaction
-            $pdo->beginTransaction();
-            
-            // Mark email as verified in the verification table
-            $markResult = markEmailVerified($pdo, $email);
-            error_log("Mark verified result: " . ($markResult ? 'true' : 'false'));
-            
-            // ==================== CREATE/UPDATE USER ACCOUNT ====================
-            $hashed_password = $_SESSION['pending_verification_password'] ?? '';
-            $fullname = $_SESSION['pending_verification_fullname'] ?? '';
-            
-            error_log("Hashed password exists: " . (!empty($hashed_password) ? 'yes' : 'no'));
-            error_log("Fullname: " . $fullname);
-            
-            // Check if user already exists
-            $stmt = $pdo->prepare("SELECT id, email_verified FROM harvhub WHERE email = ? LIMIT 1");
-            $stmt->execute([$email]);
-            $existing = $stmt->fetch();
-            
-            error_log("User exists: " . ($existing ? 'yes' : 'no'));
-            
-            if ($existing) {
-                // User exists - update them
-                error_log("Updating existing user");
-                if (!empty($hashed_password)) {
-                    $stmt = $pdo->prepare("UPDATE harvhub SET password = ?, email_verified = 1 WHERE email = ?");
-                    $result = $stmt->execute([$hashed_password, $email]);
-                    error_log("Update with password result: " . ($result ? 'true' : 'false'));
-                } else {
-                    $stmt = $pdo->prepare("UPDATE harvhub SET email_verified = 1 WHERE email = ?");
-                    $result = $stmt->execute([$email]);
-                    error_log("Update without password result: " . ($result ? 'true' : 'false'));
-                }
-            } else {
-                // New user - create account
-                error_log("Creating new user");
-                
-                // Check if fullname is set, if not use default or email username
-                if (empty($fullname)) {
-                    $fullname = explode('@', $email)[0];
-                    error_log("Fullname was empty, using default: " . $fullname);
-                }
-                
-                if (!empty($hashed_password)) {
-                    $stmt = $pdo->prepare("INSERT INTO harvhub (email, fullname, password, email_verified) VALUES (?, ?, ?, 1)");
-                    $result = $stmt->execute([$email, $fullname, $hashed_password]);
-                    error_log("Insert result: " . ($result ? 'true' : 'false'));
-                    
-                    if (!$result) {
-                        error_log("Insert failed. Error info: " . print_r($stmt->errorInfo(), true));
-                    }
-                } else {
-                    // This shouldn't happen for new users, but handle it
-                    error_log("ERROR: Missing password for new user");
-                    $_SESSION['otp_error'] = 'Missing password information. Please try signing up again.';
-                    header('Location: verify_email.php?source=' . $source);
-                    exit;
-                }
-            }
-            
-            // Commit transaction
-            $pdo->commit();
-            error_log("Transaction committed successfully");
-            
-            $_SESSION['otp_step'] = 'success';
-            $_SESSION['otp_success'] = $result['message'];
-            unset($_SESSION['otp_error']);
-            
-            // Store in session that email is verified
-            $_SESSION['email_verified'] = true;
-            $_SESSION['user_email'] = $email;
-            
-            // Clear signup temp data
-            unset($_SESSION['pending_verification_password']);
-            unset($_SESSION['pending_verification_fullname']);
-            unset($_SESSION['signup_in_progress']);
-            
-            error_log("=== VERIFICATION SUCCESSFUL ===");
-            
-        } catch (PDOException $e) {
-            // Rollback transaction on error
-            $pdo->rollBack();
-            
-            // Log the actual error for debugging
-            error_log("Database error during verification: " . $e->getMessage());
-            error_log("SQL State: " . $e->getCode());
-            error_log("Error details: " . print_r($e, true));
-            
-            // Show user-friendly error
-            $_SESSION['otp_error'] = 'An error occurred while creating your account. Error: ' . $e->getMessage();
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            error_log("General error during verification: " . $e->getMessage());
-            $_SESSION['otp_error'] = 'An unexpected error occurred: ' . $e->getMessage();
-        }
-        
+        markCodeAsUsed($pdo, $email);
+        $_SESSION['reset_step'] = 'reset';
+        $_SESSION['reset_success'] = 'Code verified! Please set your new password.';
+        unset($_SESSION['reset_error']);
     } else {
-        $_SESSION['otp_error'] = $result['message'];
-        error_log("Verification failed: " . $result['message']);
+        $_SESSION['reset_error'] = $result['message'];
     }
     
-    header('Location: verify_email.php?source=' . $source);
+    header('Location: forgot_password.php?source=' . $source);
     exit;
 }
 
-// ==================== HANDLE RESEND OTP ====================
+// ==================== HANDLE RESET PASSWORD ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reset_password') {
+    $new_password = $_POST['new_password'] ?? '';
+    $confirm_password = $_POST['confirm_password'] ?? '';
+    $email = $_SESSION['reset_email'] ?? '';
+    
+    if (empty($email) || $_SESSION['reset_step'] !== 'reset') {
+        $_SESSION['reset_error'] = 'Session expired. Please start over.';
+        $_SESSION['reset_step'] = 'request';
+        unset($_SESSION['reset_email']);
+        header('Location: forgot_password.php?source=' . $source);
+        exit;
+    }
+    
+    if (empty($new_password) || strlen($new_password) < 4) {
+        $_SESSION['reset_error'] = 'Password must be at least 4 characters long.';
+        header('Location: forgot_password.php?source=' . $source);
+        exit;
+    }
+    
+    if ($new_password !== $confirm_password) {
+        $_SESSION['reset_error'] = 'Passwords do not match.';
+        header('Location: forgot_password.php?source=' . $source);
+        exit;
+    }
+    
+    if (updatePassword($pdo, $email, $new_password)) {
+        // Clear reset session
+        unset($_SESSION['reset_email']);
+        unset($_SESSION['reset_step']);
+        unset($_SESSION['reset_success']);
+        $_SESSION['reset_error'] = '';
+        
+        // Set success flag for the modal
+        $_SESSION['reset_complete'] = true;
+        $_SESSION['reset_complete_email'] = $email;
+        
+        header('Location: forgot_password.php?source=' . $source . '&reset_complete=1');
+        exit;
+    } else {
+        $_SESSION['reset_error'] = 'Failed to update password. Please try again.';
+        header('Location: forgot_password.php?source=' . $source);
+        exit;
+    }
+}
+
+// ==================== HANDLE RESEND CODE ====================
 if (isset($_GET['resend']) && $_GET['resend'] === '1') {
-    $email = $_SESSION['pending_verification_email'] ?? '';
+    $email = $_SESSION['reset_email'] ?? '';
     
     if (!empty($email)) {
-        $code = generateOTP();
-        $maskedEmail = maskEmail($email);
+        $code = generateResetCode();
         
-        if (storeOTP($pdo, $email, $code)) {
-            if (sendOTPEmail($email, $code, $mailer_email, $mailer_password)) {
-                $_SESSION['otp_success'] = "A new verification code has been sent to {$maskedEmail}.";
-                unset($_SESSION['otp_error']);
+        if (storeResetCode($pdo, $email, $code)) {
+            if (sendResetEmail($email, $code, $mailer_email, $mailer_password)) {
+                $_SESSION['reset_success'] = 'A new verification code has been sent to your email.';
             } else {
-                $_SESSION['otp_error'] = 'Failed to send email. Please try again.';
+                $_SESSION['reset_error'] = 'Failed to send email. Please try again.';
             }
         } else {
-            $_SESSION['otp_error'] = 'Failed to generate new code. Please try again.';
+            $_SESSION['reset_error'] = 'Failed to generate new code. Please try again.';
         }
     }
     
-    header('Location: verify_email.php?source=' . $source);
+    header('Location: forgot_password.php?source=' . $source);
     exit;
 }
 
 // ==================== HANDLE CANCEL ====================
 if (isset($_GET['cancel'])) {
-    // Check if this was an approved user
-    $is_approved = $_SESSION['is_approved_user'] ?? false;
-    
-    // Clear all verification session variables
-    unset($_SESSION['pending_verification_email']);
-    unset($_SESSION['otp_step']);
-    unset($_SESSION['otp_success']);
-    unset($_SESSION['otp_error']);
-    unset($_SESSION['email_verified']);
-    unset($_SESSION['is_approved_user']);
-    unset($_SESSION['return_after_verify']);
-    unset($_SESSION['verify_source']);
-    
-    // For approved users, just go back to dashboard (they're still logged in)
-    // For others, logout completely
-    if ($is_approved) {
-        header('Location: ' . $return_url);
-    } else {
-        unset($_SESSION['user_email']);
-        session_destroy();
-        header('Location: ' . $return_url);
-    }
-    exit;
-}
-
-// ==================== HANDLE CONTINUE ====================
-if (isset($_GET['continue'])) {
-    if (isset($_SESSION['email_verified']) && $_SESSION['email_verified'] === true) {
-        $return_to = $_SESSION['return_after_verify'] ?? $return_url;
-        $is_approved = $_SESSION['is_approved_user'] ?? false;
-        
-        // Clear verification sessions
-        unset($_SESSION['pending_verification_email']);
-        unset($_SESSION['otp_step']);
-        unset($_SESSION['otp_success']);
-        unset($_SESSION['otp_error']);
-        unset($_SESSION['is_approved_user']);
-        unset($_SESSION['return_after_verify']);
-        unset($_SESSION['verify_source']);
-        
-        // Redirect to appropriate page
-        header('Location: ' . $return_to);
-        exit;
-    }
-    // If not verified, stay on verify page
-    header('Location: verify_email.php?source=' . $source);
+    // Determine where to redirect based on source
+    $redirect_url = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
+    unset($_SESSION['reset_email']);
+    unset($_SESSION['reset_step']);
+    unset($_SESSION['reset_success']);
+    unset($_SESSION['reset_error']);
+    header('Location: ' . $redirect_url);
     exit;
 }
 
 // ==================== GET CURRENT STATE ====================
-$email = $_SESSION['pending_verification_email'] ?? '';
-$step = $_SESSION['otp_step'] ?? 'request';
-$error = $_SESSION['otp_error'] ?? '';
-$success = $_SESSION['otp_success'] ?? '';
+$email = $_SESSION['reset_email'] ?? $prefill_email;
+$step = $_SESSION['reset_step'] ?? 'request';
+$error = $_SESSION['reset_error'] ?? '';
+$success = $_SESSION['reset_success'] ?? '';
+$reset_complete = isset($_GET['reset_complete']) || isset($_SESSION['reset_complete']);
+$complete_email = $_SESSION['reset_complete_email'] ?? '';
+
+if ($reset_complete) {
+    unset($_SESSION['reset_complete']);
+    unset($_SESSION['reset_complete_email']);
+}
+
 $maskedEmail = !empty($email) ? maskEmail($email) : '';
 
-// Clear error/success after display
-unset($_SESSION['otp_error']);
-unset($_SESSION['otp_success']);
-
 // Determine back link based on source
-$back_link = $return_url;
-
-// Debug info for the page
-$debug_info = [
-    'email' => $email,
-    'step' => $step,
-    'source' => $source,
-    'session' => $_SESSION,
-    'has_password' => isset($_SESSION['pending_verification_password']) ? 'yes' : 'no',
-    'has_fullname' => isset($_SESSION['pending_verification_fullname']) ? 'yes' : 'no'
-];
+$back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<title>Verify Email - HarvHub</title>
+<title>Forgot Password - HarvHub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
     /* ==================== CSS VARIABLES ==================== */
@@ -492,7 +371,7 @@ $debug_info = [
         --bg-primary: #000;
         --bg-secondary: rgba(20, 20, 30, 0.95);
         --bg-input: #1a1a2e;
-        --bg-success-details: rgba(46, 139, 87, 0.1);
+        --bg-modal: #1a1a2e;
         --bg-overlay-start: #1a0033;
         --bg-overlay-end: #000033;
         --text-primary: #e4e6eb;
@@ -507,14 +386,12 @@ $debug_info = [
         --error-color: #ff6b6b;
         --error-bg: rgba(255, 107, 107, 0.1);
         --success-bg: rgba(46, 139, 87, 0.1);
-        --badge-bg: rgba(46, 139, 87, 0.2);
+        --source-badge-bg: rgba(46, 139, 87, 0.2);
+        --modal-overlay: rgba(0,0,0,0.7);
         --btn-text: #000;
         --scrollbar-track: #1a1a2e;
         --scrollbar-thumb: #2e8b57;
         --scrollbar-thumb-hover: #3a9b67;
-        --dot-color: white;
-        --debug-bg: rgba(255, 200, 0, 0.1);
-        --debug-text: #ffaa00;
     }
 
     /* ==================== LIGHT MODE OVERRIDES ==================== */
@@ -523,7 +400,7 @@ $debug_info = [
             --bg-primary: #f0f2f5;
             --bg-secondary: rgba(255, 255, 255, 0.95);
             --bg-input: #ffffff;
-            --bg-success-details: rgba(46, 139, 87, 0.08);
+            --bg-modal: #ffffff;
             --bg-overlay-start: #e8f0e8;
             --bg-overlay-end: #d4e8d4;
             --text-primary: #1a1a2e;
@@ -538,17 +415,15 @@ $debug_info = [
             --error-color: #dc3545;
             --error-bg: rgba(220, 53, 69, 0.08);
             --success-bg: rgba(46, 139, 87, 0.08);
-            --badge-bg: rgba(46, 139, 87, 0.15);
+            --source-badge-bg: rgba(46, 139, 87, 0.15);
+            --modal-overlay: rgba(0,0,0,0.4);
             --btn-text: #fff;
             --scrollbar-track: #e8e8e8;
             --scrollbar-thumb: #2e8b57;
             --scrollbar-thumb-hover: #3a9b67;
-            --dot-color: #666;
-            --debug-bg: rgba(255, 200, 0, 0.05);
-            --debug-text: #996600;
         }
         
-        /* Light mode specific overrides */
+        /* Light mode specific overrides for better contrast */
         .container {
             border: 1px solid rgba(0,0,0,0.08);
             box-shadow: 0 20px 60px rgba(0,0,0,0.1);
@@ -614,6 +489,38 @@ $debug_info = [
             box-shadow: 0 0 15px rgba(46, 139, 87, 0.15);
         }
         
+        .password-toggle {
+            color: #999;
+        }
+        
+        .password-toggle:hover {
+            color: #2e8b57;
+        }
+        
+        .modal-content {
+            background: #ffffff;
+            border: 1px solid rgba(46, 139, 87, 0.2);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        
+        .modal-content h2 {
+            color: #2e8b57;
+        }
+        
+        .modal-content p {
+            color: #555;
+        }
+        
+        .source-badge {
+            background: rgba(46, 139, 87, 0.15);
+            color: #2e8b57;
+        }
+        
+        .email-display {
+            background: rgba(46, 139, 87, 0.05);
+            color: #2e8b57;
+        }
+        
         .back-link a {
             color: #2e8b57;
         }
@@ -634,30 +541,22 @@ $debug_info = [
             color: #555;
         }
         
+        .subtitle {
+            color: #777;
+        }
+        
         .description {
             color: #555;
         }
         
-        .email-display {
-            background: rgba(46, 139, 87, 0.05);
-            color: #2e8b57;
+        .email-prefill-hint {
+            color: #777;
         }
         
-        .status-badge {
-            background: rgba(46, 139, 87, 0.15);
-            color: #2e8b57;
-        }
-        
-        .success-details {
-            background: rgba(46, 139, 87, 0.08);
-        }
-        
-        .success-details p {
-            color: #555;
-        }
-        
-        .success-details strong {
-            color: #2e8b57;
+        .modal-overlay {
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
         }
         
         /* Light mode scrollbar */
@@ -722,22 +621,16 @@ $debug_info = [
             box-shadow: 0 0 15px rgba(46, 139, 87, 0.2);
         }
         
-        .success-details {
-            background: rgba(46, 139, 87, 0.1);
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid rgba(46, 139, 87, 0.3);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9);
         }
         
-        .success-details p {
-            color: #aaa;
-        }
-        
-        .success-details strong {
-            color: #2e8b57;
-        }
-        
-        .debug-container {
-            background: rgba(255, 200, 0, 0.05);
-            border: 1px solid rgba(255, 200, 0, 0.2);
-            color: #ffaa00;
+        .modal-overlay {
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
         }
     }
 
@@ -774,7 +667,7 @@ $debug_info = [
         background: 
             radial-gradient(circle at 20% 80%, var(--bg-overlay-start) 0%, transparent 50%),
             radial-gradient(circle at 80% 20%, var(--bg-overlay-end) 0%, transparent 50%),
-            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23' . (isset($_COOKIE['prefers_color_scheme']) && $_COOKIE['prefers_color_scheme'] === 'light' ? '999' : 'fff') . '"/><circle cx="30" cy="70" r="1.5" fill="%23' . (isset($_COOKIE['prefers_color_scheme']) && $_COOKIE['prefers_color_scheme'] === 'light' ? '999' : 'fff') . '"/><circle cx="70" cy="30" r="1" fill="%23' . (isset($_COOKIE['prefers_color_scheme']) && $_COOKIE['prefers_color_scheme'] === 'light' ? '999' : 'fff') . '"/><circle cx="90" cy="80" r="1.2" fill="%23' . (isset($_COOKIE['prefers_color_scheme']) && $_COOKIE['prefers_color_scheme'] === 'light' ? '999' : 'fff') . '"/><circle cx="50" cy="50" r="1.8" fill="%23' . (isset($_COOKIE['prefers_color_scheme']) && $_COOKIE['prefers_color_scheme'] === 'light' ? '999' : 'fff') . '"/></svg>') repeat;
+            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23666"/><circle cx="30" cy="70" r="1.5" fill="%23666"/><circle cx="70" cy="30" r="1" fill="%23666"/><circle cx="90" cy="80" r="1.2" fill="%23666"/><circle cx="50" cy="50" r="1.8" fill="%23666"/></svg>') repeat;
         background-size: cover, cover, 120px 120px;
         opacity: 0.5;
         pointer-events: none;
@@ -829,6 +722,14 @@ $debug_info = [
         scrollbar-width: thin;
         scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
         transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .subtitle {
+        text-align: center;
+        color: var(--text-muted);
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+        transition: color 0.3s ease;
     }
     
     h2 {
@@ -998,6 +899,11 @@ $debug_info = [
         cursor: not-allowed;
     }
     
+    .code-input-container input.expired {
+        border-color: var(--error-color);
+        opacity: 0.5;
+    }
+    
     .resend-link {
         text-align: center;
         margin: 12px 0 5px;
@@ -1033,29 +939,36 @@ $debug_info = [
         transition: color 0.3s ease;
     }
     
-    .success-icon {
-        font-size: 4rem;
-        text-align: center;
-        margin: 10px 0;
+    .password-wrapper {
+        position: relative;
+        margin-bottom: 10px;
     }
     
-    .success-details {
-        border-radius: 12px;
-        padding: 15px;
-        margin: 15px 0;
-        transition: background 0.3s ease;
+    .password-wrapper input {
+        padding-right: 55px;
     }
     
-    .success-details p {
-        margin: 5px 0;
-        transition: color 0.3s ease;
+    .password-toggle {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        cursor: pointer;
+        font-size: 0.8rem;
+        user-select: none;
+        background: transparent;
+        border: none;
+        padding: 4px 8px;
+        border-radius: 5px;
+        transition: color 0.2s ease;
+        -webkit-tap-highlight-color: transparent;
     }
     
-    .success-details strong {
-        transition: color 0.3s ease;
+    .password-toggle:active {
+        color: var(--input-focus);
     }
     
-    .status-badge {
+    .source-badge {
         display: inline-block;
         padding: 4px 12px;
         border-radius: 20px;
@@ -1066,40 +979,52 @@ $debug_info = [
         transition: background 0.3s ease, color 0.3s ease;
     }
     
-    /* ==================== DEBUG STYLES ==================== */
-    .debug-container {
-        margin-top: 20px;
-        padding: 15px;
-        border-radius: 10px;
-        background: var(--debug-bg);
-        border: 1px solid rgba(255, 200, 0, 0.2);
-        font-family: 'Courier New', monospace;
-        font-size: 11px;
-        overflow-x: auto;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        max-height: 200px;
-        overflow-y: auto;
-        color: var(--debug-text);
-        display: <?php echo isset($_GET['debug']) ? 'block' : 'none'; ?>;
-    }
-    
-    .debug-toggle {
+    .email-prefill-hint {
         text-align: center;
-        margin-top: 10px;
-        font-size: 0.7rem;
+        font-size: 0.8rem;
+        margin-bottom: 15px;
+        transition: color 0.3s ease;
     }
     
-    .debug-toggle a {
-        color: var(--text-muted);
-        text-decoration: none;
-        cursor: pointer;
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 20px;
+        overflow: hidden;
+        transition: background 0.3s ease, backdrop-filter 0.3s ease;
     }
     
-    .debug-toggle a:hover {
-        text-decoration: underline;
+    .modal-overlay.active {
+        display: flex;
     }
-
+    
+    .modal-content {
+        border-radius: 20px;
+        padding: 30px 25px;
+        max-width: 450px;
+        width: 100%;
+        text-align: center;
+        max-height: 90vh;
+        overflow-y: auto;
+        transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .modal-content .icon {
+        font-size: 3.5rem;
+        margin-bottom: 12px;
+    }
+    
+    .modal-content p {
+        margin-bottom: 20px;
+        line-height: 1.5;
+        font-size: 0.95rem;
+        transition: color 0.3s ease;
+    }
+    
     /* ==================== RESPONSIVE ==================== */
     @media (max-width: 480px) {
         .container {
@@ -1126,12 +1051,11 @@ $debug_info = [
             padding: 10px;
             font-size: 0.9rem;
         }
-        .success-icon {
-            font-size: 3rem;
+        .modal-content {
+            padding: 25px 20px;
         }
-        .debug-container {
-            font-size: 10px;
-            max-height: 150px;
+        .modal-content .icon {
+            font-size: 3rem;
         }
     }
     
@@ -1146,6 +1070,13 @@ $debug_info = [
         }
         .container {
             padding: 15px 12px;
+        }
+        .email-display {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+        }
+        .description {
+            font-size: 0.8rem;
         }
     }
     
@@ -1179,36 +1110,47 @@ $debug_info = [
 
 <div class="container">
     <?php if ($step === 'request'): ?>
-        <!-- STEP 1: Request OTP -->
-        <h2>Verify Your Email</h2>
-        <p class="description">We'll send a verification code to <strong><?= htmlspecialchars($maskedEmail) ?></strong> to verify your email.</p>
+        <!-- STEP 1: Request Reset Code -->
+        <h2>Forgot Password?</h2>
+        
+        <?php if ($source === 'dashboard'): ?>
+            <p class="description">We'll send a verification code to <strong><?= htmlspecialchars($prefill_email) ?></strong> to reset your password.</p>
+        <?php else: ?>
+            <p class="description">Enter the email address associated with your account. We'll send a verification code to reset your password.</p>
+        <?php endif; ?>
         
         <?php if (!empty($error)): ?>
             <div class="error-message"><?= htmlspecialchars($error) ?></div>
         <?php endif; ?>
         
-        <form method="POST" action="verify_email.php?source=<?= htmlspecialchars($source) ?>">
-            <input type="hidden" name="action" value="request_otp">
+        <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="requestForm">
+            <input type="hidden" name="action" value="request_reset">
             
-            <label for="email" style="display: none;">Email Address</label>
-            <input type="email" name="email" id="email" placeholder="youremail@gmail.com" value="<?= htmlspecialchars($email) ?>" required autofocus style="display: none;">
+            <?php if ($source === 'dashboard'): ?>
+                <input type="hidden" name="reset_email" value="<?= htmlspecialchars($prefill_email) ?>">
+            <?php else: ?>
+                <label for="reset_email">Email Address</label>
+                <input type="email" name="reset_email" id="reset_email" placeholder="youremail@gmail.com" value="<?= htmlspecialchars($email) ?>" required>
+            <?php endif; ?>
+            
             <button type="submit" class="btn">Send Verification Code</button>
         </form>
         
         <div class="back-link">
-            <a href="verify_email.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel &amp; Return</a>
+            <a href="<?= $back_link ?>">Back to <?= ($source === 'dashboard') ? 'Dashboard' : 'Login' ?></a>
         </div>
 
     <?php elseif ($step === 'verify'): ?>
-        <!-- STEP 2: Verify OTP -->
-        <h2>Enter Verification Code</h2>
+        <!-- STEP 2: Verify Code -->
+        <h2>Reset Password</h2>
         <p class="success-message">We sent a 6-digit verification code to <?= htmlspecialchars($maskedEmail) ?></p>
+        
         <?php if (!empty($error)): ?>
             <div class="error-message"><?= htmlspecialchars($error) ?></div>
         <?php endif; ?>
         
-        <form method="POST" action="verify_email.php?source=<?= htmlspecialchars($source) ?>" id="verifyForm">
-            <input type="hidden" name="action" value="verify_otp">
+        <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="verifyForm">
+            <input type="hidden" name="action" value="verify_code">
             <label>Enter 6-Digit Code</label>
             <div class="code-input-container" id="codeContainer">
                 <input type="text" maxlength="1" class="code-input" data-index="0" autofocus required inputmode="numeric" pattern="[0-9]">
@@ -1218,61 +1160,91 @@ $debug_info = [
                 <input type="text" maxlength="1" class="code-input" data-index="4" required inputmode="numeric" pattern="[0-9]">
                 <input type="text" maxlength="1" class="code-input" data-index="5" required inputmode="numeric" pattern="[0-9]">
             </div>
-            <input type="hidden" name="otp_code" id="otpCodeHidden" value="">
+            <input type="hidden" name="reset_code" id="resetCodeHidden" value="">
             
-            <button type="submit" class="btn" id="verifyBtn">Verify Email</button>
+            <button type="submit" class="btn" id="verifyBtn">Verify Code</button>
         </form>
         
         <div class="resend-link">
-            <a href="verify_email.php?resend=1&source=<?= htmlspecialchars($source) ?>" id="resendLink">Resend Code</a> &nbsp;|&nbsp;
-            <a href="verify_email.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel</a>
+            <a href="forgot_password.php?resend=1&source=<?= htmlspecialchars($source) ?>" id="resendLink">Resend Code</a> &nbsp;|&nbsp;
+            <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel</a>
         </div>
 
-    <?php elseif ($step === 'success'): ?>
-        <!-- STEP 3: Success -->
-        <div class="success-icon">✅</div>
-        <h2>Email Verified!</h2>
-        <p class="description">Your email has been successfully verified. You can now proceed to complete your registration.</p>
+    <?php elseif ($step === 'reset'): ?>
+        <!-- STEP 3: Set New Password -->
+        <h2>Set New Password</h2>
+        <p class="description">Create a new password for your account. Make sure it's something you'll remember.</p>
         
-        <div class="success-details">
-            <p><strong>Email:</strong> <?= htmlspecialchars($email) ?></p>
-            <p><strong>Status:</strong> <span style="color: #2e8b57;">Verified ✓</span></p>
-        </div>
+        <?php if (!empty($error)): ?>
+            <div class="error-message"><?= htmlspecialchars($error) ?></div>
+        <?php endif; ?>
         
-        <button class="btn" onclick="window.location.href='verify_email.php?continue=1&source=<?= htmlspecialchars($source) ?>'">Continue to Registration</button>
+        <?php if (!empty($success)): ?>
+            <div class="success-message"><?= htmlspecialchars($success) ?></div>
+        <?php endif; ?>
+        
+        <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="resetForm">
+            <input type="hidden" name="action" value="reset_password">
+            
+            <label for="new_password">New Password</label>
+            <div class="password-wrapper">
+                <input type="password" name="new_password" id="new_password" placeholder="Min 4 characters" required>
+                <button type="button" class="password-toggle" onclick="togglePassword('new_password', this)">Show</button>
+            </div>
+            
+            <label for="confirm_password">Confirm Password</label>
+            <div class="password-wrapper">
+                <input type="password" name="confirm_password" id="confirm_password" placeholder="Confirm your new password" required>
+                <button type="button" class="password-toggle" onclick="togglePassword('confirm_password', this)">Show</button>
+            </div>
+            
+            <button type="submit" class="btn">Update Password</button>
+        </form>
         
         <div class="back-link">
-            <a href="verify_email.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel &amp; Return</a>
+            <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel</a>
         </div>
+
     <?php endif; ?>
 
     <div class="footer">Secure your account</div>
-    
-    <!-- Debug Toggle -->
-    <div class="debug-toggle">
-        <a href="#" onclick="document.getElementById('debugInfo').style.display = document.getElementById('debugInfo').style.display === 'none' ? 'block' : 'none'; return false;">Toggle Debug Info</a>
-    </div>
-    
-    <!-- Debug Information -->
-    <div class="debug-container" id="debugInfo">
-        <strong>DEBUG INFORMATION:</strong>
-        <br>Email: <?= htmlspecialchars($debug_info['email']) ?>
-        <br>Step: <?= htmlspecialchars($debug_info['step']) ?>
-        <br>Source: <?= htmlspecialchars($debug_info['source']) ?>
-        <br>Has Password: <?= $debug_info['has_password'] ?>
-        <br>Has Fullname: <?= $debug_info['has_fullname'] ?>
-        <br>
-        <br><strong>Session Data:</strong>
-        <?= htmlspecialchars(print_r($debug_info['session'], true)) ?>
+</div>
+
+<!-- Success Modal -->
+<div class="modal-overlay <?= $reset_complete ? 'active' : '' ?>" id="successModal">
+    <div class="modal-content">
+        <div class="icon">✅</div>
+        <h2>Password Updated!</h2>
+        <p>Your password has been successfully reset. You can now log in to your account with your new password.</p>
+        <button class="btn" onclick="closeSuccessModal()">Return to <?= ($source === 'dashboard') ? 'Dashboard' : 'Login' ?></button>
     </div>
 </div>
 
 <script>
     // ==================== PREVENT SCROLLING AND PULL-TO-REFRESH ====================
     document.addEventListener('DOMContentLoaded', function() {
+        // Prevent touchmove on body
         document.body.addEventListener('touchmove', function(e) {
             if (!e.target.closest('.container')) {
                 e.preventDefault();
+            }
+        }, { passive: false });
+        
+        // Prevent pull-to-refresh
+        document.addEventListener('touchstart', function(e) {
+            const scrollable = e.target.closest('.container');
+            if (!scrollable) {
+                // Allow only if touching the container
+            }
+        }, { passive: true });
+        
+        // Disable back gesture on iOS
+        document.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 1) {
+                const touchX = e.touches[0].clientX;
+                if (touchX < 20) {
+                    e.preventDefault();
+                }
             }
         }, { passive: false });
     });
@@ -1280,10 +1252,11 @@ $debug_info = [
     // ==================== CODE INPUT AUTO-ADVANCE ====================
     document.addEventListener('DOMContentLoaded', function() {
         const codeInputs = document.querySelectorAll('.code-input');
-        const hiddenInput = document.getElementById('otpCodeHidden');
+        const hiddenInput = document.getElementById('resetCodeHidden');
         const verifyBtn = document.getElementById('verifyBtn');
         
         if (codeInputs.length > 0) {
+            // Focus first input on load
             setTimeout(function() {
                 if (codeInputs[0] && !codeInputs[0].disabled) {
                     codeInputs[0].focus();
@@ -1291,36 +1264,44 @@ $debug_info = [
             }, 100);
             
             codeInputs.forEach((input, index) => {
+                // Force numeric keyboard
                 input.setAttribute('inputmode', 'numeric');
                 input.setAttribute('pattern', '[0-9]');
                 
                 input.addEventListener('input', function(e) {
+                    // Allow only digits
                     this.value = this.value.replace(/\D/g, '');
                     
+                    // Auto-advance to next input
                     if (this.value.length === 1 && index < codeInputs.length - 1) {
                         codeInputs[index + 1].focus();
                     }
                     
+                    // Update hidden input with complete code
                     updateHiddenCode();
                 });
                 
                 input.addEventListener('keydown', function(e) {
+                    // Backspace goes to previous
                     if (e.key === 'Backspace' && this.value === '' && index > 0) {
                         codeInputs[index - 1].focus();
                         codeInputs[index - 1].value = '';
                         updateHiddenCode();
                     }
                     
+                    // Left arrow goes to previous
                     if (e.key === 'ArrowLeft' && index > 0) {
                         e.preventDefault();
                         codeInputs[index - 1].focus();
                     }
                     
+                    // Right arrow goes to next
                     if (e.key === 'ArrowRight' && index < codeInputs.length - 1) {
                         e.preventDefault();
                         codeInputs[index + 1].focus();
                     }
                     
+                    // Enter key submits the form
                     if (e.key === 'Enter') {
                         e.preventDefault();
                         let allFilled = true;
@@ -1333,6 +1314,7 @@ $debug_info = [
                     }
                 });
                 
+                // Allow paste
                 input.addEventListener('paste', function(e) {
                     e.preventDefault();
                     const paste = (e.clipboardData || window.clipboardData).getData('text');
@@ -1345,6 +1327,7 @@ $debug_info = [
                         }
                     });
                     
+                    // Focus on the next empty input or the last one
                     let nextIndex = Math.min(digitArray.length, codeInputs.length - 1);
                     if (nextIndex < codeInputs.length) {
                         codeInputs[nextIndex].focus();
@@ -1353,6 +1336,7 @@ $debug_info = [
                     updateHiddenCode();
                 });
                 
+                // Handle focus to select all text
                 input.addEventListener('focus', function() {
                     this.select();
                 });
@@ -1370,22 +1354,49 @@ $debug_info = [
         }
     });
 
-    // ==================== AUTO-REDIRECT AFTER SUCCESS ====================
-    <?php if ($step === 'success'): ?>
-    setTimeout(function() {
-        window.location.href = 'verify_email.php?continue=1&source=<?= htmlspecialchars($source) ?>';
-    }, 5000);
-    <?php endif; ?>
-    
-    // ==================== LOG DEBUG INFO TO CONSOLE ====================
-    console.log('=== HarvHub Verification Debug ===');
-    console.log('Email:', '<?= htmlspecialchars($debug_info['email']) ?>');
-    console.log('Step:', '<?= htmlspecialchars($debug_info['step']) ?>');
-    console.log('Source:', '<?= htmlspecialchars($debug_info['source']) ?>');
-    console.log('Has Password:', '<?= $debug_info['has_password'] ?>');
-    console.log('Has Fullname:', '<?= $debug_info['has_fullname'] ?>');
-    console.log('Session:', <?= json_encode($debug_info['session']) ?>);
-    console.log('===================================');
+    // ==================== PASSWORD TOGGLE ====================
+    function togglePassword(inputId, button) {
+        const input = document.getElementById(inputId);
+        if (input.type === 'password') {
+            input.type = 'text';
+            button.textContent = 'Hide';
+        } else {
+            input.type = 'password';
+            button.textContent = 'Show';
+        }
+    }
+
+    // ==================== SUCCESS MODAL ====================
+    function closeSuccessModal() {
+        document.getElementById('successModal').classList.remove('active');
+        <?php if ($source === 'dashboard'): ?>
+            window.location.href = 'mydashboard.php';
+        <?php else: ?>
+            window.location.href = 'index.php';
+        <?php endif; ?>
+    }
+
+    // Auto-close modal after 5 seconds
+    document.addEventListener('DOMContentLoaded', function() {
+        const modal = document.getElementById('successModal');
+        if (modal.classList.contains('active')) {
+            setTimeout(function() {
+                closeSuccessModal();
+            }, 5000);
+        }
+    });
+
+    // Close modal on overlay click
+    document.addEventListener('DOMContentLoaded', function() {
+        const modal = document.getElementById('successModal');
+        if (modal) {
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeSuccessModal();
+                }
+            });
+        }
+    });
 </script>
 
 </body>

@@ -4,8 +4,8 @@
     $user = "if0_40473107";
     $pass = "InDQmdl53FZ85";
     $serverAccountTable = "server_account";
-    $insidersServerTable = "insiders_server";
-    $insidersTable = "insiders";
+    $harvhubTable = "harvhub_server";
+    $harvhubTable = "harvhub";
 
     $message = "";
     $authenticated = false;

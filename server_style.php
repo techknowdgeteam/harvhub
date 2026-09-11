@@ -54,7 +54,7 @@
         --tag-saved-color: #90caf9;
         --tag-temp-bg: #3d2d00;
         --tag-temp-color: #ffc107;
-        --modal-overlay: rgba(0,0,0,0.6);
+        --settings_modal-overlay: rgba(0,0,0,0.6);
         --shadow-color: rgba(0,0,0,0.3);
         --shadow-light: rgba(0,0,0,0.5);
     }
@@ -89,7 +89,7 @@
             --tag-saved-color: #0d47a1;
             --tag-temp-bg: #fff3e0;
             --tag-temp-color: #e65100;
-            --modal-overlay: rgba(0,0,0,0.4);
+            --settings_modal-overlay: rgba(0,0,0,0.4);
             --shadow-color: rgba(0,0,0,0.1);
             --shadow-light: rgba(0,0,0,0.2);
         }
@@ -410,13 +410,13 @@
         font-size: 1.1rem;
     }
 
-    .modal { 
+    .settings_modal { 
         display: none; 
         position: fixed; 
         z-index: 1000; 
         left: 0; top: 0; 
         width: 100%; height: 100%; 
-        background-color: var(--modal-overlay); 
+        background-color: var(--settings_modal-overlay); 
         backdrop-filter: blur(5px);
         align-items: center;
         justify-content: center;
@@ -425,8 +425,8 @@
         transition: opacity 0.3s;
         padding: 20px;
     }
-    .modal.show { display: flex; opacity: 1; pointer-events: all; }
-    .modal-content { 
+    .settings_modal.show { display: flex; opacity: 1; pointer-events: all; }
+    .settings_modal-content { 
         background-color: var(--container-bg); 
         padding: 25px; 
         border-radius: 20px; 
@@ -436,14 +436,14 @@
         transform: scale(0.9);
         transition: transform 0.3s;
     }
-    .modal.show .modal-content { transform: scale(1); }
-    .modal-content h3 { color: var(--danger-color); margin-top: 0; }
-    .modal-content p { margin-bottom: 20px; color: var(--text-muted); }
-    .modal-content input[type="password"] { margin: 10px 0 20px; }
-    .modal-buttons { display: flex; gap: 12px; }
-    .modal-buttons button { width: 48%; margin-top: 0; }
-    #modal-cancel-btn { background-color: #7f8c8d; }
-    #modal-cancel-btn:hover { background-color: #6a7a7a; }
+    .settings_modal.show .settings_modal-content { transform: scale(1); }
+    .settings_modal-content h3 { color: var(--danger-color); margin-top: 0; }
+    .settings_modal-content p { margin-bottom: 20px; color: var(--text-muted); }
+    .settings_modal-content input[type="password"] { margin: 10px 0 20px; }
+    .settings_modal-buttons { display: flex; gap: 12px; }
+    .settings_modal-buttons button { width: 48%; margin-top: 0; }
+    #settings_modal-cancel-btn { background-color: #7f8c8d; }
+    #settings_modal-cancel-btn:hover { background-color: #6a7a7a; }
 
     hr { border: 0; border-top: 1px solid var(--border-color); margin: 30px 0; }
 
@@ -706,8 +706,8 @@
         box-shadow: none;
     }
     
-    /* Password Modal for column removal */
-    #column-password-modal {
+    /* Password settings_modal for column removal */
+    #column-password-settings_modal {
         display: none;
         position: fixed;
         z-index: 1000;
@@ -716,14 +716,14 @@
         width: 100%;
         height: 100%;
         overflow: auto;
-        background-color: var(--modal-overlay);
+        background-color: var(--settings_modal-overlay);
         backdrop-filter: blur(5px);
         align-items: center;
         justify-content: center;
         padding: 20px;
     }
     
-    #column-password-modal .modal-content {
+    #column-password-settings_modal .settings_modal-content {
         background-color: var(--container-bg);
         padding: 25px;
         border-radius: 20px;
@@ -735,19 +735,19 @@
         transition: transform 0.3s;
     }
     
-    #column-password-modal .modal-content h3 {
+    #column-password-settings_modal .settings_modal-content h3 {
         color: var(--danger-color);
         margin-bottom: 8px;
         margin-top: 0;
     }
     
-    #column-password-modal .modal-content .modal-subtitle {
+    #column-password-settings_modal .settings_modal-content .settings_modal-subtitle {
         color: var(--text-muted);
         font-size: 14px;
         margin-bottom: 15px;
     }
     
-    #column-password-modal .modal-content input[type="password"] {
+    #column-password-settings_modal .settings_modal-content input[type="password"] {
         margin: 10px 0 20px;
         width: 100%;
         padding: 12px;
@@ -758,18 +758,18 @@
         font-size: 16px;
     }
     
-    #column-password-modal .modal-content input[type="password"]:focus {
+    #column-password-settings_modal .settings_modal-content input[type="password"]:focus {
         border-color: var(--danger-color);
         outline: none;
         box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.2);
     }
     
-    #column-password-modal .modal-buttons {
+    #column-password-settings_modal .settings_modal-buttons {
         display: flex;
         gap: 12px;
     }
     
-    #column-password-modal .modal-buttons button {
+    #column-password-settings_modal .settings_modal-buttons button {
         width: 48%;
         padding: 12px;
         border: none;
@@ -781,23 +781,23 @@
         margin-top: 0;
     }
     
-    #column-password-modal .modal-buttons .btn-cancel-password {
+    #column-password-settings_modal .settings_modal-buttons .btn-cancel-password {
         background-color: #7f8c8d;
         color: white;
     }
     
-    #column-password-modal .modal-buttons .btn-cancel-password:hover {
+    #column-password-settings_modal .settings_modal-buttons .btn-cancel-password:hover {
         background-color: #6a7a7a;
         box-shadow: none;
         transform: none;
     }
     
-    #column-password-modal .modal-buttons .btn-confirm-password {
+    #column-password-settings_modal .settings_modal-buttons .btn-confirm-password {
         background-color: var(--danger-color);
         color: white;
     }
     
-    #column-password-modal .modal-buttons .btn-confirm-password:hover {
+    #column-password-settings_modal .settings_modal-buttons .btn-confirm-password:hover {
         background-color: var(--danger-hover);
         box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
     }
@@ -876,18 +876,18 @@
             width: 100%;
         }
         
-        #column-password-modal .modal-content {
+        #column-password-settings_modal .settings_modal-content {
             margin: 10% auto;
             padding: 20px;
             max-width: 90%;
         }
         
-        #column-password-modal .modal-buttons {
+        #column-password-settings_modal .settings_modal-buttons {
             flex-direction: column;
             gap: 8px;
         }
         
-        #column-password-modal .modal-buttons button {
+        #column-password-settings_modal .settings_modal-buttons button {
             width: 100%;
         }
         
@@ -896,9 +896,9 @@
         }
     }
     /* ============================================
-   PASSWORD MODAL STYLES
+   PASSWORD settings_modal STYLES
    ============================================ */
-    #settings-password-modal {
+    #settings-password-settings_modal {
         display: none;
         position: fixed;
         z-index: 9999;
@@ -906,7 +906,7 @@
         top: 0;
         width: 100%;
         height: 100%;
-        background-color: var(--modal-overlay);
+        background-color: var(--settings_modal-overlay);
         backdrop-filter: blur(5px);
         align-items: center;
         justify-content: center;
@@ -916,7 +916,7 @@
         transition: opacity 0.3s ease;
     }
 
-    #settings-password-modal .modal-content {
+    #settings-password-settings_modal .settings_modal-content {
         background-color: var(--container-bg);
         padding: 30px;
         border-radius: 20px;
@@ -929,21 +929,21 @@
         border: 1px solid var(--border-color);
     }
 
-    #settings-password-modal .modal-content h3 {
+    #settings-password-settings_modal .settings_modal-content h3 {
         color: var(--accent-color);
         margin-bottom: 8px;
         margin-top: 0;
         font-size: 1.2rem;
     }
 
-    #settings-password-modal .modal-content p {
+    #settings-password-settings_modal .settings_modal-content p {
         color: var(--text-muted);
         font-size: 14px;
         margin-bottom: 15px;
         line-height: 1.5;
     }
 
-    #settings-password-modal .modal-content input[type="password"] {
+    #settings-password-settings_modal .settings_modal-content input[type="password"] {
         width: 100%;
         padding: 12px 15px;
         border: 2px solid var(--border-color);
@@ -956,18 +956,18 @@
         transition: border-color 0.3s;
     }
 
-    #settings-password-modal .modal-content input[type="password"]:focus {
+    #settings-password-settings_modal .settings_modal-content input[type="password"]:focus {
         border-color: var(--accent-color);
         outline: none;
         box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.15);
     }
 
-    #settings-password-modal .modal-buttons {
+    #settings-password-settings_modal .settings_modal-buttons {
         display: flex;
         gap: 12px;
     }
 
-    #settings-password-modal .modal-buttons button {
+    #settings-password-settings_modal .settings_modal-buttons button {
         width: 48%;
         padding: 12px;
         border: none;
@@ -979,33 +979,33 @@
         margin-top: 0;
     }
 
-    #settings-password-modal .modal-buttons #settings-modal-cancel {
+    #settings-password-settings_modal .settings_modal-buttons #settings-settings_modal-cancel {
         background-color: #7f8c8d;
         color: white;
     }
 
-    #settings-password-modal .modal-buttons #settings-modal-cancel:hover {
+    #settings-password-settings_modal .settings_modal-buttons #settings-settings_modal-cancel:hover {
         background-color: #6a7a7a;
         transform: none;
         box-shadow: none;
     }
 
-    #settings-password-modal .modal-buttons #settings-modal-confirm {
+    #settings-password-settings_modal .settings_modal-buttons #settings-settings_modal-confirm {
         background-color: var(--primary-color);
         color: white;
     }
 
-    #settings-password-modal .modal-buttons #settings-modal-confirm:hover {
+    #settings-password-settings_modal .settings_modal-buttons #settings-settings_modal-confirm:hover {
         background-color: var(--primary-hover);
         box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
     }
 
-    #settings-password-modal .modal-buttons #settings-modal-confirm:active {
+    #settings-password-settings_modal .settings_modal-buttons #settings-settings_modal-confirm:active {
         transform: scale(0.97);
     }
 
-    /* Custom Modal (Success/Error) Styles */
-    .modal-overlay#custom-modal-overlay {
+    /* Custom settings_modal (Success/Error) Styles */
+    .settings_modal-overlay#custom-settings_modal-overlay {
         display: flex;
         position: fixed;
         z-index: 10000;
@@ -1013,19 +1013,19 @@
         top: 0;
         width: 100%;
         height: 100%;
-        background-color: var(--modal-overlay);
+        background-color: var(--settings_modal-overlay);
         backdrop-filter: blur(4px);
         align-items: center;
         justify-content: center;
         padding: 20px;
     }
 
-    .modal-overlay#custom-modal-overlay .custom-modal {
+    .settings_modal-overlay#custom-settings_modal-overlay .custom-settings_modal {
         max-width: 450px;
-        animation: modalSlideIn 0.3s ease;
+        animation: settings_modalSlideIn 0.3s ease;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-header {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-header {
         padding: 15px 20px;
         border-bottom: 1px solid var(--border-color);
         display: flex;
@@ -1035,23 +1035,23 @@
         font-size: 1.1rem;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-body {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-body {
         padding: 25px 20px;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-close {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-close {
         cursor: pointer;
         font-size: 20px;
         opacity: 0.7;
         transition: opacity 0.2s;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-close:hover {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-close:hover {
         opacity: 1;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-confirm-btn,
-    .modal-overlay#custom-modal-overlay .modal-cancel-btn {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-confirm-btn,
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-cancel-btn {
         padding: 10px 24px;
         border: none;
         border-radius: 8px;
@@ -1061,26 +1061,26 @@
         transition: all 0.2s ease;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-confirm-btn {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-confirm-btn {
         background-color: var(--primary-color);
         color: white;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-confirm-btn:hover {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-confirm-btn:hover {
         background-color: var(--primary-hover);
         box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
     }
 
-    .modal-overlay#custom-modal-overlay .modal-cancel-btn {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-cancel-btn {
         background-color: #7f8c8d;
         color: white;
     }
 
-    .modal-overlay#custom-modal-overlay .modal-cancel-btn:hover {
+    .settings_modal-overlay#custom-settings_modal-overlay .settings_modal-cancel-btn:hover {
         background-color: #6a7a7a;
     }
 
-    @keyframes modalSlideIn {
+    @keyframes settings_modalSlideIn {
         from {
             transform: scale(0.8) translateY(20px);
             opacity: 0;
@@ -1091,23 +1091,23 @@
         }
     }
 
-    /* Mobile responsiveness for modals */
+    /* Mobile responsiveness for settings_modals */
     @media (max-width: 600px) {
-        #settings-password-modal .modal-content {
+        #settings-password-settings_modal .settings_modal-content {
             padding: 20px;
             margin: 10px;
         }
         
-        #settings-password-modal .modal-buttons {
+        #settings-password-settings_modal .settings_modal-buttons {
             flex-direction: column;
             gap: 8px;
         }
         
-        #settings-password-modal .modal-buttons button {
+        #settings-password-settings_modal .settings_modal-buttons button {
             width: 100%;
         }
         
-        .modal-overlay#custom-modal-overlay .custom-modal {
+        .settings_modal-overlay#custom-settings_modal-overlay .custom-settings_modal {
             margin: 10px;
             max-width: 100%;
         }
@@ -1159,7 +1159,7 @@
         box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
     }
     /* ============================================
-    USER SELECTION MODAL STYLES (Analytics Style)
+    USER SELECTION accountmanagementmodal STYLES (Analytics Style)
     ============================================ */
 
     /* Users Sidebar Header - Search Button */
@@ -1197,11 +1197,11 @@
         opacity: 0.7;
     }
     /* ============================================
-    EDIT JSON MODAL STYLES
+    EDIT JSON accountmanagementmodal STYLES
     ============================================ */
 
-    /* Modal Container Large */
-    .modal-container.modal-large {
+    /* accountmanagementmodal Container Large */
+    .accountmanagementmodal-container.accountmanagementmodal-large {
         width: 800px;
         max-width: 95vw;
         max-height: 90vh;
@@ -1209,15 +1209,15 @@
     }
 
     @media (max-width: 768px) {
-        .modal-container.modal-large {
+        .accountmanagementmodal-container.accountmanagementmodal-large {
             width: 98vw;
             max-height: 95vh;
             min-height: 300px;
         }
     }
 
-    /* Modal Overlay for all modals */
-    .modal-overlay {
+    /* accountmanagementmodal Overlay for all accountmanagementmodals */
+    .accountmanagementmodal-overlay {
         position: fixed;
         top: 0;
         left: 0;
@@ -1230,11 +1230,11 @@
         align-items: center;
         justify-content: center;
         padding: 20px;
-        animation: modalFadeIn 0.3s ease;
+        animation: accountmanagementmodalFadeIn 0.3s ease;
     }
 
-    /* Modal Container */
-    .modal-container {
+    /* accountmanagementmodal Container */
+    .accountmanagementmodal-container {
         background: var(--container-bg, #1e1e2a);
         border-radius: 12px;
         max-width: 95%;
@@ -1243,12 +1243,12 @@
         flex-direction: column;
         border: 1px solid var(--border-color, #3a3a4a);
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        animation: modalSlideIn 0.3s ease;
+        animation: accountmanagementmodalSlideIn 0.3s ease;
         overflow: hidden;
     }
 
-    /* Modal Header */
-    .modal-header {
+    /* accountmanagementmodal Header */
+    .accountmanagementmodal-header {
         padding: 15px 20px;
         background: var(--table-header-bg, #2d2d3a);
         border-bottom: 1px solid var(--border-color, #3a3a4a);
@@ -1261,12 +1261,12 @@
         flex-shrink: 0;
     }
 
-    .modal-header h3 {
+    .accountmanagementmodal-header h3 {
         margin: 0;
         font-size: 16px;
     }
 
-    .modal-header .modal-close {
+    .accountmanagementmodal-header .accountmanagementmodal-close {
         cursor: pointer;
         font-size: 20px;
         width: 30px;
@@ -1280,21 +1280,21 @@
         flex-shrink: 0;
     }
 
-    .modal-header .modal-close:hover {
+    .accountmanagementmodal-header .accountmanagementmodal-close:hover {
         background: var(--accent-color, #3498db);
         color: white;
     }
 
-    /* Modal Body */
-    .modal-body {
+    /* accountmanagementmodal Body */
+    .accountmanagementmodal-body {
         padding: 20px;
         overflow-y: auto;
         flex: 1;
         overflow-x: hidden;
     }
 
-    /* Modal Buttons */
-    .modal-confirm-btn {
+    /* accountmanagementmodal Buttons */
+    .accountmanagementmodal-confirm-btn {
         background: #27ae60;
         color: white;
         border: none;
@@ -1305,12 +1305,12 @@
         transition: all 0.2s;
     }
 
-    .modal-confirm-btn:hover {
+    .accountmanagementmodal-confirm-btn:hover {
         background: #229954;
         transform: translateY(-1px);
     }
 
-    .modal-cancel-btn {
+    .accountmanagementmodal-cancel-btn {
         background: #e74c3c;
         color: white;
         border: none;
@@ -1321,12 +1321,12 @@
         transition: all 0.2s;
     }
 
-    .modal-cancel-btn:hover {
+    .accountmanagementmodal-cancel-btn:hover {
         background: #c0392b;
         transform: translateY(-1px);
     }
 
-    /* JSON Editor in Modal */
+    /* JSON Editor in accountmanagementmodal */
     #edit-json-textarea {
         font-family: 'Courier New', monospace;
         font-size: 13px;
@@ -1340,7 +1340,7 @@
     }
 
     /* Animations */
-    @keyframes modalFadeIn {
+    @keyframes accountmanagementmodalFadeIn {
         from {
             opacity: 0;
         }
@@ -1349,7 +1349,7 @@
         }
     }
 
-    @keyframes modalSlideIn {
+    @keyframes accountmanagementmodalSlideIn {
         from {
             transform: translateY(-30px);
             opacity: 0;
@@ -1366,7 +1366,7 @@
         pointer-events: none;
     }
 
-    /* Password Input in Modal */
+    /* Password Input in accountmanagementmodal */
     .json-password-input {
         width: 100%;
         padding: 10px;
@@ -1410,16 +1410,16 @@
         display: none !important;
     }
 
-    /* Responsive modal adjustments */
+    /* Responsive accountmanagementmodal adjustments */
     @media (max-width: 768px) {
-        .modal-container {
+        .accountmanagementmodal-container {
             max-width: 100%;
             max-height: 100vh;
             border-radius: 8px;
             margin: 5px;
         }
         
-        .modal-body {
+        .accountmanagementmodal-body {
             padding: 12px;
         }
         
@@ -1430,12 +1430,12 @@
     }
 
     @media (max-width: 480px) {
-        .modal-header {
+        .accountmanagementmodal-header {
             font-size: 14px;
             padding: 12px 15px;
         }
         
-        .modal-body {
+        .accountmanagementmodal-body {
             padding: 10px;
         }
         
@@ -1509,8 +1509,8 @@
         margin: 0 auto 10px;
     }
 
-    /* Modal Overlay - matches analytics */
-    .modal-overlay {
+    /* accountmanagementmodal Overlay - matches analytics */
+    .accountmanagementmodal-overlay {
         position: fixed;
         top: 0;
         left: 0;
@@ -1523,10 +1523,10 @@
         align-items: center;
         justify-content: center;
         padding: 20px;
-        animation: modalFadeIn 0.3s ease;
+        animation: accountmanagementmodalFadeIn 0.3s ease;
     }
 
-    @keyframes modalFadeIn {
+    @keyframes accountmanagementmodalFadeIn {
         from {
             opacity: 0;
             transform: scale(0.95);
@@ -1537,7 +1537,7 @@
         }
     }
 
-    .modal-container {
+    .accountmanagementmodal-container {
         background: var(--container-bg);
         border-radius: 12px;
         max-width: 95%;
@@ -1547,11 +1547,11 @@
         flex-direction: column;
         border: 1px solid var(--border-color);
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        animation: modalSlideIn 0.3s ease;
+        animation: accountmanagementmodalSlideIn 0.3s ease;
         overflow: hidden;
     }
 
-    @keyframes modalSlideIn {
+    @keyframes accountmanagementmodalSlideIn {
         from {
             transform: translateY(-30px);
             opacity: 0;
@@ -1562,11 +1562,11 @@
         }
     }
 
-    .modal-container.users-modal {
+    .accountmanagementmodal-container.users-accountmanagementmodal {
         width: 500px;
     }
 
-    .modal-header {
+    .accountmanagementmodal-header {
         padding: 15px 20px;
         background: var(--table-header-bg);
         border-bottom: 1px solid var(--border-color);
@@ -1579,7 +1579,7 @@
         flex-shrink: 0;
     }
 
-    .modal-close {
+    .accountmanagementmodal-close {
         cursor: pointer;
         font-size: 20px;
         width: 30px;
@@ -1593,30 +1593,30 @@
         flex-shrink: 0;
     }
 
-    .modal-close:hover {
+    .accountmanagementmodal-close:hover {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-body {
+    .accountmanagementmodal-body {
         padding: 20px;
         overflow-y: auto;
         flex: 1;
         overflow-x: hidden;
     }
 
-    /* Users Modal Styles */
-    .users-modal-search {
+    /* Users accountmanagementmodal Styles */
+    .users-accountmanagementmodal-search {
         margin-bottom: 15px;
     }
 
-    .users-modal-list {
+    .users-accountmanagementmodal-list {
         max-height: calc(85vh - 120px);
         overflow-y: auto;
         overflow-x: hidden;
     }
 
-    .modal-user-item {
+    .accountmanagementmodal-user-item {
         padding: 12px 15px;
         border-bottom: 1px solid var(--border-color);
         cursor: pointer;
@@ -1627,35 +1627,35 @@
         overflow-wrap: break-word;
     }
 
-    .modal-user-item:hover {
+    .accountmanagementmodal-user-item:hover {
         background: var(--bg-tertiary);
         transform: translateX(5px);
     }
 
-    .modal-user-item.selected {
+    .accountmanagementmodal-user-item.selected {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-user-item.selected .modal-user-email,
-    .modal-user-item.selected .modal-user-id {
+    .accountmanagementmodal-user-item.selected .accountmanagementmodal-user-email,
+    .accountmanagementmodal-user-item.selected .accountmanagementmodal-user-id {
         color: rgba(255,255,255,0.8);
     }
 
-    .modal-user-name {
+    .accountmanagementmodal-user-name {
         font-weight: bold;
         font-size: 14px;
         margin-bottom: 3px;
         word-wrap: break-word;
     }
 
-    .modal-user-email {
+    .accountmanagementmodal-user-email {
         font-size: 11px;
         opacity: 0.7;
         word-wrap: break-word;
     }
 
-    .modal-user-id {
+    .accountmanagementmodal-user-id {
         font-size: 10px;
         opacity: 0.5;
         margin-top: 3px;
@@ -1692,22 +1692,22 @@
 
     /* Responsive adjustments */
     @media (max-width: 768px) {
-        .modal-container.users-modal {
+        .accountmanagementmodal-container.users-accountmanagementmodal {
             width: 95%;
             max-width: 95%;
         }
         
-        .modal-body {
+        .accountmanagementmodal-body {
             padding: 12px;
         }
         
-        .modal-user-item {
+        .accountmanagementmodal-user-item {
             padding: 10px 12px;
         }
     }
 
     @media (max-width: 480px) {
-        .modal-container.users-modal {
+        .accountmanagementmodal-container.users-accountmanagementmodal {
             width: 100%;
             max-width: 100%;
             max-height: 95vh;
@@ -1715,24 +1715,24 @@
             margin: 5px;
         }
         
-        .modal-header {
+        .accountmanagementmodal-header {
             font-size: 14px;
             padding: 12px 15px;
         }
         
-        .modal-body {
+        .accountmanagementmodal-body {
             padding: 10px;
         }
         
-        .modal-user-item {
+        .accountmanagementmodal-user-item {
             padding: 8px 10px;
         }
         
-        .modal-user-name {
+        .accountmanagementmodal-user-name {
             font-size: 13px;
         }
         
-        .modal-user-email {
+        .accountmanagementmodal-user-email {
             font-size: 10px;
         }
     }
@@ -2831,8 +2831,8 @@
         border-color: #27ae60;
     }
 
-    /* Add Config Modal */
-    .add-config-modal {
+    /* Add Config accountmanagementmodal */
+    .add-config-accountmanagementmodal {
         display: none;
         position: fixed;
         top: 0;
@@ -2845,11 +2845,11 @@
         align-items: center;
     }
 
-    .add-config-modal.show {
+    .add-config-accountmanagementmodal.show {
         display: flex;
     }
 
-    .add-config-modal .modal-content {
+    .add-config-accountmanagementmodal .accountmanagementmodal-content {
         background: var(--bg-secondary);
         border-radius: 12px;
         padding: 25px;
@@ -2857,7 +2857,7 @@
         max-width: 600px;
     }
 
-    .add-config-modal input {
+    .add-config-accountmanagementmodal input {
         width: 100%;
         padding: 12px;
         margin: 15px 0;
@@ -3094,6 +3094,656 @@
         word-break: break-word;
         max-height: 350px;
         overflow-y: auto;
+    }
+</style>
+
+<style>
+    /* ============================================
+    SETTINGS DASHBOARD STYLES
+    ============================================ */
+    .settings-container {
+        width: 100%;
+        min-height: calc(100vh - 100px);
+        background: var(--bg-color);
+        padding: 15px 0;
+    }
+    .settings-header h2 {
+        margin: 0 0 4px 0;
+        font-size: 1.5rem;
+        color: var(--text-color);
+    }
+    .settings-sub {
+        margin: 0 0 20px 0;
+        font-size: 13px;
+        color: #888;
+    }
+    .settings-sub code,
+    .settings-card-sub code,
+    .settings-field-hint code {
+        background: rgba(127,127,127,0.15);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 11px;
+    }
+
+    /* Tabs */
+    .settings-tabs-wrapper {
+        position: relative;
+        margin-bottom: 15px;
+        overflow: hidden;
+    }
+    .settings-tabs {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 6px;
+        background: var(--bg-secondary);
+        border-radius: 10px;
+        padding: 6px;
+        border: 1px solid var(--border-color);
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .settings-tabs::-webkit-scrollbar { display: none; }
+    .settings-tabs .tab-btn {
+        flex: 0 0 auto;
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+        white-space: nowrap;
+        position: relative;
+    }
+    .settings-tabs .tab-btn.active {
+        background: var(--accent-color);
+        color: white;
+    }
+    .settings-tabs .tab-btn:hover:not(.active):not(:disabled) {
+        background: var(--bg-tertiary);
+    }
+    .settings-tabs .tab-btn:disabled {
+        cursor: not-allowed;
+    }
+    .tab-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.25);
+        border-radius: 10px;
+        padding: 0 8px;
+        font-size: 10px;
+        margin-left: 4px;
+        font-weight: 700;
+    }
+    .tab-btn.active .tab-badge {
+        background: rgba(255,255,255,0.3);
+    }
+    .settings-sub-tabs-wrapper { margin-top: -5px; margin-bottom: 15px; }
+    .sub-tabs .sub-tab-btn { padding: 6px 12px; font-size: 11px; }
+
+    .tab-content {
+        display: none;
+        animation: settingsFadeIn 0.3s ease;
+    }
+    .tab-content.active {
+        display: block;
+    }
+
+    @keyframes settingsFadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Cards */
+    .settings-card {
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .settings-card-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border-color);
+        background: var(--table-header-bg);
+    }
+    .settings-card-header h3 {
+        margin: 0 0 4px 0;
+        font-size: 16px;
+        color: var(--text-color);
+    }
+    .settings-card-sub {
+        margin: 0;
+        font-size: 12px;
+        color: #888;
+        line-height: 1.5;
+    }
+    .settings-card-body { padding: 20px; }
+    .settings-card-footer {
+        padding: 14px 20px;
+        border-top: 1px solid var(--border-color);
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        background: var(--bg-secondary);
+    }
+
+    /* Buttons */
+    .settings-btn {
+        padding: 9px 18px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        transition: all 0.2s;
+        border: 1px solid var(--border-color);
+        background: transparent;
+        color: var(--text-color);
+    }
+    .settings-btn:hover { background: var(--bg-tertiary); }
+    .settings-btn-primary {
+        background: var(--accent-color);
+        color: white;
+        border: none;
+    }
+    .settings-btn-primary:hover { background: var(--accent-hover); }
+
+    /* Fields */
+    .settings-field { margin-bottom: 16px; }
+    .settings-field label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-color);
+    }
+    .settings-input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        font-size: 14px;
+        box-sizing: border-box;
+        transition: border-color 0.2s;
+    }
+    .settings-input:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+    .settings-field-hint {
+        margin-top: 4px;
+        font-size: 11px;
+        color: #888;
+    }
+    .settings-field-error {
+        margin-top: 8px;
+        padding: 10px 12px;
+        background: rgba(244, 67, 54, 0.1);
+        border-left: 3px solid #f44336;
+        color: #f44336;
+        font-size: 12px;
+        border-radius: 4px;
+    }
+
+    /* Payment tiles */
+    .payment-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+    }
+    .payment-tile {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 18px 16px;
+        text-align: center;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .payment-tile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+    }
+    .payment-tile-icon {
+        font-size: 28px;
+        margin-bottom: 8px;
+        color: var(--accent-color);
+        font-weight: 700;
+    }
+    .payment-tile-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        margin-bottom: 8px;
+        font-weight: 700;
+    }
+    .payment-tile-value {
+        font-size: 12px;
+        font-family: monospace;
+        word-break: break-all;
+        color: var(--text-color);
+        line-height: 1.4;
+    }
+    .payment-tile-sub {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #888;
+    }
+
+    /* Brokers */
+    .broker-pairs-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .broker-pair-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        transition: background 0.2s;
+    }
+    .broker-pair-row:hover { background: var(--bg-tertiary); }
+    .broker-pair-index {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--accent-color);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    .broker-pair-body { flex: 1; min-width: 0; }
+    .broker-pair-name {
+        font-weight: 700;
+        font-size: 14px;
+        color: var(--text-color);
+        margin-bottom: 2px;
+    }
+    .broker-pair-link a {
+        font-size: 12px;
+        color: var(--accent-color);
+        text-decoration: none;
+        word-break: break-all;
+    }
+    .broker-pair-link a:hover { text-decoration: underline; }
+    .broker-pair-nolink {
+        font-size: 12px;
+        color: #f44336;
+        font-style: italic;
+    }
+    .broker-pair-actions { flex-shrink: 0; }
+    .broker-delete-btn {
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid #f44336;
+        background: transparent;
+        color: #f44336;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .broker-delete-btn:hover {
+        background: #f44336;
+        color: white;
+    }
+    .settings-empty {
+        text-align: center;
+        padding: 40px 20px;
+        color: #888;
+        font-size: 13px;
+    }
+
+    /* ============================================
+       TIER LIMIT STYLES
+       ============================================ */
+    .tier-records-list {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .tier-record-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        overflow: hidden;
+        transition: box-shadow 0.2s;
+    }
+    .tier-record-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .tier-record-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--table-header-bg);
+        border-bottom: 1px solid var(--border-color);
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .tier-record-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .tier-record-key {
+        font-weight: 700;
+        font-size: 14px;
+        color: var(--accent-color);
+        background: rgba(46, 204, 113, 0.1);
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-family: monospace;
+    }
+    .tier-record-actions {
+        display: flex;
+        gap: 8px;
+    }
+    .tier-save-btn {
+        padding: 5px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--accent-color);
+        background: transparent;
+        color: var(--accent-color);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .tier-save-btn:hover {
+        background: var(--accent-color);
+        color: white;
+    }
+    .tier-delete-btn {
+        padding: 5px 14px;
+        border-radius: 6px;
+        border: 1px solid #f44336;
+        background: transparent;
+        color: #f44336;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .tier-delete-btn:hover {
+        background: #f44336;
+        color: white;
+    }
+    .tier-record-body {
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .tier-inline-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .tier-inline-label {
+        flex: 0 0 160px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-family: monospace;
+        word-break: break-all;
+    }
+    .tier-inline-input {
+        flex: 1;
+        min-width: 140px;
+    }
+    .tier-empty-msg {
+        text-align: center;
+        color: #888;
+        font-size: 12px;
+        padding: 8px;
+        font-style: italic;
+    }
+
+    /* Fields matrix */
+    .tier-fields-matrix {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .tier-matrix {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: max-content;
+    }
+    .tier-matrix-row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+    }
+    .tier-matrix-header {
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        color: #888;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--border-color);
+    }
+    .tier-matrix-cell {
+        display: flex;
+        align-items: center;
+        padding: 4px 0;
+    }
+    .tier-matrix-fieldname-cell {
+        flex: 0 0 200px;
+        min-width: 200px;
+    }
+    .tier-matrix-entry-cell {
+        flex: 0 0 180px;
+        min-width: 180px;
+    }
+    .tier-matrix-actions-cell {
+        flex: 0 0 160px;
+        min-width: 160px;
+        gap: 6px;
+    }
+    .tier-matrix-fieldname-input,
+    .tier-matrix-value-input {
+        width: 100%;
+        font-size: 12px;
+        padding: 7px 9px;
+    }
+
+    /* Tier field list (legacy, kept for safety) */
+    .tier-fields-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .tier-field-list-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        gap: 12px;
+    }
+    .tier-field-list-name {
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--text-color);
+        font-family: monospace;
+    }
+    .tier-field-list-actions {
+        display: flex;
+        gap: 8px;
+    }
+    .tier-field-edit-btn {
+        padding: 5px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--accent-color);
+        background: transparent;
+        color: var(--accent-color);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .tier-field-edit-btn:hover {
+        background: var(--accent-color);
+        color: white;
+    }
+    .tier-field-delete-btn {
+        padding: 5px 14px;
+        border-radius: 6px;
+        border: 1px solid #f44336;
+        background: transparent;
+        color: #f44336;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .tier-field-delete-btn:hover {
+        background: #f44336;
+        color: white;
+    }
+
+    .tier-modal-fields-title {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        margin: 10px 0 12px 0;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    /* Modals */
+    .settings-modal-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(8px);
+        z-index: 5000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    .settings-modal-container {
+        background: var(--container-bg);
+        border-radius: 12px;
+        max-width: 95%;
+        width: 450px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        overflow: hidden;
+        animation: settingsModalSlide 0.3s ease;
+    }
+    .settings-modal-container.settings-modal-small { width: 450px; }
+    .settings-modal-container.settings-modal-medium { width: 520px; }
+    @keyframes settingsModalSlide {
+        from { transform: translateY(-30px) scale(0.95); opacity: 0; }
+        to   { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    .settings-modal-header {
+        padding: 16px 20px;
+        background: var(--table-header-bg);
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-shrink: 0;
+    }
+    .settings-modal-header span {
+        font-weight: 700;
+        font-size: 15px;
+    }
+    .settings-modal-close {
+        cursor: pointer;
+        font-size: 18px;
+        font-weight: 700;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: var(--bg-tertiary);
+        transition: all 0.2s;
+        flex-shrink: 0;
+    }
+    .settings-modal-close:hover {
+        background: var(--accent-color);
+        color: white;
+    }
+    .settings-modal-body {
+        padding: 20px;
+        overflow-y: auto;
+        flex: 1;
+    }
+    .settings-modal-body p {
+        margin: 0 0 12px 0;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    .settings-modal-buttons {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 16px;
+    }
+    .settings-modal-buttons-padded {
+        padding: 0 20px 20px 20px;
+        margin-top: 0;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .settings-tabs .tab-btn { font-size: 11px; padding: 6px 10px; }
+        .sub-tabs .sub-tab-btn { font-size: 10px; padding: 5px 8px; }
+        .settings-card-body { padding: 14px; }
+        .settings-card-header,
+        .settings-card-footer { padding: 12px 14px; }
+        .settings-modal-container { width: 100%; margin: 10px; max-height: 95vh; }
+        .settings-modal-container.settings-modal-medium { width: 100%; }
+        .payment-grid { grid-template-columns: 1fr; }
+        .broker-pair-row { flex-wrap: wrap; }
+        .broker-pair-actions { width: 100%; text-align: right; }
+        .tier-record-header { flex-direction: column; align-items: flex-start; }
+        .tier-inline-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+        .tier-inline-label { flex: 0 0 auto; }
+        .tier-matrix-fieldname-cell,
+        .tier-matrix-entry-cell,
+        .tier-matrix-actions-cell { flex: 0 0 150px; min-width: 150px; }
+    }
+    @media (max-width: 480px) {
+        .settings-tabs .tab-btn { font-size: 10px; padding: 5px 8px; }
+        .broker-pair-row { padding: 10px; }
+        .broker-pair-index { width: 26px; height: 26px; font-size: 11px; }
+    }
+    @media (prefers-color-scheme: dark) {
+        .settings-field-error { background: rgba(244, 67, 54, 0.15); }
+        .broker-pair-row:hover { background: #222; }
     }
 </style>
 
@@ -3736,8 +4386,8 @@
         100% { transform: rotate(360deg); }
     }
 
-    /* Modal Styles */
-    .modal-overlay {
+    /* analyticsmodal Styles */
+    .analyticsmodal-overlay {
         position: fixed;
         top: 0;
         left: 0;
@@ -3750,10 +4400,10 @@
         align-items: center;
         justify-content: center;
         padding: 20px;
-        animation: modalFadeIn 0.3s ease;
+        animation: analyticsmodalFadeIn 0.3s ease;
     }
 
-    @keyframes modalFadeIn {
+    @keyframes analyticsmodalFadeIn {
         from {
             opacity: 0;
             transform: scale(0.95);
@@ -3764,7 +4414,7 @@
         }
     }
 
-    .modal-container {
+    .analyticsmodal-container {
         background: var(--container-bg);
         border-radius: 12px;
         max-width: 95%;
@@ -3774,11 +4424,11 @@
         flex-direction: column;
         border: 1px solid var(--border-color);
         box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        animation: modalSlideIn 0.3s ease;
+        animation: analyticsmodalSlideIn 0.3s ease;
         overflow: hidden;
     }
 
-    @keyframes modalSlideIn {
+    @keyframes analyticsmodalSlideIn {
         from {
             transform: translateY(-30px);
             opacity: 0;
@@ -3789,16 +4439,16 @@
         }
     }
 
-    .modal-container.users-modal {
+    .analyticsmodal-container.users-analyticsmodal {
         width: 500px;
     }
 
-    .modal-container.modal-large {
+    .analyticsmodal-container.analyticsmodal-large {
         width: 1200px;
         max-width: 95%;
     }
 
-    .modal-header {
+    .analyticsmodal-header {
         padding: 15px 20px;
         background: var(--table-header-bg);
         border-bottom: 1px solid var(--border-color);
@@ -3811,7 +4461,7 @@
         flex-shrink: 0;
     }
 
-    .modal-close {
+    .analyticsmodal-close {
         cursor: pointer;
         font-size: 20px;
         width: 30px;
@@ -3825,30 +4475,30 @@
         flex-shrink: 0;
     }
 
-    .modal-close:hover {
+    .analyticsmodal-close:hover {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-body {
+    .analyticsmodal-body {
         padding: 20px;
         overflow-y: auto;
         flex: 1;
         overflow-x: hidden;
     }
 
-    /* Users Modal Styles */
-    .users-modal-search {
+    /* Users analyticsmodal Styles */
+    .users-analyticsmodal-search {
         margin-bottom: 15px;
     }
 
-    .users-modal-list {
+    .users-analyticsmodal-list {
         max-height: calc(85vh - 120px);
         overflow-y: auto;
         overflow-x: hidden;
     }
 
-    .modal-user-item {
+    .analyticsmodal-user-item {
         padding: 12px 15px;
         border-bottom: 1px solid var(--border-color);
         cursor: pointer;
@@ -3859,30 +4509,30 @@
         overflow-wrap: break-word;
     }
 
-    .modal-user-item:hover {
+    .analyticsmodal-user-item:hover {
         background: var(--bg-tertiary);
         transform: translateX(5px);
     }
 
-    .modal-user-item.selected {
+    .analyticsmodal-user-item.selected {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-user-name {
+    .analyticsmodal-user-name {
         font-weight: bold;
         font-size: 14px;
         margin-bottom: 3px;
         word-wrap: break-word;
     }
 
-    .modal-user-email {
+    .analyticsmodal-user-email {
         font-size: 11px;
         opacity: 0.7;
         word-wrap: break-word;
     }
 
-    .modal-user-id {
+    .analyticsmodal-user-id {
         font-size: 10px;
         opacity: 0.5;
         margin-top: 3px;
@@ -4168,7 +4818,7 @@
 
     /* Mobile optimizations for calendar */
     @media (max-width: 480px) {
-        .modal-container.modal-large {
+        .analyticsmodal-container.analyticsmodal-large {
             max-width: 100%;
             padding: 0;
             margin: 5px;
@@ -4176,7 +4826,7 @@
             border-radius: 8px;
         }
         
-        .modal-body {
+        .analyticsmodal-body {
             padding: 8px;
         }
         
@@ -4315,30 +4965,30 @@
         }
     }
 
-    /* Day Detail Modal - Enhanced */
-    .modal-container .day-detail-pnl {
+    /* Day Detail analyticsmodal - Enhanced */
+    .analyticsmodal-container .day-detail-pnl {
         font-size: 42px;
         font-weight: bold;
         text-align: center;
         padding: 15px 0;
     }
 
-    .modal-container .day-detail-pnl.profit {
+    .analyticsmodal-container .day-detail-pnl.profit {
         color: var(--profit-color);
     }
 
-    .modal-container .day-detail-pnl.loss {
+    .analyticsmodal-container .day-detail-pnl.loss {
         color: var(--loss-color);
     }
 
-    .modal-container .day-detail-stats {
+    .analyticsmodal-container .day-detail-stats {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 15px;
         margin: 15px 0;
     }
 
-    .modal-container .day-detail-stat {
+    .analyticsmodal-container .day-detail-stat {
         text-align: center;
         padding: 12px;
         background: var(--bg-tertiary);
@@ -4346,29 +4996,29 @@
         border: 1px solid var(--border-color);
     }
 
-    .modal-container .day-detail-stat-label {
+    .analyticsmodal-container .day-detail-stat-label {
         font-size: 11px;
         color: #888;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
 
-    .modal-container .day-detail-stat-value {
+    .analyticsmodal-container .day-detail-stat-value {
         font-size: 24px;
         font-weight: bold;
         margin-top: 4px;
     }
 
-    .modal-container .day-detail-stat-value.profit {
+    .analyticsmodal-container .day-detail-stat-value.profit {
         color: var(--profit-color);
     }
 
-    .modal-container .day-detail-stat-value.loss {
+    .analyticsmodal-container .day-detail-stat-value.loss {
         color: var(--loss-color);
     }
 
-    /* Scrollable modal body for large content */
-    .modal-body-scroll {
+    /* Scrollable analyticsmodal body for large content */
+    .analyticsmodal-body-scroll {
         max-height: calc(85vh - 120px);
         overflow-y: auto;
         padding: 20px;
@@ -4401,7 +5051,7 @@
         }
         
         .calendar-toggle-btn,
-        .modal-close,
+        .analyticsmodal-close,
         .floating-stats-btn {
             display: none !important;
         }
@@ -4511,9 +5161,6 @@
         color: var(--text-color);
     }
 
-    /* ============================================
-    TABS - Horizontal Scroll
-    ============================================ */
     .revenue-tabs-wrapper {
         position: relative;
         margin-bottom: 15px;
@@ -4611,9 +5258,6 @@
         to { opacity: 1; transform: translateY(0); }
     }
 
-    /* ============================================
-    SEARCH BAR - Dummy + Real
-    ============================================ */
     .search-bar-wrapper {
         position: relative;
         margin-bottom: 16px;
@@ -4689,9 +5333,6 @@
         color: var(--text-color);
     }
 
-    /* ============================================
-    SUMMARY CUBES
-    ============================================ */
     .summary-cubes {
         display: flex;
         flex-wrap: wrap;
@@ -4750,9 +5391,6 @@
         }
     }
 
-    /* ============================================
-    REVENUE HISTORY USER HEADER
-    ============================================ */
     .revenue-history-user-header {
         display: flex;
         justify-content: space-between;
@@ -4771,9 +5409,6 @@
         font-size: 16px;
     }
 
-    /* ============================================
-    BACK TO OVERVIEW BUTTON
-    ============================================ */
     .back-to-overview-btn {
         padding: 8px 20px;
         border: none;
@@ -4792,9 +5427,6 @@
         background: var(--bg-tertiary);
     }
 
-    /* ============================================
-    TABLES
-    ============================================ */
     .users-table-container {
         background: var(--container-bg);
         border-radius: 12px;
@@ -4852,7 +5484,6 @@
         border-bottom: none;
     }
 
-    /* Revenue History Users List */
     #revenue-history-users-list {
         padding: 0 !important;
     }
@@ -5002,6 +5633,21 @@
         color: #0d47a1;
     }
 
+    .status-expired {
+        background: #fce4ec;
+        color: #ad1457;
+    }
+
+    .status-no-contract {
+        background: #f5f5f5;
+        color: #616161;
+    }
+
+    .status-inactive {
+        background: #f5f5f5;
+        color: #616161;
+    }
+
     .action-select {
         padding: 4px 8px;
         border-radius: 4px;
@@ -5042,9 +5688,6 @@
         background: var(--bg-tertiary);
     }
 
-    /* ============================================
-    USER DETAIL OVERLAY - Full Screen
-    ============================================ */
     .detail-overlay {
         position: fixed;
         top: 0;
@@ -5098,9 +5741,6 @@
         background: var(--bg-tertiary);
     }
 
-    /* ============================================
-    USER DETAIL GRID
-    ============================================ */
     .user-detail-grid {
         display: flex;
         flex-direction: column;
@@ -5144,7 +5784,6 @@
         flex-shrink: 0;
     }
 
-    /* Stats Grid */
     .detail-stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -5185,9 +5824,6 @@
         color: #e65100;
     }
 
-    /* ============================================
-    DETAIL TABS
-    ============================================ */
     .detail-tabs-wrapper {
         margin-top: 4px;
     }
@@ -5241,9 +5877,6 @@
         display: block;
     }
 
-    /* ============================================
-    DAILY TARGET LIST - Updated for left/right layout
-    ============================================ */
     .daily-target-list {
         display: flex;
         flex-direction: column;
@@ -5331,7 +5964,6 @@
         padding: 2px 10px;
     }
 
-    /* Week Container */
     .week-container {
         margin: 16px 0;
         padding: 12px;
@@ -5372,7 +6004,6 @@
         font-weight: 500;
     }
 
-    /* Status badges for daily target */
     .status-met {
         background: #e8f5e9;
         color: #2e7d32;
@@ -5393,9 +6024,6 @@
         color: #888;
     }
 
-    /* ============================================
-    BALANCE LOG LIST
-    ============================================ */
     .balance-log-list {
         display: flex;
         flex-direction: column;
@@ -5505,7 +6133,6 @@
         color: #e65100;
     }
 
-    /* Unauthorized Trades Section */
     .unauthorized-trades-section {
         margin-top: 10px;
         padding: 10px 14px;
@@ -5560,10 +6187,7 @@
         margin-left: auto;
     }
 
-    /* ============================================
-    MODAL
-    ============================================ */
-    .modal-overlay {
+    .revenuemodal-overlay {
         position: fixed;
         top: 0;
         left: 0;
@@ -5578,7 +6202,7 @@
         padding: 20px;
     }
 
-    .modal-container {
+    .revenuemodal-container {
         background: var(--container-bg);
         border-radius: 12px;
         max-width: 95%;
@@ -5589,24 +6213,24 @@
         border: 1px solid var(--border-color);
         box-shadow: 0 20px 60px rgba(0,0,0,0.4);
         overflow: hidden;
-        animation: modalSlideIn 0.3s ease;
+        animation: revenuemodalSlideIn 0.3s ease;
     }
 
-    .modal-container.modal-large {
+    .revenuemodal-container.revenuemodal-large {
         width: 550px;
     }
 
-    .modal-container.modal-small {
+    .revenuemodal-container.revenuemodal-small {
         width: 450px;
         max-width: 95%;
     }
 
-    @keyframes modalSlideIn {
+    @keyframes revenuemodalSlideIn {
         from { transform: translateY(-30px) scale(0.95); opacity: 0; }
         to { transform: translateY(0) scale(1); opacity: 1; }
     }
 
-    .modal-header {
+    .revenuemodal-header {
         padding: 16px 20px;
         background: var(--table-header-bg);
         border-bottom: 1px solid var(--border-color);
@@ -5616,12 +6240,12 @@
         flex-shrink: 0;
     }
 
-    .modal-header span {
+    .revenuemodal-header span {
         font-weight: 700;
         font-size: 16px;
     }
 
-    .modal-close {
+    .revenuemodal-close {
         cursor: pointer;
         font-size: 20px;
         font-weight: 700;
@@ -5636,24 +6260,24 @@
         flex-shrink: 0;
     }
 
-    .modal-close:hover {
+    .revenuemodal-close:hover {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-body {
+    .revenuemodal-body {
         padding: 20px;
         overflow-y: auto;
         flex: 1;
     }
 
-    .modal-body p {
+    .revenuemodal-body p {
         margin: 0 0 12px 0;
         font-size: 14px;
         color: var(--text-secondary);
     }
 
-    .modal-body input {
+    .revenuemodal-body input {
         width: 100%;
         padding: 10px;
         border-radius: 6px;
@@ -5664,19 +6288,19 @@
         box-sizing: border-box;
     }
 
-    .modal-body input:focus {
+    .revenuemodal-body input:focus {
         outline: none;
         border-color: var(--accent-color);
     }
 
-    .modal-buttons {
+    .revenuemodal-buttons {
         display: flex;
         gap: 10px;
         justify-content: flex-end;
         margin-top: 16px;
     }
 
-    .modal-buttons button {
+    .revenuemodal-buttons button {
         padding: 8px 20px;
         border-radius: 6px;
         cursor: pointer;
@@ -5685,63 +6309,62 @@
         transition: all 0.2s;
     }
 
-    .modal-buttons .btn-cancel {
+    .revenuemodal-buttons .btn-cancel {
         border: 1px solid var(--border-color);
         background: transparent;
         color: var(--text-color);
     }
 
-    .modal-buttons .btn-cancel:hover {
+    .revenuemodal-buttons .btn-cancel:hover {
         background: var(--bg-tertiary);
     }
 
-    .modal-buttons .btn-confirm {
+    .revenuemodal-buttons .btn-confirm {
         border: none;
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-buttons .btn-confirm:hover {
+    .revenuemodal-buttons .btn-confirm:hover {
         background: var(--accent-hover);
     }
 
-    /* Users Modal List */
-    .modal-user-item {
+    .revenuemodal-user-item {
         padding: 12px 16px;
         cursor: pointer;
         transition: background 0.2s;
         border-bottom: 1px solid var(--border-color);
     }
 
-    .modal-user-item:last-child {
+    .revenuemodal-user-item:last-child {
         border-bottom: none;
     }
 
-    .modal-user-item:hover {
+    .revenuemodal-user-item:hover {
         background: var(--bg-tertiary);
     }
 
-    .modal-user-item.selected {
+    .revenuemodal-user-item.selected {
         background: var(--accent-color);
         color: white;
     }
 
-    .modal-user-item .modal-user-name {
+    .revenuemodal-user-item .revenuemodal-user-name {
         font-weight: 600;
         font-size: 14px;
     }
 
-    .modal-user-item .modal-user-email {
+    .revenuemodal-user-item .revenuemodal-user-email {
         font-size: 12px;
         opacity: 0.6;
     }
 
-    .modal-user-item .modal-user-id {
+    .revenuemodal-user-item .revenuemodal-user-id {
         font-size: 10px;
         opacity: 0.4;
     }
 
-    .users-modal-search {
+    .users-revenuemodal-search {
         margin-bottom: 12px;
     }
 
@@ -5761,9 +6384,6 @@
         border-color: var(--accent-color);
     }
 
-    /* ============================================
-    LOADING & EMPTY STATES
-    ============================================ */
     .loading-spinner {
         text-align: center;
         padding: 40px;
@@ -5808,9 +6428,6 @@
         color: #888;
     }
 
-    /* ============================================
-    DARK MODE SUPPORT
-    ============================================ */
     @media (prefers-color-scheme: dark) {
         .daily-target-item.unusual,
         .balance-log-item.unusual {
@@ -5894,11 +6511,19 @@
             background: #2a2a2a;
             color: #888;
         }
+
+        .status-expired {
+            background: #3a1a2a;
+            color: #f48fb1;
+        }
+
+        .status-no-contract,
+        .status-inactive {
+            background: #2a2a2a;
+            color: #bdbdbd;
+        }
     }
 
-    /* ============================================
-    RESPONSIVE
-    ============================================ */
     @media (max-width: 992px) {
         .revenue-history-user-header {
             flex-direction: column;
@@ -6002,14 +6627,14 @@
             margin-left: 0;
         }
         
-        .modal-container {
+        .revenuemodal-container {
             width: 100%;
             margin: 10px;
             border-radius: 8px;
             max-height: 95vh;
         }
         
-        .modal-container.modal-large {
+        .revenuemodal-container.revenuemodal-large {
             width: 100%;
         }
         
@@ -6457,4 +7082,95 @@
             font-size: 14px;
         }
     }
+</style>
+
+<style>
+    /* ============================================================
+       VPS ADMIN — LOCAL STYLES
+       Only adds what the revenue.css vocabulary doesn't already cover.
+       Everything else (revenue-container, revenue-tabs, tab-btn,
+       summary-cube, search-bar, revenue-table, status-badge,
+       detail-overlay, revenuemodal-*) is already defined by revenue.php.
+       ============================================================ */
+
+    /* Form grid — same idea as revenue's detail-stats-grid */
+    .vps-form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 14px;
+    }
+
+    .vps-form-group { display: flex; flex-direction: column; gap: 6px; }
+
+    .vps-form-group label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-secondary, #888);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .vps-form-group input,
+    .vps-form-group select {
+        padding: 10px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--bg-secondary);
+        color: var(--text-color);
+        font-size: 14px;
+        font-family: inherit;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .vps-form-group input:focus,
+    .vps-form-group select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+    }
+
+    /* Detail info rows */
+    .detail-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border-color);
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .detail-row:last-child { border-bottom: none; }
+
+    .detail-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary, #888);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .detail-value {
+        font-size: 14px;
+        color: var(--text-color);
+        font-family: 'SF Mono', 'Monaco', monospace;
+        word-break: break-all;
+        text-align: right;
+    }
+
+    @media (max-width: 600px) {
+        .detail-row { flex-direction: column; align-items: flex-start; }
+        .detail-value { text-align: left; }
+    }
+
+    /* Status vocab additions (revenue already defines confirmed/made/unpaid/failed/active/cancelled) */
+    .status-active { background: #e3f2fd; color: #1565c0; }
+    .status-confirmed { background: #e8f5e9; color: #2e7d32; }
+    .status-made { background: #fff3e0; color: #e65100; }
+    .status-unpaid { background: #ffebee; color: #c62828; }
+    .status-failed { background: #f5f5f5; color: #616161; }
+    .status-pending { background: #e3f2fd; color: #0d47a1; }
+    .status-declined { background: #ffebee; color: #c62828; }
+    .status-inactive { background: #f5f5f5; color: #616161; }
+    .status-suspended { background: #f3e5f5; color: #7b1fa2; }
 </style>

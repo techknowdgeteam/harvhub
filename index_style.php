@@ -54,9 +54,8 @@
         font-family: 'Segoe UI', sans-serif;
         background: var(--bg);
         color: var(--text);
-        height: 100vh;
-        overflow: hidden; /* Added: prevents vertical scroll on body */
-        position: relative;
+        margin: 0 auto;
+        padding: 0 15px;
     }
     html, body { 
         -ms-overflow-style: none; 
@@ -430,5 +429,65 @@
         cursor: pointer;
         color: var(--accent);
         font-size: 0.8rem;
+    }
+</style>
+<style>
+
+    .developer-content {
+        background: rgba(16, 185, 129, 0.05);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 30px;
+        width: 100%;
+        max-width: 100%;
+    }
+    .developer-content h3 {
+        color: var(--accent);
+        margin-top: 0;
+    }
+    .requirement-badge {
+        display: inline-block;
+        background: rgba(16, 185, 129, 0.15);
+        color: var(--accent);
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    .developer-features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+    }
+    .developer-feature-item {
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        padding: 15px;
+        border-left: 3px solid var(--accent);
+    }
+    .developer-feature-item h4 {
+        margin: 0 0 8px 0;
+        color: var(--accent);
+        font-size: 1rem;
+    }
+    .developer-feature-item p {
+        margin: 0;
+        font-size: 0.9rem;
+        opacity: 0.8;
+    }
+    /* Broker Required Notice */
+    .broker-required-notice {
+        background: rgba(255, 107, 107, 0.1);
+        border: 2px solid #ff6b6b;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 20px 0;
+        text-align: center;
+    }
+    .broker-required-notice h3 {
+        color: #ff6b6b;
+        margin-top: 0;
     }
 </style>

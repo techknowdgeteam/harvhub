@@ -8,7 +8,7 @@
 <div class="analytics-container" id="analytics-container">
     <div class="analytics-split" id="analytics-split">
         <div class="users-sidebar" id="users-sidebar">
-            <div class="users-sidebar-header" onclick="Analytics.showAllUsersModal()">
+            <div class="users-sidebar-header" onclick="Analytics.showAllUsersanalyticsmodal()">
                 <div class="search-user-btn">
                     <span class="search-icon">🔍</span>
                     <span class="search-placeholder">Search users...</span>
@@ -276,7 +276,7 @@
             const container = document.getElementById('default-user-card');
             if (this.selectedUser) {
                 container.innerHTML = `
-                    <div class="default-user-info" onclick="Analytics.showAllUsersModal()">
+                    <div class="default-user-info" onclick="Analytics.showAllUsersanalyticsmodal()">
                         <div class="default-user-name">${this.escapeHtml(this.selectedUser.fullname || 'N/A')}</div>
                         <div class="default-user-email">${this.escapeHtml(this.selectedUser.email || 'N/A')}</div>
                         <div class="default-user-id">ID: ${this.selectedUser.id}</div>
@@ -285,81 +285,81 @@
             }
         },
         
-        showAllUsersModal: function() {
+        showAllUsersanalyticsmodal: function() {
             this.addBodyBlur();
             
-            const modalHtml = `
-                <div class="modal-overlay" id="users-modal-overlay" onclick="Analytics.closeModalIfClickOutside(event)">
-                    <div class="modal-container users-modal" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            const analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="users-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutside(event)">
+                    <div class="analyticsmodal-container users-analyticsmodal" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>All Users (${this.users.length})</span>
-                            <span class="modal-close" onclick="Analytics.closeModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body">
-                            <div class="users-modal-search">
-                                <input type="text" id="users-modal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="Analytics.filterModalUsers()">
+                        <div class="analyticsmodal-body">
+                            <div class="users-analyticsmodal-search">
+                                <input type="text" id="users-analyticsmodal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="Analytics.filteranalyticsmodalUsers()">
                             </div>
                         </div>
-                        <div class="modal-body" id="users-modal-list">
-                                ${this.renderModalUsersList(this.users)}
+                        <div class="analyticsmodal-body" id="users-analyticsmodal-list">
+                                ${this.renderanalyticsmodalUsersList(this.users)}
                         </div>
                     </div>
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        renderModalUsersList: function(users) {
+        renderanalyticsmodalUsersList: function(users) {
             if (users.length === 0) {
                 return '<div class="info-message-small">No users found</div>';
             }
             
             return users.map(user => `
-                <div class="modal-user-item ${this.selectedUser && this.selectedUser.id === user.id ? 'selected' : ''}" 
-                    onclick="Analytics.selectUserFromModal(${user.id}, '${user.source}')">
-                    <div class="modal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
-                    <div class="modal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
-                    <div class="modal-user-id">ID: ${user.id}</div>
+                <div class="analyticsmodal-user-item ${this.selectedUser && this.selectedUser.id === user.id ? 'selected' : ''}" 
+                    onclick="Analytics.selectUserFromanalyticsmodal(${user.id}, '${user.source}')">
+                    <div class="analyticsmodal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
+                    <div class="analyticsmodal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
+                    <div class="analyticsmodal-user-id">ID: ${user.id}</div>
                 </div>
             `).join('');
         },
         
-        filterModalUsers: function() {
-            const searchTerm = document.getElementById('users-modal-search-input').value.toLowerCase();
+        filteranalyticsmodalUsers: function() {
+            const searchTerm = document.getElementById('users-analyticsmodal-search-input').value.toLowerCase();
             const filteredUsers = this.users.filter(user => 
                 (user.fullname && user.fullname.toLowerCase().includes(searchTerm)) ||
                 (user.email && user.email.toLowerCase().includes(searchTerm)) ||
                 user.id.toString().includes(searchTerm)
             );
             
-            const container = document.getElementById('users-modal-list');
+            const container = document.getElementById('users-analyticsmodal-list');
             if (container) {
-                container.innerHTML = this.renderModalUsersList(filteredUsers);
+                container.innerHTML = this.renderanalyticsmodalUsersList(filteredUsers);
             }
         },
         
-        selectUserFromModal: function(userId, source) {
+        selectUserFromanalyticsmodal: function(userId, source) {
             const user = this.users.find(u => u.id == userId);
             if (!user) return;
             
             this.selectedUser = user;
             this.renderDefaultUser();
             this.loadAnalytics(userId, source);
-            this.closeModal();
+            this.closeanalyticsmodal();
         },
         
-        closeModal: function() {
-            const overlay = document.getElementById('users-modal-overlay');
+        closeanalyticsmodal: function() {
+            const overlay = document.getElementById('users-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutside: function(event) {
-            if (event.target.id === 'users-modal-overlay') {
-                this.closeModal();
+        closeanalyticsmodalIfClickOutside: function(event) {
+            if (event.target.id === 'users-analyticsmodal-overlay') {
+                this.closeanalyticsmodal();
             }
         },
         
@@ -463,7 +463,7 @@
                 </div>
                 <div style="padding-top: 10px; border-top: 1px solid var(--border-color);">
                     <div class="stat-option-title" style="margin-bottom: 8px;">View Trades</div>
-                    <div class="stat-option" onclick="Analytics.showAllTradesModal(); Analytics.toggleStatsPanel();">
+                    <div class="stat-option" onclick="Analytics.showAllTradesanalyticsmodal(); Analytics.toggleStatsPanel();">
                         <div class="stat-option-title">All Trades</div>
                         <div class="stat-option-desc">View complete trade history</div>
                     </div>
@@ -471,7 +471,7 @@
             `;
         },
         
-        showAllTradesModal: function() {
+        showAllTradesanalyticsmodal: function() {
             this.addBodyBlur();
             
             const currentData = this.getCurrentData();
@@ -512,14 +512,14 @@
             
             uniqueTrades.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
             
-            let modalHtml = `
-                <div class="modal-overlay" id="trades-modal-overlay" onclick="Analytics.closeModalIfClickOutsideTrades(event)">
-                    <div class="modal-container modal-large" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            let analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="trades-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideTrades(event)">
+                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>All Trades (${uniqueTrades.length})</span>
-                            <span class="modal-close" onclick="Analytics.closeTradesModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeTradesanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoTrades ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">📭</div>
@@ -559,24 +559,24 @@
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        closeTradesModal: function() {
-            const overlay = document.getElementById('trades-modal-overlay');
+        closeTradesanalyticsmodal: function() {
+            const overlay = document.getElementById('trades-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideTrades: function(event) {
-            if (event.target.id === 'trades-modal-overlay') {
-                this.closeTradesModal();
+        closeanalyticsmodalIfClickOutsideTrades: function(event) {
+            if (event.target.id === 'trades-analyticsmodal-overlay') {
+                this.closeTradesanalyticsmodal();
             }
         },
         
-        showSequentialLossesModal: function() {
+        showSequentialLossesanalyticsmodal: function() {
             this.addBodyBlur();
             
             const currentData = this.getCurrentData();
@@ -592,14 +592,14 @@
             
             const hasNoData = !losses.consecutive_losses_count;
             
-            let modalHtml = `
-                <div class="modal-overlay" id="losses-modal-overlay" onclick="Analytics.closeModalIfClickOutsideLosses(event)">
-                    <div class="modal-container" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            let analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="losses-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideLosses(event)">
+                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>Highest Sequential Losses</span>
-                            <span class="modal-close" onclick="Analytics.closeLossesModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeLossesanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoData ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">✅</div>
@@ -645,24 +645,24 @@
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        closeLossesModal: function() {
-            const overlay = document.getElementById('losses-modal-overlay');
+        closeLossesanalyticsmodal: function() {
+            const overlay = document.getElementById('losses-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideLosses: function(event) {
-            if (event.target.id === 'losses-modal-overlay') {
-                this.closeLossesModal();
+        closeanalyticsmodalIfClickOutsideLosses: function(event) {
+            if (event.target.id === 'losses-analyticsmodal-overlay') {
+                this.closeLossesanalyticsmodal();
             }
         },
         
-        showSequentialDaysLossModal: function() {
+        showSequentialDaysLossanalyticsmodal: function() {
             this.addBodyBlur();
             
             const currentData = this.getCurrentData();
@@ -678,14 +678,14 @@
             
             const hasNoData = !daysLoss.consecutive_days_count;
             
-            let modalHtml = `
-                <div class="modal-overlay" id="daysloss-modal-overlay" onclick="Analytics.closeModalIfClickOutsideDaysLoss(event)">
-                    <div class="modal-container" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            let analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="daysloss-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideDaysLoss(event)">
+                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>Highest Sequential Days in Loss</span>
-                            <span class="modal-close" onclick="Analytics.closeDaysLossModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeDaysLossanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoData ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">✅</div>
@@ -718,20 +718,20 @@
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        closeDaysLossModal: function() {
-            const overlay = document.getElementById('daysloss-modal-overlay');
+        closeDaysLossanalyticsmodal: function() {
+            const overlay = document.getElementById('daysloss-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideDaysLoss: function(event) {
-            if (event.target.id === 'daysloss-modal-overlay') {
-                this.closeDaysLossModal();
+        closeanalyticsmodalIfClickOutsideDaysLoss: function(event) {
+            if (event.target.id === 'daysloss-analyticsmodal-overlay') {
+                this.closeDaysLossanalyticsmodal();
             }
         },
         
@@ -870,7 +870,7 @@
                         <div class="stat-label">Deals with SL/TP</div>
                         <div class="stat-value">${regularData.closed_deals_with_sl_tp || 0}</div>
                     </div>
-                    <div class="stat-card clickable" onclick="Analytics.showTradedSymbolsModal()" style="cursor: pointer;">
+                    <div class="stat-card clickable" onclick="Analytics.showTradedSymbolsanalyticsmodal()" style="cursor: pointer;">
                         <div class="stat-label">Total Trades</div>
                         <div class="stat-value">${regularData.total_trades || 0}</div>
                         <div style="font-size: 10px; color: #888; margin-top: 5px;">Click to view symbols</div>
@@ -894,13 +894,13 @@
                         <div class="stat-value">${summaries.highest_trades_per_day || 0}</div>
                         ${summaries.highest_trade_dates && summaries.highest_trade_dates.length > 0 ? `<div class="stat-dates">${summaries.highest_trade_dates.map(d => this.escapeHtml(d)).join(', ')}</div>` : '<div class="stat-dates">—</div>'}
                     </div>
-                    <div class="stat-card daily-stat-card sequential-loss clickable" onclick="Analytics.showSequentialLossesModal()" style="cursor: pointer; ${hasSequentialLosses ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
+                    <div class="stat-card daily-stat-card sequential-loss clickable" onclick="Analytics.showSequentialLossesanalyticsmodal()" style="cursor: pointer; ${hasSequentialLosses ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
                         <div class="stat-label">📉 Consecutive Lost Trades</div>
                         <div class="stat-value" style="color: ${hasSequentialLosses ? '#ff6b6b' : '#888'};">${hasSequentialLosses ? regularData.highest_sequential_losses.consecutive_losses_count : '0'}</div>
                         ${hasSequentialLosses ? `<div style="font-size: 10px; color: #888; margin-top: 5px;">Total Loss: $${this.formatNumber(regularData.highest_sequential_losses.total_loss_pnl || 0)}</div>` : '<div class="stat-dates">No data</div>'}
                         <div style="font-size: 9px; color: #888; margin-top: 3px;">Click to view details</div>
                     </div>
-                    <div class="stat-card daily-stat-card sequential-days clickable" onclick="Analytics.showSequentialDaysLossModal()" style="cursor: pointer; ${hasSequentialDaysLoss ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
+                    <div class="stat-card daily-stat-card sequential-days clickable" onclick="Analytics.showSequentialDaysLossanalyticsmodal()" style="cursor: pointer; ${hasSequentialDaysLoss ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
                         <div class="stat-label">📉 Consecutive Losing Days</div>
                         <div class="stat-value" style="color: ${hasSequentialDaysLoss ? '#ff6b6b' : '#888'};">${hasSequentialDaysLoss ? regularData.highest_sequential_days_in_loss.consecutive_days_count : '0'}</div>
                         ${hasSequentialDaysLoss ? `<div style="font-size: 10px; color: #888; margin-top: 5px;">Total Loss: $${this.formatNumber(regularData.highest_sequential_days_in_loss.total_loss_pnl || 0)}</div>` : '<div class="stat-dates">No data</div>'}
@@ -910,7 +910,7 @@
             `;
         },
         
-        showTradedSymbolsModal: function() {
+        showTradedSymbolsanalyticsmodal: function() {
             this.addBodyBlur();
             
             const currentData = this.getCurrentData();
@@ -926,14 +926,14 @@
             
             const hasNoSymbols = Object.keys(symbols).length === 0;
             
-            let modalHtml = `
-                <div class="modal-overlay" id="symbols-modal-overlay" onclick="Analytics.closeModalIfClickOutsideSymbols(event)">
-                    <div class="modal-container modal-large" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            let analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="symbols-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideSymbols(event)">
+                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>Traded Symbols (${Object.keys(symbols).length})</span>
-                            <span class="modal-close" onclick="Analytics.closeSymbolsModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeSymbolsanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
                             ${hasNoSymbols ? `
                                 <div class="empty-state">
                                     <div class="empty-state-icon">📊</div>
@@ -970,20 +970,20 @@
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        closeSymbolsModal: function() {
-            const overlay = document.getElementById('symbols-modal-overlay');
+        closeSymbolsanalyticsmodal: function() {
+            const overlay = document.getElementById('symbols-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideSymbols: function(event) {
-            if (event.target.id === 'symbols-modal-overlay') {
-                this.closeSymbolsModal();
+        closeanalyticsmodalIfClickOutsideSymbols: function(event) {
+            if (event.target.id === 'symbols-analyticsmodal-overlay') {
+                this.closeSymbolsanalyticsmodal();
             }
         },
         
@@ -1019,24 +1019,24 @@
             const startDate = currentData.start_date ? this.formatDateDisplay(currentData.start_date) : 'N/A';
             const endDate = currentData.end_date ? this.formatDateDisplay(currentData.end_date) : 'N/A';
             
-            const modalHtml = `
-                <div class="modal-overlay" id="calendar-modal-overlay" onclick="Analytics.closeModalIfClickOutsideCalendar(event)">
-                    <div class="modal-container modal-large" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            const analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="calendar-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideCalendar(event)">
+                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>📅 Trades from ${startDate} to ${endDate}</span>
-                            <span class="modal-close" onclick="Analytics.closeCalendarModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeCalendaranalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
-                            ${this.renderDailyCalendarModal(dailyRecord, regularData)}
+                        <div class="analyticsmodal-body" style="max-height: 70vh; overflow-y: auto;">
+                            ${this.renderDailyCalendaranalyticsmodal(dailyRecord, regularData)}
                         </div>
                     </div>
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        renderDailyCalendarModal: function(dailyRecord, regularData) {
+        renderDailyCalendaranalyticsmodal: function(dailyRecord, regularData) {
             if (!dailyRecord || Object.keys(dailyRecord).length === 0) {
                 return `
                     <div class="section-card" style="text-align: center; color: #888; padding: 40px;">
@@ -1106,7 +1106,7 @@
                     const pnlClass = pnl >= 0 ? 'calendar-profit' : 'calendar-loss';
                     
                     html += `
-                        <div class="calendar-day ${pnlClass}" onclick="Analytics.showDayDetailModal('${dateStr}')">
+                        <div class="calendar-day ${pnlClass}" onclick="Analytics.showDayDetailanalyticsmodal('${dateStr}')">
                             <div class="calendar-day-date">${monthName} ${dayNumber}</div>
                             <div class="calendar-day-pnl">$${this.formatNumber(pnl)}</div>
                             <div class="calendar-day-trades">${tradesCount} ${tradesCount > 1 ? 'trades' : 'trade'}</div>
@@ -1144,21 +1144,21 @@
             return html;
         },
         
-        closeCalendarModal: function() {
-            const overlay = document.getElementById('calendar-modal-overlay');
+        closeCalendaranalyticsmodal: function() {
+            const overlay = document.getElementById('calendar-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideCalendar: function(event) {
-            if (event.target.id === 'calendar-modal-overlay') {
-                this.closeCalendarModal();
+        closeanalyticsmodalIfClickOutsideCalendar: function(event) {
+            if (event.target.id === 'calendar-analyticsmodal-overlay') {
+                this.closeCalendaranalyticsmodal();
             }
         },
         
-        showDayDetailModal: function(dateStr) {
+        showDayDetailanalyticsmodal: function(dateStr) {
             this.addBodyBlur();
             
             const currentData = this.getCurrentData();
@@ -1206,14 +1206,14 @@
             // Sort trades by time (newest first)
             allTradesList.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
             
-            let modalHtml = `
-                <div class="modal-overlay" id="daydetail-modal-overlay" onclick="Analytics.closeModalIfClickOutsideDayDetail(event)">
-                    <div class="modal-container" onclick="event.stopPropagation()">
-                        <div class="modal-header">
+            let analyticsmodalHtml = `
+                <div class="analyticsmodal-overlay" id="daydetail-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideDayDetail(event)">
+                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                        <div class="analyticsmodal-header">
                             <span>📅 ${dayOfWeek}, ${month} ${day}, ${year}</span>
-                            <span class="modal-close" onclick="Analytics.closeDayDetailModal()">✕</span>
+                            <span class="analyticsmodal-close" onclick="Analytics.closeDayDetailanalyticsmodal()">✕</span>
                         </div>
-                        <div class="modal-body" style="max-height: 70vh; overflow-y: auto; padding: 20px;">
+                        <div class="analyticsmodal-body" style="max-height: 70vh; overflow-y: auto; padding: 20px;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
                                 <div class="stat-card" style="padding: 15px;">
                                     <div class="stat-label">Daily P&L</div>
@@ -1284,20 +1284,20 @@
                 </div>
             `;
             
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
         },
         
-        closeDayDetailModal: function() {
-            const overlay = document.getElementById('daydetail-modal-overlay');
+        closeDayDetailanalyticsmodal: function() {
+            const overlay = document.getElementById('daydetail-analyticsmodal-overlay');
             if (overlay) {
                 overlay.remove();
             }
             this.removeBodyBlur();
         },
         
-        closeModalIfClickOutsideDayDetail: function(event) {
-            if (event.target.id === 'daydetail-modal-overlay') {
-                this.closeDayDetailModal();
+        closeanalyticsmodalIfClickOutsideDayDetail: function(event) {
+            if (event.target.id === 'daydetail-analyticsmodal-overlay') {
+                this.closeDayDetailanalyticsmodal();
             }
         },
         

@@ -1,6 +1,10 @@
 <?php
 // revenue.php - Revenue Dashboard with Tab Navigation
 // This file is included in serveraccount.php when view=paid_users
+// UPDATED: Uses revenue_history table instead of column
+// UPDATED: Understands contract-cancelled-* combined statuses
+// UPDATED: Fetches programme_investors for developer/investor percentages and contract duration
+// UPDATED: New columns - Programme Developer, Dev%, Dev Amount, Inv%, Inv Amount, Contract Duration
 ?>
 
 <div class="revenue-container" id="revenue-container">
@@ -124,26 +128,29 @@
             </div>
         </div>
 
-        <!-- Active Users Table -->
+        <!-- Active Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="active-users-table">
                     <thead>
                         <tr>
-                            <th>User</th>
-                            <th>Broker</th>
-                            <th>Login ID</th>
-                            <th>Broker Balance</th>
-                            <th>P&L</th>
-                            <th>Current Balance</th>
-                            <th>User Share</th>
-                            <th>Server Share</th>
+                            <th>Programme Developer</th>
+                            <th>Investor</th>
+                            <th>Investor Broker</th>
+                            <th>Investor Login ID</th>
+                            <th>Investor Broker Balance</th>
+                            <th>Investor P&L</th>
+                            <th>Investor Current Balance</th>
+                            <th>Dev %</th>
+                            <th>Dev Amount</th>
+                            <th>Inv %</th>
+                            <th>Inv Amount</th>
                             <th>Status</th>
                             <th>Action</th>
                         </tr>
                     </thead>
                     <tbody id="active-users-body">
-                        <tr><td colspan="10" style="text-align:center;padding:40px;color:#888;">Loading active users...</td></tr>
+                        <tr><td colspan="13" style="text-align:center;padding:40px;color:#888;">Loading active users...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -201,23 +208,28 @@
             </div>
         </div>
 
-        <!-- Completed Users Table -->
+        <!-- Completed Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="completed-users-table">
                     <thead>
                         <tr>
-                            <th>User</th>
-                            <th>Broker</th>
-                            <th>Login ID</th>
+                            <th>Programme Developer</th>
+                            <th>Investor</th>
+                            <th>Investor Broker</th>
+                            <th>Investor Login ID</th>
                             <th>Invested With</th>
                             <th>Profit</th>
+                            <th>Dev %</th>
+                            <th>Dev Amount</th>
+                            <th>Inv %</th>
+                            <th>Inv Amount</th>
                             <th>Status</th>
                             <th>Action</th>
                         </tr>
                     </thead>
                     <tbody id="completed-users-body">
-                        <tr><td colspan="7" style="text-align:center;padding:40px;color:#888;">Loading completed users...</td></tr>
+                        <tr><td colspan="12" style="text-align:center;padding:40px;color:#888;">Loading completed users...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -283,23 +295,24 @@
             </div>
         </div>
 
-        <!-- Inactive Users Table -->
+        <!-- Inactive Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="inactive-users-table">
                     <thead>
                         <tr>
-                            <th>User</th>
-                            <th>Broker</th>
-                            <th>Login ID</th>
-                            <th>Broker Balance</th>
-                            <th>P&L</th>
+                            <th>Programme Developer</th>
+                            <th>Investor</th>
+                            <th>Investor Broker</th>
+                            <th>Investor Login ID</th>
+                            <th>Investor Broker Balance</th>
+                            <th>Investor P&L</th>
                             <th>Status</th>
                             <th>Action</th>
                         </tr>
                     </thead>
                     <tbody id="inactive-users-body">
-                        <tr><td colspan="7" style="text-align:center;padding:40px;color:#888;">Loading inactive users...</td></tr>
+                        <tr><td colspan="8" style="text-align:center;padding:40px;color:#888;">Loading inactive users...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -374,9 +387,9 @@
                 <button class="back-to-overview-btn" onclick="Revenue.clearRevenueHistoryUserSelection()"><- Back to Overview</button>
             </div>
 
-            <!-- Search Bar - Below Back button, opens modal -->
+            <!-- Search Bar - Below Back button, opens revenuemodal -->
             <div class="search-bar-wrapper" id="revenue-history-search-wrapper">
-                <div class="search-bar search-bar-dummy" id="rev-history-search-dummy" onclick="Revenue.showRevenueHistoryUsersModal()">
+                <div class="search-bar search-bar-dummy" id="rev-history-search-dummy" onclick="Revenue.showRevenueHistoryUsersrevenuemodal()">
                     <span class="search-icon">+</span>
                     <span class="search-placeholder" id="revenue-history-search-placeholder">Search users by name, email, or ID...</span>
                 </div>
@@ -424,11 +437,11 @@
                 </div>
                 <div class="summary-cube">
                     <div class="cube-value" id="rev-user-total-server-share">$0.00</div>
-                    <div class="cube-label">Total Server Share</div>
+                    <div class="cube-label">Total Dev Share</div>
                 </div>
                 <div class="summary-cube">
                     <div class="cube-value" id="rev-user-total-user-share">$0.00</div>
-                    <div class="cube-label">Total Investors Share</div>
+                    <div class="cube-label">Total Inv Share</div>
                 </div>
                 <div class="summary-cube">
                     <div class="cube-value" id="rev-user-total-payments-made">$0.00</div>
@@ -460,15 +473,15 @@
 </div>
 
 <!-- ============================================ -->
-<!-- INITIALIZE ENROLLMENT MODAL                  -->
+<!-- INITIALIZE ENROLLMENT revenuemodal                  -->
 <!-- ============================================ -->
-<div id="initialize-enrollment-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-container modal-medium">
-        <div class="modal-header">
+<div id="initialize-enrollment-revenuemodal" class="revenuemodal-overlay" style="display:none;">
+    <div class="revenuemodal-container revenuemodal-medium">
+        <div class="revenuemodal-header">
             <span>Initialize Enrollment</span>
-            <span class="modal-close" onclick="Revenue.closeInitializeEnrollmentModal()">x</span>
+            <span class="revenuemodal-close" onclick="Revenue.closeInitializeEnrollmentrevenuemodal()">x</span>
         </div>
-        <div class="modal-body">
+        <div class="revenuemodal-body">
             <p style="margin-bottom: 16px; color: #888; font-size: 14px;">
                 Enter the broker balance to initialize enrollment for <strong id="init-enroll-user-name">User</strong>.
                 This will set the contract start date to today and reset relevant fields.
@@ -495,8 +508,8 @@
             
             <div id="init-enroll-error" style="color: #f44336; font-size: 13px; margin-bottom: 12px; display:none;"></div>
             
-            <div class="modal-buttons">
-                <button class="btn-cancel" onclick="Revenue.closeInitializeEnrollmentModal()">Cancel</button>
+            <div class="revenuemodal-buttons">
+                <button class="btn-cancel" onclick="Revenue.closeInitializeEnrollmentrevenuemodal()">Cancel</button>
                 <button class="btn-confirm" id="init-enroll-confirm-btn" onclick="Revenue.confirmInitializeEnrollment()">Initialize Enrollment</button>
             </div>
         </div>
@@ -504,78 +517,78 @@
 </div>
 
 <!-- ============================================ -->
-<!-- CUSTOM CONFIRMATION MODAL                    -->
+<!-- CUSTOM CONFIRMATION revenuemodal                    -->
 <!-- ============================================ -->
-<div id="custom-confirm-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-container modal-small">
-        <div class="modal-header">
-            <span id="confirm-modal-title">Confirm Action</span>
-            <span class="modal-close" onclick="Revenue.closeConfirmModal()">x</span>
+<div id="custom-confirm-revenuemodal" class="revenuemodal-overlay" style="display:none;">
+    <div class="revenuemodal-container revenuemodal-small">
+        <div class="revenuemodal-header">
+            <span id="confirm-revenuemodal-title">Confirm Action</span>
+            <span class="revenuemodal-close" onclick="Revenue.closeConfirmrevenuemodal()">x</span>
         </div>
-        <div class="modal-body">
-            <p id="confirm-modal-message">Are you sure?</p>
-            <div class="modal-buttons">
-                <button class="btn-cancel" onclick="Revenue.closeConfirmModal()">Cancel</button>
-                <button class="btn-confirm" id="confirm-modal-confirm-btn" onclick="Revenue.confirmModalAction()">Confirm</button>
+        <div class="revenuemodal-body">
+            <p id="confirm-revenuemodal-message">Are you sure?</p>
+            <div class="revenuemodal-buttons">
+                <button class="btn-cancel" onclick="Revenue.closeConfirmrevenuemodal()">Cancel</button>
+                <button class="btn-confirm" id="confirm-revenuemodal-confirm-btn" onclick="Revenue.confirmrevenuemodalAction()">Confirm</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ============================================ -->
-<!-- PASSWORD MODAL                              -->
+<!-- PASSWORD revenuemodal                              -->
 <!-- ============================================ -->
-<div id="password-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-container modal-small">
-        <div class="modal-header">
-            <span id="password-modal-title">Security Check</span>
-            <span class="modal-close" onclick="Revenue.closePasswordModal()">x</span>
+<div id="password-revenuemodal" class="revenuemodal-overlay" style="display:none;">
+    <div class="revenuemodal-container revenuemodal-small">
+        <div class="revenuemodal-header">
+            <span id="password-revenuemodal-title">Security Check</span>
+            <span class="revenuemodal-close" onclick="Revenue.closePasswordrevenuemodal()">x</span>
         </div>
-        <div class="modal-body">
-            <p id="password-modal-message">Please enter your admin password to continue.</p>
-            <input type="password" id="password-modal-input" placeholder="Enter password" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-color);font-size:14px;box-sizing:border-box;">
-            <div id="password-modal-error" style="color:#f44336;font-size:13px;margin-top:6px;display:none;"></div>
-            <div class="modal-buttons">
-                <button class="btn-cancel" onclick="Revenue.closePasswordModal()">Cancel</button>
-                <button class="btn-confirm" id="password-modal-confirm-btn" onclick="Revenue.confirmPasswordModal()">Confirm</button>
+        <div class="revenuemodal-body">
+            <p id="password-revenuemodal-message">Please enter your admin password to continue.</p>
+            <input type="password" id="password-revenuemodal-input" placeholder="Enter password" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-color);font-size:14px;box-sizing:border-box;">
+            <div id="password-revenuemodal-error" style="color:#f44336;font-size:13px;margin-top:6px;display:none;"></div>
+            <div class="revenuemodal-buttons">
+                <button class="btn-cancel" onclick="Revenue.closePasswordrevenuemodal()">Cancel</button>
+                <button class="btn-confirm" id="password-revenuemodal-confirm-btn" onclick="Revenue.confirmPasswordrevenuemodal()">Confirm</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ============================================ -->
-<!-- SUCCESS/ERROR NOTIFICATION MODAL             -->
+<!-- SUCCESS/ERROR NOTIFICATION revenuemodal             -->
 <!-- ============================================ -->
-<div id="notification-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-container modal-small">
-        <div class="modal-header">
-            <span id="notification-modal-title">Notification</span>
-            <span class="modal-close" onclick="Revenue.closeNotificationModal()">x</span>
+<div id="notification-revenuemodal" class="revenuemodal-overlay" style="display:none;">
+    <div class="revenuemodal-container revenuemodal-small">
+        <div class="revenuemodal-header">
+            <span id="notification-revenuemodal-title">Notification</span>
+            <span class="revenuemodal-close" onclick="Revenue.closeNotificationrevenuemodal()">x</span>
         </div>
-        <div class="modal-body">
-            <p id="notification-modal-message"></p>
-            <div class="modal-buttons">
-                <button class="btn-confirm" onclick="Revenue.closeNotificationModal()">OK</button>
+        <div class="revenuemodal-body">
+            <p id="notification-revenuemodal-message"></p>
+            <div class="revenuemodal-buttons">
+                <button class="btn-confirm" onclick="Revenue.closeNotificationrevenuemodal()">OK</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ============================================ -->
-<!-- REVENUE HISTORY USERS MODAL                  -->
+<!-- REVENUE HISTORY USERS revenuemodal                  -->
 <!-- ============================================ -->
-<div id="revenue-history-users-modal" class="modal-overlay" style="display:none;" onclick="Revenue.closeRevenueHistoryUsersModalIfClickOutside(event)">
-    <div class="modal-container modal-large" onclick="event.stopPropagation()">
-        <div class="modal-header">
+<div id="revenue-history-users-revenuemodal" class="revenuemodal-overlay" style="display:none;" onclick="Revenue.closeRevenueHistoryUsersrevenuemodalIfClickOutside(event)">
+    <div class="revenuemodal-container revenuemodal-large" onclick="event.stopPropagation()">
+        <div class="revenuemodal-header">
             <span>Select User</span>
-            <span class="modal-close" onclick="Revenue.closeRevenueHistoryUsersModal()">x</span>
+            <span class="revenuemodal-close" onclick="Revenue.closeRevenueHistoryUsersrevenuemodal()">x</span>
         </div>
-        <div class="modal-body">
-            <div class="users-modal-search">
-                <input type="text" id="revenue-history-modal-search-input" class="user-search-input" placeholder="Search users by name, email, or ID..." onkeyup="Revenue.filterRevenueHistoryModalUsers()">
+        <div class="revenuemodal-body">
+            <div class="users-revenuemodal-search">
+                <input type="text" id="revenue-history-revenuemodal-search-input" class="user-search-input" placeholder="Search users by name, email, or ID..." onkeyup="Revenue.filterRevenueHistoryrevenuemodalUsers()">
             </div>
         </div>
-        <div class="modal-body" id="revenue-history-modal-list" style="max-height: 50vh; overflow-y: auto;">
+        <div class="revenuemodal-body" id="revenue-history-revenuemodal-list" style="max-height: 50vh; overflow-y: auto;">
             <!-- User list rendered here -->
         </div>
     </div>
@@ -618,6 +631,9 @@
         revenueHistoryData: {},
         selectedUserRevenueHistory: [],
         
+        // Programme Investors data (userid => {developerid, developer_name, programme_name, contract_duration, developer_percentage, investor_percentage, ...})
+        programmeInvestorsMap: {},
+        
         // State
         currentTab: 'active',
         currentActiveSubTab: 'all',
@@ -635,27 +651,132 @@
         isRevenueHistorySearchActive: false,
         isMobileView: false,
         
-        // Modal callbacks
+        // revenuemodal callbacks
         _confirmCallback: null,
         _passwordCallback: null,
         _initEnrollCallback: null,
         
-        // Config
+        // Config (defaults - will be overridden per user from programme_investors)
         serverSharePercent: 30,
         userSharePercent: 70,
         minProfitForSplit: 30,
         minBrokerBalance: 30,
+        contractDuration: 30,
+
+        // ============================================
+        // NORMALIZATION HELPERS
+        // ============================================
+        normalizeLoyaltyStatus: function(status) {
+            const s = String(status || '').toLowerCase().trim();
+            if (s === '') return '';
+
+            const isCancelled = s.indexOf('cancelled') !== -1
+                             || s.indexOf('canceled') !== -1
+                             || s.indexOf('contract_cancelled') !== -1;
+
+            let base = null;
+            if (s.indexOf('payment-confirmed') !== -1 || s.indexOf('payment_confirmed') !== -1) {
+                base = 'payment-confirmed';
+            } else if (s.indexOf('payment-made') !== -1 || s.indexOf('payment_made') !== -1) {
+                base = 'payment-made';
+            } else if (s.indexOf('failed-payment') !== -1 || s.indexOf('failed_payment') !== -1
+                    || s.indexOf('payment-failed') !== -1 || s.indexOf('payment_failed') !== -1) {
+                base = 'failed-payment';
+            } else if (s.indexOf('unpaid-payment') !== -1 || s.indexOf('unpaid_payment') !== -1
+                    || s.indexOf('unpaid') !== -1
+                    || s.indexOf('payment-required') !== -1 || s.indexOf('payment_required') !== -1) {
+                base = 'unpaid-payment';
+            }
+
+            if (isCancelled) {
+                if (base !== null) {
+                    return 'contract-cancelled-' + base;
+                }
+                return 'contract_cancelled';
+            }
+
+            if (base !== null) {
+                return base;
+            }
+
+            return s;
+        },
+
+        loyaltyIsFamily: function(status, family) {
+            const n = this.normalizeLoyaltyStatus(status);
+            switch (family) {
+                case 'unpaid':
+                    return n === 'unpaid-payment' || n === 'contract-cancelled-unpaid-payment';
+                case 'payment-made':
+                    return n === 'payment-made' || n === 'contract-cancelled-payment-made';
+                case 'payment-confirmed':
+                    return n === 'payment-confirmed' || n === 'contract-cancelled-payment-confirmed';
+                case 'failed':
+                    return n === 'failed-payment' || n === 'contract-cancelled-failed-payment';
+                case 'cancelled':
+                    return n.indexOf('contract-cancelled') === 0 || n === 'contract_cancelled';
+                default:
+                    return false;
+            }
+        },
+
+        // ============================================
+        // GET PROGRAMME DATA FOR USER
+        // ============================================
+        getProgrammeDataForUser: function(userId) {
+            const pid = parseInt(userId);
+            if (this.programmeInvestorsMap[pid]) {
+                return this.programmeInvestorsMap[pid];
+            }
+            // Fallback to server defaults
+            return {
+                developerid: 0,
+                developer_name: 'N/A',
+                programme_name: '',
+                contract_duration: this.contractDuration,
+                developer_percentage: this.serverSharePercent,
+                investor_percentage: this.userSharePercent,
+                minimum_investment_amount: 0,
+                maximum_investment_amount: 0,
+                has_programme: false
+            };
+        },
+
+        getDevPercent: function(userId) {
+            const data = this.getProgrammeDataForUser(userId);
+            return data.developer_percentage;
+        },
+
+        getInvPercent: function(userId) {
+            const data = this.getProgrammeDataForUser(userId);
+            return data.investor_percentage;
+        },
+
+        getContractDurationForUser: function(userId) {
+            const data = this.getProgrammeDataForUser(userId);
+            return data.contract_duration;
+        },
 
         // ============================================
         // INITIALIZATION
         // ============================================
         init: function() {
-            this.serverSharePercent = parseInt(document.querySelector('[data-server-share]')?.dataset?.serverShare) || 30;
-            this.userSharePercent = parseInt(document.querySelector('[data-user-share]')?.dataset?.userShare) || 70;
-            this.minProfitForSplit = parseFloat(document.querySelector('[data-min-profit]')?.dataset?.minProfit) || 30;
-            this.minBrokerBalance = parseFloat(document.querySelector('[data-min-deposit]')?.dataset?.minDeposit) || 30;
+            const configEl = document.getElementById('revenue-config');
+            if (configEl) {
+                this.serverSharePercent = parseInt(configEl.dataset.serverShare) || 30;
+                this.userSharePercent = parseInt(configEl.dataset.userShare) || 70;
+                this.minProfitForSplit = parseFloat(configEl.dataset.minProfit) || 30;
+                this.minBrokerBalance = parseFloat(configEl.dataset.minDeposit) || 30;
+                this.contractDuration = parseInt(configEl.dataset.contractDuration) || 30;
+            } else {
+                // Fallback to data attributes
+                this.serverSharePercent = parseInt(document.querySelector('[data-server-share]')?.dataset?.serverShare) || 30;
+                this.userSharePercent = parseInt(document.querySelector('[data-user-share]')?.dataset?.userShare) || 70;
+                this.minProfitForSplit = parseFloat(document.querySelector('[data-min-profit]')?.dataset?.minProfit) || 30;
+                this.minBrokerBalance = parseFloat(document.querySelector('[data-min-deposit]')?.dataset?.minDeposit) || 30;
+                this.contractDuration = parseInt(document.querySelector('[data-contract-duration]')?.dataset?.contractDuration) || 30;
+            }
             
-            // Set min deposit display
             document.getElementById('init-enroll-min-deposit').textContent = this.minBrokerBalance.toFixed(2);
             
             this.loadUsers();
@@ -668,23 +789,23 @@
                     if (Revenue.isDetailViewOpen) {
                         Revenue.closeUserDetail();
                     }
-                    Revenue.closeConfirmModal();
-                    Revenue.closePasswordModal();
-                    Revenue.closeNotificationModal();
-                    Revenue.closeRevenueHistoryUsersModal();
-                    Revenue.closeInitializeEnrollmentModal();
+                    Revenue.closeConfirmrevenuemodal();
+                    Revenue.closePasswordrevenuemodal();
+                    Revenue.closeNotificationrevenuemodal();
+                    Revenue.closeRevenueHistoryUsersrevenuemodal();
+                    Revenue.closeInitializeEnrollmentrevenuemodal();
                     Revenue.deactivateSearch('active');
                     Revenue.deactivateSearch('completed');
                     Revenue.deactivateSearch('inactive');
                 }
                 if (e.key === 'Enter') {
-                    if (document.getElementById('password-modal').style.display === 'flex') {
-                        Revenue.confirmPasswordModal();
+                    if (document.getElementById('password-revenuemodal').style.display === 'flex') {
+                        Revenue.confirmPasswordrevenuemodal();
                     }
-                    if (document.getElementById('custom-confirm-modal').style.display === 'flex') {
-                        Revenue.confirmModalAction();
+                    if (document.getElementById('custom-confirm-revenuemodal').style.display === 'flex') {
+                        Revenue.confirmrevenuemodalAction();
                     }
-                    if (document.getElementById('initialize-enrollment-modal').style.display === 'flex') {
+                    if (document.getElementById('initialize-enrollment-revenuemodal').style.display === 'flex') {
                         Revenue.confirmInitializeEnrollment();
                     }
                 }
@@ -694,7 +815,7 @@
                 const row = e.target.closest('.clickable-row');
                 if (row && !e.target.closest('.action-select') && !e.target.closest('.status-select')) {
                     const userId = row.dataset.userId;
-                    const source = row.dataset.source || 'insiders';
+                    const source = row.dataset.source || 'harvhub';
                     Revenue.viewUserDetail(userId, source);
                 }
             });
@@ -709,52 +830,52 @@
         },
 
         // ============================================
-        // CUSTOM CONFIRM MODAL
+        // CUSTOM CONFIRM revenuemodal
         // ============================================
-        showConfirmModal: function(title, message, callback) {
-            document.getElementById('confirm-modal-title').textContent = title || 'Confirm Action';
-            document.getElementById('confirm-modal-message').textContent = message || 'Are you sure?';
+        showConfirmrevenuemodal: function(title, message, callback) {
+            document.getElementById('confirm-revenuemodal-title').textContent = title || 'Confirm Action';
+            document.getElementById('confirm-revenuemodal-message').textContent = message || 'Are you sure?';
             this._confirmCallback = callback;
-            document.getElementById('custom-confirm-modal').style.display = 'flex';
+            document.getElementById('custom-confirm-revenuemodal').style.display = 'flex';
         },
 
-        closeConfirmModal: function() {
-            document.getElementById('custom-confirm-modal').style.display = 'none';
+        closeConfirmrevenuemodal: function() {
+            document.getElementById('custom-confirm-revenuemodal').style.display = 'none';
             this._confirmCallback = null;
         },
 
-        confirmModalAction: function() {
+        confirmrevenuemodalAction: function() {
             const callback = this._confirmCallback;
-            this.closeConfirmModal();
+            this.closeConfirmrevenuemodal();
             if (typeof callback === 'function') {
                 callback();
             }
         },
 
         // ============================================
-        // PASSWORD MODAL
+        // PASSWORD revenuemodal
         // ============================================
-        showPasswordModal: function(title, message, callback) {
-            document.getElementById('password-modal-title').textContent = title || 'Security Check';
-            document.getElementById('password-modal-message').textContent = message || 'Please enter your admin password to continue.';
-            document.getElementById('password-modal-input').value = '';
-            document.getElementById('password-modal-error').style.display = 'none';
+        showPasswordrevenuemodal: function(title, message, callback) {
+            document.getElementById('password-revenuemodal-title').textContent = title || 'Security Check';
+            document.getElementById('password-revenuemodal-message').textContent = message || 'Please enter your admin password to continue.';
+            document.getElementById('password-revenuemodal-input').value = '';
+            document.getElementById('password-revenuemodal-error').style.display = 'none';
             this._passwordCallback = callback;
-            document.getElementById('password-modal').style.display = 'flex';
+            document.getElementById('password-revenuemodal').style.display = 'flex';
             setTimeout(() => {
-                document.getElementById('password-modal-input').focus();
+                document.getElementById('password-revenuemodal-input').focus();
             }, 100);
         },
 
-        closePasswordModal: function() {
-            document.getElementById('password-modal').style.display = 'none';
+        closePasswordrevenuemodal: function() {
+            document.getElementById('password-revenuemodal').style.display = 'none';
             this._passwordCallback = null;
-            document.getElementById('password-modal-error').style.display = 'none';
+            document.getElementById('password-revenuemodal-error').style.display = 'none';
         },
 
-        confirmPasswordModal: function() {
-            const password = document.getElementById('password-modal-input').value;
-            const errorEl = document.getElementById('password-modal-error');
+        confirmPasswordrevenuemodal: function() {
+            const password = document.getElementById('password-revenuemodal-input').value;
+            const errorEl = document.getElementById('password-revenuemodal-error');
             
             if (!password) {
                 errorEl.textContent = 'Please enter your password.';
@@ -763,23 +884,23 @@
             }
             
             const callback = this._passwordCallback;
-            this.closePasswordModal();
+            this.closePasswordrevenuemodal();
             if (typeof callback === 'function') {
                 callback(password);
             }
         },
 
         // ============================================
-        // NOTIFICATION MODAL (replaces alert)
+        // NOTIFICATION revenuemodal
         // ============================================
         showNotification: function(message, title, isError) {
-            document.getElementById('notification-modal-title').textContent = title || (isError ? 'Error' : 'Success');
-            document.getElementById('notification-modal-message').textContent = message || '';
-            document.getElementById('notification-modal').style.display = 'flex';
+            document.getElementById('notification-revenuemodal-title').textContent = title || (isError ? 'Error' : 'Success');
+            document.getElementById('notification-revenuemodal-message').textContent = message || '';
+            document.getElementById('notification-revenuemodal').style.display = 'flex';
         },
 
-        closeNotificationModal: function() {
-            document.getElementById('notification-modal').style.display = 'none';
+        closeNotificationrevenuemodal: function() {
+            document.getElementById('notification-revenuemodal').style.display = 'none';
         },
 
         // ============================================
@@ -909,10 +1030,35 @@
         // LOAD USERS
         // ============================================
         loadUsers: function() {
-            this.loadActiveUsers();
-            this.loadCompletedUsers();
-            this.loadInactiveUsers();
-            this.loadRevenueHistoryUsers();
+            // First load programme investors data, then load all user data
+            this.loadProgrammeInvestors().then(() => {
+                this.loadActiveUsers();
+                this.loadCompletedUsers();
+                this.loadInactiveUsers();
+                this.loadRevenueHistoryUsers();
+            });
+        },
+
+        loadProgrammeInvestors: function() {
+            return fetch(window.location.pathname, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: 'action=get_programme_investors_map'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.investors) {
+                    this.programmeInvestorsMap = data.investors;
+                }
+                return true;
+            })
+            .catch(error => {
+                console.error('Error loading programme investors:', error);
+                return true;
+            });
         },
 
         loadActiveUsers: function() {
@@ -977,9 +1123,6 @@
             });
         },
 
-        // ============================================
-        // LOAD INACTIVE USERS
-        // ============================================
         loadInactiveUsers: function() {
             fetch(window.location.pathname, {
                 method: 'POST',
@@ -1012,9 +1155,6 @@
             });
         },
 
-        // ============================================
-        // LOAD REVENUE HISTORY USERS
-        // ============================================
         loadRevenueHistoryUsers: function() {
             fetch(window.location.pathname, {
                 method: 'POST',
@@ -1050,14 +1190,10 @@
                     this.filteredRevenueHistoryUsers = this.getFilteredRevenueHistoryUsers();
                     this.updateBadge('revenue-history-count', this.allRevenueHistoryUsers.length);
                     
-                    // Reset selected user when loading
                     this.selectedRevenueHistoryUser = null;
                     this.selectedUserRevenueHistory = [];
                     
-                    // Update global summary cubes
                     this.updateRevenueHistoryGlobalCubes();
-                    
-                    // Show overview (users list)
                     this.showOverview();
                 } else {
                     this.allRevenueHistoryUsers = [];
@@ -1102,21 +1238,25 @@
                 }
 
                 history.forEach(record => {
-                    const loyalties = (record.loyalties || '').toLowerCase();
+                    const loyaltiesRaw = record.loyalties || '';
                     const serverShare = parseFloat(record.server_share || 0);
                     const userShare = parseFloat(record.user_share || 0);
                     const profit = parseFloat(record.profit || 0);
                     const startingBalance = parseFloat(record.starting_balance || 0);
                     
-                    if (loyalties === 'unpaid-payment' || loyalties === 'unpaid_payment' || loyalties === 'unpaid') {
-                        totals.totalUnpaid += serverShare;
-                    } else if (loyalties === 'payment-made' || loyalties === 'payment_made') {
-                        totals.totalPaymentsMade += serverShare;
-                    } else if (loyalties === 'payment-confirmed' || loyalties === 'payment_confirmed') {
+                    if (String(loyaltiesRaw).toLowerCase().indexOf('active') !== -1) {
+                        return;
+                    }
+                    
+                    if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
                         totals.totalPaymentsConfirmed += serverShare;
-                    } else if (loyalties === 'failed-payment' || loyalties === 'failed_payment' || loyalties === 'payment-failed' || loyalties === 'payment_failed') {
+                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
+                        totals.totalPaymentsMade += serverShare;
+                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
                         totals.totalFailed += serverShare;
-                    } else if (loyalties === 'contract_cancelled' || loyalties === 'contract-cancelled' || loyalties.includes('cancelled')) {
+                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid')) {
+                        totals.totalUnpaid += serverShare;
+                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
                         totals.totalCancelled += 1;
                     }
                     
@@ -1208,7 +1348,7 @@
             const user = this.allRevenueHistoryUsers.find(u => u.id == userId && u.source === source);
             if (!user) return;
             
-            this.selectRevenueHistoryUserFromModal(userId, source);
+            this.selectRevenueHistoryUserFromrevenuemodal(userId, source);
         },
 
         // ============================================
@@ -1241,7 +1381,7 @@
             };
             
             history.forEach(record => {
-                const loyalties = (record.loyalties || '').toLowerCase();
+                const loyaltiesRaw = record.loyalties || '';
                 const serverShare = parseFloat(record.server_share || 0);
                 const userShare = parseFloat(record.user_share || 0);
                 const profit = parseFloat(record.profit || 0);
@@ -1252,14 +1392,14 @@
                 totals.totalUserShare += userShare;
                 totals.totalServerShare += serverShare;
                 
-                if (loyalties === 'payment-made' || loyalties === 'payment_made') {
-                    totals.totalPaymentsMade += serverShare;
-                } else if (loyalties === 'payment-confirmed' || loyalties === 'payment_confirmed') {
+                if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
                     totals.totalPaymentsConfirmed += serverShare;
-                } else if (loyalties === 'contract_cancelled' || loyalties === 'contract-cancelled' || loyalties.includes('cancelled')) {
-                    totals.totalCancelled += 1;
-                } else if (loyalties === 'failed-payment' || loyalties === 'failed_payment' || loyalties === 'payment-failed' || loyalties === 'payment_failed') {
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
+                    totals.totalPaymentsMade += serverShare;
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
                     totals.totalFailed += serverShare;
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
+                    totals.totalCancelled += 1;
                 }
             });
             
@@ -1351,11 +1491,14 @@
                                 <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">Contract ID</th>
                                 <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">Start</th>
                                 <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">End</th>
+                                <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">Duration</th>
                                 <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Starting Balance</th>
                                 <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Current Balance</th>
                                 <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Profit</th>
-                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Server Share</th>
-                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">User Share</th>
+                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Dev %</th>
+                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Dev Amount</th>
+                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Inv %</th>
+                                <th style="padding: 8px 10px; text-align: right; border-bottom: 2px solid var(--border-color);">Inv Amount</th>
                                 <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">Status</th>
                                 <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid var(--border-color);">Invested With</th>
                             </tr>
@@ -1369,19 +1512,28 @@
                 const profit = parseFloat(record.profit) || 0;
                 const serverShare = parseFloat(record.server_share) || 0;
                 const userShare = parseFloat(record.user_share) || 0;
-                const status = record.loyalties || 'Unknown';
+                const status = this.normalizeLoyaltyStatus(record.loyalties || 'Unknown');
                 const statusClass = this.getStatusClass(status);
                 const investedWith = record.invested_with || 'N/A';
+                
+                // Get programme data for this user to get percentages
+                const progData = this.getProgrammeDataForUser(this.selectedRevenueHistoryUser?.id);
+                const devPercent = progData.developer_percentage;
+                const invPercent = progData.investor_percentage;
+                const duration = progData.contract_duration;
                 
                 html += `
                     <tr style="border-bottom: 1px solid var(--border-color);">
                         <td style="padding: 6px 10px; font-size: 10px; font-family: monospace;">${this.escapeHtml(record.contract_id || 'N/A')}</td>
                         <td style="padding: 6px 10px;">${this.formatDate(record.execution_start_date)}</td>
                         <td style="padding: 6px 10px;">${this.formatDate(record.execution_end_date)}</td>
+                        <td style="padding: 6px 10px;">${duration} days</td>
                         <td style="padding: 6px 10px; text-align: right;">$${this.formatNumber(startingBalance)}</td>
                         <td style="padding: 6px 10px; text-align: right;">$${this.formatNumber(currentBalance)}</td>
                         <td style="padding: 6px 10px; text-align: right; color: ${profit >= 0 ? '#4caf50' : '#f44336'}; font-weight: 600;">$${this.formatNumber(profit)}</td>
+                        <td style="padding: 6px 10px; text-align: right;">${devPercent}%</td>
                         <td style="padding: 6px 10px; text-align: right;">$${this.formatNumber(serverShare)}</td>
+                        <td style="padding: 6px 10px; text-align: right;">${invPercent}%</td>
                         <td style="padding: 6px 10px; text-align: right;">$${this.formatNumber(userShare)}</td>
                         <td style="padding: 6px 10px;"><span class="status-badge ${statusClass}">${this.escapeHtml(this.getStatusLabel(status))}</span></td>
                         <td style="padding: 6px 10px; font-size: 11px;">${this.escapeHtml(investedWith)}</td>
@@ -1428,18 +1580,18 @@
             };
             
             history.forEach(record => {
-                const loyalties = (record.loyalties || '').toLowerCase();
+                const loyaltiesRaw = record.loyalties || '';
                 counts.all++;
                 
-                if (loyalties === 'unpaid-payment' || loyalties === 'unpaid_payment' || loyalties === 'unpaid') {
-                    counts.unpaid++;
-                } else if (loyalties === 'payment-made' || loyalties === 'payment_made') {
-                    counts['payment-made']++;
-                } else if (loyalties === 'payment-confirmed' || loyalties === 'payment_confirmed') {
+                if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
                     counts['payment-confirmed']++;
-                } else if (loyalties === 'failed-payment' || loyalties === 'failed_payment' || loyalties === 'payment-failed' || loyalties === 'payment_failed') {
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
+                    counts['payment-made']++;
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
                     counts.failed++;
-                } else if (loyalties === 'contract_cancelled' || loyalties === 'contract-cancelled' || loyalties.includes('cancelled')) {
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid')) {
+                    counts.unpaid++;
+                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
                     counts.cancelled++;
                 }
             });
@@ -1463,19 +1615,19 @@
             }
             
             return history.filter(record => {
-                const loyalties = (record.loyalties || '').toLowerCase();
+                const loyaltiesRaw = record.loyalties || '';
                 
                 switch(subTab) {
                     case 'unpaid':
-                        return loyalties === 'unpaid-payment' || loyalties === 'unpaid_payment' || loyalties === 'unpaid';
+                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid');
                     case 'payment-made':
-                        return loyalties === 'payment-made' || loyalties === 'payment_made';
+                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made');
                     case 'payment-confirmed':
-                        return loyalties === 'payment-confirmed' || loyalties === 'payment_confirmed';
+                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed');
                     case 'failed':
-                        return loyalties === 'failed-payment' || loyalties === 'failed_payment' || loyalties === 'payment-failed' || loyalties === 'payment_failed';
+                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed');
                     case 'cancelled':
-                        return loyalties === 'contract_cancelled' || loyalties === 'contract-cancelled' || loyalties.includes('cancelled');
+                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled');
                     default:
                         return true;
                 }
@@ -1498,45 +1650,45 @@
         },
 
         // ============================================
-        // REVENUE HISTORY USERS MODAL
+        // REVENUE HISTORY USERS revenuemodal
         // ============================================
-        showRevenueHistoryUsersModal: function() {
-            const modal = document.getElementById('revenue-history-users-modal');
-            const searchInput = document.getElementById('revenue-history-modal-search-input');
+        showRevenueHistoryUsersrevenuemodal: function() {
+            const revenuemodal = document.getElementById('revenue-history-users-revenuemodal');
+            const searchInput = document.getElementById('revenue-history-revenuemodal-search-input');
             
-            modal.style.display = 'flex';
+            revenuemodal.style.display = 'flex';
             searchInput.value = '';
             
-            this.renderRevenueHistoryModalUsers(this.allRevenueHistoryUsers);
+            this.renderRevenueHistoryrevenuemodalUsers(this.allRevenueHistoryUsers);
             searchInput.focus();
         },
 
-        closeRevenueHistoryUsersModal: function() {
-            document.getElementById('revenue-history-users-modal').style.display = 'none';
+        closeRevenueHistoryUsersrevenuemodal: function() {
+            document.getElementById('revenue-history-users-revenuemodal').style.display = 'none';
         },
 
-        closeRevenueHistoryUsersModalIfClickOutside: function(event) {
-            if (event.target.id === 'revenue-history-users-modal') {
-                this.closeRevenueHistoryUsersModal();
+        closeRevenueHistoryUsersrevenuemodalIfClickOutside: function(event) {
+            if (event.target.id === 'revenue-history-users-revenuemodal') {
+                this.closeRevenueHistoryUsersrevenuemodal();
             }
         },
 
-        filterRevenueHistoryModalUsers: function() {
-            const searchTerm = document.getElementById('revenue-history-modal-search-input').value.toLowerCase();
+        filterRevenueHistoryrevenuemodalUsers: function() {
+            const searchTerm = document.getElementById('revenue-history-revenuemodal-search-input').value.toLowerCase();
             const filteredUsers = this.allRevenueHistoryUsers.filter(user => {
                 const name = (user.fullname || '').toLowerCase();
                 const email = (user.email || '').toLowerCase();
                 const id = String(user.id || '');
                 return name.includes(searchTerm) || email.includes(searchTerm) || id.includes(searchTerm);
             });
-            this.renderRevenueHistoryModalUsers(filteredUsers);
+            this.renderRevenueHistoryrevenuemodalUsers(filteredUsers);
         },
 
         // ============================================
-        // RENDER REVENUE HISTORY MODAL USERS
+        // RENDER REVENUE HISTORY revenuemodal USERS
         // ============================================
-        renderRevenueHistoryModalUsers: function(users) {
-            const container = document.getElementById('revenue-history-modal-list');
+        renderRevenueHistoryrevenuemodalUsers: function(users) {
+            const container = document.getElementById('revenue-history-revenuemodal-list');
             
             if (users.length === 0) {
                 container.innerHTML = '<div style="text-align:center;padding:40px;color:#888;">No users found</div>';
@@ -1562,11 +1714,11 @@
                     this.selectedRevenueHistoryUser.id === user.id && 
                     this.selectedRevenueHistoryUser.source === user.source;
                 html += `
-                    <div class="modal-user-item ${isSelected ? 'selected' : ''}" 
-                        onclick="Revenue.selectRevenueHistoryUserFromModal(${user.id}, '${user.source}')">
-                        <div class="modal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
-                        <div class="modal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
-                        <div class="modal-user-id">ID: ${user.id}</div>
+                    <div class="revenuemodal-user-item ${isSelected ? 'selected' : ''}" 
+                        onclick="Revenue.selectRevenueHistoryUserFromrevenuemodal(${user.id}, '${user.source}')">
+                        <div class="revenuemodal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
+                        <div class="revenuemodal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
+                        <div class="revenuemodal-user-id">ID: ${user.id}</div>
                         ${recordCount > 0 ? 
                             `<div style="font-size:10px;color:#888;margin-top:4px;">${recordCount} records</div>` : 
                             `<div style="font-size:10px;color:#888;margin-top:4px;">No history records</div>`
@@ -1579,9 +1731,9 @@
         },
 
         // ============================================
-        // SELECT REVENUE HISTORY USER FROM MODAL
+        // SELECT REVENUE HISTORY USER FROM revenuemodal
         // ============================================
-        selectRevenueHistoryUserFromModal: function(userId, source) {
+        selectRevenueHistoryUserFromrevenuemodal: function(userId, source) {
             const user = this.allRevenueHistoryUsers.find(u => u.id == userId && u.source === source);
             if (!user) return;
             
@@ -1597,12 +1749,10 @@
             }
             
             this.selectedRevenueHistoryUser = user;
-            this.closeRevenueHistoryUsersModal();
+            this.closeRevenueHistoryUsersrevenuemodal();
             
-            // Show user details view
             this.showUserDetails();
             
-            // Update search placeholder
             const placeholder = document.getElementById('revenue-history-search-placeholder');
             if (placeholder) {
                 placeholder.textContent = this.escapeHtml(user.fullname || 'N/A') + ' (ID: ' + user.id + ')';
@@ -1611,7 +1761,6 @@
             document.getElementById('revenue-history-user-name').textContent = 
                 this.escapeHtml(user.fullname || 'N/A') + ' - Revenue History';
             
-            // Reset sub-tab to 'all'
             this.currentRevenueHistorySubTab = 'all';
             document.querySelectorAll('#revenue-history-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.revenueSubtab === 'all');
@@ -1624,13 +1773,9 @@
             this.selectedRevenueHistoryUser = null;
             this.selectedUserRevenueHistory = [];
             
-            // Show overview (users list)
             this.showOverview();
-            
-            // Update global summary cubes
             this.updateRevenueHistoryGlobalCubes();
             
-            // Update search placeholder
             const placeholder = document.getElementById('revenue-history-search-placeholder');
             if (placeholder) {
                 placeholder.textContent = 'Search users by name, email, or ID...';
@@ -1835,9 +1980,12 @@
                 const execDate = user.execution_start_date;
                 if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
                 
+                const userId = user.id;
+                const duration = this.getContractDurationForUser(userId);
+                
                 const start = new Date(execDate);
                 const end = new Date(start);
-                end.setDate(end.getDate() + (parseInt(user.contract_duration) || 30));
+                end.setDate(end.getDate() + duration);
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 end.setHours(0, 0, 0, 0);
@@ -1845,30 +1993,23 @@
                 return today > end;
             };
 
-            // Helper to check if contract is cancelled
             const isCancelled = (user) => {
                 const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
                 return l === 'contract-cancelled' || l === 'contract_cancelled' || l.includes('cancelled');
             };
 
-            // Helper to check if user has a payment status
             const hasPaymentStatus = (user) => {
-                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
-                const paymentStatuses = [
-                    'payment-confirmed', 'payment_confirmed',
-                    'payment-made', 'payment_made',
-                    'unpaid-payment', 'unpaid_payment', 'unpaid',
-                    'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
-                ];
-                return paymentStatuses.some(status => l === status || l.includes(status));
+                const l = (user.current_loyalties || user.loyalties || '');
+                return Revenue.loyaltyIsFamily(l, 'payment-confirmed')
+                    || Revenue.loyaltyIsFamily(l, 'payment-made')
+                    || Revenue.loyaltyIsFamily(l, 'unpaid')
+                    || Revenue.loyaltyIsFamily(l, 'failed');
             };
 
             switch(subTab) {
                 case 'inactive-above':
                     users = users.filter(u => {
                         const profit = parseFloat(u.profitandloss) || 0;
-                        // Contract ended AND profit > threshold
-                        // AND (no payment status OR contract is cancelled with profit > threshold)
                         return isContractEnded(u) && 
                             profit > this.minProfitForSplit && 
                             !hasPaymentStatus(u);
@@ -1881,7 +2022,7 @@
                             profit > 0 && 
                             profit <= this.minProfitForSplit && 
                             !hasPaymentStatus(u) &&
-                            !isCancelled(u); // Exclude cancelled from below
+                            !isCancelled(u);
                     });
                     break;
                 case 'inactive-loss':
@@ -1890,31 +2031,31 @@
                         return isContractEnded(u) && 
                             profit < 0 && 
                             !hasPaymentStatus(u) &&
-                            !isCancelled(u); // Exclude cancelled from loss
+                            !isCancelled(u);
                     });
                     break;
                 case 'unpaid':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        return l === 'unpaid-payment' || l === 'unpaid_payment' || l === 'unpaid' || l === 'unpaidpayment';
+                        const l = (u.current_loyalties || u.loyalties || '');
+                        return Revenue.loyaltyIsFamily(l, 'unpaid');
                     });
                     break;
                 case 'payment-made':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        return l === 'payment-made' || l === 'payment_made' || l === 'paymentmade';
+                        const l = (u.current_loyalties || u.loyalties || '');
+                        return Revenue.loyaltyIsFamily(l, 'payment-made');
                     });
                     break;
                 case 'payment-confirmed':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        return l === 'payment-confirmed' || l === 'payment_confirmed' || l === 'paymentconfirmed';
+                        const l = (u.current_loyalties || u.loyalties || '');
+                        return Revenue.loyaltyIsFamily(l, 'payment-confirmed');
                     });
                     break;
                 case 'failed':
                     users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
-                        return l === 'failed-payment' || l === 'failed_payment' || l === 'payment-failed' || l === 'payment_failed' || l === 'failedpayment' || l === 'paymentfailed';
+                        const l = (u.current_loyalties || u.loyalties || '');
+                        return Revenue.loyaltyIsFamily(l, 'failed');
                     });
                     break;
                 default:
@@ -1972,9 +2113,12 @@
                         const execDate = u.execution_start_date;
                         if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
                         
+                        const userId = u.id;
+                        const duration = this.getContractDurationForUser(userId);
+                        
                         const start = new Date(execDate);
                         const end = new Date(start);
-                        end.setDate(end.getDate() + (parseInt(u.contract_duration) || 30));
+                        end.setDate(end.getDate() + duration);
                         const today = new Date();
                         today.setHours(0, 0, 0, 0);
                         end.setHours(0, 0, 0, 0);
@@ -1984,8 +2128,8 @@
                     break;
                 case 'cancelled':
                     users = users.filter(u => {
-                        const l = (u.loyalties || '').toLowerCase();
-                        return l.includes('cancelled');
+                        const l = (u.loyalties || '');
+                        return Revenue.loyaltyIsFamily(l, 'cancelled');
                     });
                     break;
                 default:
@@ -2025,7 +2169,7 @@
         },
 
         // ============================================
-        // RENDER ACTIVE USERS
+        // RENDER ACTIVE USERS - NEW COLUMNS
         // ============================================
         renderActiveUsers: function() {
             const tbody = document.getElementById('active-users-body');
@@ -2033,7 +2177,7 @@
             const isUnusualTab = this.currentActiveSubTab === 'unusual';
 
             if (!users || users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#888;">' + 
+                tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:40px;color:#888;">' + 
                     (isUnusualTab ? 'No unusual activity found' : 'No active users found') + 
                     '</td></tr>';
                 return;
@@ -2047,11 +2191,17 @@
                 const profitClass = profitAndLoss >= 0 ? 'profit' : 'loss';
                 const balanceClass = currentBalance >= 0 ? 'profit' : 'loss';
                 
-                let userShare = 0;
-                let serverShare = 0;
+                // Get programme-specific percentages
+                const progData = this.getProgrammeDataForUser(user.id);
+                const devPercent = progData.developer_percentage;
+                const invPercent = progData.investor_percentage;
+                
+                // Calculate shares using programme-specific percentages
+                let investorAmount = 0;
+                let developerAmount = 0;
                 if (profitAndLoss > 0) {
-                    userShare = (profitAndLoss * this.userSharePercent) / 100;
-                    serverShare = (profitAndLoss * this.serverSharePercent) / 100;
+                    investorAmount = (profitAndLoss * invPercent) / 100;
+                    developerAmount = (profitAndLoss * devPercent) / 100;
                 }
                 
                 let status = 'Active';
@@ -2072,7 +2222,7 @@
 
                 let actionHtml = '';
                 let clickableClass = 'clickable-row';
-                let dataAttrs = `data-user-id="${user.id}" data-source="${user.source || 'insiders'}"`;
+                let dataAttrs = `data-user-id="${user.id}" data-source="${user.source || 'harvhub'}"`;
                 
                 if (isUnusualTab) {
                     const withdrawalCount = user.withdrawal_count || 0;
@@ -2082,22 +2232,36 @@
                     statusClass = 'status-unusual';
                     
                     actionHtml = `
-                        <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'insiders'}" onchange="Revenue.handleUnusualAction(this)">
+                        <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'harvhub'}" onchange="Revenue.handleUnusualAction(this)">
                             <option value="">Remain Active</option>
                             <option value="cancel-contract">Cancel Contract</option>
                         </select>
                     `;
                 } else {
                     actionHtml = `
-                        <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'insiders'}" onchange="Revenue.handleActiveAction(this)">
+                        <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'harvhub'}" onchange="Revenue.handleActiveAction(this)">
                             <option value="">Remain Active</option>
                             <option value="cancel-contract">Cancel Contract</option>
                         </select>
                     `;
                 }
 
+                // Programme Developer display
+                let devDisplay = '';
+                if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
+                    devDisplay = `
+                        <div class="programme-developer-cell">
+                            <div class="dev-name">${this.escapeHtml(progData.developer_name)}</div>
+                            ${progData.programme_name ? `<div class="prog-name">${this.escapeHtml(progData.programme_name)}</div>` : ''}
+                        </div>
+                    `;
+                } else {
+                    devDisplay = '<span style="color:#888;">N/A</span>';
+                }
+
                 html += `
                     <tr class="${clickableClass}" ${dataAttrs}>
+                        <td>${devDisplay}</td>
                         <td>
                             <div class="user-cell">
                                 <div class="user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
@@ -2110,8 +2274,10 @@
                         <td>$${this.formatNumber(brokerBalance)}</td>
                         <td class="${profitClass}">$${this.formatNumber(profitAndLoss)}</td>
                         <td class="${balanceClass}">$${this.formatNumber(currentBalance)}</td>
-                        <td>$${this.formatNumber(userShare)}</td>
-                        <td>$${this.formatNumber(serverShare)}</td>
+                        <td>${devPercent}%</td>
+                        <td>$${this.formatNumber(developerAmount)}</td>
+                        <td>${invPercent}%</td>
+                        <td>$${this.formatNumber(investorAmount)}</td>
                         <td><span class="status-badge ${statusClass}">${status}</span></td>
                         <td>${actionHtml}</td>
                     </tr>
@@ -2122,7 +2288,7 @@
         },
 
         // ============================================
-        // RENDER COMPLETED USERS
+        // RENDER COMPLETED USERS - NEW COLUMNS
         // ============================================
         renderCompletedUsers: function() {
             const tbody = document.getElementById('completed-users-body');
@@ -2130,7 +2296,7 @@
             const subTab = this.currentCompletedSubTab;
 
             if (!users || users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#888;">No completed users found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:40px;color:#888;">No completed users found</td></tr>';
                 return;
             }
 
@@ -2138,6 +2304,19 @@
             users.forEach(user => {
                 const profit = parseFloat(user.profitandloss) || 0;
                 const profitClass = profit >= 0 ? 'profit' : 'loss';
+                
+                // Get programme-specific percentages
+                const progData = this.getProgrammeDataForUser(user.id);
+                const devPercent = progData.developer_percentage;
+                const invPercent = progData.investor_percentage;
+                
+                // Calculate shares using programme-specific percentages
+                let investorAmount = 0;
+                let developerAmount = 0;
+                if (profit > 0) {
+                    investorAmount = (profit * invPercent) / 100;
+                    developerAmount = (profit * devPercent) / 100;
+                }
                 
                 let displayStatus = '';
                 let statusClass = '';
@@ -2192,8 +2371,8 @@
                             actionHtml = `
                                 <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
                                     <option value="">Select Status</option>
-                                    <option value="payment-confirmed" ${user.current_loyalties === 'payment-confirmed' || user.current_loyalties === 'payment_confirmed' ? 'selected' : ''}>Payment Confirmed</option>
-                                    <option value="failed-payment" ${user.current_loyalties === 'failed-payment' || user.current_loyalties === 'failed_payment' || user.current_loyalties === 'payment-failed' || user.current_loyalties === 'payment_failed' ? 'selected' : ''}>Payment Failed</option>
+                                    <option value="payment-confirmed">Payment Confirmed</option>
+                                    <option value="failed-payment">Payment Failed</option>
                                 </select>
                             `;
                             break;
@@ -2201,9 +2380,9 @@
                             actionHtml = `
                                 <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
                                     <option value="">Select Status</option>
-                                    <option value="payment-made" ${user.current_loyalties === 'payment-made' || user.current_loyalties === 'payment_made' ? 'selected' : ''}>Payment Made</option>
-                                    <option value="failed-payment" ${user.current_loyalties === 'failed-payment' || user.current_loyalties === 'failed_payment' || user.current_loyalties === 'payment-failed' || user.current_loyalties === 'payment_failed' ? 'selected' : ''}>Payment Failed</option>
-                                    <option value="unpaid-payment" ${user.current_loyalties === 'unpaid-payment' || user.current_loyalties === 'unpaid_payment' || user.current_loyalties === 'unpaid' ? 'selected' : ''}>Unpaid</option>
+                                    <option value="payment-made">Payment Made</option>
+                                    <option value="failed-payment">Payment Failed</option>
+                                    <option value="unpaid-payment">Unpaid</option>
                                     <option value="suspend">Suspend</option>
                                 </select>
                             `;
@@ -2212,8 +2391,8 @@
                             actionHtml = `
                                 <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
                                     <option value="">Select Status</option>
-                                    <option value="payment-confirmed" ${user.current_loyalties === 'payment-confirmed' || user.current_loyalties === 'payment_confirmed' ? 'selected' : ''}>Payment Confirmed</option>
-                                    <option value="payment-made" ${user.current_loyalties === 'payment-made' || user.current_loyalties === 'payment_made' ? 'selected' : ''}>Payment Made</option>
+                                    <option value="payment-confirmed">Payment Confirmed</option>
+                                    <option value="payment-made">Payment Made</option>
                                 </select>
                             `;
                             break;
@@ -2221,18 +2400,32 @@
                             actionHtml = `
                                 <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
                                     <option value="">Select Status</option>
-                                    <option value="unpaid-payment" ${user.current_loyalties === 'unpaid-payment' || user.current_loyalties === 'unpaid_payment' || user.current_loyalties === 'unpaid' ? 'selected' : ''}>Unpaid</option>
-                                    <option value="payment-made" ${user.current_loyalties === 'payment-made' || user.current_loyalties === 'payment_made' ? 'selected' : ''}>Payment Made</option>
-                                    <option value="payment-confirmed" ${user.current_loyalties === 'payment-confirmed' || user.current_loyalties === 'payment_confirmed' ? 'selected' : ''}>Payment Confirmed</option>
-                                    <option value="failed-payment" ${user.current_loyalties === 'failed-payment' || user.current_loyalties === 'failed_payment' || user.current_loyalties === 'payment-failed' || user.current_loyalties === 'payment_failed' ? 'selected' : ''}>Failed</option>
+                                    <option value="unpaid-payment">Unpaid</option>
+                                    <option value="payment-made">Payment Made</option>
+                                    <option value="payment-confirmed">Payment Confirmed</option>
+                                    <option value="failed-payment">Failed</option>
                                     <option value="suspend">Suspend</option>
                                 </select>
                             `;
                     }
                 }
 
+                // Programme Developer display
+                let devDisplay = '';
+                if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
+                    devDisplay = `
+                        <div class="programme-developer-cell">
+                            <div class="dev-name">${this.escapeHtml(progData.developer_name)}</div>
+                            ${progData.programme_name ? `<div class="prog-name">${this.escapeHtml(progData.programme_name)}</div>` : ''}
+                        </div>
+                    `;
+                } else {
+                    devDisplay = '<span style="color:#888;">N/A</span>';
+                }
+
                 html += `
                     <tr>
+                        <td>${devDisplay}</td>
                         <td>
                             <div class="user-cell">
                                 <div class="user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
@@ -2244,6 +2437,10 @@
                         <td>${this.escapeHtml(user.login || 'N/A')}</td>
                         <td>${this.escapeHtml(user.invested_with || 'N/A')}</td>
                         <td class="${profitClass}">$${this.formatNumber(profit)}</td>
+                        <td>${devPercent}%</td>
+                        <td>$${this.formatNumber(developerAmount)}</td>
+                        <td>${invPercent}%</td>
+                        <td>$${this.formatNumber(investorAmount)}</td>
                         <td><span class="status-badge ${statusClass}">${displayStatus}</span></td>
                         <td>${actionHtml}</td>
                     </tr>
@@ -2254,14 +2451,14 @@
         },
 
         // ============================================
-        // RENDER INACTIVE USERS
+        // RENDER INACTIVE USERS - NEW COLUMNS
         // ============================================
         renderInactiveUsers: function() {
             const tbody = document.getElementById('inactive-users-body');
             const users = this.filteredInactiveUsers;
 
             if (!users || users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#888;">No inactive users found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#888;">No inactive users found</td></tr>';
                 return;
             }
 
@@ -2271,13 +2468,17 @@
                 const profitAndLoss = parseFloat(user.profitandloss) || 0;
                 const profitClass = profitAndLoss >= 0 ? 'profit' : 'loss';
                 
+                // Get programme data for this user
+                const progData = this.getProgrammeDataForUser(user.id);
+                
                 let status = 'Inactive';
                 let statusClass = 'status-inactive';
                 
                 const execDate = user.execution_start_date;
-                const loyalties = (user.loyalties || '').toLowerCase();
+                const loyalties = (user.loyalties || '');
+                const duration = progData.contract_duration;
                 
-                if (loyalties.includes('cancelled')) {
+                if (Revenue.loyaltyIsFamily(loyalties, 'cancelled')) {
                     status = 'Cancelled';
                     statusClass = 'status-cancelled';
                 } else if (!execDate || execDate === '0000-00-00' || execDate === null) {
@@ -2286,7 +2487,7 @@
                 } else {
                     const start = new Date(execDate);
                     const end = new Date(start);
-                    end.setDate(end.getDate() + (parseInt(user.contract_duration) || 30));
+                    end.setDate(end.getDate() + duration);
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
                     end.setHours(0, 0, 0, 0);
@@ -2297,8 +2498,22 @@
                     }
                 }
 
+                // Programme Developer display
+                let devDisplay = '';
+                if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
+                    devDisplay = `
+                        <div class="programme-developer-cell">
+                            <div class="dev-name">${this.escapeHtml(progData.developer_name)}</div>
+                            ${progData.programme_name ? `<div class="prog-name">${this.escapeHtml(progData.programme_name)}</div>` : ''}
+                        </div>
+                    `;
+                } else {
+                    devDisplay = '<span style="color:#888;">N/A</span>';
+                }
+
                 html += `
                     <tr>
+                        <td>${devDisplay}</td>
                         <td>
                             <div class="user-cell">
                                 <div class="user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
@@ -2312,7 +2527,7 @@
                         <td class="${profitClass}">$${this.formatNumber(profitAndLoss)}</td>
                         <td><span class="status-badge ${statusClass}">${status}</span></td>
                         <td>
-                            <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'insiders'}" onchange="Revenue.handleInactiveAction(this)">
+                            <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'harvhub'}" onchange="Revenue.handleInactiveAction(this)">
                                 <option value="">Remain Inactive</option>
                                 <option value="initialize-enrollment">Initialize Enrollment</option>
                             </select>
@@ -2369,16 +2584,16 @@
             if (!action) return;
             
             if (action === 'initialize-enrollment') {
-                this.showInitializeEnrollmentModal(userId, source);
+                this.showInitializeEnrollmentrevenuemodal(userId, source);
             }
             
             selectElement.value = '';
         },
 
         // ============================================
-        // INITIALIZE ENROLLMENT MODAL
+        // INITIALIZE ENROLLMENT revenuemodal
         // ============================================
-        showInitializeEnrollmentModal: function(userId, source) {
+        showInitializeEnrollmentrevenuemodal: function(userId, source) {
             const user = this.allInactiveUsers.find(u => u.id == userId && u.source === source);
             if (!user) {
                 this.showNotification('User not found', 'Error', true);
@@ -2394,14 +2609,14 @@
                 source: source
             };
             
-            document.getElementById('initialize-enrollment-modal').style.display = 'flex';
+            document.getElementById('initialize-enrollment-revenuemodal').style.display = 'flex';
             setTimeout(() => {
                 document.getElementById('init-enroll-broker-balance').focus();
             }, 100);
         },
 
-        closeInitializeEnrollmentModal: function() {
-            document.getElementById('initialize-enrollment-modal').style.display = 'none';
+        closeInitializeEnrollmentrevenuemodal: function() {
+            document.getElementById('initialize-enrollment-revenuemodal').style.display = 'none';
             this._initEnrollCallback = null;
             document.getElementById('init-enroll-error').style.display = 'none';
         },
@@ -2423,7 +2638,7 @@
             }
             
             const callback = this._initEnrollCallback;
-            this.closeInitializeEnrollmentModal();
+            this.closeInitializeEnrollmentrevenuemodal();
             
             if (callback) {
                 this.confirmInitializeEnrollmentWithPassword(callback.userId, callback.source, brokerBalance);
@@ -2433,7 +2648,7 @@
         confirmInitializeEnrollmentWithPassword: function(userId, source, brokerBalance) {
             const self = this;
             
-            this.showPasswordModal(
+            this.showPasswordrevenuemodal(
                 'Initialize Enrollment',
                 'Enter admin password to initialize enrollment for User ID ' + userId,
                 function(password) {
@@ -2444,7 +2659,7 @@
                         return;
                     }
                     
-                    const confirmBtn = document.getElementById('password-modal-confirm-btn');
+                    const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                     const originalText = confirmBtn.textContent;
                     confirmBtn.textContent = 'Processing...';
                     confirmBtn.disabled = true;
@@ -2488,17 +2703,14 @@
         // ============================================
         // CANCEL CONTRACT
         // ============================================
-        // ============================================
-        // CANCEL CONTRACT (FIXED)
-        // ============================================
         cancelContract: function(userId, source) {
             const self = this;
             
-            this.showConfirmModal(
+            this.showConfirmrevenuemodal(
                 'Cancel Contract',
                 'Are you sure you want to cancel the contract for User ID ' + userId + '? This action cannot be undone.',
                 function() {
-                    self.showPasswordModal(
+                    self.showPasswordrevenuemodal(
                         'Cancel Contract',
                         'Enter admin password to cancel contract for User ID ' + userId,
                         function(password) {
@@ -2509,7 +2721,7 @@
                                 return;
                             }
                             
-                            const confirmBtn = document.getElementById('password-modal-confirm-btn');
+                            const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
@@ -2529,12 +2741,10 @@
                                 
                                 if (data.success) {
                                     self.showNotification('Contract cancelled successfully! User moved to inactive tab.', 'Success', false);
-                                    // RELOAD ALL DATA
                                     self.loadActiveUsers();
                                     self.loadCompletedUsers();
                                     self.loadRevenueHistoryUsers();
                                     self.loadInactiveUsers();
-                                    // Also reload unusual users if active
                                     if (self.currentActiveSubTab === 'unusual') {
                                         self.loadUnusualUsers();
                                     }
@@ -2563,11 +2773,11 @@
         suspendUser: function(userId, source) {
             const self = this;
             
-            this.showConfirmModal(
+            this.showConfirmrevenuemodal(
                 'Suspend User',
                 'Are you sure you want to suspend User ID ' + userId + '?',
                 function() {
-                    self.showPasswordModal(
+                    self.showPasswordrevenuemodal(
                         'Suspend User',
                         'Enter admin password to suspend User ID ' + userId,
                         function(password) {
@@ -2578,7 +2788,7 @@
                                 return;
                             }
                             
-                            const confirmBtn = document.getElementById('password-modal-confirm-btn');
+                            const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
@@ -2623,7 +2833,7 @@
         // ============================================
         viewUserDetail: function(userId, source) {
             this.selectedUserId = userId;
-            this.selectedUserSource = source || 'insiders';
+            this.selectedUserSource = source || 'harvhub';
             this.isDetailViewOpen = true;
             
             const overlay = document.getElementById('user-detail-overlay');
@@ -2662,7 +2872,7 @@
         },
 
         // ============================================
-        // RENDER USER DETAIL - Updated for new daily target structure
+        // RENDER USER DETAIL
         // ============================================
         renderUserDetail: function(detailData, basicData) {
             const container = document.getElementById('detail-overlay-body');
@@ -2671,7 +2881,9 @@
             const dailyLog = detailData.log || {};
             const dailyTarget = detailData.daily_target || {};
             
-            // Parse daily target data - new structure with weeks
+            // Get programme data for this user
+            const progData = this.getProgrammeDataForUser(user.id);
+            
             let dailyTargetData = {};
             if (dailyTarget) {
                 if (typeof dailyTarget === 'string') {
@@ -2720,7 +2932,6 @@
                 dailyTargetData = {};
             }
             
-            // Parse daily log data
             let dailyLogData = {};
             if (dailyLog) {
                 if (typeof dailyLog === 'string') {
@@ -2743,10 +2954,8 @@
             const isAboveThreshold = profitAndLoss > this.minProfitForSplit;
             const isInProfit = profitAndLoss > 0;
             
-            // Get week keys from dailyTargetData
             const weekKeys = Object.keys(dailyTargetData).filter(key => key.startsWith('week_')).sort();
             
-            // Get log dates
             const logDates = Object.keys(dailyLogData).sort((a, b) => {
                 const partsA = a.split('-');
                 const partsB = b.split('-');
@@ -2758,7 +2967,6 @@
                 return b.localeCompare(a);
             });
             
-            // Count total days and unusual days
             let totalDays = 0;
             let totalMet = 0;
             let totalOwed = 0;
@@ -2787,6 +2995,15 @@
                                 <h3>${this.escapeHtml(user.fullname || 'N/A')}</h3>
                                 <p class="detail-user-email">${this.escapeHtml(user.email || 'N/A')}</p>
                                 <p class="detail-user-id">ID: ${user.id} | Source: ${this.escapeHtml(user.source || 'N/A')}</p>
+                                ${progData.has_programme ? `
+                                    <p class="detail-programme-info" style="margin-top:8px;font-size:12px;color:#888;">
+                                        <strong>Developer:</strong> ${this.escapeHtml(progData.developer_name)} 
+                                        ${progData.programme_name ? ` | <strong>Programme:</strong> ${this.escapeHtml(progData.programme_name)}` : ''}
+                                        | <strong>Duration:</strong> ${progData.contract_duration} days
+                                        | <strong>Dev %:</strong> ${progData.developer_percentage}%
+                                        | <strong>Inv %:</strong> ${progData.investor_percentage}%
+                                    </p>
+                                ` : ''}
                             </div>
                             <div class="detail-user-status">
                                 <span class="status-badge ${isAboveThreshold ? 'status-above' : isInProfit ? 'status-profit' : 'status-loss'}">
@@ -2900,7 +3117,6 @@
                         
                         const statusClass = status === 'met' ? 'status-met' : status === 'owed' ? 'status-owed' : 'status-pending';
                         
-                        // Check if this day has unusual activity
                         let isUnusual = false;
                         if (dateStr) {
                             const parts = dateStr.split('-');
@@ -3137,11 +3353,11 @@
             
             const self = this;
             
-            this.showConfirmModal(
+            this.showConfirmrevenuemodal(
                 'Update Status',
                 'Update status to "' + newStatus + '" for User ID ' + userId + '?',
                 function() {
-                    self.showPasswordModal(
+                    self.showPasswordrevenuemodal(
                         'Update Status',
                         'Enter admin password to update status for User ID ' + userId,
                         function(password) {
@@ -3152,7 +3368,7 @@
                                 return;
                             }
                             
-                            const confirmBtn = document.getElementById('password-modal-confirm-btn');
+                            const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
@@ -3264,8 +3480,13 @@
 
                 if (pnl > 0) {
                     totalInProfit++;
-                    const serverShare = (pnl * this.serverSharePercent) / 100;
-                    const userShare = (pnl * this.userSharePercent) / 100;
+                    // Use programme-specific percentages
+                    const progData = this.getProgrammeDataForUser(user.id);
+                    const devPercent = progData.developer_percentage;
+                    const invPercent = progData.investor_percentage;
+                    
+                    const serverShare = (pnl * devPercent) / 100;
+                    const userShare = (pnl * invPercent) / 100;
                     totalServerShare += serverShare;
                     totalUserShare += userShare;
                 }
@@ -3366,9 +3587,11 @@
                 const execDate = user.execution_start_date;
                 if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
                 
+                const duration = this.getContractDurationForUser(user.id);
+                
                 const start = new Date(execDate);
                 const end = new Date(start);
-                end.setDate(end.getDate() + (parseInt(user.contract_duration) || 30));
+                end.setDate(end.getDate() + duration);
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 end.setHours(0, 0, 0, 0);
@@ -3377,32 +3600,26 @@
             };
 
             const isCancelled = (user) => {
-                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
-                return l === 'contract-cancelled' || l === 'contract_cancelled' || l.includes('cancelled');
+                const l = (user.current_loyalties || user.loyalties || '');
+                return Revenue.loyaltyIsFamily(l, 'cancelled');
             };
 
             const hasPaymentStatus = (user) => {
-                const l = (user.current_loyalties || user.loyalties || '').toLowerCase();
-                const paymentStatuses = [
-                    'payment-confirmed', 'payment_confirmed',
-                    'payment-made', 'payment_made',
-                    'unpaid-payment', 'unpaid_payment', 'unpaid',
-                    'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
-                ];
-                return paymentStatuses.some(status => l === status || l.includes(status));
+                const l = (user.current_loyalties || user.loyalties || '');
+                return Revenue.loyaltyIsFamily(l, 'payment-confirmed')
+                    || Revenue.loyaltyIsFamily(l, 'payment-made')
+                    || Revenue.loyaltyIsFamily(l, 'unpaid')
+                    || Revenue.loyaltyIsFamily(l, 'failed');
             };
 
             users.forEach(u => {
                 const profit = parseFloat(u.profitandloss) || 0;
-                const l = (u.current_loyalties || u.loyalties || '').toLowerCase();
+                const l = (u.current_loyalties || u.loyalties || '');
                 
-                // Check if contract is ended (not active)
                 if (isContractEnded(u)) {
-                    // If cancelled with profit > threshold, show in above
                     if (isCancelled(u) && profit > this.minProfitForSplit) {
                         counts['inactive-above']++;
                     }
-                    // Otherwise, normal inactive logic
                     else if (!hasPaymentStatus(u) && !isCancelled(u)) {
                         if (profit > this.minProfitForSplit) {
                             counts['inactive-above']++;
@@ -3414,14 +3631,13 @@
                     }
                 }
                 
-                // Payment statuses
-                if (l === 'unpaid-payment' || l === 'unpaid_payment' || l === 'unpaid' || l === 'unpaidpayment') {
+                if (Revenue.loyaltyIsFamily(l, 'unpaid')) {
                     counts.unpaid++;
-                } else if (l === 'payment-made' || l === 'payment_made' || l === 'paymentmade') {
+                } else if (Revenue.loyaltyIsFamily(l, 'payment-made')) {
                     counts['payment-made']++;
-                } else if (l === 'payment-confirmed' || l === 'payment_confirmed' || l === 'paymentconfirmed') {
+                } else if (Revenue.loyaltyIsFamily(l, 'payment-confirmed')) {
                     counts['payment-confirmed']++;
-                } else if (l === 'failed-payment' || l === 'failed_payment' || l === 'payment-failed' || l === 'payment_failed' || l === 'failedpayment' || l === 'paymentfailed') {
+                } else if (Revenue.loyaltyIsFamily(l, 'failed')) {
                     counts.failed++;
                 }
             });
@@ -3442,16 +3658,18 @@
 
             users.forEach(u => {
                 const execDate = u.execution_start_date;
-                const loyalties = (u.loyalties || '').toLowerCase();
+                const loyalties = (u.loyalties || '');
                 
-                if (loyalties.includes('cancelled')) {
+                if (Revenue.loyaltyIsFamily(loyalties, 'cancelled')) {
                     counts.cancelled++;
                 } else if (!execDate || execDate === '0000-00-00' || execDate === null) {
                     counts['no-contract']++;
                 } else {
+                    const duration = this.getContractDurationForUser(u.id);
+                    
                     const start = new Date(execDate);
                     const end = new Date(start);
-                    end.setDate(end.getDate() + (parseInt(u.contract_duration) || 30));
+                    end.setDate(end.getDate() + duration);
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
                     end.setHours(0, 0, 0, 0);
@@ -3472,26 +3690,34 @@
         // STATUS HELPERS
         // ============================================
         getStatusLabel: function(status) {
-            const s = (status || '').toLowerCase();
-            if (s === 'payment-confirmed' || s === 'payment_confirmed') return 'Payment Confirmed';
-            if (s === 'payment-made' || s === 'payment_made') return 'Payment Made';
-            if (s === 'unpaid-payment' || s === 'unpaid_payment' || s === 'unpaid') return 'Unpaid';
-            if (s === 'failed-payment' || s === 'failed_payment' || s === 'payment-failed' || s === 'payment_failed') return 'Failed';
-            if (s === 'contract_cancelled' || s === 'contract-cancelled' || s.includes('cancelled')) return 'Cancelled';
-            if (s === 'loss_completed') return 'Loss Completed';
-            if (s === 'below_threshold') return 'Below Threshold';
-            return status || 'Unknown';
+            const n = this.normalizeLoyaltyStatus(status);
+            switch (n) {
+                case 'payment-confirmed': return 'Payment Confirmed';
+                case 'payment-made': return 'Payment Made';
+                case 'unpaid-payment': return 'Unpaid';
+                case 'failed-payment': return 'Failed';
+                case 'contract-cancelled-payment-confirmed': return 'Cancelled (Payment Confirmed)';
+                case 'contract-cancelled-payment-made': return 'Cancelled (Payment Made)';
+                case 'contract-cancelled-unpaid-payment': return 'Cancelled (Unpaid)';
+                case 'contract-cancelled-failed-payment': return 'Cancelled (Failed)';
+                case 'contract_cancelled': return 'Cancelled';
+                case 'loss_completed': return 'Loss Completed';
+                case 'below_threshold': return 'Below Threshold';
+                case 'active': return 'Active Contract';
+                default: return status || 'Unknown';
+            }
         },
 
         getStatusClass: function(status) {
-            const s = (status || '').toLowerCase();
-            if (s === 'payment-confirmed' || s === 'payment_confirmed') return 'status-confirmed';
-            if (s === 'payment-made' || s === 'payment_made') return 'status-made';
-            if (s === 'unpaid-payment' || s === 'unpaid_payment' || s === 'unpaid') return 'status-unpaid';
-            if (s === 'failed-payment' || s === 'failed_payment' || s === 'payment-failed' || s === 'payment_failed') return 'status-failed';
-            if (s === 'contract_cancelled' || s === 'contract-cancelled' || s.includes('cancelled')) return 'status-cancelled';
-            if (s === 'loss_completed') return 'status-loss';
-            if (s === 'below_threshold') return 'status-below';
+            const n = this.normalizeLoyaltyStatus(status);
+            if (n === 'payment-confirmed' || n === 'contract-cancelled-payment-confirmed') return 'status-confirmed';
+            if (n === 'payment-made' || n === 'contract-cancelled-payment-made') return 'status-made';
+            if (n === 'unpaid-payment' || n === 'contract-cancelled-unpaid-payment') return 'status-unpaid';
+            if (n === 'failed-payment' || n === 'contract-cancelled-failed-payment') return 'status-failed';
+            if (n === 'contract_cancelled') return 'status-cancelled';
+            if (n === 'loss_completed') return 'status-loss';
+            if (n === 'below_threshold') return 'status-below';
+            if (n === 'active') return 'active';
             return 'status-default';
         },
 
@@ -3590,4 +3816,3 @@
         Revenue.init();
     });
 </script>
-

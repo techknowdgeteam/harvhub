@@ -26,7 +26,7 @@
 <div id="users-tab" class="management-tab" style="display: none;">
     <div class="split-view">
         <div class="user-list-panel">
-            <div class="users-sidebar-header" onclick="showAllUsersModal()">
+            <div class="users-sidebar-header" onclick="showAllUsersaccountmanagementmodal()">
                 <div class="search-user-btn">
                     <span class="search-icon">🔍</span>
                     <span class="search-placeholder">Search users...</span>
@@ -71,7 +71,7 @@
                         <span class="config-entry-title" id="user-config-title">📁 User Configuration</span>
                     </div>
                     <div class="config-entry-buttons" onclick="event.stopPropagation()">
-                        <button type="button" class="edit-json-btn-header" id="user-edit-btn" onclick="openEditModal('user')" disabled>✏️ Edit JSON</button>
+                        <button type="button" class="edit-json-btn-header" id="user-edit-btn" onclick="openEditaccountmanagementmodal('user')" disabled>✏️ Edit JSON</button>
                         <button type="button" class="copy-config-btn" id="user-config-copy-btn" onclick="copyUserConfigToClipboard()" style="display: none;">📋 Copy JSON</button>
                     </div>
                 </div>
@@ -95,7 +95,7 @@
                 <span class="config-entry-title">📁 Server Configuration</span>
             </div>
             <div class="config-entry-buttons" onclick="event.stopPropagation()">
-                <button type="button" class="edit-config-btn" id="server-edit-btn" onclick="openEditModal('server')">✏️ Edit JSON</button>
+                <button type="button" class="edit-config-btn" id="server-edit-btn" onclick="openEditaccountmanagementmodal('server')">✏️ Edit JSON</button>
                 <button type="button" class="copy-config-btn" id="server-copy-btn" onclick="copyJsonToClipboard('server')">📋 Copy JSON</button>
             </div>
         </div>
@@ -112,7 +112,7 @@
             <h3>📁 Account Management Configurations</h3>
             <div class="header-buttons">
                 <button type="button" class="refresh-configs-btn" onclick="loadAccountManagementConfigs()" style="background: #3498db;">🔄 Refresh</button>
-                <button type="button" class="add-config-entry-btn" onclick="showAddConfigEntryModal()" style="background: #27ae60;">➕ Add New Configuration</button>
+                <button type="button" class="add-config-entry-btn" onclick="showAddConfigEntryaccountmanagementmodal()" style="background: #27ae60;">➕ Add New Configuration</button>
             </div>
         </div>
         <div id="config-entries-container" class="config-entries-grid">
@@ -269,7 +269,7 @@
 <div id="execution-tab" class="management-tab" style="display: none;">
     <div class="split-view">
         <div class="user-list-panel">
-            <div class="users-sidebar-header" onclick="showExecutionUsersModal()">
+            <div class="users-sidebar-header" onclick="showExecutionUsersaccountmanagementmodal()">
                 <div class="search-user-btn">
                     <span class="search-icon">🔍</span>
                     <span class="search-placeholder">Search users...</span>
@@ -305,7 +305,7 @@
 <div id="autotrading-tab" class="management-tab" style="display: none;">
     <div class="split-view">
         <div class="user-list-panel">
-            <div class="users-sidebar-header" onclick="showAutotradingUsersModal()">
+            <div class="users-sidebar-header" onclick="showAutotradingUsersaccountmanagementmodal()">
                 <div class="search-user-btn">
                     <span class="search-icon">🔍</span>
                     <span class="search-placeholder">Search users...</span>
@@ -332,20 +332,20 @@
     </div>
 </div>
 
-<!-- Edit JSON Modal -->
-<div id="edit-json-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-container modal-large" id="edit-json-modal-container">
-        <div class="modal-header">
-            <span id="edit-json-modal-title">✏️ Edit JSON Configuration</span>
-            <span class="modal-close" onclick="closeEditModal()">✕</span>
+<!-- Edit JSON accountmanagementmodal -->
+<div id="edit-json-accountmanagementmodal" class="accountmanagementmodal-overlay" style="display: none;">
+    <div class="accountmanagementmodal-container accountmanagementmodal-large" id="edit-json-accountmanagementmodal-container">
+        <div class="accountmanagementmodal-header">
+            <span id="edit-json-accountmanagementmodal-title">✏️ Edit JSON Configuration</span>
+            <span class="accountmanagementmodal-close" onclick="closeEditaccountmanagementmodal()">✕</span>
         </div>
-        <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; height: 100%;">
+        <div class="accountmanagementmodal-body" style="padding: 20px; display: flex; flex-direction: column; height: 100%;">
             <div style="flex: 1; display: flex; flex-direction: column; min-height: 400px;">
                 <textarea id="edit-json-textarea" class="json-editor-fullwidth" style="flex: 1; min-height: 400px; width: 100%; padding: 15px; background: var(--bg-secondary); color: var(--text-color); border: 2px solid var(--accent-color); border-radius: 8px; font-family: 'Courier New', monospace; font-size: 13px; resize: vertical; white-space: pre; overflow: auto; box-sizing: border-box;"></textarea>
             </div>
             <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
-                <button type="button" class="modal-cancel-btn" onclick="closeEditModal()" style="background: #e74c3c; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
-                <button type="button" class="modal-confirm-btn" onclick="saveEditModal()" style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">💾 Save Changes</button>
+                <button type="button" class="accountmanagementmodal-cancel-btn" onclick="closeEditaccountmanagementmodal()" style="background: #e74c3c; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">Cancel</button>
+                <button type="button" class="accountmanagementmodal-confirm-btn" onclick="saveEditaccountmanagementmodal()" style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px;">💾 Save Changes</button>
             </div>
         </div>
     </div>
@@ -366,8 +366,8 @@
     let currentTab = 'server';
     let allUsersCache = [];
     let currentFilteredUsers = [];
-    let editModalTargetType = null;
-    let editModalDataBackup = null;
+    let editaccountmanagementmodalTargetType = null;
+    let editaccountmanagementmodalDataBackup = null;
     let pendingSaveData = null;
 
     // Autotrading Settings Variables
@@ -397,144 +397,144 @@
     let configDataCacheTimestamp = {};
 
     // ============================================
-    // CUSTOM MODAL FUNCTIONS
+    // CUSTOM accountmanagementmodal FUNCTIONS
     // ============================================
 
-    function showCustomModal(title, message, type = 'info', callback = null) {
-        // Remove any existing modal
-        const existingModal = document.getElementById('custom-modal-overlay');
-        if (existingModal) {
-            existingModal.remove();
+    function showCustomaccountmanagementmodal(title, message, type = 'info', callback = null) {
+        // Remove any existing accountmanagementmodal
+        const existingaccountmanagementmodal = document.getElementById('custom-accountmanagementmodal-overlay');
+        if (existingaccountmanagementmodal) {
+            existingaccountmanagementmodal.remove();
         }
 
         let icon = 'ℹ️';
-        let modalClass = 'modal-info';
+        let accountmanagementmodalClass = 'accountmanagementmodal-info';
         if (type === 'success') {
             icon = '✅';
-            modalClass = 'modal-success';
+            accountmanagementmodalClass = 'accountmanagementmodal-success';
         } else if (type === 'error') {
             icon = '❌';
-            modalClass = 'modal-error';
+            accountmanagementmodalClass = 'accountmanagementmodal-error';
         } else if (type === 'warning') {
             icon = '⚠️';
-            modalClass = 'modal-warning';
+            accountmanagementmodalClass = 'accountmanagementmodal-warning';
         }
 
-        const modalHtml = `
-            <div class="modal-overlay" id="custom-modal-overlay" onclick="closeCustomModal(event)">
-                <div class="modal-container custom-modal ${modalClass}" onclick="event.stopPropagation()" style="max-width: 450px;">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="custom-accountmanagementmodal-overlay" onclick="closeCustomaccountmanagementmodal(event)">
+                <div class="accountmanagementmodal-container custom-accountmanagementmodal ${accountmanagementmodalClass}" onclick="event.stopPropagation()" style="max-width: 450px;">
+                    <div class="accountmanagementmodal-header">
                         <span>${icon} ${title}</span>
-                        <span class="modal-close" onclick="closeCustomModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closeCustomaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body" style="text-align: center; padding: 30px 20px;">
+                    <div class="accountmanagementmodal-body" style="text-align: center; padding: 30px 20px;">
                         <p style="font-size: 15px; line-height: 1.6; margin: 0;">${message}</p>
                     </div>
                     <div style="padding: 15px 20px 20px; display: flex; justify-content: center; border-top: 1px solid var(--border-color);">
-                        <button class="modal-confirm-btn" onclick="closeCustomModal()" style="min-width: 100px;">OK</button>
+                        <button class="accountmanagementmodal-confirm-btn" onclick="closeCustomaccountmanagementmodal()" style="min-width: 100px;">OK</button>
                     </div>
                 </div>
             </div>
         `;
 
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
         
         // Store callback if provided
         if (callback) {
-            window._customModalCallback = callback;
+            window._customaccountmanagementmodalCallback = callback;
         }
     }
 
     function showCustomConfirm(title, message, confirmText = 'Confirm', cancelText = 'Cancel', onConfirm = null) {
-        // Remove any existing modal
-        const existingModal = document.getElementById('custom-modal-overlay');
-        if (existingModal) {
-            existingModal.remove();
+        // Remove any existing accountmanagementmodal
+        const existingaccountmanagementmodal = document.getElementById('custom-accountmanagementmodal-overlay');
+        if (existingaccountmanagementmodal) {
+            existingaccountmanagementmodal.remove();
         }
 
-        const modalHtml = `
-            <div class="modal-overlay" id="custom-modal-overlay" onclick="closeCustomModal(event)">
-                <div class="modal-container custom-modal" onclick="event.stopPropagation()" style="max-width: 450px;">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="custom-accountmanagementmodal-overlay" onclick="closeCustomaccountmanagementmodal(event)">
+                <div class="accountmanagementmodal-container custom-accountmanagementmodal" onclick="event.stopPropagation()" style="max-width: 450px;">
+                    <div class="accountmanagementmodal-header">
                         <span>⚠️ ${title}</span>
-                        <span class="modal-close" onclick="closeCustomModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closeCustomaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body" style="text-align: center; padding: 30px 20px;">
+                    <div class="accountmanagementmodal-body" style="text-align: center; padding: 30px 20px;">
                         <p style="font-size: 15px; line-height: 1.6; margin: 0;">${message}</p>
                     </div>
                     <div style="padding: 15px 20px 20px; display: flex; gap: 10px; justify-content: center; border-top: 1px solid var(--border-color);">
-                        <button class="modal-cancel-btn" onclick="closeCustomModal()" style="min-width: 80px;">${cancelText}</button>
-                        <button class="modal-confirm-btn" id="custom-confirm-btn" style="min-width: 80px; background: #e74c3c;">${confirmText}</button>
+                        <button class="accountmanagementmodal-cancel-btn" onclick="closeCustomaccountmanagementmodal()" style="min-width: 80px;">${cancelText}</button>
+                        <button class="accountmanagementmodal-confirm-btn" id="custom-confirm-btn" style="min-width: 80px; background: #e74c3c;">${confirmText}</button>
                     </div>
                 </div>
             </div>
         `;
 
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
 
         if (onConfirm) {
             const confirmBtn = document.getElementById('custom-confirm-btn');
             confirmBtn.addEventListener('click', function() {
-                closeCustomModal();
+                closeCustomaccountmanagementmodal();
                 onConfirm();
             });
         }
     }
 
-    function closeCustomModal(event) {
-        if (event && event.target && event.target.id !== 'custom-modal-overlay' && event.target.className !== 'modal-close' && event.target.className !== 'modal-confirm-btn' && event.target.className !== 'modal-cancel-btn') {
+    function closeCustomaccountmanagementmodal(event) {
+        if (event && event.target && event.target.id !== 'custom-accountmanagementmodal-overlay' && event.target.className !== 'accountmanagementmodal-close' && event.target.className !== 'accountmanagementmodal-confirm-btn' && event.target.className !== 'accountmanagementmodal-cancel-btn') {
             return;
         }
-        const modal = document.getElementById('custom-modal-overlay');
-        if (modal) {
-            modal.remove();
+        const accountmanagementmodal = document.getElementById('custom-accountmanagementmodal-overlay');
+        if (accountmanagementmodal) {
+            accountmanagementmodal.remove();
         }
-        if (window._customModalCallback) {
-            window._customModalCallback = null;
+        if (window._customaccountmanagementmodalCallback) {
+            window._customaccountmanagementmodalCallback = null;
         }
     }
 
-    function showPasswordModal(title, message, onConfirm) {
-        // Remove any existing modal
-        const existingModal = document.getElementById('password-modal-overlay');
-        if (existingModal) {
-            existingModal.remove();
+    function showPasswordaccountmanagementmodal(title, message, onConfirm) {
+        // Remove any existing accountmanagementmodal
+        const existingaccountmanagementmodal = document.getElementById('password-accountmanagementmodal-overlay');
+        if (existingaccountmanagementmodal) {
+            existingaccountmanagementmodal.remove();
         }
 
-        const modalHtml = `
-            <div class="modal-overlay" id="password-modal-overlay" onclick="closePasswordModal(event)">
-                <div class="modal-container" onclick="event.stopPropagation()" style="max-width: 400px;">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="password-accountmanagementmodal-overlay" onclick="closePasswordaccountmanagementmodal(event)">
+                <div class="accountmanagementmodal-container" onclick="event.stopPropagation()" style="max-width: 400px;">
+                    <div class="accountmanagementmodal-header">
                         <span>🔐 ${title}</span>
-                        <span class="modal-close" onclick="closePasswordModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closePasswordaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body">
+                    <div class="accountmanagementmodal-body">
                         <p style="font-size: 14px; margin-bottom: 15px;">${message}</p>
-                        <input type="password" id="password-modal-input" class="json-password-input" placeholder="Enter admin password..." autocomplete="off" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); border-radius: 6px; font-size: 14px; box-sizing: border-box;">
+                        <input type="password" id="password-accountmanagementmodal-input" class="json-password-input" placeholder="Enter admin password..." autocomplete="off" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); border-radius: 6px; font-size: 14px; box-sizing: border-box;">
                         <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
-                            <button class="modal-cancel-btn" onclick="closePasswordModal()" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #e74c3c; color: white;">Cancel</button>
-                            <button class="modal-confirm-btn" id="password-modal-confirm" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #27ae60; color: white;">Confirm</button>
+                            <button class="accountmanagementmodal-cancel-btn" onclick="closePasswordaccountmanagementmodal()" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #e74c3c; color: white;">Cancel</button>
+                            <button class="accountmanagementmodal-confirm-btn" id="password-accountmanagementmodal-confirm" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #27ae60; color: white;">Confirm</button>
                         </div>
                     </div>
                 </div>
             </div>
         `;
 
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
 
-        const input = document.getElementById('password-modal-input');
-        const confirmBtn = document.getElementById('password-modal-confirm');
+        const input = document.getElementById('password-accountmanagementmodal-input');
+        const confirmBtn = document.getElementById('password-accountmanagementmodal-confirm');
 
         input.focus();
 
         confirmBtn.addEventListener('click', function() {
             const password = input.value;
             if (!password) {
-                showCustomModal('Error', 'Password is required', 'error');
+                showCustomaccountmanagementmodal('Error', 'Password is required', 'error');
                 input.focus();
                 return;
             }
-            closePasswordModal();
+            closePasswordaccountmanagementmodal();
             if (onConfirm) {
                 onConfirm(password);
             }
@@ -547,13 +547,13 @@
         });
     }
 
-    function closePasswordModal(event) {
-        if (event && event.target && event.target.id !== 'password-modal-overlay' && event.target.className !== 'modal-close' && event.target.className !== 'modal-confirm-btn' && event.target.className !== 'modal-cancel-btn') {
+    function closePasswordaccountmanagementmodal(event) {
+        if (event && event.target && event.target.id !== 'password-accountmanagementmodal-overlay' && event.target.className !== 'accountmanagementmodal-close' && event.target.className !== 'accountmanagementmodal-confirm-btn' && event.target.className !== 'accountmanagementmodal-cancel-btn') {
             return;
         }
-        const modal = document.getElementById('password-modal-overlay');
-        if (modal) {
-            modal.remove();
+        const accountmanagementmodal = document.getElementById('password-accountmanagementmodal-overlay');
+        if (accountmanagementmodal) {
+            accountmanagementmodal.remove();
         }
     }
 
@@ -600,21 +600,21 @@
     }
 
     // ============================================
-    // EDIT JSON MODAL FUNCTIONS
+    // EDIT JSON accountmanagementmodal FUNCTIONS
     // ============================================
 
-    function openEditModal(type) {
+    function openEditaccountmanagementmodal(type) {
         if (type === 'user') {
             if (!currentUserId || !currentSourceTable) {
-                showCustomModal('Error', 'Please select a user first', 'error');
+                showCustomaccountmanagementmodal('Error', 'Please select a user first', 'error');
                 return;
             }
         }
         
-        editModalTargetType = type;
-        const modal = document.getElementById('edit-json-modal');
+        editaccountmanagementmodalTargetType = type;
+        const accountmanagementmodal = document.getElementById('edit-json-accountmanagementmodal');
         const textarea = document.getElementById('edit-json-textarea');
-        const title = document.getElementById('edit-json-modal-title');
+        const title = document.getElementById('edit-json-accountmanagementmodal-title');
         
         let dataToEdit = currentEditingData;
         let titleText = type === 'server' ? '✏️ Edit Server Configuration' : `✏️ Edit User Configuration - ${document.getElementById('selected-user-name')?.textContent || 'User'}`;
@@ -626,11 +626,11 @@
             };
         }
         
-        editModalDataBackup = JSON.parse(JSON.stringify(dataToEdit));
+        editaccountmanagementmodalDataBackup = JSON.parse(JSON.stringify(dataToEdit));
         textarea.value = JSON.stringify(dataToEdit, null, 2);
         title.textContent = titleText;
         
-        modal.style.display = 'flex';
+        accountmanagementmodal.style.display = 'flex';
         addBlur();
         
         setTimeout(() => {
@@ -642,35 +642,35 @@
         textarea.addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
-                saveEditModal();
+                saveEditaccountmanagementmodal();
             }
         });
     }
 
-    function closeEditModal() {
-        const modal = document.getElementById('edit-json-modal');
-        modal.style.display = 'none';
+    function closeEditaccountmanagementmodal() {
+        const accountmanagementmodal = document.getElementById('edit-json-accountmanagementmodal');
+        accountmanagementmodal.style.display = 'none';
         removeBlur();
-        editModalTargetType = null;
-        editModalDataBackup = null;
+        editaccountmanagementmodalTargetType = null;
+        editaccountmanagementmodalDataBackup = null;
     }
 
-    function saveEditModal() {
+    function saveEditaccountmanagementmodal() {
         const textarea = document.getElementById('edit-json-textarea');
         let newData;
         try {
             newData = JSON.parse(textarea.value);
         } catch (e) {
-            showCustomModal('Invalid JSON', 'Error parsing JSON: ' + e.message, 'error');
+            showCustomaccountmanagementmodal('Invalid JSON', 'Error parsing JSON: ' + e.message, 'error');
             return;
         }
         
-        const typeText = editModalTargetType === 'server' ? 'Server Configuration' : `User Configuration for ${document.getElementById('selected-user-name')?.textContent || 'User'}`;
-        showPasswordModal(
+        const typeText = editaccountmanagementmodalTargetType === 'server' ? 'Server Configuration' : `User Configuration for ${document.getElementById('selected-user-name')?.textContent || 'User'}`;
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             `Please enter your admin password to save changes to:<br><strong style="color: #3498db;">${typeText}</strong>`,
             function(password) {
-                executeSaveWithPassword(password, editModalTargetType, newData);
+                executeSaveWithPassword(password, editaccountmanagementmodalTargetType, newData);
             }
         );
     }
@@ -703,8 +703,8 @@
                 currentEditingData = newData;
                 const containerId = type === 'server' ? '#server-json-viewer' : '#user-json-viewer';
                 displayJsonViewer(newData, containerId);
-                showCustomModal('Success', 'JSON configuration saved successfully!', 'success');
-                closeEditModal();
+                showCustomaccountmanagementmodal('Success', 'JSON configuration saved successfully!', 'success');
+                closeEditaccountmanagementmodal();
                 
                 if (type === 'user') {
                     const copyBtn = document.getElementById('user-copy-btn');
@@ -714,15 +714,15 @@
                 }
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error saving configuration', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error saving configuration', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error saving configuration', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error saving configuration', 'error');
         })
         .finally(() => {
             pendingSaveData = null;
@@ -957,17 +957,17 @@
             dataToCopy = currentEditingData;
         } else if (type === 'user') {
             if (!currentUserId || !currentSourceTable) {
-                showCustomModal('Error', 'Please select a user first', 'error');
+                showCustomaccountmanagementmodal('Error', 'Please select a user first', 'error');
                 return;
             }
             dataToCopy = currentEditingData;
         }
         if (!dataToCopy) {
-            showCustomModal('Error', 'No data to copy', 'error');
+            showCustomaccountmanagementmodal('Error', 'No data to copy', 'error');
             return;
         }
         if (typeof dataToCopy === 'object' && Object.keys(dataToCopy).length === 0) {
-            showCustomModal('Error', 'No configuration data available to copy', 'error');
+            showCustomaccountmanagementmodal('Error', 'No configuration data available to copy', 'error');
             return;
         }
         const jsonString = JSON.stringify(dataToCopy, null, 2);
@@ -983,7 +983,7 @@
                         btn.style.background = '#3498db';
                     }, 2000);
                 }
-                showCustomModal('Success', 'JSON copied to clipboard!', 'success');
+                showCustomaccountmanagementmodal('Success', 'JSON copied to clipboard!', 'success');
             }).catch(err => {
                 console.error('Failed to copy: ', err);
                 fallbackCopyToClipboard(jsonString);
@@ -1011,13 +1011,13 @@
         try {
             const successful = document.execCommand('copy');
             if (successful) {
-                showCustomModal('Success', 'JSON copied to clipboard!', 'success');
+                showCustomaccountmanagementmodal('Success', 'JSON copied to clipboard!', 'success');
             } else {
-                showCustomModal('Error', 'Failed to copy JSON', 'error');
+                showCustomaccountmanagementmodal('Error', 'Failed to copy JSON', 'error');
             }
         } catch (err) {
             console.error('Fallback copy error:', err);
-            showCustomModal('Error', 'Failed to copy JSON', 'error');
+            showCustomaccountmanagementmodal('Error', 'Failed to copy JSON', 'error');
         }
         document.body.removeChild(textArea);
     }
@@ -1070,13 +1070,13 @@
                 selectUser(defaultUser.id, defaultUser.source, defaultUser.fullname || 'N/A', defaultUser.email || 'N/A');
             } else {
                 userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-                showCustomModal('Error', data.error || 'Error loading users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-            showCustomModal('Error', 'Error loading users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading users', 'error');
         });
     }
 
@@ -1094,7 +1094,7 @@
         userDiv.onclick = function(e) {
             e.stopPropagation();
             selectUser(user.id, user.source, user.fullname || 'N/A', user.email || 'N/A');
-            showAllUsersModal();
+            showAllUsersaccountmanagementmodal();
         };
         let statusClass = 'status-badge-default';
         let statusText = user.application_status || 'Not Set';
@@ -1111,88 +1111,106 @@
         container.appendChild(userDiv);
     }
 
-    function showAllUsersModal() {
+    function showAllUsersaccountmanagementmodal() {
         const container = document.querySelector('.split-view') || document.querySelector('.account-management-container');
         if (container) {
             container.classList.add('blur-background');
         }
-        const modalHtml = `
-            <div class="modal-overlay" id="users-modal-overlay" onclick="closeModalIfClickOutside(event)">
-                <div class="modal-container users-modal" onclick="event.stopPropagation()">
-                    <div class="modal-header">
+        
+        // Remove any existing accountmanagementmodal overlay first
+        const existingaccountmanagementmodal = document.getElementById('users-accountmanagementmodal-overlay');
+        if (existingaccountmanagementmodal) {
+            existingaccountmanagementmodal.remove();
+        }
+        
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="users-accountmanagementmodal-overlay" onclick="closeaccountmanagementmodalIfClickOutside(event)">
+                <div class="accountmanagementmodal-container users-accountmanagementmodal" onclick="event.stopPropagation()">
+                    <div class="accountmanagementmodal-header">
                         <span>All Users (${allUsersCache.length})</span>
-                        <span class="modal-close" onclick="closeModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closeaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body">
-                        <div class="users-modal-search">
-                            <input type="text" id="users-modal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filterModalUsers()">
+                    <div class="accountmanagementmodal-body">
+                        <div class="users-accountmanagementmodal-search">
+                            <input type="text" id="users-accountmanagementmodal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filteraccountmanagementmodalUsers()">
                         </div>
                     </div>
-                    <div class="modal-body users-modal-list" id="users-modal-list">
-                        ${renderModalUsersList(allUsersCache)}
+                    <div class="accountmanagementmodal-body users-accountmanagementmodal-list" id="users-accountmanagementmodal-list">
+                        ${renderaccountmanagementmodalUsersList(allUsersCache)}
                     </div>
                 </div>
             </div>
         `;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
+        
+        // Ensure the accountmanagementmodal is visible
+        const overlay = document.getElementById('users-accountmanagementmodal-overlay');
+        if (overlay) {
+            overlay.style.display = 'flex';
+            overlay.style.zIndex = '10000';
+        }
+        
+        // Focus the search input after a short delay
         setTimeout(() => {
-            const searchInput = document.getElementById('users-modal-search-input');
+            const searchInput = document.getElementById('users-accountmanagementmodal-search-input');
             if (searchInput) searchInput.focus();
         }, 100);
     }
 
-    function renderModalUsersList(users) {
+    function renderaccountmanagementmodalUsersList(users) {
         if (!users || users.length === 0) {
             return '<div class="info-message-small">No users found</div>';
         }
         return users.map(user => `
-            <div class="modal-user-item ${currentUserId && currentUserId == user.id ? 'selected' : ''}" 
-                onclick="selectUserFromModal(${user.id}, '${user.source}')">
-                <div class="modal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
-                <div class="modal-user-email">${escapeHtml(user.email || 'N/A')}</div>
-                <div class="modal-user-id">ID: ${user.id}</div>
+            <div class="accountmanagementmodal-user-item ${currentUserId && currentUserId == user.id ? 'selected' : ''}" 
+                onclick="selectUserFromaccountmanagementmodal(${user.id}, '${user.source}')">
+                <div class="accountmanagementmodal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-email">${escapeHtml(user.email || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-id">ID: ${user.id}</div>
             </div>
         `).join('');
     }
 
-    function filterModalUsers() {
-        const searchTerm = document.getElementById('users-modal-search-input').value.toLowerCase();
+    function filteraccountmanagementmodalUsers() {
+        const searchTerm = document.getElementById('users-accountmanagementmodal-search-input').value.toLowerCase();
         const filteredUsers = allUsersCache.filter(user => 
             (user.fullname && user.fullname.toLowerCase().includes(searchTerm)) ||
             (user.email && user.email.toLowerCase().includes(searchTerm)) ||
             user.id.toString().includes(searchTerm)
         );
-        const container = document.getElementById('users-modal-list');
+        const container = document.getElementById('users-accountmanagementmodal-list');
         if (container) {
-            container.innerHTML = renderModalUsersList(filteredUsers);
+            container.innerHTML = renderaccountmanagementmodalUsersList(filteredUsers);
         }
     }
 
-    function selectUserFromModal(userId, source) {
+    function selectUserFromaccountmanagementmodal(userId, source) {
         const user = allUsersCache.find(u => u.id == userId);
         if (!user) return;
         selectUser(userId, source, user.fullname || 'N/A', user.email || 'N/A');
         displaySingleUser(user);
-        closeModal();
+        closeaccountmanagementmodal();
     }
 
-    function closeModal() {
-        const overlay = document.getElementById('users-modal-overlay');
+    function closeaccountmanagementmodal() {
+        const overlay = document.getElementById('users-accountmanagementmodal-overlay');
         if (overlay) {
+            overlay.style.display = 'none';
             overlay.remove();
         }
         removeBlur();
     }
 
-    function closeModalIfClickOutside(event) {
-        if (event.target.id === 'users-modal-overlay') {
-            closeModal();
+    function closeaccountmanagementmodalIfClickOutside(event) {
+        if (event.target.id === 'users-accountmanagementmodal-overlay') {
+            closeaccountmanagementmodal();
         }
     }
 
     function selectUser(userId, sourceTable, fullname, email) {
         if (!userId || !sourceTable) {
-            showCustomModal('Error', 'Invalid user selection', 'error');
+            showCustomaccountmanagementmodal('Error', 'Invalid user selection', 'error');
             return;
         }
         currentUserId = userId;
@@ -1229,7 +1247,7 @@
 
     function loadUserAccountManagement(userId, sourceTable) {
         if (!userId || !sourceTable) {
-            showCustomModal('Error', 'Invalid user selection', 'error');
+            showCustomaccountmanagementmodal('Error', 'Invalid user selection', 'error');
             return;
         }
         currentUserId = userId;
@@ -1313,7 +1331,7 @@
                     }
                 }
             } else {
-                showCustomModal('Error', data.error || 'Error loading account management', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading account management', 'error');
                 currentEditingData = {};
                 const titleSpan = document.getElementById('user-config-title');
                 if (titleSpan) {
@@ -1341,7 +1359,7 @@
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error loading account management', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading account management', 'error');
             currentEditingData = {};
             const titleSpan = document.getElementById('user-config-title');
             if (titleSpan) {
@@ -1415,7 +1433,7 @@
 
     function copyUserConfigToClipboard() {
         if (!currentEditingData) {
-            showCustomModal('Error', 'No configuration data to copy', 'error');
+            showCustomaccountmanagementmodal('Error', 'No configuration data to copy', 'error');
             return;
         }
         const jsonString = JSON.stringify(currentEditingData, null, 2);
@@ -1431,7 +1449,7 @@
                         btn.style.background = '#9b59b6';
                     }, 2000);
                 }
-                showCustomModal('Success', 'User configuration copied to clipboard!', 'success');
+                showCustomaccountmanagementmodal('Success', 'User configuration copied to clipboard!', 'success');
             }).catch(err => {
                 console.error('Failed to copy: ', err);
                 fallbackCopyToClipboard(jsonString);
@@ -1462,16 +1480,16 @@
 
     function updateApplicationStatus() {
         if (!currentUserId || !currentSourceTable) {
-            showCustomModal('Error', 'No user selected', 'error');
+            showCustomaccountmanagementmodal('Error', 'No user selected', 'error');
             return;
         }
         const select = document.getElementById('application-status-select');
         const newStatus = select.value;
         if (!newStatus) {
-            showCustomModal('Error', 'Please select a status', 'error');
+            showCustomaccountmanagementmodal('Error', 'Please select a status', 'error');
             return;
         }
-        showPasswordModal(
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             'Please enter your admin password to update application status.',
             function(password) {
@@ -1499,7 +1517,7 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showCustomModal('Success', `Application status updated to ${newStatus} for User ID ${userId}`, 'success');
+                showCustomaccountmanagementmodal('Success', `Application status updated to ${newStatus} for User ID ${userId}`, 'success');
                 // FIX: Use .default-user-info instead of .user-item
                 const userItem = document.querySelector(`.default-user-info[data-user-id="${userId}"]`);
                 if (userItem) {
@@ -1518,15 +1536,15 @@
                 }
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error updating status', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error updating status', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error updating status', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error updating status', 'error');
         });
     }
 
@@ -1556,12 +1574,12 @@
                 currentEditingData = data.data;
                 displayJsonViewer(data.data, '#server-json-viewer');
             } else {
-                showCustomModal('Error', data.error || 'Error loading server account management', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading server account management', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error loading server account management', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading server account management', 'error');
         });
     }
 
@@ -1609,7 +1627,7 @@
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading configurations. Please refresh the page.</div>';
-            showCustomModal('Error', 'Error loading configurations', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading configurations', 'error');
         });
     }
 
@@ -1681,7 +1699,7 @@
 
     function editConfigEntry(entryKey) {
         if (currentEditingConfigEntry) {
-            showCustomModal('Error', 'Please save or cancel the current edit first', 'error');
+            showCustomaccountmanagementmodal('Error', 'Please save or cancel the current edit first', 'error');
             return;
         }
         currentEditingConfigEntry = entryKey;
@@ -1729,14 +1747,14 @@
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error loading entry data', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading entry data', 'error');
             currentEditingConfigEntry = null;
         });
     }
 
     function cancelConfigEntry(entryKey) {
         if (!currentEditingConfigEntry || currentEditingConfigEntry !== entryKey) {
-            showCustomModal('Error', 'No active edit for this entry', 'error');
+            showCustomaccountmanagementmodal('Error', 'No active edit for this entry', 'error');
             return;
         }
         const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
@@ -1761,42 +1779,42 @@
         }
         currentEditingConfigEntry = null;
         originalConfigEntryBackup = null;
-        showCustomModal('Success', 'Edit cancelled', 'success');
+        showCustomaccountmanagementmodal('Success', 'Edit cancelled', 'success');
     }
 
     function saveConfigEntry(entryKey) {
         if (!currentEditingConfigEntry || currentEditingConfigEntry !== entryKey) {
-            showCustomModal('Error', 'No active edit for this entry', 'error');
+            showCustomaccountmanagementmodal('Error', 'No active edit for this entry', 'error');
             return;
         }
         const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
         const editor = document.getElementById(`editor-${safeKey}`);
         const keyEditor = document.getElementById(`key-editor-${safeKey}`);
         if (!editor) {
-            showCustomModal('Error', 'Editor not found', 'error');
+            showCustomaccountmanagementmodal('Error', 'Editor not found', 'error');
             return;
         }
         let newValue;
         try {
             newValue = JSON.parse(editor.value);
         } catch (e) {
-            showCustomModal('Invalid JSON', 'Error parsing JSON: ' + e.message, 'error');
+            showCustomaccountmanagementmodal('Invalid JSON', 'Error parsing JSON: ' + e.message, 'error');
             return;
         }
         let newKey = entryKey;
         if (keyEditor) {
             newKey = keyEditor.value.trim();
             if (!newKey) {
-                showCustomModal('Error', 'Configuration key cannot be empty', 'error');
+                showCustomaccountmanagementmodal('Error', 'Configuration key cannot be empty', 'error');
                 return;
             }
             if (!/^[a-zA-Z0-9_\-]+$/.test(newKey)) {
-                showCustomModal('Error', 'Key can only contain letters, numbers, underscores, and hyphens', 'error');
+                showCustomaccountmanagementmodal('Error', 'Key can only contain letters, numbers, underscores, and hyphens', 'error');
                 return;
             }
         }
         
-        showPasswordModal(
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             'Please enter your admin password to save this configuration.',
             function(password) {
@@ -1855,18 +1873,18 @@
                         if (createData.synced_to_management) {
                             message += ' (Synced to accountmanagement)';
                         }
-                        showCustomModal('Success', message, 'success');
+                        showCustomaccountmanagementmodal('Success', message, 'success');
                         clearConfigEntryEditState(deleteOldKey);
                         loadAccountManagementConfigs();
                     } else {
-                        showCustomModal('Error', createData.error || 'Error creating new entry', 'error');
+                        showCustomaccountmanagementmodal('Error', createData.error || 'Error creating new entry', 'error');
                     }
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    showCustomModal('Error', 'Error saving configuration: ' + error.message, 'error');
+                    showCustomaccountmanagementmodal('Error', 'Error saving configuration: ' + error.message, 'error');
                     if (error.message === 'Invalid password') {
-                        showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                        showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                     }
                 })
                 .finally(() => {
@@ -1893,20 +1911,20 @@
                     if (data.synced_to_management) {
                         message += ' (Synced to accountmanagement)';
                     }
-                    showCustomModal('Success', message, 'success');
+                    showCustomaccountmanagementmodal('Success', message, 'success');
                     clearConfigEntryEditState(oldKey);
                     loadAccountManagementConfigs();
                 } else {
                     if (data.error === 'Invalid password') {
-                        showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                        showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                     } else {
-                        showCustomModal('Error', data.error || 'Error saving configuration', 'error');
+                        showCustomaccountmanagementmodal('Error', data.error || 'Error saving configuration', 'error');
                     }
                 }
             })
             .catch(error => {
                 console.error('Error:', error);
-                showCustomModal('Error', 'Error saving configuration', 'error');
+                showCustomaccountmanagementmodal('Error', 'Error saving configuration', 'error');
             })
             .finally(() => {
                 window.pendingConfigSave = null;
@@ -1973,7 +1991,7 @@
         const safeKey = entryKey.replace(/[^a-zA-Z0-9]/g, '_');
         const contentDiv = document.getElementById(`content-${safeKey}`);
         if (!contentDiv) {
-            showCustomModal('Error', 'Configuration content not found', 'error');
+            showCustomaccountmanagementmodal('Error', 'Configuration content not found', 'error');
             return;
         }
         let preElement = contentDiv.querySelector('.config-json-view');
@@ -1987,14 +2005,14 @@
             }
         }
         if (!dataValue) {
-            showCustomModal('Error', 'No configuration data found to copy', 'error');
+            showCustomaccountmanagementmodal('Error', 'No configuration data found to copy', 'error');
             return;
         }
         let parsedData;
         try {
             parsedData = JSON.parse(dataValue);
         } catch (e) {
-            showCustomModal('Error', 'Invalid JSON format in configuration', 'error');
+            showCustomaccountmanagementmodal('Error', 'Invalid JSON format in configuration', 'error');
             return;
         }
         const fullJsonObject = {
@@ -2003,7 +2021,7 @@
         const jsonString = JSON.stringify(fullJsonObject, null, 2);
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(jsonString).then(() => {
-                showCustomModal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+                showCustomaccountmanagementmodal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
                 const buttons = document.querySelectorAll(`.copy-config-btn`);
                 buttons.forEach(btn => {
                     if (btn.parentElement.parentElement.querySelector('.config-entry-title')?.textContent.includes(entryKey)) {
@@ -2018,11 +2036,11 @@
                 });
             }).catch(() => {
                 fallbackCopyToClipboard(jsonString);
-                showCustomModal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+                showCustomaccountmanagementmodal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
             });
         } else {
             fallbackCopyToClipboard(jsonString);
-            showCustomModal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
+            showCustomaccountmanagementmodal('Success', `Configuration "${entryKey}" (with key) copied to clipboard!`, 'success');
         }
     }
 
@@ -2033,7 +2051,7 @@
             'Delete',
             'Cancel',
             function() {
-                showPasswordModal(
+                showPasswordaccountmanagementmodal(
                     'Security Verification',
                     'Please enter your admin password to delete this configuration.',
                     function(password) {
@@ -2063,51 +2081,51 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showCustomModal('Success', `Configuration "${entryKey}" deleted successfully!`, 'success');
+                showCustomaccountmanagementmodal('Success', `Configuration "${entryKey}" deleted successfully!`, 'success');
                 loadAccountManagementConfigs();
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error deleting configuration', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error deleting configuration', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error deleting configuration', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error deleting configuration', 'error');
         });
     }
 
-    function showAddConfigEntryModal() {
-        // Remove any existing modal
-        const existingModal = document.getElementById('add-config-modal');
-        if (existingModal) {
-            existingModal.remove();
+    function showAddConfigEntryaccountmanagementmodal() {
+        // Remove any existing accountmanagementmodal
+        const existingaccountmanagementmodal = document.getElementById('add-config-accountmanagementmodal');
+        if (existingaccountmanagementmodal) {
+            existingaccountmanagementmodal.remove();
         }
 
-        const modalHtml = `
-            <div class="modal-overlay" id="add-config-modal" onclick="document.getElementById('add-config-modal').style.display='none'">
-                <div class="modal-container" onclick="event.stopPropagation()" style="max-width: 500px;">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="add-config-accountmanagementmodal" onclick="document.getElementById('add-config-accountmanagementmodal').style.display='none'">
+                <div class="accountmanagementmodal-container" onclick="event.stopPropagation()" style="max-width: 500px;">
+                    <div class="accountmanagementmodal-header">
                         <span>➕ Add New Configuration</span>
-                        <span class="modal-close" onclick="document.getElementById('add-config-modal').style.display='none'">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="document.getElementById('add-config-accountmanagementmodal').style.display='none'">✕</span>
                     </div>
-                    <div class="modal-body">
+                    <div class="accountmanagementmodal-body">
                         <p style="margin-bottom: 10px;">Enter a unique key name for this configuration:</p>
                         <input type="text" id="new-config-key" placeholder="e.g., configuration_3, my_custom_settings, etc." style="width: 100%; padding: 12px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); border-radius: 6px; font-size: 14px; box-sizing: border-box;">
                         <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
-                            <button class="modal-cancel-btn" onclick="document.getElementById('add-config-modal').style.display='none'" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #e74c3c; color: white;">Cancel</button>
-                            <button class="modal-confirm-btn" id="add-config-confirm" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #27ae60; color: white;">Create</button>
+                            <button class="accountmanagementmodal-cancel-btn" onclick="document.getElementById('add-config-accountmanagementmodal').style.display='none'" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #e74c3c; color: white;">Cancel</button>
+                            <button class="accountmanagementmodal-confirm-btn" id="add-config-confirm" style="padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; background: #27ae60; color: white;">Create</button>
                         </div>
                     </div>
                 </div>
             </div>
         `;
 
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
-        const modal = document.getElementById('add-config-modal');
-        modal.style.display = 'flex';
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
+        const accountmanagementmodal = document.getElementById('add-config-accountmanagementmodal');
+        accountmanagementmodal.style.display = 'flex';
         const input = document.getElementById('new-config-key');
         input.focus();
 
@@ -2115,11 +2133,11 @@
         confirmBtn.addEventListener('click', function() {
             const key = document.getElementById('new-config-key')?.value.trim();
             if (!key) {
-                showCustomModal('Error', 'Please enter a configuration key', 'error');
+                showCustomaccountmanagementmodal('Error', 'Please enter a configuration key', 'error');
                 input.focus();
                 return;
             }
-            modal.style.display = 'none';
+            accountmanagementmodal.style.display = 'none';
             createNewConfigEntry(key);
         });
 
@@ -2143,7 +2161,7 @@
             }
         };
         
-        showPasswordModal(
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             'Please enter your admin password to create the new configuration.',
             function(password) {
@@ -2171,19 +2189,19 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showCustomModal('Success', `Configuration "${entryKey}" created successfully!`, 'success');
+                showCustomaccountmanagementmodal('Success', `Configuration "${entryKey}" created successfully!`, 'success');
                 loadAccountManagementConfigs();
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error creating configuration', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error creating configuration', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error creating configuration', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error creating configuration', 'error');
         });
     }
 
@@ -2209,13 +2227,13 @@
                 displayUserTable(container, data.users, 'verified');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading Active Investors: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading Active Investors', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading Active Investors', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading Active Investors</div>';
-            showCustomModal('Error', 'Error loading Active Investors', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading Active Investors', 'error');
         });
     }
 
@@ -2237,13 +2255,13 @@
                 displayUserTable(container, data.users, 'pending');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading pending users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading pending users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading pending users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading pending users</div>';
-            showCustomModal('Error', 'Error loading pending users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading pending users', 'error');
         });
     }
 
@@ -2265,13 +2283,13 @@
                 displayUserTable(container, data.users, 'suspended');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading suspended users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading suspended users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading suspended users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading suspended users</div>';
-            showCustomModal('Error', 'Error loading suspended users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading suspended users', 'error');
         });
     }
 
@@ -2293,13 +2311,13 @@
                 displayUserTable(container, data.users, 'justjoined');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading just joined users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading just joined users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading just joined users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading just joined users</div>';
-            showCustomModal('Error', 'Error loading just joined users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading just joined users', 'error');
         });
     }
 
@@ -2321,13 +2339,13 @@
                 displayJustJoinedValidUserTable(container, data.users, 'justjoinedvalid');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading users</div>';
-            showCustomModal('Error', 'Error loading users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading users', 'error');
         });
     }
 
@@ -2420,10 +2438,10 @@
                 const select = row.querySelector('.status-update-select');
                 const newStatus = select.value;
                 if (!newStatus) {
-                    showCustomModal('Error', 'Please select a status', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Please select a status', 'error');
                     return;
                 }
-                showPasswordModal(
+                showPasswordaccountmanagementmodal(
                     'Security Verification',
                     'Please enter your admin password to update application status.',
                     function(password) {
@@ -2453,7 +2471,7 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showCustomModal('Success', `Application status updated to ${newStatus} for User ID ${userId}`, 'success');
+                showCustomaccountmanagementmodal('Success', `Application status updated to ${newStatus} for User ID ${userId}`, 'success');
                 const statusCell = row.querySelector('td:nth-child(14)');
                 let statusClass = 'status-badge-pending';
                 if (newStatus === 'approved') statusClass = 'status-badge-approved';
@@ -2484,15 +2502,15 @@
                 }
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error updating status', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error updating status', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error updating status', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error updating status', 'error');
         });
     }
 
@@ -2514,13 +2532,13 @@
                 displayUserTable(container, data.users, 'approved');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading approved users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading approved users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading approved users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading approved users</div>';
-            showCustomModal('Error', 'Error loading approved users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading approved users', 'error');
         });
     }
 
@@ -2542,13 +2560,13 @@
                 displayBypassedUserTable(container, data.users, 'bypassed');
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading bypassed users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading bypassed users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading bypassed users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading bypassed users</div>';
-            showCustomModal('Error', 'Error loading bypassed users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading bypassed users', 'error');
         });
     }
 
@@ -2712,7 +2730,7 @@
                             'Cancel Contract',
                             'Abort',
                             function() {
-                                showPasswordModal(
+                                showPasswordaccountmanagementmodal(
                                     'Security Verification',
                                     'Please enter your admin password to confirm contract cancellation.',
                                     function(password) {
@@ -2722,7 +2740,7 @@
                             }
                         );
                     } else {
-                        showCustomModal('Info', 'No action taken - user remains active', 'info');
+                        showCustomaccountmanagementmodal('Info', 'No action taken - user remains active', 'info');
                     }
                 });
             });
@@ -2753,7 +2771,7 @@
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showCustomModal('Success', data.message || 'Contract cancelled successfully!', 'success');
+                showCustomaccountmanagementmodal('Success', data.message || 'Contract cancelled successfully!', 'success');
                 const executionDateCell = row.querySelector('.execution-date-cell');
                 if (executionDateCell && data.new_execution_date) {
                     executionDateCell.textContent = data.new_execution_date;
@@ -2775,15 +2793,15 @@
                 }
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error cancelling contract', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error cancelling contract', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error cancelling contract', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error cancelling contract', 'error');
         })
         .finally(() => {
             if (actionBtn && actionBtn.disabled !== true) {
@@ -2871,24 +2889,24 @@
                 container.innerHTML = html;
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading users: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">❌ Error loading users</div>';
-            showCustomModal('Error', 'Error loading users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading users', 'error');
         });
     }
 
     function saveInvestedWith(userId, sourceTable, rowId) {
         const inputElement = document.getElementById(`input-${rowId}`);
         if (!inputElement) {
-            showCustomModal('Error', 'Input field not found', 'error');
+            showCustomaccountmanagementmodal('Error', 'Input field not found', 'error');
             return;
         }
         const newValue = inputElement.value.trim();
-        showPasswordModal(
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             'Please enter your admin password to save INVESTED_WITH changes.',
             function(password) {
@@ -2927,18 +2945,18 @@
                 if (displayCell) {
                     displayCell.innerHTML = newValue || '<em style="color: #888;">Not set</em>';
                 }
-                showCustomModal('Success', `INVESTED_WITH updated for User ID ${userId}`, 'success');
+                showCustomaccountmanagementmodal('Success', `INVESTED_WITH updated for User ID ${userId}`, 'success');
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error updating INVESTED_WITH', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error updating INVESTED_WITH', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error updating INVESTED_WITH', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error updating INVESTED_WITH', 'error');
         })
         .finally(() => {
             if (saveBtn) {
@@ -2979,13 +2997,13 @@
                 selectUserForExecutionHistory(defaultUser.id, defaultUser.source, defaultUser.fullname || 'N/A', defaultUser.email || 'N/A');
             } else {
                 userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-                showCustomModal('Error', data.error || 'Error loading users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-            showCustomModal('Error', 'Error loading users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading users', 'error');
         });
     }
 
@@ -3002,7 +3020,7 @@
         userDiv.onclick = function(e) {
             e.stopPropagation();
             selectUserForExecutionHistory(user.id, user.source, user.fullname || 'N/A', user.email || 'N/A');
-            showExecutionUsersModal();
+            showExecutionUsersaccountmanagementmodal();
         };
         userDiv.innerHTML = `
             <div class="default-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
@@ -3012,91 +3030,91 @@
         container.appendChild(userDiv);
     }
 
-    function showExecutionUsersModal() {
+    function showExecutionUsersaccountmanagementmodal() {
         const container = document.querySelector('.split-view') || document.querySelector('.account-management-container');
         if (container) {
             container.classList.add('blur-background');
         }
         const users = window.executionUsersCache || [];
-        const modalHtml = `
-            <div class="modal-overlay" id="execution-users-modal-overlay" onclick="closeExecutionModalIfClickOutside(event)">
-                <div class="modal-container users-modal" onclick="event.stopPropagation()">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="execution-users-accountmanagementmodal-overlay" onclick="closeExecutionaccountmanagementmodalIfClickOutside(event)">
+                <div class="accountmanagementmodal-container users-accountmanagementmodal" onclick="event.stopPropagation()">
+                    <div class="accountmanagementmodal-header">
                         <span>All Users (${users.length})</span>
-                        <span class="modal-close" onclick="closeExecutionModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closeExecutionaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body">
-                        <div class="users-modal-search">
-                            <input type="text" id="execution-users-modal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filterExecutionModalUsers()">
+                    <div class="accountmanagementmodal-body">
+                        <div class="users-accountmanagementmodal-search">
+                            <input type="text" id="execution-users-accountmanagementmodal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filterExecutionaccountmanagementmodalUsers()">
                         </div>
                     </div>
-                    <div class="modal-body users-modal-list" id="execution-users-modal-list">
-                        ${renderExecutionModalUsersList(users)}
+                    <div class="accountmanagementmodal-body users-accountmanagementmodal-list" id="execution-users-accountmanagementmodal-list">
+                        ${renderExecutionaccountmanagementmodalUsersList(users)}
                     </div>
                 </div>
             </div>
         `;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
         setTimeout(() => {
-            const searchInput = document.getElementById('execution-users-modal-search-input');
+            const searchInput = document.getElementById('execution-users-accountmanagementmodal-search-input');
             if (searchInput) searchInput.focus();
         }, 100);
     }
 
-    function renderExecutionModalUsersList(users) {
+    function renderExecutionaccountmanagementmodalUsersList(users) {
         if (!users || users.length === 0) {
             return '<div class="info-message-small">No users found</div>';
         }
         return users.map(user => `
-            <div class="modal-user-item ${currentExecutionUserId && currentExecutionUserId == user.id ? 'selected' : ''}" 
-                onclick="selectExecutionUserFromModal(${user.id}, '${user.source}')">
-                <div class="modal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
-                <div class="modal-user-email">${escapeHtml(user.email || 'N/A')}</div>
-                <div class="modal-user-id">ID: ${user.id}</div>
+            <div class="accountmanagementmodal-user-item ${currentExecutionUserId && currentExecutionUserId == user.id ? 'selected' : ''}" 
+                onclick="selectExecutionUserFromaccountmanagementmodal(${user.id}, '${user.source}')">
+                <div class="accountmanagementmodal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-email">${escapeHtml(user.email || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-id">ID: ${user.id}</div>
             </div>
         `).join('');
     }
 
-    function filterExecutionModalUsers() {
-        const searchTerm = document.getElementById('execution-users-modal-search-input').value.toLowerCase();
+    function filterExecutionaccountmanagementmodalUsers() {
+        const searchTerm = document.getElementById('execution-users-accountmanagementmodal-search-input').value.toLowerCase();
         const users = window.executionUsersCache || [];
         const filteredUsers = users.filter(user => 
             (user.fullname && user.fullname.toLowerCase().includes(searchTerm)) ||
             (user.email && user.email.toLowerCase().includes(searchTerm)) ||
             user.id.toString().includes(searchTerm)
         );
-        const container = document.getElementById('execution-users-modal-list');
+        const container = document.getElementById('execution-users-accountmanagementmodal-list');
         if (container) {
-            container.innerHTML = renderExecutionModalUsersList(filteredUsers);
+            container.innerHTML = renderExecutionaccountmanagementmodalUsersList(filteredUsers);
         }
     }
 
-    function selectExecutionUserFromModal(userId, source) {
+    function selectExecutionUserFromaccountmanagementmodal(userId, source) {
         const users = window.executionUsersCache || [];
         const user = users.find(u => u.id == userId);
         if (!user) return;
         selectUserForExecutionHistory(userId, source, user.fullname || 'N/A', user.email || 'N/A');
         displayExecutionSingleUser(user);
-        closeExecutionModal();
+        closeExecutionaccountmanagementmodal();
     }
 
-    function closeExecutionModal() {
-        const overlay = document.getElementById('execution-users-modal-overlay');
+    function closeExecutionaccountmanagementmodal() {
+        const overlay = document.getElementById('execution-users-accountmanagementmodal-overlay');
         if (overlay) {
             overlay.remove();
         }
         removeBlur();
     }
 
-    function closeExecutionModalIfClickOutside(event) {
-        if (event.target.id === 'execution-users-modal-overlay') {
-            closeExecutionModal();
+    function closeExecutionaccountmanagementmodalIfClickOutside(event) {
+        if (event.target.id === 'execution-users-accountmanagementmodal-overlay') {
+            closeExecutionaccountmanagementmodal();
         }
     }
 
     function selectUserForExecutionHistory(userId, sourceTable, fullname, email) {
         if (!userId || !sourceTable) {
-            showCustomModal('Error', 'Invalid user selection', 'error');
+            showCustomaccountmanagementmodal('Error', 'Invalid user selection', 'error');
             return;
         }
         currentExecutionUserId = userId;
@@ -3170,13 +3188,13 @@
                 container.innerHTML = html;
             } else {
                 container.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading execution history: ${data.error || 'Unknown error'}</div>`;
-                showCustomModal('Error', data.error || 'Error loading execution history', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading execution history', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading execution history</div>';
-            showCustomModal('Error', 'Error loading execution history', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading execution history', 'error');
         });
     }
 
@@ -3211,13 +3229,13 @@
                 selectUserForAutoTrading(defaultUser.id, defaultUser.source, defaultUser.fullname || 'N/A', defaultUser.email || 'N/A');
             } else {
                 userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-                showCustomModal('Error', data.error || 'Error loading users', 'error');
+                showCustomaccountmanagementmodal('Error', data.error || 'Error loading users', 'error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
             userListDiv.innerHTML = '<div class="info-message-small" style="color: #e74c3c;">Error loading users</div>';
-            showCustomModal('Error', 'Error loading users', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading users', 'error');
         });
     }
 
@@ -3234,7 +3252,7 @@
         userDiv.onclick = function(e) {
             e.stopPropagation();
             selectUserForAutoTrading(user.id, user.source, user.fullname || 'N/A', user.email || 'N/A');
-            showAutotradingUsersModal();
+            showAutotradingUsersaccountmanagementmodal();
         };
         userDiv.innerHTML = `
             <div class="default-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
@@ -3244,91 +3262,91 @@
         container.appendChild(userDiv);
     }
 
-    function showAutotradingUsersModal() {
+    function showAutotradingUsersaccountmanagementmodal() {
         const container = document.querySelector('.split-view') || document.querySelector('.account-management-container');
         if (container) {
             container.classList.add('blur-background');
         }
         const users = window.autotradingUsersCache || [];
-        const modalHtml = `
-            <div class="modal-overlay" id="autotrading-users-modal-overlay" onclick="closeAutotradingModalIfClickOutside(event)">
-                <div class="modal-container users-modal" onclick="event.stopPropagation()">
-                    <div class="modal-header">
+        const accountmanagementmodalHtml = `
+            <div class="accountmanagementmodal-overlay" id="autotrading-users-accountmanagementmodal-overlay" onclick="closeAutotradingaccountmanagementmodalIfClickOutside(event)">
+                <div class="accountmanagementmodal-container users-accountmanagementmodal" onclick="event.stopPropagation()">
+                    <div class="accountmanagementmodal-header">
                         <span>All Users (${users.length})</span>
-                        <span class="modal-close" onclick="closeAutotradingModal()">✕</span>
+                        <span class="accountmanagementmodal-close" onclick="closeAutotradingaccountmanagementmodal()">✕</span>
                     </div>
-                    <div class="modal-body">
-                        <div class="users-modal-search">
-                            <input type="text" id="autotrading-users-modal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filterAutotradingModalUsers()">
+                    <div class="accountmanagementmodal-body">
+                        <div class="users-accountmanagementmodal-search">
+                            <input type="text" id="autotrading-users-accountmanagementmodal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="filterAutotradingaccountmanagementmodalUsers()">
                         </div>
                     </div>
-                    <div class="modal-body users-modal-list" id="autotrading-users-modal-list">
-                        ${renderAutotradingModalUsersList(users)}
+                    <div class="accountmanagementmodal-body users-accountmanagementmodal-list" id="autotrading-users-accountmanagementmodal-list">
+                        ${renderAutotradingaccountmanagementmodalUsersList(users)}
                     </div>
                 </div>
             </div>
         `;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.body.insertAdjacentHTML('beforeend', accountmanagementmodalHtml);
         setTimeout(() => {
-            const searchInput = document.getElementById('autotrading-users-modal-search-input');
+            const searchInput = document.getElementById('autotrading-users-accountmanagementmodal-search-input');
             if (searchInput) searchInput.focus();
         }, 100);
     }
 
-    function renderAutotradingModalUsersList(users) {
+    function renderAutotradingaccountmanagementmodalUsersList(users) {
         if (!users || users.length === 0) {
             return '<div class="info-message-small">No users found</div>';
         }
         return users.map(user => `
-            <div class="modal-user-item ${currentAutoTradingUserId && currentAutoTradingUserId == user.id ? 'selected' : ''}" 
-                onclick="selectAutotradingUserFromModal(${user.id}, '${user.source}')">
-                <div class="modal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
-                <div class="modal-user-email">${escapeHtml(user.email || 'N/A')}</div>
-                <div class="modal-user-id">ID: ${user.id}</div>
+            <div class="accountmanagementmodal-user-item ${currentAutoTradingUserId && currentAutoTradingUserId == user.id ? 'selected' : ''}" 
+                onclick="selectAutotradingUserFromaccountmanagementmodal(${user.id}, '${user.source}')">
+                <div class="accountmanagementmodal-user-name">${escapeHtml(user.fullname || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-email">${escapeHtml(user.email || 'N/A')}</div>
+                <div class="accountmanagementmodal-user-id">ID: ${user.id}</div>
             </div>
         `).join('');
     }
 
-    function filterAutotradingModalUsers() {
-        const searchTerm = document.getElementById('autotrading-users-modal-search-input').value.toLowerCase();
+    function filterAutotradingaccountmanagementmodalUsers() {
+        const searchTerm = document.getElementById('autotrading-users-accountmanagementmodal-search-input').value.toLowerCase();
         const users = window.autotradingUsersCache || [];
         const filteredUsers = users.filter(user => 
             (user.fullname && user.fullname.toLowerCase().includes(searchTerm)) ||
             (user.email && user.email.toLowerCase().includes(searchTerm)) ||
             user.id.toString().includes(searchTerm)
         );
-        const container = document.getElementById('autotrading-users-modal-list');
+        const container = document.getElementById('autotrading-users-accountmanagementmodal-list');
         if (container) {
-            container.innerHTML = renderAutotradingModalUsersList(filteredUsers);
+            container.innerHTML = renderAutotradingaccountmanagementmodalUsersList(filteredUsers);
         }
     }
 
-    function selectAutotradingUserFromModal(userId, source) {
+    function selectAutotradingUserFromaccountmanagementmodal(userId, source) {
         const users = window.autotradingUsersCache || [];
         const user = users.find(u => u.id == userId);
         if (!user) return;
         selectUserForAutoTrading(userId, source, user.fullname || 'N/A', user.email || 'N/A');
         displayAutotradingSingleUser(user);
-        closeAutotradingModal();
+        closeAutotradingaccountmanagementmodal();
     }
 
-    function closeAutotradingModal() {
-        const overlay = document.getElementById('autotrading-users-modal-overlay');
+    function closeAutotradingaccountmanagementmodal() {
+        const overlay = document.getElementById('autotrading-users-accountmanagementmodal-overlay');
         if (overlay) {
             overlay.remove();
         }
         removeBlur();
     }
 
-    function closeAutotradingModalIfClickOutside(event) {
-        if (event.target.id === 'autotrading-users-modal-overlay') {
-            closeAutotradingModal();
+    function closeAutotradingaccountmanagementmodalIfClickOutside(event) {
+        if (event.target.id === 'autotrading-users-accountmanagementmodal-overlay') {
+            closeAutotradingaccountmanagementmodal();
         }
     }
 
     function selectUserForAutoTrading(userId, sourceTable, fullname, email) {
         if (!userId || !sourceTable) {
-            showCustomModal('Error', 'Invalid user selection', 'error');
+            showCustomaccountmanagementmodal('Error', 'Invalid user selection', 'error');
             return;
         }
         currentAutoTradingUserId = userId;
@@ -3402,7 +3420,7 @@
         .catch(error => {
             console.error('Error:', error);
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: #e74c3c;">Error loading user settings</div>';
-            showCustomModal('Error', 'Error loading user settings', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error loading user settings', 'error');
         });
     }
 
@@ -3438,13 +3456,13 @@
 
     function saveAutoTradingSettings() {
         if (!currentAutoTradingUserId || !currentAutoTradingSourceTable) {
-            showCustomModal('Error', 'No user selected', 'error');
+            showCustomaccountmanagementmodal('Error', 'No user selected', 'error');
             return;
         }
         const autoTradingValue = parseInt(document.getElementById('enable_autotrading_select')?.value || 1);
         const bypassValue = parseInt(document.getElementById('bypass_restriction_select')?.value || 0);
         const demoAccountValue = parseInt(document.getElementById('demo_account_select')?.value || 0);
-        showPasswordModal(
+        showPasswordaccountmanagementmodal(
             'Security Verification',
             'Please enter your admin password to save all settings.',
             function(password) {
@@ -3483,18 +3501,18 @@
                 currentAutoTradingData.enable_autotrading = autoTradingValue;
                 currentAutoTradingData.bypass_restriction = bypassValue;
                 currentAutoTradingData.demo_account = demoAccountValue;
-                showCustomModal('Success', 'All settings updated successfully!', 'success');
+                showCustomaccountmanagementmodal('Success', 'All settings updated successfully!', 'success');
             } else {
                 if (data.error === 'Invalid password') {
-                    showCustomModal('Error', 'Password verification failed. Please try again.', 'error');
+                    showCustomaccountmanagementmodal('Error', 'Password verification failed. Please try again.', 'error');
                 } else {
-                    showCustomModal('Error', data.error || 'Error updating settings', 'error');
+                    showCustomaccountmanagementmodal('Error', data.error || 'Error updating settings', 'error');
                 }
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showCustomModal('Error', 'Error updating settings', 'error');
+            showCustomaccountmanagementmodal('Error', 'Error updating settings', 'error');
         });
     }
 

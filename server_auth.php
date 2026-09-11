@@ -2,7 +2,7 @@
 // server_auth.php
 
 // NOTE: This file assumes the database connection ($pdo) and session_start()
-// have already been initiated in the main file (insiders_server.php).
+// have already been initiated in the main file (harvhub_server.php).
 
 // Initialize status and message
 $server_auth_error = '';

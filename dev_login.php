@@ -1,6 +1,6 @@
 <?php
     session_start();
-    //index.php
+    //dev_login.php
     // ==================== DATABASE CONNECTION ====================
     try {
         $pdo = new PDO(
@@ -119,11 +119,11 @@
         $error = "Failed to load broker configuration.";
     }
 
-    // Handle logout - redirect to index.php with logged_out parameter
+    // Handle logout - redirect to dev_login.php with logged_out parameter
     if (isset($_GET['logout']) && $_GET['logout'] == 1) {
         session_unset();
         session_destroy();
-        header("Location: index.php?logged_out=1");
+        header("Location: dev_login.php?logged_out=1");
         exit;
     }
 
@@ -135,7 +135,7 @@
     $logged_in_email = $_SESSION['user_email'] ?? '';
     $user_fullname = '';
     $login_error = '';
-    $show_password_field = false;
+    $show_not_developer_modal = false;
 
     // ==================== CHECK USER STATUS ====================
     // Only check if email is verified, nothing else
@@ -149,16 +149,16 @@
             if (isset($user_check['email_verified']) && $user_check['email_verified'] == 0) {
                 $_SESSION['pending_verification_email'] = $logged_in_email;
                 $_SESSION['otp_step'] = 'request';
-                $_SESSION['return_after_verify'] = 'index.php';
+                $_SESSION['return_after_verify'] = 'dev_login.php';
                 $_SESSION['is_approved_user'] = false;
-                header("Location: verify_email.php?source=index");
+                header("Location: verify_email.php?source=dev_login");
                 exit;
             }
             
             $user_fullname = $user_check['fullname'] ?? '';
             
-            // If email is verified, go straight to app.php
-            header("Location: app.php");
+            // If email is verified, go straight to dev_app.php
+            header("Location: dev_app.php");
             exit;
         }
     }
@@ -177,10 +177,10 @@
                 if (isset($user['email_verified']) && $user['email_verified'] == 0) {
                     $_SESSION['pending_verification_email'] = $email;
                     $_SESSION['otp_step'] = 'request';
-                    $_SESSION['return_after_verify'] = 'index.php';
+                    $_SESSION['return_after_verify'] = 'dev_login.php';
                     $_SESSION['is_approved_user'] = false;
                     $_SESSION['user_email'] = $email;
-                    header("Location: verify_email.php?source=index");
+                    header("Location: verify_email.php?source=dev_login");
                     exit;
                 }
                 
@@ -188,78 +188,32 @@
                 if (isset($_POST['password']) && !empty($_POST['password'])) {
                     if (password_verify($_POST['password'], $user['password'] ?? '')) {
                         $_SESSION['user_email'] = $email;
-                        header("Location: app.php");
+                        header("Location: dev_app.php");
                         exit;
                     } else {
                         $login_error = "Incorrect password. Please try again.";
                         $_SESSION['login_email_temp'] = $email;
                         $_SESSION['login_error'] = $login_error;
-                        header("Location: index.php");
+                        header("Location: dev_login.php");
                         exit;
                     }
                 } else {
                     $_SESSION['login_email_temp'] = $email;
                     $_SESSION['show_password_field'] = true;
-                    header("Location: index.php");
+                    header("Location: dev_login.php");
                     exit;
                 }
             } else {
                 $login_error = "No account found with this email. Please create an account.";
                 $_SESSION['login_error'] = $login_error;
                 $_SESSION['login_email_temp'] = $email;
-                header("Location: index.php");
+                header("Location: dev_login.php");
                 exit;
             }
         } else {
             $login_error = "Invalid email address.";
             $_SESSION['login_error'] = $login_error;
-            header("Location: index.php");
-            exit;
-        }
-    }
-
-    // ==================== HANDLE SIGNUP ====================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signup_submit'])) {
-        $email = trim(strtolower($_POST['signup_email']));
-        $fullname = trim($_POST['signup_fullname'] ?? '');
-        $password = $_POST['signup_password'] ?? '';
-        $confirm_password = $_POST['signup_confirm_password'] ?? '';
-        $signup_error = '';
-        
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $signup_error = "Invalid email address.";
-        } elseif (empty($fullname)) {
-            $signup_error = "Please enter your full name.";
-        } elseif (empty($password) || strlen($password) < 4) {
-            $signup_error = "Password must be at least 4 characters long.";
-        } elseif ($password !== $confirm_password) {
-            $signup_error = "Passwords do not match.";
-        } else {
-            $stmt = $pdo->prepare("SELECT id, email_verified FROM harvhub WHERE email = ? LIMIT 1");
-            $stmt->execute([$email]);
-            $existing = $stmt->fetch();
-            
-            if ($existing && $existing['email_verified'] == 1) {
-                $signup_error = "This email is already verified. Please login instead.";
-            } else {
-                $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-                $_SESSION['pending_verification_email'] = $email;
-                $_SESSION['pending_verification_fullname'] = $fullname;
-                $_SESSION['pending_verification_password'] = $hashed_password;
-                $_SESSION['otp_step'] = 'request';
-                $_SESSION['return_after_verify'] = 'index.php';
-                $_SESSION['signup_in_progress'] = true;
-                header("Location: verify_email.php?source=index");
-                exit;
-            }
-        }
-        
-        if (!empty($signup_error)) {
-            $_SESSION['signup_error'] = $signup_error;
-            $_SESSION['signup_email'] = $email;
-            $_SESSION['signup_fullname'] = $fullname;
-            $_SESSION['show_signup_modal'] = true;
-            header("Location: index.php");
+            header("Location: dev_login.php");
             exit;
         }
     }
@@ -268,16 +222,12 @@
     $show_password_field = $_SESSION['show_password_field'] ?? false;
     $login_email_temp = $_SESSION['login_email_temp'] ?? '';
     $login_error = $_SESSION['login_error'] ?? '';
-    $show_signup_modal = $_SESSION['show_signup_modal'] ?? false;
-    $signup_email = $_SESSION['signup_email'] ?? '';
-    $signup_error = $_SESSION['signup_error'] ?? '';
+    $show_not_developer_modal = $_SESSION['show_not_developer_modal'] ?? false;
     
     unset($_SESSION['show_password_field']);
     unset($_SESSION['login_email_temp']);
     unset($_SESSION['login_error']);
-    unset($_SESSION['show_signup_modal']);
-    unset($_SESSION['signup_email']);
-    unset($_SESSION['signup_error']);
+    unset($_SESSION['show_not_developer_modal']);
 
     function showSpinner() {
         echo '<style>
@@ -347,41 +297,38 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<title>🌾HarvHub</title>
+<title>Developer Platform</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <?php include 'index_style.php' ?>
 
 </head>
-<body class="<?php echo ($logged_in_email !== '') ? 'logged-in' : ''; ?>">
+<body>
         <header>
             <div>
-                <h1>HarvHub</h1>
+                <h1>HarvHub Developers</h1>
             </div>
         </header>
         
-        <!-- Information Grid -->
         <div class="info-grid">
             <div class="info-card">
-                <h3>Investing & Harvesting</h3>
+                <h3>For Developers</h3>
+                <p>Build and train your AI to understand your strategy. Analysis and precision will be taken on your preferred symbols.</p>
                 <ul>
-                    <li>Deposit to your broker MT5.</li>
-                    <li>Apply for account verification after approval.</li>
-                    <li>Enroll to start the programme.</li>
-                    <li>Market conditions determine the results and returns.</li>
-                    <li>Trades are fully automated during the contract period.</li>
-                    <li>Harvest your profits after contract period.</li>
-                    <li>Our service prioritizes the safety of your capital, though we cannot fully control market results.</li>
+                    <li>Submit technical analysis via the Developer Dashboard for review.</li>
+                    <li>Automated strategy validation.</li>
+                    <li>Live market execution.</li>
+                    <li>Monitor performance metrics in real-time.</li>
                 </ul>
             </div>
             
             <div class="info-card">
-                <h3>Requirements & Guidelines</h3>
+                <h3>Developer Requirements & Guidelines</h3>
+                <p>Build and submit your trading strategies for automated analysis on your chosen markets.</p>
                 <ul>
-                    <li>Investor: Ensure minimum of <strong>$<?= number_format($min_broker_balance, 2) ?></strong> is deposited into your broker account.</li>
+                    <li>Your developed strategy must have at least a 40% win rate.</li>
                     <li>Real Account: Only real accounts will be verified; demo accounts are not allowed.</li>
-                    <li>Profit Split: After contract completion, ensure you send the server percentage to remain eligible for the programme.</li>
-                    <li>Rules & Regulations: Do not withdraw profits, place trades, modify trades, transfer or deposit funds into your MT5 during the contract period.</li>
+                    <li>Automated strategy validation.</li>
+                    <li>Submit technical analysis via the Developer Dashboard for review.</li>
                 </ul>
             </div>
         </div>
@@ -412,67 +359,67 @@
                     </div>
                     <button type="submit" class="btn" style="width:100%; margin-top:15px;">Login</button>
                     <p style="margin-top: 15px; text-align: center; font-size: 0.9rem; opacity: 0.7;">
-                        <a href="forgot_password.php?source=index" style="color: var(--accent);">Forgot Password?</a>
+                        <a href="forgot_password.php?source=dev_login" style="color: var(--accent);">Forgot Password?</a>
                     </p>
                 <?php else: ?>
                     <button type="submit" class="btn" style="width:100%; margin-top:15px;">Continue</button>
                 <?php endif; ?>
                 
                 <div style="margin-top: 20px; text-align: center; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px;">
-                    <button type="button" class="btn" style="width:100%; background: transparent; border: 2px solid var(--accent); color: var(--accent);" onclick="closeModal('emailModal'); openSignupModal();">
-                        Create an Account
-                    </button>
+                    <p style="opacity:0.7; font-size:0.9rem;">Need an account? Contact support to register as a developer.</p>
                 </div>
             </form>
         </div>
     </div>
-    
-    <!-- Signup Modal -->
-    <div id="signupModal" class="modal <?php echo $show_signup_modal ? 'active' : ''; ?>">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal('signupModal')">×</span>
-            <h2 style="text-align:center;">Create Your Account</h2>
-            <p style="text-align:center; opacity:0.7; margin-bottom: 20px;">The email you entered is not registered. Create a new account below.</p>
-            <form method="POST" style="margin-top:10px;">
-                <input type="hidden" name="signup_submit" value="1">
-                
-                <label style="display:block; margin-bottom: 5px; font-weight:600;">Full Name</label>
-                <input type="text" name="signup_fullname" placeholder="Enter your full name" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($_SESSION['signup_fullname'] ?? '') ?>">
-                
-                <label style="display:block; margin-top: 15px; margin-bottom: 5px; font-weight:600;">Email Address</label>
-                <input type="email" name="signup_email" placeholder="youremail@gmail.com" required style="text-align:center; font-size:1.1rem;" value="<?= htmlspecialchars($signup_email) ?>">
-                
-                <label style="display:block; margin-top: 15px; margin-bottom: 5px; font-weight:600;">Set Password</label>
-                <input type="password" name="signup_password" id="signupPassword" placeholder="Create a strong password (min 4 characters)" required>
 
-                <label style="display:block; margin-top: 10px; margin-bottom: 5px; font-weight:600;">Confirm Password</label>
-                <input type="password" name="signup_confirm_password" id="signupConfirmPassword" placeholder="Confirm your password" required>
-                
-                <?php if ($signup_error): ?>
-                    <p class="error-text" style="color: #ff6b6b; margin-top: 12px;"><?= htmlspecialchars($signup_error) ?></p>
-                <?php endif; ?>
-                
-                <button type="submit" class="btn" style="width:100%; margin-top:20px;">Create Account</button>
-                <p style="margin-top: 15px; text-align: center; font-size: 0.9rem; opacity: 0.7;">
-                    Already have an account? <a href="#" onclick="closeModal('signupModal'); openEmailModal(); return false;" style="color: var(--accent);">Login</a>
+    <!-- Not Developer Modal -->
+    <div id="notDeveloperModal" class="modal <?php echo $show_not_developer_modal ? 'active' : ''; ?>">
+        <div class="modal-content">
+            <span class="close" onclick="window.location.href='?logout=1'">×</span>
+            <div style="text-align:center; padding:2rem 1rem;">
+                <h2 style="color: #ff6b6b;">Access Restricted</h2>
+                <p style="font-size:1.2rem; line-height:1.7; margin:1.5rem 0;">
+                    This platform is exclusively for developers. You are currently not registered as a developer.
                 </p>
-            </form>
+                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 10px; margin: 20px 0;">
+                    <h3 style="color: var(--accent);">Contact Support</h3>
+                    <p style="opacity:0.8;">To gain developer access, please contact our support team:</p>
+                    <p style="color: var(--accent); font-size: 1.1rem; margin-top: 10px;">
+                        <a href="mailto:harvhub12@gmail.com" style="color: var(--accent);">support@harvhub.com</a>
+                    </p>
+                </div>
+                <button class="btn" onclick="window.location.href='?logout=1'" style="margin-top: 10px;">
+                    Logout Now
+                </button>
+            </div>
         </div>
     </div>
     
     <script>
+        let logoutTimerInterval = null;
+        
+        <?php if ($show_not_developer_modal): ?>
+        document.addEventListener('DOMContentLoaded', function() {
+            let seconds = 10;
+            const timerElement = document.getElementById('logoutTimer');
+            
+            logoutTimerInterval = setInterval(function() {
+                seconds--;
+                if (timerElement) {
+                    timerElement.textContent = seconds;
+                }
+                if (seconds <= 0) {
+                    clearInterval(logoutTimerInterval);
+                    window.location.href = '?logout=1';
+                }
+            }, 1000);
+        });
+        <?php endif; ?>
+        
         function openEmailModal() { 
             document.getElementById('emailModal').classList.add('active'); 
             setTimeout(() => {
                 const emailInput = document.getElementById('loginEmailInput');
-                if (emailInput) emailInput.focus();
-            }, 100);
-        }
-        
-        function openSignupModal() {
-            document.getElementById('signupModal').classList.add('active');
-            setTimeout(() => {
-                const emailInput = document.querySelector('#signupModal input[name="signup_email"]');
                 if (emailInput) emailInput.focus();
             }, 100);
         }
@@ -489,6 +436,11 @@
                 const emailInput = document.getElementById('loginEmailInput');
                 if (emailInput) emailInput.value = '';
             }
+            if(id === 'notDeveloperModal') {
+                if (logoutTimerInterval) {
+                    clearInterval(logoutTimerInterval);
+                }
+            }
         }
         
         document.addEventListener('DOMContentLoaded', function() {
@@ -501,6 +453,10 @@
                     }
                 });
             }
+            
+            <?php if ($show_not_developer_modal): ?>
+                document.getElementById('notDeveloperModal').classList.add('active');
+            <?php endif; ?>
             
             <?php if ($show_password_field || $login_error): ?>
                 openEmailModal();

@@ -315,7 +315,15 @@
         return $summary;
     }
 
-    function determineUserStatus($user, $contractDuration, $minProfitForSplit) {
+    function determineUserStatus($user, $contractDuration, $minProfitForSplit, $serverSharePercent = null, $userSharePercent = null) {
+        // Fallback to globals if not provided
+        if ($serverSharePercent === null) {
+            $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
+        }
+        if ($userSharePercent === null) {
+            $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
+        }
+        
         $executionStartDate = $user['execution_start_date'] ?? null;
         $profitAndLoss = (float)($user['profitandloss'] ?? 0);
         $currentLoyalties = normalizePaymentStatus($user['loyalties'] ?? '');
@@ -339,32 +347,23 @@
             $is_contract_active = ($contractDaysLeft > 0);
             $has_valid_execution = true;
             
-            // ===== Check if contract expired with profit > threshold =====
             if ($contract_completed && $profitAndLoss > $minProfitForSplit) {
                 $isContractExpiredWithProfit = true;
             }
         }
         
-        // Check if contract is cancelled
         $isCancelled = false;
         if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
             $isCancelled = true;
         }
         
-        // Check if payment failed
         $isFailedPayment = ($currentLoyalties === 'failed-payment');
         
-        // ===== SPECIAL: Check for expired contract with profit > threshold =====
-        // Even if loyalties is not set, we should show this in revenue
-        // ===== SPECIAL: Check for expired contract with profit > threshold =====
-        // ===== SPECIAL: Check for expired contract with profit > threshold =====
+        // SPECIAL: Expired contract with profit > threshold
         if ($isContractExpiredWithProfit && !$isCancelled) {
-            $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
-            $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
             $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
             $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
             
-            // Check if already has a valid status
             $validStatuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
             $statusAlreadySet = false;
             foreach ($validStatuses as $validStatus) {
@@ -374,7 +373,6 @@
                 }
             }
             
-            // If no valid status, use unpaid-payment (Section 2.5c will handle the database save)
             $statusToSet = $statusAlreadySet ? $currentLoyalties : 'unpaid-payment';
             
             return [
@@ -388,8 +386,6 @@
             ];
         }
         
-        // ===== SIMPLIFIED: Enable dropdown for ANY user with profit > threshold =====
-        // Only disable if contract is active (not ended yet) or no profit
         if ($is_contract_active) {
             return [
                 'status' => $currentLoyalties ?: 'active',
@@ -402,7 +398,6 @@
             ];
         }
         
-        // If no profit, disable dropdown
         if ($profitAndLoss <= 0) {
             return [
                 'status' => $currentLoyalties ?: 'inactive',
@@ -415,7 +410,6 @@
             ];
         }
         
-        // If profit below threshold, disable dropdown
         if ($profitAndLoss <= $minProfitForSplit) {
             return [
                 'status' => $currentLoyalties ?: 'below_threshold',
@@ -428,17 +422,12 @@
             ];
         }
         
-        // ===== PROFIT > THRESHOLD = ENABLE DROPDOWN =====
         if ($profitAndLoss > $minProfitForSplit) {
-            // Get shares from global or use defaults
-            $serverSharePercent = (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30);
-            $userSharePercent = (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70);
             $serverShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
             $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
             
             $normalizedCurrent = normalizePaymentStatus($currentLoyalties);
             
-            // ENABLED: always show in revenue when profit > threshold
             return [
                 'status' => $normalizedCurrent ?: 'unpaid-payment',
                 'should_show_in_revenue' => true,
@@ -450,7 +439,6 @@
             ];
         }
         
-        // Fallback - disabled
         return [
             'status' => $currentLoyalties ?: 'inactive',
             'should_show_in_revenue' => false,
@@ -462,21 +450,105 @@
         ];
     }
 
-    function get_list_array($str) {
-        return array_filter(array_map('trim', explode(',', $str ?? '')));
+    function getProgrammeInvestorData($pdo, $userId) {
+        // 1) Try: user is enrolled as an investor in someone's programme
+        try {
+            $stmt = $pdo->prepare("
+                SELECT 
+                    pi.contract_duration,
+                    pi.developer_percentage,
+                    pi.investor_percentage,
+                    pi.developerid,
+                    pi.programme_id,
+                    d.fullname AS developer_name,
+                    p.program_name AS programme_name
+                FROM programme_investors pi
+                LEFT JOIN developers d ON d.id = pi.developerid
+                LEFT JOIN programme p ON p.id = pi.programme_id
+                WHERE pi.investorid = ?
+                ORDER BY pi.id DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                return [
+                    'has_programme'         => true,
+                    'contract_duration'     => (int)$row['contract_duration'],
+                    'developer_percentage'  => (int)$row['developer_percentage'],
+                    'investor_percentage'   => (int)$row['investor_percentage'],
+                    'developerid'           => (int)$row['developerid'],
+                    'developer_name'        => $row['developer_name'] ?? 'N/A',
+                    'programme_id'          => (int)$row['programme_id'],
+                    'programme_name'        => $row['programme_name'] ?? '',
+                    'role'                  => 'investor'
+                ];
+            }
+        } catch (Exception $e) { /* fall through */ }
+
+        // 2) Fallback: user is a developer with a programme template row
+        //    (covers the "investor is also a developer" case)
+        try {
+            $stmt = $pdo->prepare("
+                SELECT 
+                    pi.contract_duration,
+                    pi.developer_percentage,
+                    pi.investor_percentage,
+                    pi.developerid,
+                    pi.programme_id,
+                    d.fullname AS developer_name,
+                    p.program_name AS programme_name
+                FROM programme_investors pi
+                LEFT JOIN developers d ON d.id = pi.developerid
+                LEFT JOIN programme p ON p.id = pi.programme_id
+                WHERE pi.developerid = ?
+                ORDER BY pi.id DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                return [
+                    'has_programme'         => true,
+                    'contract_duration'     => (int)$row['contract_duration'],
+                    'developer_percentage'  => (int)$row['developer_percentage'],
+                    'investor_percentage'   => (int)$row['investor_percentage'],
+                    'developerid'           => (int)$row['developerid'],
+                    'developer_name'        => $row['developer_name'] ?? 'N/A',
+                    'programme_id'          => (int)$row['programme_id'],
+                    'programme_name'        => $row['programme_name'] ?? '',
+                    'role'                  => 'developer'  // acting as own investor
+                ];
+            }
+        } catch (Exception $e) { /* fall through */ }
+
+        // 3) No programme anywhere → defaults
+        return [
+            'has_programme'         => false,
+            'contract_duration'     => (int)($GLOBALS['serverAccount']['contract_duration'] ?? 30),
+            'developer_percentage'  => (int)($GLOBALS['serverAccount']['server_share_percent'] ?? 30),
+            'investor_percentage'   => (int)($GLOBALS['serverAccount']['user_share_percent'] ?? 70),
+            'developerid'           => 0,
+            'developer_name'        => 'N/A',
+            'programme_id'          => 0,
+            'programme_name'        => '',
+            'role'                  => 'none'
+        ];
     }
+
 
     function format_currency($amount) {
         return '$' . number_format($amount, 2);
     }
     
     // ============================================
-    // SECTION 3b: REVENUE HISTORY SYNC FUNCTION (UPDATED)
+    // SECTION 3b: REVENUE HISTORY SYNC FUNCTION (UPDATED - TABLE BASED)
     // ============================================
 
     function syncUserRevenueHistory($userId, $sourceTable, $pdo, $serverAccount) {
         try {
-            // Get user data with all relevant fields
             $stmt = $pdo->prepare("SELECT * FROM {$sourceTable} WHERE id = ?");
             $stmt->execute([$userId]);
             $userData = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -485,13 +557,14 @@
                 return ['success' => false, 'message' => 'User not found'];
             }
             
-            // Get configuration
-            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
-            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
-            $serverSharePercent = (int)($serverAccount['server_share_percent'] ?? 30);
-            $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
+            // Get programme-specific values
+            $progData = getProgrammeInvestorData($pdo, $userId);
+            $contractDuration = $progData['contract_duration'];
+            $serverSharePercent = $progData['developer_percentage'];
+            $userSharePercent = $progData['investor_percentage'];
             
-            // Get user values
+            $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
+            
             $executionStartDate = $userData['execution_start_date'] ?? null;
             $brokerBalance = (float)($userData['broker_balance'] ?? 0);
             $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
@@ -499,8 +572,8 @@
             $currentLoyalties = normalizePaymentStatus($userData['loyalties'] ?? '');
             $contractId = $userData['contract_id'] ?? null;
             $investedWith = $userData['invested_with'] ?? null;
+            $userEmail = $userData['email'] ?? '';
             
-            // ===== CRITICAL: Determine if contract is active =====
             $isContractActive = false;
             $executionEndDate = null;
             
@@ -515,7 +588,6 @@
                 $isContractActive = ($today <= $end);
             }
             
-            // Calculate shares if profit is eligible
             $serverShare = 0;
             $userShare = 0;
             $isEligible = false;
@@ -525,83 +597,6 @@
                 $isEligible = true;
             }
             
-            // Ensure revenue_history column exists
-            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$sourceTable} LIKE 'revenue_history'");
-            if ($checkColumn->rowCount() == 0) {
-                $pdo->exec("ALTER TABLE {$sourceTable} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
-            }
-            
-            // Get current revenue history
-            $stmt = $pdo->prepare("SELECT revenue_history FROM {$sourceTable} WHERE id = ?");
-            $stmt->execute([$userId]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            $history = [];
-            if ($result && !empty($result['revenue_history'])) {
-                $history = json_decode($result['revenue_history'], true);
-                if (!is_array($history)) {
-                    $history = [];
-                }
-            }
-            
-            // ============================================================
-            // STEP 1: CLEAN INVALID RECORDS (remove records with no contract_id)
-            // ============================================================
-            $invalidRecordsRemoved = 0;
-            $validHistory = [];
-            foreach ($history as $record) {
-                $recordContractId = $record['contract_id'] ?? null;
-                if (!empty($recordContractId) && $recordContractId !== 'N/A' && $recordContractId !== 'null') {
-                    $validHistory[] = $record;
-                } else {
-                    $invalidRecordsRemoved++;
-                }
-            }
-            $history = $validHistory;
-            
-            // ============================================================
-            // STEP 2: FIND OR CREATE RECORD USING CONTRACT_ID
-            // ============================================================
-            $existingRecordIndex = -1;
-            $recordFound = false;
-            
-            // Check if current loyalties is failed-payment - we should still update the record
-            $isFailedPayment = ($currentLoyalties === 'failed-payment');
-            
-            if (!empty($contractId) && $contractId !== 'N/A' && $contractId !== 'null') {
-                foreach ($history as $index => $record) {
-                    $recordContractId = $record['contract_id'] ?? null;
-                    if (!empty($recordContractId) && $recordContractId === $contractId) {
-                        $existingRecordIndex = $index;
-                        $recordFound = true;
-                        break;
-                    }
-                }
-            }
-            
-            // ============================================================
-            // ============================================================
-            // STEP 3: DETERMINE FINAL STATUS
-            // ============================================================
-            $finalStatus = $currentLoyalties;
-
-            // Check if contract is cancelled (based on loyalties)
-            $isContractCancelled = false;
-            if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
-                $isContractCancelled = true;
-            }
-
-            // ===== CRITICAL: If contract is cancelled, FORCE the history status to 'contract_cancelled' =====
-            // The revenue_history record should ALWAYS show 'contract_cancelled' regardless of column changes
-            // This means even if the main loyalties column is updated to 'unpaid-payment', 'payment-made', etc.
-            // the history record remains 'contract_cancelled'
-            if ($isContractCancelled) {
-                $finalStatus = 'contract_cancelled';
-            }
-            
-            // ============================================================
-            // STEP 4: GENERATE CONTRACT_ID IF MISSING
-            // ============================================================
             if (empty($contractId) || $contractId === 'N/A' || $contractId === 'null') {
                 if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00' && !empty($executionEndDate)) {
                     $startFormatted = date('dmY', strtotime($executionStartDate));
@@ -610,8 +605,7 @@
                     
                     $updateContractId = $pdo->prepare("UPDATE {$sourceTable} SET contract_id = ? WHERE id = ?");
                     $updateContractId->execute([$contractId, $userId]);
-                } else if ($isFailedPayment) {
-                    // For failed payments without a contract_id, generate one based on current date
+                } else if ($currentLoyalties === 'failed-payment' || strpos($currentLoyalties, 'failed') !== false) {
                     $now = new DateTime();
                     $executionStartDate = $now->format('Y-m-d');
                     $start = clone $now;
@@ -629,61 +623,19 @@
                 }
             }
             
-            // ============================================================
-            // STEP 5: UPDATE EXISTING RECORD OR CREATE NEW
-            // ============================================================
             $now = date('Y-m-d H:i:s');
+            $finalStatus = $currentLoyalties;
             
-            if ($recordFound && $existingRecordIndex !== -1) {
-                // ===== UPDATE EXISTING RECORD =====
-                $history[$existingRecordIndex]['contract_id'] = $contractId;
-                $history[$existingRecordIndex]['loyalties'] = $finalStatus;
-                $history[$existingRecordIndex]['server_share'] = $serverShare;
-                $history[$existingRecordIndex]['user_share'] = $userShare;
-                $history[$existingRecordIndex]['current_balance'] = $currentBalance;
-                $history[$existingRecordIndex]['profit'] = $profitAndLoss;
-                $history[$existingRecordIndex]['updated_at'] = $now;
-                $history[$existingRecordIndex]['execution_start_date'] = $executionStartDate;
-                $history[$existingRecordIndex]['execution_end_date'] = $executionEndDate;
-                $history[$existingRecordIndex]['starting_balance'] = $brokerBalance;
-                
-                if (!isset($history[$existingRecordIndex]['invested_with']) && !empty($investedWith)) {
-                    $history[$existingRecordIndex]['invested_with'] = $investedWith;
-                }
-                
-                // If status is payment-confirmed, add confirmation details
-                if ($currentLoyalties === 'payment-confirmed') {
-                    $history[$existingRecordIndex]['confirmed_at'] = $now;
-                }
-                
-                // If status is failed-payment, add failure details
-                if ($currentLoyalties === 'failed-payment' || $isFailedPayment) {
-                    $history[$existingRecordIndex]['failed_at'] = $now;
-                    $history[$existingRecordIndex]['failed_reason'] = 'Payment verification failed';
-                }
-                
-            } else {
-                // ===== CREATE NEW RECORD =====
-                $newId = time();
-                if (!empty($history)) {
-                    foreach ($history as $item) {
-                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] >= $newId) {
-                            $newId = (int)$item['id'] + 1;
-                        }
-                    }
-                }
-                
-                if (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
-                    $executionStartDate = date('Y-m-d');
-                    $start = new DateTime($executionStartDate);
-                    $end = clone $start;
-                    $end->modify("+{$contractDuration} days");
-                    $executionEndDate = $end->format('Y-m-d');
-                }
-                
-                $newRecord = [
-                    'id' => $newId,
-                    'contract_id' => $contractId,
+            if (strpos(strtolower($currentLoyalties), 'cancelled') !== false) {
+                $finalStatus = 'contract_cancelled';
+            }
+            
+            $stmt = $pdo->prepare("SELECT * FROM revenue_history WHERE user_email = ? AND contract_id = ?");
+            $stmt->execute([$userEmail, $contractId]);
+            $existingRecord = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($existingRecord) {
+                $updateFields = [
                     'execution_start_date' => $executionStartDate,
                     'execution_end_date' => $executionEndDate,
                     'starting_balance' => $brokerBalance,
@@ -692,44 +644,60 @@
                     'user_share' => $userShare,
                     'server_share' => $serverShare,
                     'loyalties' => $finalStatus,
-                    'recorded_at' => $now,
-                    'invested_with' => $investedWith
+                    'invested_with' => $investedWith,
+                    'updated_at' => $now
                 ];
                 
                 if ($currentLoyalties === 'payment-confirmed') {
-                    $newRecord['confirmed_at'] = $now;
+                    $updateFields['payment_date'] = $now;
                 }
                 
-                if ($currentLoyalties === 'failed-payment' || $isFailedPayment) {
-                    $newRecord['failed_at'] = $now;
-                    $newRecord['failed_reason'] = 'Payment verification failed';
+                if ($currentLoyalties === 'failed-payment' || strpos($currentLoyalties, 'failed') !== false) {
+                    $updateFields['payment_details'] = 'Payment verification failed';
                 }
                 
-                $history[] = $newRecord;
+                $setClause = [];
+                $params = [];
+                foreach ($updateFields as $key => $value) {
+                    $setClause[] = "{$key} = ?";
+                    $params[] = $value;
+                }
+                $params[] = $userEmail;
+                $params[] = $contractId;
+                
+                $updateStmt = $pdo->prepare("UPDATE revenue_history SET " . implode(', ', $setClause) . " WHERE user_email = ? AND contract_id = ?");
+                $updateStmt->execute($params);
+                
+                $message = 'Revenue history updated';
+            } else {
+                $insertStmt = $pdo->prepare("
+                    INSERT INTO revenue_history (
+                        user_email, contract_id, execution_start_date, execution_end_date,
+                        starting_balance, current_balance, profit, user_share, server_share,
+                        loyalties, invested_with, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                
+                $insertStmt->execute([
+                    $userEmail,
+                    $contractId,
+                    $executionStartDate,
+                    $executionEndDate,
+                    $brokerBalance,
+                    $currentBalance,
+                    $profitAndLoss,
+                    $userShare,
+                    $serverShare,
+                    $finalStatus,
+                    $investedWith,
+                    $now,
+                    $now
+                ]);
+                
+                $message = 'New revenue record created';
             }
             
-            // ============================================================
-            // STEP 6: SORT NEWEST FIRST BY ID
-            // ============================================================
-            usort($history, function($a, $b) {
-                $idA = isset($a['id']) ? (int)$a['id'] : 0;
-                $idB = isset($b['id']) ? (int)$b['id'] : 0;
-                return $idB - $idA;
-            });
-            
-            // ============================================================
-            // STEP 7: SAVE UPDATED HISTORY
-            // ============================================================
-            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-            $updateStmt = $pdo->prepare("UPDATE {$sourceTable} SET revenue_history = ? WHERE id = ?");
-            $updateStmt->execute([$jsonHistory, $userId]);
-            
-            $message = $recordFound ? 'Revenue history updated' : 'New revenue record created';
-            if ($invalidRecordsRemoved > 0) {
-                $message .= " (removed {$invalidRecordsRemoved} invalid record(s) with no contract_id)";
-            }
-            
-            if ($isFailedPayment) {
+            if ($currentLoyalties === 'failed-payment' || strpos($currentLoyalties, 'failed') !== false) {
                 $message .= " - Payment marked as failed";
             }
             
@@ -776,85 +744,77 @@
     
     // ============================================
     // SECTION 4.5: AUTO-MARK EXPIRED CONTRACTS AS UNPAID
+    // UPDATED: Uses programme_investors for contract duration per user
     // ============================================
-    // This runs on every page load to automatically mark expired contracts
-    // with profit above threshold as 'unpaid-payment'
 
     if ($authenticated) {
         try {
-            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
             $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
             $today = new DateTime();
             $today->setTime(0, 0, 0);
             
-            // Valid statuses that should NOT be overwritten
             $validStatuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
             
-            // Check both tables
-            foreach ([$insidersTable, $insidersServerTable] as $table) {
-                try {
-                    // Get all users with execution_start_date
-                    $stmt = $pdo->prepare("
-                        SELECT id, execution_start_date, profitandloss, loyalties 
-                        FROM {$table} 
-                        WHERE execution_start_date IS NOT NULL 
-                        AND execution_start_date != '0000-00-00'
-                        AND execution_start_date != ''
-                    ");
-                    $stmt->execute();
-                    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT id, execution_start_date, profitandloss, loyalties, email, invested_with 
+                    FROM {$harvhubTable} 
+                    WHERE execution_start_date IS NOT NULL 
+                    AND execution_start_date != '0000-00-00'
+                    AND execution_start_date != ''
+                ");
+                $stmt->execute();
+                $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($users as $user) {
+                    $executionStartDate = $user['execution_start_date'];
+                    $profitAndLoss = (float)($user['profitandloss'] ?? 0);
+                    $currentLoyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    $userId = $user['id'];
                     
-                    foreach ($users as $user) {
-                        $executionStartDate = $user['execution_start_date'];
-                        $profitAndLoss = (float)($user['profitandloss'] ?? 0);
-                        $currentLoyalties = strtolower(trim($user['loyalties'] ?? ''));
+                    // Get programme-specific contract duration
+                    $progData = getProgrammeInvestorData($pdo, $userId);
+                    $contractDuration = $progData['contract_duration'];
+                    
+                    try {
+                        $start = new DateTime($executionStartDate);
+                        $end = clone $start;
+                        $end->modify("+{$contractDuration} days");
+                        $end->setTime(0, 0, 0);
                         
-                        // Check if contract is expired
-                        try {
-                            $start = new DateTime($executionStartDate);
-                            $end = clone $start;
-                            $end->modify("+{$contractDuration} days");
-                            $end->setTime(0, 0, 0);
-                            
-                            // Skip if contract is still active
-                            if ($today <= $end) {
-                                continue;
-                            }
-                        } catch (Exception $e) {
+                        if ($today <= $end) {
                             continue;
                         }
-                        
-                        // Skip if profit is not above threshold
-                        if ($profitAndLoss <= $minProfitForSplit) {
-                            continue;
-                        }
-                        
-                        // Check if loyalties already has a valid status
-                        $statusAlreadySet = false;
-                        foreach ($validStatuses as $validStatus) {
-                            if (strpos($currentLoyalties, $validStatus) !== false) {
-                                $statusAlreadySet = true;
-                                break;
-                            }
-                        }
-                        
-                        // If no valid status, auto-mark as unpaid-payment
-                        if (!$statusAlreadySet) {
-                            $updateStmt = $pdo->prepare("UPDATE {$table} SET loyalties = 'unpaid-payment' WHERE id = ?");
-                            $updateStmt->execute([$user['id']]);
-                            
-                            // Sync revenue history
-                            if (function_exists('syncUserRevenueHistory')) {
-                                syncUserRevenueHistory($user['id'], $table, $pdo, $serverAccount);
-                            }
+                    } catch (Exception $e) {
+                        continue;
+                    }
+                    
+                    if ($profitAndLoss <= $minProfitForSplit) {
+                        continue;
+                    }
+                    
+                    $statusAlreadySet = false;
+                    foreach ($validStatuses as $validStatus) {
+                        if (strpos($currentLoyalties, $validStatus) !== false) {
+                            $statusAlreadySet = true;
+                            break;
                         }
                     }
-                } catch (Exception $e) {
-                    // Skip this table on error
+                    
+                    if (!$statusAlreadySet) {
+                        $updateStmt = $pdo->prepare("UPDATE {$harvhubTable} SET loyalties = 'unpaid-payment' WHERE id = ?");
+                        $updateStmt->execute([$userId]);
+                        
+                        if (function_exists('syncUserRevenueHistory')) {
+                            syncUserRevenueHistory($userId, $harvhubTable, $pdo, $serverAccount);
+                        }
+                    }
                 }
+            } catch (Exception $e) {
+                // Skip on error
             }
         } catch (Exception $e) {
-            // Silent fail - don't break the page
+            // Silent fail
         }
     }
     // ============================================
@@ -864,13 +824,119 @@
         header('Content-Type: application/json');
         
         $action = $_POST['action'] ?? '';
+        // 5a0: Get Programme Investors Map (userid => programme data)
+        if ($action === 'get_programme_investors_map') {
+            try {
+                $investorsMap = [];
+
+                // One row per investor — the latest enrolment, joined to programme + developer
+                // (developer here is the programme owner, i.e. programme.userid)
+                $stmt = $pdo->query("
+                    SELECT
+                        pi.investorid,
+                        pi.developerid,
+                        pi.programme_id,
+                        pi.contract_duration,
+                        pi.developer_percentage,
+                        pi.investor_percentage,
+                        pi.minimum_investment_amount,
+                        pi.maximum_investment_amount,
+                        d.fullname  AS developer_name,
+                        d.email     AS developer_email,
+                        p.program_name AS programme_name
+                    FROM programme_investors pi
+                    LEFT JOIN harvhub    d ON d.id = pi.developerid
+                    LEFT JOIN programme  p ON p.id = pi.programme_id
+                    WHERE pi.investorid > 0
+                    ORDER BY pi.id ASC
+                ");
+
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $investorId = (int)$row['investorid'];
+                    // Last row wins — matches programmes.php's "one active enrolment" model.
+                    $investorsMap[$investorId] = [
+                        'developerid'               => (int)$row['developerid'],
+                        'developer_name'            => $row['developer_name']  ?? 'N/A',
+                        'developer_email'           => $row['developer_email'] ?? '',
+                        'programme_id'              => (int)$row['programme_id'],
+                        'programme_name'            => $row['programme_name']  ?? '',
+                        'contract_duration'         => (int)$row['contract_duration'],
+                        'developer_percentage'      => (int)$row['developer_percentage'],
+                        'investor_percentage'       => (int)$row['investor_percentage'],
+                        'minimum_investment_amount' => (float)$row['minimum_investment_amount'],
+                        'maximum_investment_amount' => (float)$row['maximum_investment_amount'],
+                        'has_programme'             => true
+                    ];
+                }
+
+                echo json_encode(['success' => true, 'investors' => $investorsMap]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+        // 5a1: Get programme investor data for a single user
+        if ($action === 'get_programme_investor_for_user') {
+            $user_id = (int)($_POST['user_id'] ?? 0);
+            
+            if ($user_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid user']);
+                exit;
+            }
+            
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT 
+                        pi.investorid,
+                        pi.developerid,
+                        pi.programme_id,
+                        pi.contract_duration,
+                        pi.developer_percentage,
+                        pi.investor_percentage,
+                        pi.minimum_investment_amount,
+                        pi.maximum_investment_amount,
+                        d.fullname AS developer_name,
+                        p.program_name AS programme_name
+                    FROM programme_investors pi
+                    LEFT JOIN developers d ON d.id = pi.developerid
+                    LEFT JOIN programme p ON p.id = pi.programme_id
+                    WHERE pi.investorid = ?
+                    LIMIT 1
+                ");
+                $stmt->execute([$user_id]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($row) {
+                    echo json_encode([
+                        'success' => true,
+                        'data' => [
+                            'developerid' => (int)$row['developerid'],
+                            'developer_name' => $row['developer_name'] ?? 'N/A',
+                            'programme_id' => (int)$row['programme_id'],
+                            'programme_name' => $row['programme_name'] ?? '',
+                            'contract_duration' => (int)$row['contract_duration'],
+                            'developer_percentage' => (int)$row['developer_percentage'],
+                            'investor_percentage' => (int)$row['investor_percentage'],
+                            'minimum_investment_amount' => (float)$row['minimum_investment_amount'],
+                            'maximum_investment_amount' => (float)$row['maximum_investment_amount'],
+                            'has_programme' => true
+                        ]
+                    ]);
+                } else {
+                    echo json_encode(['success' => true, 'data' => null]);
+                }
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
         
         // 5a: Live User Data Update
         if (empty($action)) {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && $source_table === $harvhubTable) {
                 $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
                 $stmt->execute([$user_id]);
                 $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -923,48 +989,36 @@
             }
             exit;
         }
-        // 5aa: Get Active Investors (users with active contracts)
+        // 5aa: Get Active Investors (users with active contracts) - UPDATED for programme_investors
         if ($action === 'get_active_investors') {
             try {
                 $users = array();
-                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                 
-                // ===== FIX: Function to check if user should be in active list =====
                 function shouldBeActive($user, $contractDuration, $minProfitForSplit) {
-                    // MUST have application_status containing 'approved'
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
                         return false;
                     }
                     
-                    // MUST have login (not empty)
                     $login = trim($user['login'] ?? '');
                     if (empty($login)) {
                         return false;
                     }
                     
-                    // ============================================================
-                    // CHECK 0: If execution_start_date is NULL/empty → NOT ACTIVE
-                    // ============================================================
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
-                        return false; // No active contract
+                        return false;
                     }
                     
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     
-                    // ============================================================
-                    // CHECK 1: If loyalties contains 'cancelled' → NOT ACTIVE
-                    // ============================================================
                     if (strpos($loyalties, 'cancelled') !== false) {
-                        return false; // CANCELLED - NOT ACTIVE
+                        return false;
                     }
                     
-                    // ============================================================
-                    // CHECK 2: Check if contract is still active based on dates
-                    // ============================================================
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -985,73 +1039,50 @@
                         }
                     }
                     
-                    // ============================================================
-                    // CHECK 3: If contract is ACTIVE (not expired) → ACTIVE
-                    // ============================================================
                     if ($isContractActive) {
                         return true;
                     }
                     
-                    // ============================================================
-                    // CHECK 4: Contract is EXPIRED - check loyalties
-                    // ============================================================
                     $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
                     
                     foreach ($activeStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
-                            return true; // ACTIVE - still needs attention
+                            return true;
                         }
                     }
                     
-                    // If loyalties is payment-confirmed → NOT ACTIVE
                     if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
                         return false;
                     }
                     
-                    // ANY other loyalties value with expired contract = NOT ACTIVE
                     return false;
                 }
                 
-                // Get from insiders_server table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$insidersServerTable}' as source, ? as contract_duration
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$harvhubTable}' as source
+                            FROM {$harvhubTable} 
                             WHERE application_status LIKE '%approved%'
                             AND login IS NOT NULL 
                             AND login != ''
                             ORDER BY id DESC
                         ");
-                        $stmt1->execute([$contractDuration]);
-                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        $stmt->execute();
+                        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
+                            // Get programme-specific data for this user
+                            $progData = getProgrammeInvestorData($pdo, $user['id']);
+                            $contractDuration = $progData['contract_duration'];
+                            
                             if (shouldBeActive($user, $contractDuration, $minProfitForSplit)) {
-                                $users[] = $user;
-                            }
-                        }
-                    }
-                } catch (Exception $e) { }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$insidersTable}' as source, ? as contract_duration
-                            FROM {$insidersTable} 
-                            WHERE application_status LIKE '%approved%'
-                            AND login IS NOT NULL 
-                            AND login != ''
-                            ORDER BY id DESC
-                        ");
-                        $stmt2->execute([$contractDuration]);
-                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                        
-                        foreach ($results as $user) {
-                            if (shouldBeActive($user, $contractDuration, $minProfitForSplit)) {
+                                $user['contract_duration'] = $contractDuration;
+                                $user['developer_name'] = $progData['developer_name'];
+                                $user['programme_name'] = $progData['programme_name'];
+                                $user['developer_percentage'] = $progData['developer_percentage'];
+                                $user['investor_percentage'] = $progData['investor_percentage'];
                                 $users[] = $user;
                             }
                         }
@@ -1064,13 +1095,13 @@
             }
             exit;
         }
-        // 5aa2: Get Unusual Users (with daily_balance_log analysis) - FIXED to only show active users
+        // 5aa2: Get Unusual Users (with daily_balance_log analysis) - UPDATED for programme_investors
         if ($action === 'get_unusual_users') {
             try {
                 $search = trim($_POST['search'] ?? '');
                 $users = [];
                 $today = date('Y-m-d');
-                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                 
                 function checkUnusualActivity($dailyLog) {
@@ -1110,32 +1141,24 @@
                     ];
                 }
 
-                // ===== Helper function to check if user is ACTIVE =====
-                // ===== Helper function to check if user is ACTIVE =====
                 function isUserActive($user, $contractDuration) {
-                    // MUST have application_status containing 'approved'
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
-                        return false; // Not approved = skip
+                        return false;
                     }
                     
-                    // MUST have login (not empty)
                     $login = trim($user['login'] ?? '');
                     if (empty($login)) {
-                        return false; // No login = skip
+                        return false;
                     }
                     
-                    // ============================================================
-                    // CRITICAL: If execution_start_date is NULL → NOT ACTIVE
-                    // ============================================================
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
-                        return false; // No active contract
+                        return false;
                     }
                     
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     
-                    // FIRST: Check if contract is still active based on dates
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -1148,7 +1171,6 @@
                             $todayObj = new DateTime();
                             $todayObj->setTime(0, 0, 0);
                             
-                            // If contract end date is >= today, contract is ACTIVE
                             if ($end >= $todayObj) {
                                 $isContractActive = true;
                             }
@@ -1157,87 +1179,58 @@
                         }
                     }
                     
-                    // RULE 1: If contract is ACTIVE (not expired), user is ACTIVE
                     if ($isContractActive) {
-                        return true; // ACTIVE - contract still running
+                        return true;
                     }
                     
-                    // RULE 2: Contract is EXPIRED - check loyalties
                     $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
                     
-                    // Check if loyalties matches any active status
                     foreach ($activeStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
-                            return true; // ACTIVE
+                            return true;
                         }
                     }
                     
-                    // NOT active
                     return false;
                 }
                 
-                // Get from insiders_server table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$insidersServerTable}' as source FROM {$insidersServerTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$harvhubTable}' as source FROM {$harvhubTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
                         if (!empty($search)) {
                             $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
                         }
                         $sql .= " ORDER BY id DESC";
-                        $stmt1 = $pdo->prepare($sql);
+                        $stmt = $pdo->prepare($sql);
                         if (!empty($search)) {
                             $searchTerm = '%' . $search . '%';
-                            $stmt1->execute([$today, $searchTerm, $searchTerm, $searchTerm]);
+                            $stmt->execute([$today, $searchTerm, $searchTerm, $searchTerm]);
                         } else {
-                            $stmt1->execute([$today]);
+                            $stmt->execute([$today]);
                         }
-                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         foreach ($results as $user) {
-                            // ===== CRITICAL: Only include if user is ACTIVE =====
+                            // Get programme-specific duration
+                            $progData = getProgrammeInvestorData($pdo, $user['id']);
+                            $contractDuration = $progData['contract_duration'];
+                            
                             if (isUserActive($user, $contractDuration) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
                                 $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
                                 $user['withdrawal_count'] = $summary['withdrawal_count'];
                                 $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
                                 $user['unauthorized_balance'] = $summary['unauthorized_balance'];
+                                $user['contract_duration'] = $contractDuration;
+                                $user['developer_name'] = $progData['developer_name'];
+                                $user['programme_name'] = $progData['programme_name'];
+                                $user['developer_percentage'] = $progData['developer_percentage'];
+                                $user['investor_percentage'] = $progData['investor_percentage'];
                                 $users[] = $user;
                             }
                         }
                     }
                 } catch (Exception $e) {
-                    error_log("Error in get_unusual_users (insiders_server): " . $e->getMessage());
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$insidersTable}' as source FROM {$insidersTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
-                        if (!empty($search)) {
-                            $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
-                        }
-                        $sql .= " ORDER BY id DESC";
-                        $stmt2 = $pdo->prepare($sql);
-                        if (!empty($search)) {
-                            $searchTerm = '%' . $search . '%';
-                            $stmt2->execute([$today, $searchTerm, $searchTerm, $searchTerm]);
-                        } else {
-                            $stmt2->execute([$today]);
-                        }
-                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                        foreach ($results as $user) {
-                            // ===== CRITICAL: Only include if user is ACTIVE =====
-                            if (isUserActive($user, $contractDuration) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
-                                $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
-                                $user['withdrawal_count'] = $summary['withdrawal_count'];
-                                $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
-                                $user['unauthorized_balance'] = $summary['unauthorized_balance'];
-                                $users[] = $user;
-                            }
-                        }
-                    }
-                } catch (Exception $e) {
-                    error_log("Error in get_unusual_users (insiders): " . $e->getMessage());
+                    error_log("Error in get_unusual_users: " . $e->getMessage());
                 }
                 
                 echo json_encode(['success' => true, 'users' => $users]);
@@ -1252,7 +1245,7 @@
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -1302,12 +1295,12 @@
             exit;
         }
 
-        // 5aa4: Get User Data (for detail modal)
+        // 5aa4: Get User Data (for detail settings_modal)
         if ($action === 'get_user_data') {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -1327,7 +1320,7 @@
             exit;
         }
 
-        // 5aa5: Update Payment Status (for completed tab)
+        // 5aa5: Update Payment Status - UPDATED for programme_investors
         if ($action === 'update_payment_status') {
             $user_id = $_POST['user_id'] ?? '';
             $new_status = trim($_POST['payment_status'] ?? '');
@@ -1353,7 +1346,7 @@
             
             $normalizedStatus = normalizePaymentStatus($new_status);
             
-            if (!empty($user_id) && !empty($new_status) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && !empty($new_status) && $source_table === $harvhubTable) {
                 try {
                     $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
                     $stmt->execute([$normalizedStatus, $user_id]);
@@ -1372,41 +1365,44 @@
             exit;
         }
 
-        // 5ab: Get Completed Investors with enhanced data
+        // 5ab: Get Completed Investors with enhanced data - UPDATED for programme_investors
         if ($action === 'get_completed_investors') {
             try {
                 $users = array();
-                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 
-                // Get from insiders_server table - ALL users with revenue_history
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        // ===== FIX: Include broker and login in SELECT =====
-                        $stmt1 = $pdo->prepare("
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
                             SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
                                 profitandloss, broker_balance, 
                                 broker, login,
-                                revenue_history,
-                                ? as contract_duration,
-                                '{$insidersServerTable}' as source
-                            FROM {$insidersServerTable} 
+                                '{$harvhubTable}' as source
+                            FROM {$harvhubTable} 
                             ORDER BY id DESC
                         ");
-                        $stmt1->execute([$contractDuration]);
-                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        $stmt->execute();
+                        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
+                            // Get programme-specific data
+                            $progData = getProgrammeInvestorData($pdo, $user['id']);
+                            
                             $history = [];
                             $hasHistory = false;
                             
-                            if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
-                                $history = json_decode($user['revenue_history'], true);
-                                if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
-                                    $hasHistory = true;
-                                } else {
-                                    $history = [];
-                                }
+                            $historyStmt = $pdo->prepare("
+                                SELECT * FROM revenue_history 
+                                WHERE user_email = ? 
+                                ORDER BY created_at DESC
+                            ");
+                            $historyStmt->execute([$user['email']]);
+                            $historyRecords = $historyStmt->fetchAll(PDO::FETCH_ASSOC);
+                            
+                            if (!empty($historyRecords)) {
+                                $history = $historyRecords;
+                                $hasHistory = true;
                             }
                             
                             $userData = [
@@ -1436,82 +1432,20 @@
                                 'profitandloss' => (float)($user['profitandloss'] ?? 0),
                                 'broker_balance' => (float)($user['broker_balance'] ?? 0),
                                 'revenue_history' => $history,
-                                'contract_duration' => $user['contract_duration'] ?? $contractDuration
+                                'contract_duration' => $progData['contract_duration'],
+                                'developer_name' => $progData['developer_name'],
+                                'programme_name' => $progData['programme_name'],
+                                'developer_percentage' => $progData['developer_percentage'],
+                                'investor_percentage' => $progData['investor_percentage'],
+                                'developerid' => $progData['developerid'],
+                                'programme_id' => $progData['programme_id']
                             ];
                             
                             $users[] = $userData;
                         }
                     }
                 } catch (Exception $e) {
-                    error_log("Error in get_completed_investors (insiders_server): " . $e->getMessage());
-                }
-                
-                // Get from insiders table - ALL users with revenue_history
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        // ===== FIX: Include broker and login in SELECT =====
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, loyalties, invested_with, execution_start_date, 
-                                profitandloss, broker_balance, 
-                                broker, login,
-                                revenue_history,
-                                ? as contract_duration,
-                                '{$insidersTable}' as source
-                            FROM {$insidersTable} 
-                            ORDER BY id DESC
-                        ");
-                        $stmt2->execute([$contractDuration]);
-                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                        
-                        foreach ($results as $user) {
-                            $history = [];
-                            $hasHistory = false;
-                            
-                            if (!empty($user['revenue_history']) && $user['revenue_history'] !== '[]') {
-                                $history = json_decode($user['revenue_history'], true);
-                                if (json_last_error() === JSON_ERROR_NONE && is_array($history) && !empty($history)) {
-                                    $hasHistory = true;
-                                } else {
-                                    $history = [];
-                                }
-                            }
-                            
-                            $userData = [
-                                'id' => $user['id'],
-                                'source' => $user['source'],
-                                'fullname' => $user['fullname'] ?? 'N/A',
-                                'email' => $user['email'] ?? 'N/A',
-                                'broker' => $user['broker'] ?? 'N/A',
-                                'login' => $user['login'] ?? 'N/A',
-                                'has_history' => $hasHistory,
-                                'history_count' => $hasHistory ? count($history) : 0,
-                                'current_loyalties' => $user['loyalties'] ?? null,
-                                'payment_summary' => $hasHistory ? calculatePaymentSummaryFromHistory($history) : [
-                                    'total_unpaid_revenue' => 0,
-                                    'total_payment_made' => 0,
-                                    'total_payment_confirmed' => 0,
-                                    'total_cancelled_contracts' => 0,
-                                    'total_failed_payments' => 0,
-                                    'unpaid_count' => 0,
-                                    'payment_made_count' => 0,
-                                    'payment_confirmed_count' => 0,
-                                    'cancelled_count' => 0,
-                                    'failed_count' => 0
-                                ],
-                                'invested_with' => $user['invested_with'] ?? null,
-                                'execution_start_date' => $user['execution_start_date'] ?? null,
-                                'profitandloss' => (float)($user['profitandloss'] ?? 0),
-                                'broker_balance' => (float)($user['broker_balance'] ?? 0),
-                                'revenue_history' => $history,
-                                'contract_duration' => $user['contract_duration'] ?? $contractDuration
-                            ];
-                            
-                            $users[] = $userData;
-                        }
-                    }
-                } catch (Exception $e) {
-                    error_log("Error in get_completed_investors (insiders): " . $e->getMessage());
+                    error_log("Error in get_completed_investors: " . $e->getMessage());
                 }
                 
                 echo json_encode(['success' => true, 'users' => $users]);
@@ -1521,64 +1455,60 @@
             exit;
         }
 
-        // 5ac: Get Revenue History for a specific user
+        // 5ac: Get Revenue History for a specific user (UPDATED - Table Based)
         if ($action === 'get_revenue_history') {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
             
             try {
-                // Check if revenue_history column exists
-                $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
-                if ($checkColumn->rowCount() == 0) {
-                    echo json_encode(['success' => true, 'history' => []]);
+                // First get user email
+                $stmt2 = $pdo->prepare("SELECT email, invested_with FROM {$source_table} WHERE id = ?");
+                $stmt2->execute([$user_id]);
+                $userInfo = $stmt2->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$userInfo) {
+                    echo json_encode(['success' => false, 'error' => 'User not found']);
                     exit;
                 }
                 
-                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                $stmt->execute([$user_id]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                $userEmail = $userInfo['email'];
+                $userInvestedWith = $userInfo['invested_with'] ?? null;
                 
-                $history = [];
-                if ($result && !empty($result['revenue_history'])) {
-                    $history = json_decode($result['revenue_history'], true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $history = [];
-                    }
-                    // Sort NEWEST FIRST
-                    if (is_array($history) && !empty($history)) {
-                        usort($history, function($a, $b) {
-                            $dateA = isset($a['recorded_at']) ? strtotime($a['recorded_at']) : (isset($a['id']) ? $a['id'] : 0);
-                            $dateB = isset($b['recorded_at']) ? strtotime($b['recorded_at']) : (isset($b['id']) ? $b['id'] : 0);
-                            return $dateB - $dateA;
-                        });
-                    }
-                }
-
-                // Also fetch invested_with for the user to add to history records if missing
-                $stmt2 = $pdo->prepare("SELECT invested_with FROM {$source_table} WHERE id = ?");
-                $stmt2->execute([$user_id]);
-                $userInvestedWith = $stmt2->fetch(PDO::FETCH_ASSOC)['invested_with'] ?? null;
-
-                if (is_array($history) && !empty($history) && $userInvestedWith) {
-                    $needsUpdate = false;
-                    foreach ($history as &$record) {
-                        if (!isset($record['invested_with'])) {
-                            $record['invested_with'] = $userInvestedWith;
-                            $needsUpdate = true;
+                // Fetch from revenue_history table using user_email
+                $stmt = $pdo->prepare("
+                    SELECT * FROM revenue_history 
+                    WHERE user_email = ? 
+                    ORDER BY created_at DESC
+                ");
+                $stmt->execute([$userEmail]);
+                $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Update missing invested_with
+                if (!empty($history) && $userInvestedWith) {
+                    foreach ($history as $record) {
+                        if (!isset($record['invested_with']) || empty($record['invested_with'])) {
+                            $updateStmt = $pdo->prepare("
+                                UPDATE revenue_history SET invested_with = ? 
+                                WHERE user_email = ? AND contract_id = ?
+                            ");
+                            $updateStmt->execute([$userInvestedWith, $userEmail, $record['contract_id']]);
                         }
                     }
-                    if ($needsUpdate) {
-                        $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-                        $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-                        $updateStmt->execute([$jsonHistory, $user_id]);
-                    }
+                    // Re-fetch after updates
+                    $stmt = $pdo->prepare("
+                        SELECT * FROM revenue_history 
+                        WHERE user_email = ? 
+                        ORDER BY created_at DESC
+                    ");
+                    $stmt->execute([$userEmail]);
+                    $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 }
-
+                
                 echo json_encode(['success' => true, 'history' => $history]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1591,7 +1521,7 @@
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && $source_table === $harvhubTable) {
                 $stmt = $pdo->prepare("SELECT accountmanagement FROM {$source_table} WHERE id = ?");
                 $stmt->execute([$user_id]);
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1638,27 +1568,16 @@
             $users = [];
             
             // Check if unauthorized_actions column exists before selecting it
-            $checkColumn1 = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'unauthorized_actions'");
-            $hasUnauthorizedColumn1 = $checkColumn1->rowCount() > 0;
+            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$harvhubTable} LIKE 'unauthorized_actions'");
+            $hasUnauthorizedColumn = $checkColumn->rowCount() > 0;
             
-            $checkColumn2 = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'unauthorized_actions'");
-            $hasUnauthorizedColumn2 = $checkColumn2->rowCount() > 0;
-            
-            if ($hasUnauthorizedColumn1) {
-                $stmt1 = $pdo->prepare("SELECT id, fullname, email, application_status, unauthorized_actions, '{$insidersTable}' as source FROM {$insidersTable} ORDER BY id DESC");
+            if ($hasUnauthorizedColumn) {
+                $stmt = $pdo->prepare("SELECT id, fullname, email, application_status, unauthorized_actions, '{$harvhubTable}' as source FROM {$harvhubTable} ORDER BY id DESC");
             } else {
-                $stmt1 = $pdo->prepare("SELECT id, fullname, email, application_status, '' as unauthorized_actions, '{$insidersTable}' as source FROM {$insidersTable} ORDER BY id DESC");
+                $stmt = $pdo->prepare("SELECT id, fullname, email, application_status, '' as unauthorized_actions, '{$harvhubTable}' as source FROM {$harvhubTable} ORDER BY id DESC");
             }
-            $stmt1->execute();
-            $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-            
-            if ($hasUnauthorizedColumn2) {
-                $stmt2 = $pdo->prepare("SELECT id, fullname, email, application_status, unauthorized_actions, '{$insidersServerTable}' as source FROM {$insidersServerTable} ORDER BY id DESC");
-            } else {
-                $stmt2 = $pdo->prepare("SELECT id, fullname, email, application_status, '' as unauthorized_actions, '{$insidersServerTable}' as source FROM {$insidersServerTable} ORDER BY id DESC");
-            }
-            $stmt2->execute();
-            $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+            $stmt->execute();
+            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             echo json_encode(['success' => true, 'users' => $users]);
             exit;
@@ -1684,7 +1603,7 @@
                 $source_table = $_POST['source_table'] ?? '';
                 
                 // IMPORTANT: First verify the user exists
-                if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                if (empty($user_id) || $source_table !== $harvhubTable) {
                     echo json_encode(['error' => 'Invalid user selection']);
                     exit;
                 }
@@ -1788,7 +1707,7 @@
             if ($target_type === 'user') {
                 $user_id = $_POST['user_id'] ?? '';
                 $source_table = $_POST['source_table'] ?? '';
-                if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                if (!empty($user_id) && $source_table === $harvhubTable) {
                     $updateTable = $source_table;
                     $updateId = $user_id;
                     $stmt = $pdo->prepare("SELECT accountmanagement FROM {$updateTable} WHERE id = ?");
@@ -1872,7 +1791,7 @@
             if ($target_type === 'user') {
                 $user_id = $_POST['user_id'] ?? '';
                 $source_table = $_POST['source_table'] ?? '';
-                if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                if (!empty($user_id) && $source_table === $harvhubTable) {
                     $updateTable = $source_table;
                     $updateId = $user_id;
                     $stmt = $pdo->prepare("SELECT accountmanagement FROM {$updateTable} WHERE id = ?");
@@ -1984,36 +1903,20 @@
                     }
                 }
                 
-                // Check and get from insiders_server table
-                if (columnExists($pdo, $insidersServerTable, 'invested_with')) {
-                    $stmt1 = $pdo->prepare("SELECT id, fullname, email, invested_with, '{$insidersServerTable}' as source FROM {$insidersServerTable} ORDER BY id DESC");
-                    $stmt1->execute();
-                    $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
+                // Check and get from harvhub table
+                if (columnExists($pdo, $harvhubTable, 'invested_with')) {
+                    $stmt = $pdo->prepare("SELECT id, fullname, email, invested_with, '{$harvhubTable}' as source FROM {$harvhubTable} ORDER BY id DESC");
+                    $stmt->execute();
+                    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 } else {
                     // Column doesn't exist, select without it and add null value
-                    $stmt1 = $pdo->prepare("SELECT id, fullname, email, '{$insidersServerTable}' as source FROM {$insidersServerTable} ORDER BY id DESC");
-                    $stmt1->execute();
-                    $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                    $stmt = $pdo->prepare("SELECT id, fullname, email, '{$harvhubTable}' as source FROM {$harvhubTable} ORDER BY id DESC");
+                    $stmt->execute();
+                    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     foreach ($results as &$row) {
                         $row['invested_with'] = null;
                     }
-                    $users = array_merge($users, $results);
-                }
-                
-                // Check and get from insiders table
-                if (columnExists($pdo, $insidersTable, 'invested_with')) {
-                    $stmt2 = $pdo->prepare("SELECT id, fullname, email, invested_with, '{$insidersTable}' as source FROM {$insidersTable} ORDER BY id DESC");
-                    $stmt2->execute();
-                    $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
-                } else {
-                    // Column doesn't exist, select without it and add null value
-                    $stmt2 = $pdo->prepare("SELECT id, fullname, email, '{$insidersTable}' as source FROM {$insidersTable} ORDER BY id DESC");
-                    $stmt2->execute();
-                    $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                    foreach ($results as &$row) {
-                        $row['invested_with'] = null;
-                    }
-                    $users = array_merge($users, $results);
+                    $users = $results;
                 }
                 
                 echo json_encode(['success' => true, 'users' => $users]);
@@ -2032,7 +1935,7 @@
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
             
-            // Verify admin credentials (same as before)
+            // Verify credentials (same as before)
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2050,7 +1953,7 @@
             }
             
             // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -2081,8 +1984,8 @@
             try {
                 $history = [];
                 
-                // Only fetch from insiders table (where column exists)
-                $stmt = $pdo->prepare("SELECT id, executions_notification FROM {$insidersTable} WHERE executions_notification IS NOT NULL AND executions_notification != ''");
+                // Only fetch from harvhub table (where column exists)
+                $stmt = $pdo->prepare("SELECT id, executions_notification FROM {$harvhubTable} WHERE executions_notification IS NOT NULL AND executions_notification != ''");
                 $stmt->execute();
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -2117,7 +2020,7 @@
                 $user_id = $_POST['user_id'] ?? '';
                 $source_table = $_POST['source_table'] ?? '';
                 
-                if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+                if (empty($user_id) || $source_table !== $harvhubTable) {
                     echo json_encode(['error' => 'Invalid user selection']);
                     exit;
                 }
@@ -2161,7 +2064,7 @@
             $source_table = $_POST['source_table'] ?? '';
             $column_name = $_POST['column_name'] ?? '';
             
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid request']);
                 exit;
             }
@@ -2200,7 +2103,7 @@
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
             
-            // Verify admin credentials
+            // Verify credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2218,7 +2121,7 @@
             }
             
             // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -2253,7 +2156,7 @@
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
             
-            // Verify admin credentials
+            // Verify credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2271,7 +2174,7 @@
             }
             
             // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -2305,15 +2208,15 @@
                 $minBrokerBalance = (float)($serverAccount['min_broker_balance'] ?? 30.00);
                 $users = array();
                 
-                // Get from insiders_server table if table exists
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $checkColumn1 = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'invested_with'");
-                        if ($checkColumn1->rowCount() > 0) {
-                            $stmt1 = $pdo->prepare("
-                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                                FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $checkColumn = $pdo->query("SHOW COLUMNS FROM {$harvhubTable} LIKE 'invested_with'");
+                        if ($checkColumn->rowCount() > 0) {
+                            $stmt = $pdo->prepare("
+                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                                FROM {$harvhubTable} 
                                 WHERE invested_with IS NOT NULL 
                                 AND invested_with != '' 
                                 AND execution_start_date IS NOT NULL 
@@ -2321,32 +2224,8 @@
                                 AND enable_autotrading = 1
                                 AND broker_balance >= ?
                             ");
-                            $stmt1->execute([$minBrokerBalance]);
-                            $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                        }
-                    }
-                } catch (Exception $e) {
-                    // Table or column doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $checkColumn2 = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'invested_with'");
-                        if ($checkColumn2->rowCount() > 0) {
-                            $stmt2 = $pdo->prepare("
-                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                                FROM {$insidersTable} 
-                                WHERE invested_with IS NOT NULL 
-                                AND invested_with != '' 
-                                AND execution_start_date IS NOT NULL 
-                                AND execution_start_date != '0000-00-00'
-                                AND enable_autotrading = 1
-                                AND broker_balance >= ?
-                            ");
-                            $stmt2->execute([$minBrokerBalance]);
-                            $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                            $stmt->execute([$minBrokerBalance]);
+                            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         }
                     }
                 } catch (Exception $e) {
@@ -2365,33 +2244,17 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status = 'pending'
                         ");
-                        $stmt1->execute();
-                        $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                    }
-                } catch (Exception $e) {
-                    // Table doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status = 'pending'
-                        ");
-                        $stmt2->execute();
-                        $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                        $stmt->execute();
+                        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     }
                 } catch (Exception $e) {
                     // Table doesn't exist, skip
@@ -2409,33 +2272,17 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status IN ('suspended', 'blacklisted')
                         ");
-                        $stmt1->execute();
-                        $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                    }
-                } catch (Exception $e) {
-                    // Table doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status IN ('suspended', 'blacklisted')
-                        ");
-                        $stmt2->execute();
-                        $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                        $stmt->execute();
+                        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     }
                 } catch (Exception $e) {
                     // Table doesn't exist, skip
@@ -2453,33 +2300,17 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status = 'just-joined'
                         ");
-                        $stmt1->execute();
-                        $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                    }
-                } catch (Exception $e) {
-                    // Table doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status = 'just-joined'
-                        ");
-                        $stmt2->execute();
-                        $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                        $stmt->execute();
+                        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     }
                 } catch (Exception $e) {
                     // Table doesn't exist, skip
@@ -2497,33 +2328,17 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status = 'just-joined-and-valid_credentials'
                         ");
-                        $stmt1->execute();
-                        $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                    }
-                } catch (Exception $e) {
-                    // Table doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status = 'just-joined-and-valid_credentials'
-                        ");
-                        $stmt2->execute();
-                        $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                        $stmt->execute();
+                        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     }
                 } catch (Exception $e) {
                     // Table doesn't exist, skip
@@ -2541,33 +2356,17 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
+                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status = 'approved'
                         ");
-                        $stmt1->execute();
-                        $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                    }
-                } catch (Exception $e) {
-                    // Table doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, broker_balance, account_mode, demo_account, contract_days_left, terminal_path, '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status = 'approved'
-                        ");
-                        $stmt2->execute();
-                        $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                        $stmt->execute();
+                        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     }
                 } catch (Exception $e) {
                     // Table doesn't exist, skip
@@ -2587,7 +2386,7 @@
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
             
-            // Verify admin credentials
+            // Verify credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2605,7 +2404,7 @@
             }
             
             // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
@@ -2634,38 +2433,19 @@
             try {
                 $users = array();
                 
-                // Get from insiders_server table
+                // Get from harvhub table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $checkColumn1 = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable} LIKE 'bypass_restriction'");
-                        if ($checkColumn1->rowCount() > 0) {
-                            $stmt1 = $pdo->prepare("
-                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, bypass_restriction, broker_balance, account_mode, demo_account, unauthorized_actions, '{$insidersServerTable}' as source 
-                                FROM {$insidersServerTable} 
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $checkColumn = $pdo->query("SHOW COLUMNS FROM {$harvhubTable} LIKE 'bypass_restriction'");
+                        if ($checkColumn->rowCount() > 0) {
+                            $stmt = $pdo->prepare("
+                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, bypass_restriction, broker_balance, account_mode, demo_account, unauthorized_actions, '{$harvhubTable}' as source 
+                                FROM {$harvhubTable} 
                                 WHERE bypass_restriction = 1
                             ");
-                            $stmt1->execute();
-                            $users = array_merge($users, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-                        }
-                    }
-                } catch (Exception $e) {
-                    // Table or column doesn't exist, skip
-                }
-                
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $checkColumn2 = $pdo->query("SHOW COLUMNS FROM {$insidersTable} LIKE 'bypass_restriction'");
-                        if ($checkColumn2->rowCount() > 0) {
-                            $stmt2 = $pdo->prepare("
-                                SELECT id, fullname, email, broker, invested_with, execution_start_date, enable_autotrading, bypass_restriction, broker_balance, account_mode, demo_account, unauthorized_actions, '{$insidersTable}' as source 
-                                FROM {$insidersTable} 
-                                WHERE bypass_restriction = 1
-                            ");
-                            $stmt2->execute();
-                            $users = array_merge($users, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+                            $stmt->execute();
+                            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         }
                     }
                 } catch (Exception $e) {
@@ -2691,7 +2471,7 @@
                 exit;
             }
             
-            // Verify admin credentials
+            // Verify credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2751,6 +2531,68 @@
             }
             exit;
         }
+        // 5w2: Get Tier Limit Configuration
+        if ($action === 'settings_get_tier_limit') {
+            try {
+                $stmt = $pdo->prepare("SELECT tier_limit FROM {$serverAccountTable} WHERE id = 1");
+                $stmt->execute();
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                $tierData = [];
+                if ($result && !empty($result['tier_limit'])) {
+                    $decoded = json_decode($result['tier_limit'], true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $tierData = $decoded;
+                    }
+                }
+                
+                echo json_encode(['success' => true, 'tiers' => $tierData]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5w3: Save/Update Tier Limit Configuration
+        if ($action === 'settings_save_tier_limit') {
+            $tiers_json = $_POST['tiers'] ?? '{}';
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            
+            $tiers = json_decode($tiers_json, true);
+            if (json_last_error() !== JSON_ERROR_NONE || !is_array($tiers)) {
+                echo json_encode(['error' => 'Invalid JSON data']);
+                exit;
+            }
+            
+            // Verify credentials
+            if (empty($admin_password)) {
+                echo json_encode(['error' => 'Password is required']);
+                exit;
+            }
+            
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$adminData || 
+                $login_id !== ($adminData['admin_login_id'] ?? '') || 
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+            
+            try {
+                $jsonData = json_encode($tiers, JSON_PRETTY_PRINT);
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET tier_limit = ? WHERE id = 1");
+                $stmt->execute([$jsonData]);
+                
+                echo json_encode(['success' => true, 'tiers' => $tiers]);
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+            }
+            exit;
+        }
 
         // 5x: Get specific configuration entry
         if ($action === 'get_config_entry') {
@@ -2779,14 +2621,13 @@
             }
             exit;
         }
-        // 5y: Cancel Contract - Update active record to contract_cancelled
+        // 5y: Cancel Contract - UPDATED to use programme_investors
         if ($action === 'cancel_contract') {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
             
-            // Verify admin credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -2803,13 +2644,11 @@
                 exit;
             }
             
-            // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
             
-            // Get current user data before cancellation
             $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
             $stmt->execute([$user_id]);
             $userData = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -2819,32 +2658,29 @@
                 exit;
             }
             
-            // Get contract duration from server account
-            $contractDuration = (int)($adminData['contract_duration'] ?? 30);
+            // Get programme-specific values
+            $progData = getProgrammeInvestorData($pdo, $user_id);
+            $contractDuration = $progData['contract_duration'];
+            $serverSharePercent = $progData['developer_percentage'];
+            $userSharePercent = $progData['investor_percentage'];
+            
             $minProfitForSplit = (float)($adminData['min_profit_for_split'] ?? 30);
-            $serverSharePercent = (int)($adminData['server_share_percent'] ?? 30);
-            $userSharePercent = (int)($adminData['user_share_percent'] ?? 70);
             $contractId = $userData['contract_id'] ?? null;
             
-            // Get current profit and loss
             $profitAndLoss = (float)($userData['profitandloss'] ?? 0);
             $brokerBalance = (float)($userData['broker_balance'] ?? 0);
             $currentBalance = $brokerBalance + $profitAndLoss;
             $executionStartDate = $userData['execution_start_date'] ?? null;
+            $userEmail = $userData['email'] ?? '';
+            $investedWith = $userData['invested_with'] ?? null;
             
-            // ================================================================
-            // ===== DETERMINE LOYALTIES BASED ON PROFIT =====
-            // ================================================================
             $loyaltiesToSet = 'contract_cancelled';
             $isAboveThreshold = ($profitAndLoss > $minProfitForSplit);
             
             if ($isAboveThreshold) {
-                // Profit above threshold - user owes payment
                 $loyaltiesToSet = 'unpaid-payment';
             }
-            // else: profit is zero, negative, or below threshold - just cancelled
             
-            // Calculate shares based on current profit
             $serverShare = 0;
             $userShare = 0;
             if ($isAboveThreshold) {
@@ -2852,7 +2688,6 @@
                 $userShare = round(($profitAndLoss * $userSharePercent) / 100, 2);
             }
             
-            // Calculate execution end date
             $executionEndDate = null;
             if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00') {
                 $start = new DateTime($executionStartDate);
@@ -2861,147 +2696,80 @@
                 $executionEndDate = $end->format('Y-m-d');
             }
             
-            // Get current revenue history
-            $history = [];
-            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
-            if ($checkColumn->rowCount() > 0) {
-                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                $stmt->execute([$user_id]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($result && !empty($result['revenue_history'])) {
-                    $history = json_decode($result['revenue_history'], true);
-                    if (!is_array($history)) {
-                        $history = [];
-                    }
-                }
+            if (empty($contractId) && !empty($executionStartDate) && !empty($executionEndDate)) {
+                $startFormatted = date('dmY', strtotime($executionStartDate));
+                $endFormatted = date('dmY', strtotime($executionEndDate));
+                $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
+            } elseif (empty($contractId)) {
+                $now = new DateTime();
+                $executionStartDate = $now->format('Y-m-d');
+                $start = clone $now;
+                $end = clone $start;
+                $end->modify("+{$contractDuration} days");
+                $executionEndDate = $end->format('Y-m-d');
+                $startFormatted = date('dmY', strtotime($executionStartDate));
+                $endFormatted = date('dmY', strtotime($executionEndDate));
+                $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
             }
             
-            // ===== FIND RECORD BY CONTRACT_ID =====
-            $existingRecordIndex = -1;
-            if (!empty($contractId)) {
-                foreach ($history as $index => $record) {
-                    if (isset($record['contract_id']) && $record['contract_id'] === $contractId) {
-                        $existingRecordIndex = $index;
-                        break;
-                    }
-                }
-            }
-
-            // If not found by contract_id, try by dates (fallback)
-            if ($existingRecordIndex === -1 && !empty($executionStartDate) && !empty($executionEndDate)) {
-                foreach ($history as $index => $record) {
-                    if (($record['execution_start_date'] ?? '') === $executionStartDate && 
-                        ($record['execution_end_date'] ?? '') === $executionEndDate) {
-                        $existingRecordIndex = $index;
-                        break;
-                    }
-                }
-            }
-
-            // ================================================================
-            // ===== HISTORY RECORD ALWAYS GETS 'contract_cancelled' =====
-            // ================================================================
-            if ($existingRecordIndex !== -1) {
-                // ===== UPDATE EXISTING RECORD =====
-                // CRITICAL: loyalty in history ALWAYS remains 'contract_cancelled' for cancelled contracts
-                $history[$existingRecordIndex]['loyalties'] = 'contract_cancelled';
-                $history[$existingRecordIndex]['cancelled_at'] = date('Y-m-d H:i:s');
-                $history[$existingRecordIndex]['cancelled_by'] = $login_id;
-                $history[$existingRecordIndex]['profit'] = $profitAndLoss;
-                $history[$existingRecordIndex]['server_share'] = $serverShare;
-                $history[$existingRecordIndex]['user_share'] = $userShare;
-                $history[$existingRecordIndex]['current_balance'] = $currentBalance;
-                $history[$existingRecordIndex]['ending_balance'] = $currentBalance;
-                $history[$existingRecordIndex]['updated_at'] = date('Y-m-d H:i:s');
-                $history[$existingRecordIndex]['contract_id'] = $contractId;
-                
-                if (!isset($history[$existingRecordIndex]['invested_with']) && isset($userData['invested_with'])) {
-                    $history[$existingRecordIndex]['invested_with'] = $userData['invested_with'];
-                }
+            $checkStmt = $pdo->prepare("SELECT * FROM revenue_history WHERE user_email = ? AND contract_id = ?");
+            $checkStmt->execute([$userEmail, $contractId]);
+            $existingRecord = $checkStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($existingRecord) {
+                $updateStmt = $pdo->prepare("
+                    UPDATE revenue_history SET 
+                        loyalties = 'contract_cancelled',
+                        profit = ?,
+                        server_share = ?,
+                        user_share = ?,
+                        current_balance = ?,
+                        updated_at = ?
+                    WHERE user_email = ? AND contract_id = ?
+                ");
+                $updateStmt->execute([
+                    $profitAndLoss,
+                    $serverShare,
+                    $userShare,
+                    $currentBalance,
+                    date('Y-m-d H:i:s'),
+                    $userEmail,
+                    $contractId
+                ]);
             } else {
-                // ===== CREATE NEW CANCELLED RECORD =====
-                $newId = 1;
-                if (!empty($history)) {
-                    $maxId = 0;
-                    foreach ($history as $item) {
-                        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
-                            $maxId = (int)$item['id'];
-                        }
-                    }
-                    $newId = $maxId + 1;
-                }
-                
-                // Generate contract_id if not exists
-                if (empty($contractId) && !empty($executionStartDate) && !empty($executionEndDate)) {
-                    $startFormatted = date('dmY', strtotime($executionStartDate));
-                    $endFormatted = date('dmY', strtotime($executionEndDate));
-                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
-                } elseif (empty($contractId)) {
-                    $now = new DateTime();
-                    $executionStartDate = $now->format('Y-m-d');
-                    $start = clone $now;
-                    $end = clone $start;
-                    $end->modify("+{$contractDuration} days");
-                    $executionEndDate = $end->format('Y-m-d');
-                    $startFormatted = date('dmY', strtotime($executionStartDate));
-                    $endFormatted = date('dmY', strtotime($executionEndDate));
-                    $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
-                }
-                
-                $cancelledRecord = [
-                    'id' => $newId,
-                    'contract_id' => $contractId,
-                    'execution_start_date' => $executionStartDate,
-                    'execution_end_date' => $executionEndDate,
-                    'starting_balance' => $brokerBalance,
-                    'current_balance' => $currentBalance,
-                    'ending_balance' => $currentBalance,
-                    'profit' => $profitAndLoss,
-                    'user_share' => $userShare,
-                    'server_share' => $serverShare,
-                    'loyalties' => 'contract_cancelled', // ALWAYS contract_cancelled in history
-                    'recorded_at' => date('Y-m-d H:i:s'),
-                    'cancelled_at' => date('Y-m-d H:i:s'),
-                    'cancelled_by' => $login_id,
-                    'invested_with' => $userData['invested_with'] ?? null
-                ];
-                
-                $history[] = $cancelledRecord;
+                $insertStmt = $pdo->prepare("
+                    INSERT INTO revenue_history (
+                        user_email, contract_id, execution_start_date, execution_end_date,
+                        starting_balance, current_balance, profit, user_share, server_share,
+                        loyalties, invested_with, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $insertStmt->execute([
+                    $userEmail,
+                    $contractId,
+                    $executionStartDate,
+                    $executionEndDate,
+                    $brokerBalance,
+                    $currentBalance,
+                    $profitAndLoss,
+                    $userShare,
+                    $serverShare,
+                    'contract_cancelled',
+                    $investedWith,
+                    date('Y-m-d H:i:s'),
+                    date('Y-m-d H:i:s')
+                ]);
             }
             
-            // Save updated history
-            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-            
-            if ($checkColumn->rowCount() == 0) {
-                $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
-            }
-            
-            $updateStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-            $updateStmt->execute([$jsonHistory, $user_id]);
-            
-            // ================================================================
-            // ===== SET LOYALTIES BASED ON PROFIT =====
-            // ================================================================
-            // If profit > threshold: set to 'unpaid-payment' so user owes
-            // If profit <= threshold: set to 'contract_cancelled'
             $updateLoyalties = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
             $updateLoyalties->execute([$loyaltiesToSet, $user_id]);
             
-            // ===== Set reset_contract = 1 =====
             $updateReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
             $updateReset->execute([$user_id]);
             
-            // ================================================================
-            // ===== CRITICAL: Clear execution_start_date and contract_id =====
-            // ===== This removes the user from the Active tab          =====
-            // ================================================================
             $updateExecDate = $pdo->prepare("UPDATE {$source_table} SET execution_start_date = NULL, contract_id = NULL WHERE id = ?");
             $updateExecDate->execute([$user_id]);
             
-            // ================================================================
-            // ===== OPTIONAL: Also clear daily_balance_log and daily_target_met =====
-            // ===== This ensures clean state for future enrollments      =====
-            // ================================================================
             $updateCleanup = $pdo->prepare("UPDATE {$source_table} SET daily_balance_log = NULL, daily_target_met = NULL WHERE id = ?");
             $updateCleanup->execute([$user_id]);
             
@@ -3024,7 +2792,7 @@
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && $source_table === $harvhubTable) {
                 try {
                     // Debug log to see what's happening (optional, remove in production)
                     error_log("Fetching analytics for user_id: $user_id, table: $source_table");
@@ -3073,7 +2841,7 @@
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && $source_table === $harvhubTable) {
                 $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
                 $stmt->execute([$user_id]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -3136,178 +2904,638 @@
             }
             exit;
         }
-        
-        // 5z5: Get System Server IP Configuration
-        if ($action === 'get_system_config') {
-            try {
-                $stmt = $pdo->prepare("SELECT system_server_config FROM {$serverAccountTable} WHERE id = 1");
-                $stmt->execute();
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $config = [];
-                if ($result && !empty($result['system_server_config'])) {
-                    $config = json_decode($result['system_server_config'], true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $config = [];
-                    }
+
+        if ($action === 'settings_update_payment') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET btc_address = ?, eth_address = ?, eth_network = ?, usdt_address = ?, usdt_network = ? WHERE id = 1");
+            $stmt->execute([
+                trim($_POST['btc_address'] ?? ''),
+                trim($_POST['eth_address'] ?? ''),
+                trim($_POST['eth_network'] ?? 'ERC20'),
+                trim($_POST['usdt_address'] ?? ''),
+                trim($_POST['usdt_network'] ?? 'TRC20')
+            ]);
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        if ($action === 'settings_get_brokers') {
+            $stmt = $pdo->prepare("SELECT brokers, brokers_link FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            echo json_encode([
+                'success' => true,
+                'brokers' => $row['brokers'] ?? '',
+                'brokers_link' => $row['brokers_link'] ?? ''
+            ]);
+            exit;
+        }
+
+        // ============================================
+        // SAVE BROKER (with duplicate check)
+        // ============================================
+        if ($action === 'settings_save_broker') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            $broker = trim($_POST['broker'] ?? '');
+            $broker_link = trim($_POST['broker_link'] ?? '');
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, brokers, brokers_link FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            // Validate presence
+            if ($broker === '' || $broker_link === '') {
+                echo json_encode(['error' => 'Both broker name and link are required']);
+                exit;
+            }
+
+            // Normalizer for matching broker name inside URL
+            $norm = function($s) {
+                $s = strtolower($s);
+                $s = preg_replace('#^https?://#', '', $s);
+                $s = preg_replace('#^www\.#', '', $s);
+                $s = preg_replace('/[^a-z0-9]/', '', $s);
+                return $s;
+            };
+
+            // Broker name must contain letters/numbers
+            if ($norm($broker) === '') {
+                echo json_encode(['error' => 'Broker name must contain letters or numbers']);
+                exit;
+            }
+
+            // URL must contain the broker name
+            if (strpos($norm($broker_link), $norm($broker)) === false) {
+                echo json_encode(['error' => 'URL does not match broker name']);
+                exit;
+            }
+
+            // Build existing lists
+            $existingBrokers = array_values(array_filter(array_map('trim', explode(',', $adminData['brokers'] ?? ''))));
+            $existingLinks   = array_values(array_filter(array_map('trim', explode(',', $adminData['brokers_link'] ?? ''))));
+
+            // Duplicate broker name check (case-insensitive)
+            foreach ($existingBrokers as $b) {
+                if (strcasecmp($b, $broker) === 0) {
+                    echo json_encode(['error' => 'Broker already exists']);
+                    exit;
                 }
-                
-                echo json_encode(['success' => true, 'config' => $config]);
+            }
+
+            // Add new broker + link
+            $existingBrokers[] = $broker;
+
+            $linkExists = false;
+            foreach ($existingLinks as $l) {
+                if (strcasecmp($l, $broker_link) === 0) { $linkExists = true; break; }
+            }
+            if (!$linkExists) {
+                $existingLinks[] = $broker_link;
+            }
+
+            $newBrokers = implode(',', $existingBrokers);
+            $newLinks   = implode(',', $existingLinks);
+
+            $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers = ?, brokers_link = ? WHERE id = 1");
+            $stmt->execute([$newBrokers, $newLinks]);
+
+            echo json_encode([
+                'success' => true,
+                'brokers' => $newBrokers,
+                'brokers_link' => $newLinks
+            ]);
+            exit;
+        }
+
+        // ============================================
+        // DELETE BROKER (removes broker name + its matched link)
+        // ============================================
+        if ($action === 'settings_delete_broker') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            $broker = trim($_POST['broker'] ?? '');
+            $broker_link = trim($_POST['broker_link'] ?? '');
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash, brokers, brokers_link FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            if ($broker === '' && $broker_link === '') {
+                echo json_encode(['error' => 'Nothing to delete']);
+                exit;
+            }
+
+            // Build current lists
+            $existingBrokers = array_values(array_filter(array_map('trim', explode(',', $adminData['brokers'] ?? ''))));
+            $existingLinks   = array_values(array_filter(array_map('trim', explode(',', $adminData['brokers_link'] ?? ''))));
+
+            $removedBroker = false;
+            $removedLink   = false;
+
+            // Remove the broker name (exact, case-insensitive match)
+            if ($broker !== '') {
+                $filteredBrokers = [];
+                foreach ($existingBrokers as $b) {
+                    if (strcasecmp($b, $broker) === 0) {
+                        $removedBroker = true;
+                        continue;
+                    }
+                    $filteredBrokers[] = $b;
+                }
+                $existingBrokers = $filteredBrokers;
+            }
+
+            // Remove the link (exact, case-insensitive match)
+            if ($broker_link !== '') {
+                $filteredLinks = [];
+                foreach ($existingLinks as $l) {
+                    if (strcasecmp($l, $broker_link) === 0) {
+                        $removedLink = true;
+                        continue;
+                    }
+                    $filteredLinks[] = $l;
+                }
+                $existingLinks = $filteredLinks;
+            }
+
+            if (!$removedBroker && !$removedLink) {
+                echo json_encode(['error' => 'Broker or link not found']);
+                exit;
+            }
+
+            $newBrokers = implode(',', $existingBrokers);
+            $newLinks   = implode(',', $existingLinks);
+
+            $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers = ?, brokers_link = ? WHERE id = 1");
+            $stmt->execute([$newBrokers, $newLinks]);
+
+            echo json_encode([
+                'success' => true,
+                'brokers' => $newBrokers,
+                'brokers_link' => $newLinks
+            ]);
+            exit;
+        }
+
+        if ($action === 'settings_update_requirements') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            // Minimum deposit and min broker balance must share the same value
+            $minDeposit = (float)($_POST['minimum_deposit'] ?? 0);
+            $minBrokerBalance = (float)($_POST['min_broker_balance'] ?? 0);
+            $shared = max($minDeposit, $minBrokerBalance);
+
+            $stmt = $pdo->prepare("
+                UPDATE {$serverAccountTable} SET
+                    minimum_deposit = ?,
+                    min_broker_balance = ?,
+                    contract_duration = ?,
+                    server_share_percent = ?,
+                    user_share_percent = ?,
+                    min_profit_for_split = ?,
+                    expiry_threshold_days = ?
+                WHERE id = 1
+            ");
+            $stmt->execute([
+                $shared,
+                $shared,
+                (int)($_POST['contract_duration'] ?? 0),
+                (int)($_POST['server_share_percent'] ?? 30),
+                (int)($_POST['user_share_percent'] ?? 70),
+                (float)($_POST['min_profit_for_split'] ?? 30),
+                (int)($_POST['expiry_threshold_days'] ?? 5)
+            ]);
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        if ($action === 'settings_update_mailer') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET mailer_email = ?, mailer_password = ? WHERE id = 1");
+            $stmt->execute([
+                trim($_POST['mailer_email'] ?? ''),
+                $_POST['mailer_password'] ?? ''
+            ]);
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        if ($action === 'settings_update_credentials') {
+            $currentPassword = $_POST['admin_password_current'] ?? '';
+            $login_id = $_POST['login_id'] ?? '';
+            $newLoginId = trim($_POST['admin_login_id'] ?? '');
+            $newPassword = $_POST['admin_password'] ?? '';
+
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData || $login_id !== ($adminData['admin_login_id'] ?? '') ||
+                !password_verify($currentPassword, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            if ($newLoginId === '') {
+                echo json_encode(['error' => 'Admin Login ID is required']);
+                exit;
+            }
+
+            if ($newPassword !== '') {
+                $hash = password_hash($newPassword, PASSWORD_DEFAULT);
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET admin_login_id = ?, admin_password_hash = ? WHERE id = 1");
+                $stmt->execute([$newLoginId, $hash]);
+            } else {
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET admin_login_id = ? WHERE id = 1");
+                $stmt->execute([$newLoginId]);
+            }
+
+            echo json_encode(['success' => true]);
+            exit;
+        }
+        // ============================================================
+        // 5z5: VPS MANAGEMENT — NEW SYSTEM (per-user VPS rows)
+        // These handlers back the new vps_config.php admin page.
+        // The old `system_server_config` JSON column is no longer used.
+        // ============================================================
+
+        // 5z5a: Get ALL users (for "Register VPS for Users" tab)
+        if ($action === 'vps_get_all_users') {
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT id, fullname, email
+                    FROM {$harvhubTable}
+                    ORDER BY fullname ASC
+                ");
+                $stmt->execute();
+                $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $withVps = [];
+                try {
+                    $vstmt = $pdo->query("SELECT user_id FROM vps");
+                    while ($r = $vstmt->fetch(PDO::FETCH_ASSOC)) {
+                        $withVps[(int)$r['user_id']] = true;
+                    }
+                } catch (Exception $e) {}
+
+                foreach ($users as &$u) {
+                    $u['has_vps'] = isset($withVps[(int)$u['id']]);
+                }
+                unset($u);
+
+                echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
             exit;
         }
 
-        // 5z6: Update System Server IP Configuration
-        if ($action === 'update_system_config') {
-            $config = json_decode($_POST['config'] ?? '{}', true);
-            $admin_password = $_POST['admin_password'] ?? '';
-            $login_id = $_POST['login_id'] ?? '';
-            
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                echo json_encode(['error' => 'Invalid JSON configuration']);
+        // 5z5b: Get the VPS row for a single user (for edit form)
+        if ($action === 'vps_get_user_vps') {
+            $user_id = (int)($_POST['user_id'] ?? 0);
+            if ($user_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid user']);
                 exit;
             }
-            
-            // Verify admin credentials
-            if (empty($admin_password)) {
-                echo json_encode(['error' => 'Password is required']);
-                exit;
-            }
-            
-            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
-            $stmt->execute();
-            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$adminData || 
-                $login_id !== ($adminData['admin_login_id'] ?? '') || 
-                !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
-                echo json_encode(['error' => 'Invalid password']);
-                exit;
-            }
-            
+
             try {
-                $jsonConfig = json_encode($config, JSON_PRETTY_PRINT);
-                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET system_server_config = ? WHERE id = 1");
-                $stmt->execute([$jsonConfig]);
-                
-                echo json_encode(['success' => true, 'message' => 'Configuration updated successfully']);
+                $ustmt = $pdo->prepare("SELECT id, fullname, email FROM {$harvhubTable} WHERE id = ?");
+                $ustmt->execute([$user_id]);
+                $userRow = $ustmt->fetch(PDO::FETCH_ASSOC);
+                if (!$userRow) {
+                    echo json_encode(['success' => false, 'error' => 'User not found']);
+                    exit;
+                }
+
+                $vstmt = $pdo->prepare("SELECT * FROM vps WHERE user_id = ? LIMIT 1");
+                $vstmt->execute([$user_id]);
+                $vpsRow = $vstmt->fetch(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'success' => true,
+                    'user'    => $userRow,
+                    'vps'     => $vpsRow ?: null
+                ]);
             } catch (Exception $e) {
-                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
             exit;
         }
 
-        // 5z7: Search Users for IP Assignment - SEARCHES ALL USERS
-        if ($action === 'search_users_for_config') {
-            $search = trim($_POST['search'] ?? '');
-            $exclude_ids = isset($_POST['exclude_ids']) ? json_decode($_POST['exclude_ids'], true) : [];
-            
-            if (strlen($search) < 1) {
-                echo json_encode(['success' => true, 'users' => []]);
+        // 5z5c: Save / Update VPS for a user
+        if ($action === 'vps_save_user_vps') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id       = $_POST['login_id'] ?? '';
+            $user_id        = (int)($_POST['user_id'] ?? 0);
+
+            // Re-verify credentials
+            $astmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $astmt->execute();
+            $adminData = $astmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData
+                || $login_id !== ($adminData['admin_login_id'] ?? '')
+                || !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['success' => false, 'error' => 'Invalid password']);
                 exit;
             }
-            
-            $users = [];
-            $searchTerm = '%' . $search . '%';
-            
-            // Search in insiders_server table - NO STATUS FILTERING, get ALL users
+
+            if ($user_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid user']);
+                exit;
+            }
+
+            $server_location        = trim($_POST['server_location'] ?? '');
+            $subscription_duration  = (int)($_POST['subscription_duration'] ?? 30);
+            $subscription_start     = trim($_POST['subscription_start_date'] ?? '');
+            $vps_ip_address         = trim($_POST['vps_ip_address'] ?? '');
+            $vps_provider_login     = trim($_POST['vps_provider_login'] ?? '');
+            $vps_provider_password  = (string)($_POST['vps_provider_password'] ?? '');
+            $computer_username      = trim($_POST['computer_username'] ?? '');
+            $computer_password      = (string)($_POST['computer_password'] ?? '');
+            $rdp_password           = (string)($_POST['rdp_password'] ?? '');
+            $visibility             = ($_POST['visibility'] ?? 'private') === 'public' ? 'public' : 'private';
+
+            if ($server_location === '') {
+                echo json_encode(['success' => false, 'error' => 'Server location is required']);
+                exit;
+            }
+
+            if ($subscription_start === '' || $subscription_start === '0000-00-00') {
+                $subscription_start = null;
+            } else {
+                $ts = strtotime($subscription_start);
+                $subscription_start = $ts ? date('Y-m-d', $ts) : null;
+            }
+
             try {
-                $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                if ($checkTable1->rowCount() > 0) {
-                    // First, check what columns exist in this table
-                    $availableColumns = [];
-                    $colQuery = $pdo->query("SHOW COLUMNS FROM {$insidersServerTable}");
-                    while ($col = $colQuery->fetch(PDO::FETCH_ASSOC)) {
-                        $availableColumns[] = $col['Field'];
-                    }
-                    
-                    // Build SELECT with available columns only
-                    $selectFields = "id, fullname, email, '{$insidersServerTable}' as source";
-                    if (in_array('broker', $availableColumns)) $selectFields .= ", broker";
-                    if (in_array('login', $availableColumns)) $selectFields .= ", login";
-                    if (in_array('broker_balance', $availableColumns)) $selectFields .= ", broker_balance";
-                    if (in_array('application_status', $availableColumns)) $selectFields .= ", application_status";
-                    
-                    $stmt1 = $pdo->prepare("
-                        SELECT {$selectFields} 
-                        FROM {$insidersServerTable} 
-                        WHERE (fullname LIKE ? OR email LIKE ? OR id LIKE ?)
-                        ORDER BY fullname ASC
-                        LIMIT 50
+                $check = $pdo->prepare("SELECT id FROM vps WHERE user_id = ? LIMIT 1");
+                $check->execute([$user_id]);
+                $existing = $check->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing) {
+                    $upd = $pdo->prepare("
+                        UPDATE vps SET
+                            server_location = ?,
+                            subscription_duration = ?,
+                            subscription_start_date = ?,
+                            vps_ip_address = ?,
+                            vps_provider_login = ?,
+                            vps_provider_password = ?,
+                            computer_username = ?,
+                            computer_password = ?,
+                            rdp_password = ?,
+                            visibility = ?
+                        WHERE user_id = ?
                     ");
-                    $stmt1->execute([$searchTerm, $searchTerm, $searchTerm]);
-                    $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
-                    foreach ($results as $user) {
-                        if (!in_array($user['id'], $exclude_ids)) {
-                            $users[] = $user;
-                        }
-                    }
+                    $upd->execute([
+                        $server_location,
+                        $subscription_duration,
+                        $subscription_start,
+                        $vps_ip_address,
+                        $vps_provider_login,
+                        $vps_provider_password,
+                        $computer_username,
+                        $computer_password,
+                        $rdp_password,
+                        $visibility,
+                        $user_id
+                    ]);
+                    echo json_encode(['success' => true, 'message' => 'VPS updated']);
+                } else {
+                    $ins = $pdo->prepare("
+                        INSERT INTO vps
+                            (user_id, server_location, subscription_duration, subscription_start_date,
+                            vps_ip_address, vps_provider_login, vps_provider_password,
+                            computer_username, computer_password, rdp_password, visibility)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ");
+                    $ins->execute([
+                        $user_id,
+                        $server_location,
+                        $subscription_duration,
+                        $subscription_start,
+                        $vps_ip_address,
+                        $vps_provider_login,
+                        $vps_provider_password,
+                        $computer_username,
+                        $computer_password,
+                        $rdp_password,
+                        $visibility
+                    ]);
+                    echo json_encode(['success' => true, 'message' => 'VPS registered']);
                 }
             } catch (Exception $e) {
-                error_log("Error searching insiders_server_table: " . $e->getMessage());
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
-            
-            // Search in insiders table - NO STATUS FILTERING, get ALL users
-            try {
-                $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                if ($checkTable2->rowCount() > 0) {
-                    // First, check what columns exist in this table
-                    $availableColumns = [];
-                    $colQuery = $pdo->query("SHOW COLUMNS FROM {$insidersTable}");
-                    while ($col = $colQuery->fetch(PDO::FETCH_ASSOC)) {
-                        $availableColumns[] = $col['Field'];
-                    }
-                    
-                    // Build SELECT with available columns only
-                    $selectFields = "id, fullname, email, '{$insidersTable}' as source";
-                    if (in_array('broker', $availableColumns)) $selectFields .= ", broker";
-                    if (in_array('login', $availableColumns)) $selectFields .= ", login";
-                    if (in_array('broker_balance', $availableColumns)) $selectFields .= ", broker_balance";
-                    if (in_array('application_status', $availableColumns)) $selectFields .= ", application_status";
-                    
-                    $stmt2 = $pdo->prepare("
-                        SELECT {$selectFields} 
-                        FROM {$insidersTable} 
-                        WHERE (fullname LIKE ? OR email LIKE ? OR id LIKE ?)
-                        ORDER BY fullname ASC
-                        LIMIT 50
-                    ");
-                    $stmt2->execute([$searchTerm, $searchTerm, $searchTerm]);
-                    $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                    foreach ($results as $user) {
-                        if (!in_array($user['id'], $exclude_ids)) {
-                            $users[] = $user;
-                        }
-                    }
-                }
-            } catch (Exception $e) {
-                error_log("Error searching insiders_table: " . $e->getMessage());
-            }
-            
-            // Remove duplicates by ID (in case a user appears in both tables - unlikely but safe)
-            $uniqueUsers = [];
-            $seenIds = [];
-            foreach ($users as $user) {
-                if (!in_array($user['id'], $seenIds)) {
-                    $seenIds[] = $user['id'];
-                    $uniqueUsers[] = $user;
-                }
-            }
-            
-            echo json_encode(['success' => true, 'users' => $uniqueUsers]);
             exit;
         }
-        // 5z8: Get Inactive Users (FIXED - Proper active/inactive logic with cancelled contracts)
+
+        // 5z5d: List all users with VPS
+        if ($action === 'vps_list_with_vps') {
+            try {
+                $stmt = $pdo->query("
+                    SELECT v.*, h.fullname, h.email
+                    FROM vps v
+                    INNER JOIN {$harvhubTable} h ON h.id = v.user_id
+                    ORDER BY h.fullname ASC
+                ");
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $fCounts = [];
+                $rCounts = [];
+
+                try {
+                    $fs = $pdo->query("SELECT owner_id, COUNT(*) AS c FROM vps_hosts_followers GROUP BY owner_id");
+                    while ($r = $fs->fetch(PDO::FETCH_ASSOC)) {
+                        $fCounts[(int)$r['owner_id']] = (int)$r['c'];
+                    }
+                } catch (Exception $e) {}
+
+                try {
+                    $rs = $pdo->query("SELECT owner_id, COUNT(*) AS c FROM vps_hosts_requestors GROUP BY owner_id");
+                    while ($r = $rs->fetch(PDO::FETCH_ASSOC)) {
+                        $rCounts[(int)$r['owner_id']] = (int)$r['c'];
+                    }
+                } catch (Exception $e) {}
+
+                foreach ($rows as &$r) {
+                    $r['follower_count'] = $fCounts[(int)$r['user_id']] ?? 0;
+                    $r['requestor_count'] = $rCounts[(int)$r['user_id']] ?? 0;
+                }
+                unset($r);
+
+                echo json_encode(['success' => true, 'users' => $rows]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z5e: Get VPS details for a specific user
+        if ($action === 'vps_get_details') {
+            $user_id = (int)($_POST['user_id'] ?? 0);
+            if ($user_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid user']);
+                exit;
+            }
+
+            try {
+                $ustmt = $pdo->prepare("SELECT id, fullname, email FROM {$harvhubTable} WHERE id = ?");
+                $ustmt->execute([$user_id]);
+                $userRow = $ustmt->fetch(PDO::FETCH_ASSOC);
+                if (!$userRow) {
+                    echo json_encode(['success' => false, 'error' => 'User not found']);
+                    exit;
+                }
+
+                $vstmt = $pdo->prepare("SELECT * FROM vps WHERE user_id = ? LIMIT 1");
+                $vstmt->execute([$user_id]);
+                $vpsRow = $vstmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$vpsRow) {
+                    echo json_encode(['success' => false, 'error' => 'User has no VPS']);
+                    exit;
+                }
+
+                echo json_encode([
+                    'success' => true,
+                    'user' => $userRow,
+                    'vps'  => $vpsRow
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z5f: Get VPS followers for a given owner
+        if ($action === 'vps_get_followers') {
+            $owner_id = (int)($_POST['owner_id'] ?? 0);
+            if ($owner_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid owner']);
+                exit;
+            }
+
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT f.id, f.follower_id, f.host_status, f.created_at,
+                        h.fullname, h.email
+                    FROM vps_hosts_followers f
+                    LEFT JOIN {$harvhubTable} h ON h.id = f.follower_id
+                    WHERE f.owner_id = ?
+                    ORDER BY f.created_at DESC
+                ");
+                $stmt->execute([$owner_id]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode(['success' => true, 'followers' => $rows]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z5g: Get VPS requestors for a given owner
+        if ($action === 'vps_get_requestors') {
+            $owner_id = (int)($_POST['owner_id'] ?? 0);
+            if ($owner_id <= 0) {
+                echo json_encode(['success' => false, 'error' => 'Invalid owner']);
+                exit;
+            }
+
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT r.id, r.requestor_id, r.request_status, r.created_at,
+                        h.fullname, h.email
+                    FROM vps_hosts_requestors r
+                    LEFT JOIN {$harvhubTable} h ON h.id = r.requestor_id
+                    WHERE r.owner_id = ?
+                    ORDER BY r.created_at DESC
+                ");
+                $stmt->execute([$owner_id]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode(['success' => true, 'requestors' => $rows]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // 5z5h: List users without VPS
+        if ($action === 'vps_list_without_vps') {
+            try {
+                $stmt = $pdo->query("
+                    SELECT h.id, h.fullname, h.email
+                    FROM {$harvhubTable} h
+                    LEFT JOIN vps v ON v.user_id = h.id
+                    WHERE v.id IS NULL
+                    ORDER BY h.fullname ASC
+                ");
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['success' => true, 'users' => $rows]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+        // 5z8: Get Inactive Users - UPDATED for programme_investors
         if ($action === 'get_inactive_users') {
             try {
                 $users = array();
-                $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
+                $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
 
-                // Helper function to check if user is inactive
                 function isUserInactive($user, $contractDuration, $today, $minProfitForSplit) {
                     $appStatus = strtolower(trim($user['application_status'] ?? ''));
                     if (strpos($appStatus, 'approved') === false) {
@@ -3322,21 +3550,13 @@
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     $profitAndLoss = (float)($user['profitandloss'] ?? 0);
                     
-                    // ============================================================
-                    // RULE 1: If contract is CANCELLED
-                    // ============================================================
                     if (strpos($loyalties, 'cancelled') !== false) {
-                        // If profit > threshold, show in COMPLETED tab (not inactive)
                         if ($profitAndLoss > $minProfitForSplit) {
-                            return false; // NOT INACTIVE - belongs in COMPLETED tab
+                            return false;
                         }
-                        // If profit <= threshold, show in INACTIVE tab
-                        return true; // INACTIVE
+                        return true;
                     }
                     
-                    // ============================================================
-                    // RULE 2: Payment statuses go to COMPLETED tab (not inactive)
-                    // ============================================================
                     $paymentStatuses = [
                         'payment-made', 'payment_made',
                         'unpaid-payment', 'unpaid_payment', 'unpaid',
@@ -3345,21 +3565,15 @@
                     
                     foreach ($paymentStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
-                            return false; // NOT INACTIVE - belongs in COMPLETED tab
+                            return false;
                         }
                     }
                     
-                    // ============================================================
-                    // RULE 3: If execution_start_date is NULL → INACTIVE
-                    // ============================================================
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
-                        return true; // No active contract = INACTIVE
+                        return true;
                     }
                     
-                    // ============================================================
-                    // RULE 4: Check if contract is still active
-                    // ============================================================
                     $isContractActive = false;
                     
                     if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
@@ -3381,69 +3595,45 @@
                     }
                     
                     if ($isContractActive) {
-                        return false; // ACTIVE - not inactive
+                        return false;
                     }
                     
-                    // ============================================================
-                    // RULE 5: Contract is expired, no payment status → INACTIVE
-                    // ============================================================
                     return true;
                 }
 
-                // Get from insiders_server table
                 try {
-                    $checkTable1 = $pdo->query("SHOW TABLES LIKE '{$insidersServerTable}'");
-                    if ($checkTable1->rowCount() > 0) {
-                        $stmt1 = $pdo->prepare("
+                    $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
+                    if ($checkTable->rowCount() > 0) {
+                        $stmt = $pdo->prepare("
                             SELECT id, fullname, email, broker, login, broker_balance, profitandloss, 
                                 loyalties, execution_start_date, invested_with, application_status,
-                                '{$insidersServerTable}' as source 
-                            FROM {$insidersServerTable} 
+                                '{$harvhubTable}' as source 
+                            FROM {$harvhubTable} 
                             WHERE application_status LIKE '%approved%'
                             AND login IS NOT NULL 
                             AND login != ''
                             ORDER BY id DESC
                         ");
-                        $stmt1->execute();
-                        $results = $stmt1->fetchAll(PDO::FETCH_ASSOC);
+                        $stmt->execute();
+                        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         
                         foreach ($results as $user) {
+                            // Get programme-specific duration
+                            $progData = getProgrammeInvestorData($pdo, $user['id']);
+                            $contractDuration = $progData['contract_duration'];
+                            
                             if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit)) {
                                 $user['contract_duration'] = $contractDuration;
+                                $user['developer_name'] = $progData['developer_name'];
+                                $user['programme_name'] = $progData['programme_name'];
+                                $user['developer_percentage'] = $progData['developer_percentage'];
+                                $user['investor_percentage'] = $progData['investor_percentage'];
                                 $users[] = $user;
                             }
                         }
                     }
                 } catch (Exception $e) {
-                    error_log("Error in get_inactive_users (insiders_server): " . $e->getMessage());
-                }
-
-                // Get from insiders table
-                try {
-                    $checkTable2 = $pdo->query("SHOW TABLES LIKE '{$insidersTable}'");
-                    if ($checkTable2->rowCount() > 0) {
-                        $stmt2 = $pdo->prepare("
-                            SELECT id, fullname, email, broker, login, broker_balance, profitandloss, 
-                                loyalties, execution_start_date, invested_with, application_status,
-                                '{$insidersTable}' as source 
-                            FROM {$insidersTable} 
-                            WHERE application_status LIKE '%approved%'
-                            AND login IS NOT NULL 
-                            AND login != ''
-                            ORDER BY id DESC
-                        ");
-                        $stmt2->execute();
-                        $results = $stmt2->fetchAll(PDO::FETCH_ASSOC);
-                        
-                        foreach ($results as $user) {
-                            if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit)) {
-                                $user['contract_duration'] = $contractDuration;
-                                $users[] = $user;
-                            }
-                        }
-                    }
-                } catch (Exception $e) {
-                    error_log("Error in get_inactive_users (insiders): " . $e->getMessage());
+                    error_log("Error in get_inactive_users: " . $e->getMessage());
                 }
 
                 echo json_encode(['success' => true, 'users' => $users]);
@@ -3455,7 +3645,7 @@
         // 5z8: Get User Details by IDs
         if ($action === 'get_users_by_ids') {
             $user_ids = json_decode($_POST['user_ids'] ?? '[]', true);
-            $source_table = $_POST['source_table'] ?? $insidersTable;
+            $source_table = $_POST['source_table'] ?? $harvhubTable;
             
             if (empty($user_ids) || !is_array($user_ids)) {
                 echo json_encode(['success' => true, 'users' => []]);
@@ -3501,17 +3691,15 @@
             }
             exit;
         }
-        // 5z9: Initialize Enrollment (Admin-initiated enrollment for inactive users)
+        // 5z9: Initialize Enrollment - UPDATED to use programme_investors
         if ($action === 'initialize_enrollment') {
             $user_id = $_POST['user_id'] ?? '';
             $source_table = $_POST['source_table'] ?? '';
             $broker_balance = (float)($_POST['broker_balance'] ?? 0);
             $admin_password = $_POST['admin_password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
-            $contractDuration = (int)($serverAccount['contract_duration'] ?? 30);
             $minBrokerBalance = (float)($serverAccount['min_broker_balance'] ?? 30);
             
-            // Verify admin credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -3528,35 +3716,34 @@
                 exit;
             }
             
-            // Validate input
-            if (empty($user_id) || !in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (empty($user_id) || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
             
-            // Validate broker balance
             if ($broker_balance < $minBrokerBalance) {
                 echo json_encode(['error' => 'Broker balance must be at least $' . number_format($minBrokerBalance, 2)]);
                 exit;
             }
             
-            // Check if user exists
-            $checkUser = $pdo->prepare("SELECT id, fullname FROM {$source_table} WHERE id = ?");
+            $checkUser = $pdo->prepare("SELECT id, fullname, email, invested_with FROM {$source_table} WHERE id = ?");
             $checkUser->execute([$user_id]);
-            if ($checkUser->rowCount() === 0) {
+            $userData = $checkUser->fetch(PDO::FETCH_ASSOC);
+            if (!$userData) {
                 echo json_encode(['error' => 'User does not exist']);
                 exit;
             }
             
-            // Get today's date
+            // Get programme-specific contract duration
+            $progData = getProgrammeInvestorData($pdo, $user_id);
+            $contractDuration = $progData['contract_duration'];
+            
             $today = date('Y-m-d');
             $endDate = date('Y-m-d', strtotime("+{$contractDuration} days", strtotime($today)));
             $startFormatted = date('dmY', strtotime($today));
             $endFormatted = date('dmY', strtotime($endDate));
             $contractId = "sd-{$startFormatted}-ed-{$endFormatted}";
             
-            // Update the user - initialize enrollment
-            // ===== FIX: Set daily_balance_log and daily_target_met to NULL =====
             $updateStmt = $pdo->prepare("
                 UPDATE {$source_table} SET 
                     broker_balance = ?,
@@ -3572,80 +3759,38 @@
             ");
             $updateStmt->execute([$broker_balance, $today, $contractId, $user_id]);
             
-            // Also update revenue_history to add a new active contract record
-            $history = [];
-            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'revenue_history'");
-            if ($checkColumn->rowCount() > 0) {
-                $stmt = $pdo->prepare("SELECT revenue_history FROM {$source_table} WHERE id = ?");
-                $stmt->execute([$user_id]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($result && !empty($result['revenue_history'])) {
-                    $history = json_decode($result['revenue_history'], true);
-                    if (!is_array($history)) {
-                        $history = [];
-                    }
-                }
-            }
-            
-            // Filter out records with empty contract_id
-            $filteredHistory = [];
-            foreach ($history as $record) {
-                $recordContractId = $record['contract_id'] ?? null;
-                if (!empty($recordContractId) && $recordContractId !== 'N/A' && $recordContractId !== 'null') {
-                    $filteredHistory[] = $record;
-                }
-            }
-            $history = $filteredHistory;
-            
-            // Create new revenue entry
-            $newId = time();
-            if (!empty($history)) {
-                foreach ($history as $item) {
-                    if (isset($item['id']) && is_numeric($item['id']) && $item['id'] >= $newId) {
-                        $newId = (int)$item['id'] + 1;
-                    }
-                }
-            }
-            
-            $newRecord = [
-                'id' => $newId,
-                'contract_id' => $contractId,
-                'execution_start_date' => $today,
-                'execution_end_date' => $endDate,
-                'starting_balance' => $broker_balance,
-                'current_balance' => $broker_balance,
-                'profit' => 0,
-                'user_share' => 0,
-                'server_share' => 0,
-                'loyalties' => 'active',
-                'recorded_at' => date('Y-m-d H:i:s'),
-                'invested_with' => null // Will be updated from user data if available
-            ];
-            
-            $history[] = $newRecord;
-            
-            // Sort newest first
-            usort($history, function($a, $b) {
-                $idA = isset($a['id']) ? (int)$a['id'] : 0;
-                $idB = isset($b['id']) ? (int)$b['id'] : 0;
-                return $idB - $idA;
-            });
-            
-            $jsonHistory = json_encode($history, JSON_PRETTY_PRINT);
-            
-            if ($checkColumn->rowCount() == 0) {
-                $pdo->exec("ALTER TABLE {$source_table} ADD COLUMN revenue_history LONGTEXT DEFAULT NULL");
-            }
-            
-            $updateHistoryStmt = $pdo->prepare("UPDATE {$source_table} SET revenue_history = ? WHERE id = ?");
-            $updateHistoryStmt->execute([$jsonHistory, $user_id]);
+            $insertStmt = $pdo->prepare("
+                INSERT INTO revenue_history (
+                    user_email, contract_id, execution_start_date, execution_end_date,
+                    starting_balance, current_balance, profit, user_share, server_share,
+                    loyalties, invested_with, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $insertStmt->execute([
+                $userData['email'] ?? '',
+                $contractId,
+                $today,
+                $endDate,
+                $broker_balance,
+                $broker_balance,
+                0,
+                0,
+                0,
+                'active',
+                $userData['invested_with'] ?? null,
+                date('Y-m-d H:i:s'),
+                date('Y-m-d H:i:s')
+            ]);
             
             echo json_encode([
                 'success' => true,
                 'message' => 'Enrollment initialized successfully',
                 'contract_id' => $contractId,
                 'execution_start_date' => $today,
-                'broker_balance' => $broker_balance
+                'broker_balance' => $broker_balance,
+                'contract_duration' => $contractDuration,
+                'developer_name' => $progData['developer_name'],
+                'programme_name' => $progData['programme_name']
             ]);
             exit;
         }
@@ -3660,7 +3805,7 @@
                 exit;
             }
             
-            // Verify admin credentials
+            // Verify credentials
             if (empty($admin_password)) {
                 echo json_encode(['error' => 'Password is required']);
                 exit;
@@ -3688,7 +3833,7 @@
             }
             exit;
         }
-        // 5z11: Verify Admin Password (for column removal)
+        // 5z11: Verify Password (for column removal)
         if ($action === 'verify_password') {
             $password = $_POST['password'] ?? '';
             $login_id = $_POST['login_id'] ?? '';
@@ -3713,6 +3858,7 @@
         }
     }
 
+
     // ============================================
     // SECTION 6: AUTHENTICATED POST HANDLING (Settings, Updates, etc.)
     // ============================================
@@ -3725,205 +3871,14 @@
             if (isset($serverAccount['admin_login_id']) && $login_id_reauth === $serverAccount['admin_login_id'] && password_verify($password_reauth, $serverAccount['admin_password_hash'] ?? '')) {
                 $re_authenticated_for_action = true;
             } else {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Action failed: Invalid Admin Password confirmation. Session terminated.</span>";
+                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Action failed: Invalid Password confirmation. Session terminated.</span>";
                 unset($_SESSION['admin_logged_in']);
                 header("Location: serveraccount.php");
                 exit;
             }
         }
 
-        // 6a: Update Addresses and Settings
-        if (isset($_POST['update_addresses']) && $re_authenticated_for_action) {
-            try {
-                $btc_address = trim($_POST['btc_address'] ?? '');
-                $eth_address = trim($_POST['eth_address'] ?? '');
-                $eth_network = trim($_POST['eth_network'] ?? 'ERC20');
-                $usdt_address = trim($_POST['usdt_address'] ?? '');
-                $usdt_network = trim($_POST['usdt_network'] ?? 'TRC20');
-                
-                $minimum_deposit = floatval($_POST['minimum_deposit'] ?? 0.00);
-                $contract_duration = is_numeric($_POST['contract_duration'] ?? null) ? (int)$_POST['contract_duration'] : null;
-                
-                $server_share_percent = is_numeric($_POST['server_share_percent'] ?? null) ? (int)$_POST['server_share_percent'] : 30;
-                $user_share_percent = is_numeric($_POST['user_share_percent'] ?? null) ? (int)$_POST['user_share_percent'] : 70;
-                $min_profit_for_split = floatval($_POST['min_profit_for_split'] ?? 30.00);
-                $min_broker_balance = floatval($_POST['min_broker_balance'] ?? 30.00);
-                $minimum_contract_days = is_numeric($_POST['minimum_contract_days'] ?? null) ? (int)$_POST['minimum_contract_days'] : 5;
-                $expiry_threshold_days = is_numeric($_POST['expiry_threshold_days'] ?? null) ? (int)$_POST['expiry_threshold_days'] : 5;
-
-                // ===== NEW: Handle columns_to_reset from hidden input =====
-                $columns_to_reset = $_POST['columns_to_reset'] ?? '[]';
-                // Validate JSON
-                $columns_to_reset_decoded = json_decode($columns_to_reset, true);
-                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_to_reset_decoded)) {
-                    $columns_to_reset_decoded = [];
-                }
-                // Filter out empty values
-                $columns_to_reset_decoded = array_filter($columns_to_reset_decoded, function($val) {
-                    return !empty(trim($val));
-                });
-                // Re-index and ensure unique values
-                $columns_to_reset_decoded = array_values(array_unique($columns_to_reset_decoded));
-                $columns_to_reset_json = json_encode($columns_to_reset_decoded, JSON_UNESCAPED_UNICODE);
-
-                $stmt = $pdo->prepare("
-                    UPDATE {$serverAccountTable} SET 
-                        btc_address = ?, eth_address = ?, eth_network = ?, usdt_address = ?, usdt_network = ?, 
-                        minimum_deposit = ?, contract_duration = ?, server_share_percent = ?, user_share_percent = ?,
-                        min_profit_for_split = ?, min_broker_balance = ?, minimum_contract_days = ?, expiry_threshold_days = ?,
-                        columns_to_reset = ?
-                    WHERE id = 1
-                ");
-                $stmt->execute([
-                    $btc_address, $eth_address, $eth_network, $usdt_address, $usdt_network, 
-                    $minimum_deposit, $contract_duration, $server_share_percent, $user_share_percent,
-                    $min_profit_for_split, $min_broker_balance, $minimum_contract_days, $expiry_threshold_days,
-                    $columns_to_reset_json
-                ]);
-                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment settings updated successfully!</span>";
-                header("Location: serveraccount.php?view=settings");
-                exit;
-            } catch (Exception $e) {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating settings: " . htmlspecialchars($e->getMessage()) . "</span>";
-                header("Location: serveraccount.php?view=settings");
-                exit;
-            }
-        }
-        
-
-
-        
-        // 6b: Update Admin Credentials
-        if (isset($_POST['update_credentials']) && $re_authenticated_for_action) {
-            $new_login_id = trim($_POST['new_login_id'] ?? $serverAccount['admin_login_id']);
-            $new_password = $_POST['new_password'] ?? '';
-
-            try {
-                $update_query = "UPDATE {$serverAccountTable} SET admin_login_id = ?";
-                $params = [$new_login_id];
-
-                if (!empty($new_password)) {
-                    $password_hash = password_hash($new_password, PASSWORD_DEFAULT);
-                    $update_query .= ", admin_password_hash = ?";
-                    $params[] = $password_hash;
-                }
-                
-                $update_query .= " WHERE id = 1";
-                $stmt = $pdo->prepare($update_query);
-                $stmt->execute($params);
-                
-                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Credentials updated successfully! Please re-login with your new details.</span>";
-                unset($_SESSION['admin_logged_in']);
-                header("Location: serveraccount.php");
-                exit;
-            } catch (Exception $e) {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating credentials: " . htmlspecialchars($e->getMessage()) . "</span>";
-                header("Location: serveraccount.php?view=settings");
-                exit;
-            }
-        }
-
-        // 6c: Add New Broker/Link
-        if (isset($_POST['add_broker']) && $re_authenticated_for_action) {
-            $new_broker = trim($_POST['new_broker'] ?? '');
-            if (!empty($new_broker)) {
-                try {
-                    $current_brokers = $serverAccount['brokers'] ?? '';
-                    $brokers_array = array_filter(array_map('trim', explode(',', $current_brokers)));
-                    if (!in_array($new_broker, $brokers_array)) {
-                        $brokers_array[] = $new_broker;
-                        $updated_brokers = implode(',', $brokers_array);
-                        $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers = ? WHERE id = 1");
-                        $stmt->execute([$updated_brokers]);
-                        $_SESSION['admin_message'] = "<span style='color:green;'>✅ Broker '{$new_broker}' added successfully!</span>";
-                    } else {
-                        $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Broker '{$new_broker}' already exists.</span>";
-                    }
-                } catch (Exception $e) {
-                    $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error adding broker: " . htmlspecialchars($e->getMessage()) . "</span>";
-                }
-            } else {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ New broker field cannot be empty.</span>";
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
-
-        if (isset($_POST['add_brokers_link']) && $re_authenticated_for_action) {
-            $new_link = trim($_POST['new_link'] ?? '');
-            if (!empty($new_link)) {
-                try {
-                    $current_links = $serverAccount['brokers_link'] ?? '';
-                    $links_array = array_filter(array_map('trim', explode(',', $current_links)));
-                    if (!in_array($new_link, $links_array)) {
-                        $links_array[] = $new_link;
-                        $updated_links = implode(',', $links_array);
-                        $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers_link = ? WHERE id = 1");
-                        $stmt->execute([$updated_links]);
-                        $_SESSION['admin_message'] = "<span style='color:green;'>✅ Broker link '{$new_link}' added successfully!</span>";
-                    } else {
-                        $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Broker link '{$new_link}' already exists.</span>";
-                    }
-                } catch (Exception $e) {
-                    $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error adding broker link: " . htmlspecialchars($e->getMessage()) . "</span>";
-                }
-            } else {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ New broker link field cannot be empty.</span>";
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
-
-        // 6d: Delete Broker/Link
-        if (isset($_POST['delete_broker']) && $re_authenticated_for_action) {
-            $broker_to_delete = trim($_POST['broker_value'] ?? '');
-            if (!empty($broker_to_delete)) {
-                try {
-                    $current_brokers = $serverAccount['brokers'] ?? '';
-                    $brokers_array = array_filter(array_map('trim', explode(',', $current_brokers)));
-                    $key = array_search($broker_to_delete, $brokers_array);
-                    if ($key !== false) {
-                        unset($brokers_array[$key]);
-                        $updated_brokers = implode(',', array_filter($brokers_array));
-                        $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers = ? WHERE id = 1");
-                        $stmt->execute([$updated_brokers]);
-                        $_SESSION['admin_message'] = "<span style='color:green;'>✅ Broker '{$broker_to_delete}' deleted successfully!</span>";
-                    } else {
-                        $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Broker '{$broker_to_delete}' not found.</span>";
-                    }
-                } catch (Exception $e) {
-                    $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error deleting broker: " . htmlspecialchars($e->getMessage()) . "</span>";
-                }
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
-        
-        if (isset($_POST['delete_brokers_link']) && $re_authenticated_for_action) {
-            $link_to_delete = trim($_POST['link_value'] ?? '');
-            if (!empty($link_to_delete)) {
-                try {
-                    $current_links = $serverAccount['brokers_link'] ?? '';
-                    $links_array = array_filter(array_map('trim', explode(',', $current_links)));
-                    $key = array_search($link_to_delete, $links_array);
-                    if ($key !== false) {
-                        unset($links_array[$key]);
-                        $updated_links = implode(',', array_filter($links_array));
-                        $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET brokers_link = ? WHERE id = 1");
-                        $stmt->execute([$updated_links]);
-                        $_SESSION['admin_message'] = "<span style='color:green;'>✅ Broker link '{$link_to_delete}' deleted successfully!</span>";
-                    } else {
-                        $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Broker link '{$link_to_delete}' not found.</span>";
-                    }
-                } catch (Exception $e) {
-                    $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error deleting broker link: " . htmlspecialchars($e->getMessage()) . "</span>";
-                }
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
-
-        // 6e: Update Payment Status (with hierarchical validation and revenue history update)
+        // 6e: Update Payment Status (with hierarchical validation and revenue history update) - UPDATED Table Based
         if (isset($_POST['update_payment_status']) && $re_authenticated_for_action) {
             $user_id = $_POST['user_id'] ?? '';
             $new_status = trim($_POST['payment_status'] ?? '');
@@ -3931,7 +3886,7 @@
             
             $normalizedStatus = normalizePaymentStatus($new_status);
             
-            if (!empty($user_id) && !empty($new_status) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && !empty($new_status) && $source_table === $harvhubTable) {
                 try {
                     $stmt = $pdo->prepare("SELECT * FROM {$source_table} WHERE id = ?");
                     $stmt->execute([$user_id]);
@@ -3942,44 +3897,39 @@
                         $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
                         $decision = determineUserStatus($targetUser, $contractDuration, $minProfitForSplit);
                         
-                        // ===== SPECIAL CASE: failed-payment can be set on any eligible user =====
-                        // This allows admins to mark payments as failed without restrictions
+                        // SPECIAL CASE: failed-payment can be set on any eligible user
                         $isFailedPayment = ($normalizedStatus === 'failed-payment');
                         
-                        // Allow failed-payment to be set even if not eligible (for manual correction)
                         if ($isFailedPayment || ($decision['has_eligible_profit'] && $decision['should_show_in_revenue'])) {
                             // Update the main loyalties field
                             $stmt = $pdo->prepare("UPDATE {$source_table} SET loyalties = ? WHERE id = ?");
                             $stmt->execute([$normalizedStatus, $user_id]);
                             
-                            // ===== CRITICAL: Only set reset_contract for payment-confirmed =====
-                            // reset_contract should only be set to 1 when payment is confirmed
-                            // DO NOT set reset_contract for failed-payment
+                            // Only set reset_contract for payment-confirmed
                             if ($normalizedStatus === 'payment-confirmed') {
                                 $stmtReset = $pdo->prepare("UPDATE {$source_table} SET reset_contract = 1 WHERE id = ?");
                                 $stmtReset->execute([$user_id]);
                             }
-                            // For failed-payment, we do NOT change reset_contract
                             
-                            // Call the sync function to update revenue history
+                            // Update revenue_history table
                             $syncResult = syncUserRevenueHistory($user_id, $source_table, $pdo, $serverAccount);
                             
                             if ($syncResult['success']) {
-                                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Payment status updated to '{$normalizedStatus}' for User ID {$user_id}!</span>";
+                                $_SESSION['admin_message'] = "<span style='color:green;'>Payment status updated to '{$normalizedStatus}' for User ID {$user_id}!</span>";
                             } else {
-                                $_SESSION['admin_message'] = "<span style='color:orange;'>⚠️ Status updated but revenue history sync failed: {$syncResult['message']}</span>";
+                                $_SESSION['admin_message'] = "<span style='color:orange;'>Status updated but revenue history sync failed: {$syncResult['message']}</span>";
                             }
                         } else {
-                            $_SESSION['admin_message'] = "<span style='color:red;'>❌ Cannot update status: User does not have an eligible profit split scenario. Reason: {$decision['reason']}</span>";
+                            $_SESSION['admin_message'] = "<span style='color:red;'>Cannot update status: User does not have an eligible profit split scenario. Reason: {$decision['reason']}</span>";
                         }
                     } else {
-                        $_SESSION['admin_message'] = "<span style='color:red;'>❌ User not found.</span>";
+                        $_SESSION['admin_message'] = "<span style='color:red;'>User not found.</span>";
                     }
                 } catch (Exception $e) {
-                    $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating payment status: " . htmlspecialchars($e->getMessage()) . "</span>";
+                    $_SESSION['admin_message'] = "<span style='color:red;'>Error updating payment status: " . htmlspecialchars($e->getMessage()) . "</span>";
                 }
             } else {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Invalid update request. Please fill all fields.</span>";
+                $_SESSION['admin_message'] = "<span style='color:red;'>Invalid update request. Please fill all fields.</span>";
             }
             header("Location: serveraccount.php?view=paid_users");
             exit;
@@ -3991,7 +3941,7 @@
             $server_decision = trim($_POST['server_decision'] ?? '');
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && !empty($server_decision) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && !empty($server_decision) && $source_table === $harvhubTable) {
                 try {
                     $checkColumn = $pdo->query("SHOW COLUMNS FROM {$source_table} LIKE 'server_decision'");
                     if ($checkColumn->rowCount() == 0) {
@@ -4011,27 +3961,13 @@
             exit;
         }
 
-        // 6g: Update News
-        if (isset($_POST['update_news']) && $re_authenticated_for_action) {
-            $news_content = trim($_POST['news_content'] ?? '');
-            try {
-                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET news = ? WHERE id = 1");
-                $stmt->execute([$news_content]);
-                $_SESSION['admin_message'] = "<span style='color:green;'>✅ News updated successfully!</span>";
-            } catch (Exception $e) {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating news: " . htmlspecialchars($e->getMessage()) . "</span>";
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
-        
         // 6h: Update Application Status
         if (isset($_POST['update_application_status']) && $re_authenticated_for_action) {
             $user_id = $_POST['user_id'] ?? '';
             $new_status = trim($_POST['new_application_status'] ?? '');
             $source_table = $_POST['source_table'] ?? '';
             
-            if (!empty($user_id) && !empty($new_status) && in_array($source_table, [$insidersServerTable, $insidersTable])) {
+            if (!empty($user_id) && !empty($new_status) && $source_table === $harvhubTable) {
                 try {
                     $stmt = $pdo->prepare("UPDATE {$source_table} SET application_status = ? WHERE id = ?");
                     $stmt->execute([$new_status, $user_id]);
@@ -4045,70 +3981,6 @@
             header("Location: serveraccount.php?view=account_management");
             exit;
         }
-        // 6z: Save Columns to Reset (separate action)
-        if (isset($_POST['save_columns_to_reset']) && $re_authenticated_for_action) {
-            try {
-                // Get the columns_to_reset data from POST
-                $columns_to_reset_raw = $_POST['columns_to_reset'] ?? '[]';
-                
-                // Parse the JSON data
-                $columns_data = json_decode($columns_to_reset_raw, true);
-                if (json_last_error() !== JSON_ERROR_NONE || !is_array($columns_data)) {
-                    $columns_data = [];
-                }
-                
-                // Validate and sanitize each entry
-                $validated_columns = [];
-                foreach ($columns_data as $entry) {
-                    if (is_array($entry) && isset($entry['column']) && !empty(trim($entry['column']))) {
-                        $column_name = trim($entry['column']);
-                        
-                        // Handle value - store as string or int based on input
-                        $value = $entry['value'] ?? null;
-                        if ($value !== null) {
-                            // Check if it's numeric
-                            if (is_numeric($value)) {
-                                // Store as integer if it's a whole number, float if decimal
-                                if (strpos($value, '.') !== false) {
-                                    $value = (float)$value;
-                                } else {
-                                    $value = (int)$value;
-                                }
-                            } else {
-                                // Store as string
-                                $value = (string)$value;
-                            }
-                        }
-                        
-                        $validated_columns[] = [
-                            'column' => $column_name,
-                            'value' => $value
-                        ];
-                    }
-                }
-                
-                // Remove duplicates by column name
-                $unique_columns = [];
-                $seen_columns = [];
-                foreach ($validated_columns as $entry) {
-                    if (!in_array($entry['column'], $seen_columns)) {
-                        $seen_columns[] = $entry['column'];
-                        $unique_columns[] = $entry;
-                    }
-                }
-                
-                $columns_to_reset_json = json_encode($unique_columns, JSON_UNESCAPED_UNICODE);
-                
-                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET columns_to_reset = ? WHERE id = 1");
-                $stmt->execute([$columns_to_reset_json]);
-                
-                $_SESSION['admin_message'] = "<span style='color:green;'>✅ Columns to reset updated successfully! (" . count($unique_columns) . " columns configured)</span>";
-            } catch (Exception $e) {
-                $_SESSION['admin_message'] = "<span style='color:red;'>❌ Error updating columns to reset: " . htmlspecialchars($e->getMessage()) . "</span>";
-            }
-            header("Location: serveraccount.php?view=settings");
-            exit;
-        }
         
         // Re-fetch account data after any potential update
         $stmt = $pdo->prepare("SELECT * FROM {$serverAccountTable} WHERE id = 1");
@@ -4116,11 +3988,9 @@
         $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
         // Check and add server_decision column if needed
-        foreach ([$insidersTable, $insidersServerTable] as $table) {
-            $checkColumn = $pdo->query("SHOW COLUMNS FROM {$table} LIKE 'server_decision'");
-            if ($checkColumn->rowCount() == 0) {
-                $pdo->exec("ALTER TABLE {$table} ADD COLUMN server_decision VARCHAR(50) DEFAULT NULL");
-            }
+        $checkColumn = $pdo->query("SHOW COLUMNS FROM {$harvhubTable} LIKE 'server_decision'");
+        if ($checkColumn->rowCount() == 0) {
+            $pdo->exec("ALTER TABLE {$harvhubTable} ADD COLUMN server_decision VARCHAR(50) DEFAULT NULL");
         }
     }
 
@@ -4129,7 +3999,7 @@
     // ============================================
 
     // ============================================
-    // SECTION 7a: Paid Users / Revenue Dashboard Data
+    // SECTION 7a: Paid Users / Revenue Dashboard Data (UPDATED - Table Based)
     // ============================================
     if ($authenticated && $currentView === 'paid_users') {
         $allUsers = [];
@@ -4152,7 +4022,7 @@
             'total_unpaid_payments' => 0
         ];
         
-        // TABLE SUMMARY - Will be populated with filtered data for display
+        // TABLE SUMMARY
         $tableSummary = [
             'total_broker_balance' => 0,
             'total_profit' => 0,
@@ -4172,16 +4042,10 @@
         $userSharePercent = (int)($serverAccount['user_share_percent'] ?? 70);
         $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30.00);
 
-        // ========== FETCH ALL USERS (Active, Inactive, Completed) ==========
-        // Fetch ALL users from insiders table - no filter
-        $stmt1 = $pdo->prepare("SELECT {$selectFields}, '{$insidersTable}' AS source FROM {$insidersTable}");
-        $stmt1->execute();
-        $allUsers = array_merge($allUsers, $stmt1->fetchAll(PDO::FETCH_ASSOC));
-
-        // Fetch ALL users from insiders_server table - no filter
-        $stmt2 = $pdo->prepare("SELECT {$selectFields}, '{$insidersServerTable}' AS source FROM {$insidersServerTable}");
-        $stmt2->execute();
-        $allUsers = array_merge($allUsers, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+        // FETCH ALL USERS FROM SINGLE TABLE
+        $stmt = $pdo->prepare("SELECT {$selectFields}, '{$harvhubTable}' AS source FROM {$harvhubTable}");
+        $stmt->execute();
+        $allUsers = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Process each user for the table and summaries
         foreach ($allUsers as &$user) {
@@ -4193,12 +4057,12 @@
             $user['profitandloss_display'] = $profitAndLoss;
             $user['current_balance'] = $currentBalance;
             
-            // ========== DASHBOARD SUMMARY (ALL ACTIVE USERS) ==========
+            // DASHBOARD SUMMARY
             $dashboardSummary['total_broker_balance'] += $brokerBalance;
             $dashboardSummary['total_profit'] += $profitAndLoss;
             $dashboardSummary['total_current_balance'] += $currentBalance;
             
-            // Calculate potential shares for dashboard (using raw profit, no eligibility check)
+            // Calculate potential shares for dashboard
             if ($profitAndLoss > $minProfitForSplit) {
                 $dashboardSummary['users_with_profit']++;
                 $potentialServerShare = round(($profitAndLoss * $serverSharePercent) / 100, 2);
@@ -4207,20 +4071,29 @@
                 $dashboardSummary['total_user_share'] += $potentialUserShare;
                 $dashboardSummary['total_expected_payment'] += $potentialServerShare;
                 
-                // Track payment statuses for dashboard
-                $rawStatus = $user['loyalties'] ?? '';
-                $normalizedStatus = normalizePaymentStatus($rawStatus);
-                if ($normalizedStatus === 'payment-confirmed') {
-                    $dashboardSummary['total_payments_received'] += $potentialServerShare;
-                } elseif ($normalizedStatus === 'payment-made') {
-                    $dashboardSummary['total_payments_made'] += $potentialServerShare;
-                } else {
-                    $dashboardSummary['total_unpaid_payments'] += $potentialServerShare;
+                // Track payment statuses from revenue_history table using user_email
+                $historyStmt = $pdo->prepare("
+                    SELECT loyalties, server_share FROM revenue_history 
+                    WHERE user_email = ? 
+                    ORDER BY created_at DESC LIMIT 1
+                ");
+                $historyStmt->execute([$user['email']]);
+                $latestRecord = $historyStmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($latestRecord) {
+                    $normalizedStatus = normalizePaymentStatus($latestRecord['loyalties'] ?? '');
+                    $recordedServerShare = (float)($latestRecord['server_share'] ?? 0);
+                    if ($normalizedStatus === 'payment-confirmed') {
+                        $dashboardSummary['total_payments_received'] += $recordedServerShare;
+                    } elseif ($normalizedStatus === 'payment-made') {
+                        $dashboardSummary['total_payments_made'] += $recordedServerShare;
+                    } else {
+                        $dashboardSummary['total_unpaid_payments'] += $potentialServerShare;
+                    }
                 }
             }
             
-            // ========== TABLE SUMMARY & DISPLAY LOGIC ==========
-            // Determine user status based on contract rules
+            // TABLE SUMMARY & DISPLAY LOGIC
             $decision = determineUserStatus($user, $contractDuration, $minProfitForSplit);
             
             $user['should_show_in_revenue'] = $decision['should_show_in_revenue'];
@@ -4231,47 +4104,45 @@
             $user['determined_status'] = $decision['status'];
             $user['decision_reason'] = $decision['reason'];
             
-            // Determine current status for each user
             $rawStatus = $user['loyalties'] ?? '';
             $normalizedStatus = normalizePaymentStatus($rawStatus);
             $user['loyalties_normalized'] = $normalizedStatus;
 
-            // Check if contract is active based on execution_start_date and contract duration
+            // Check if contract is active
             $isContractActive = false;
             $executionStartDate = $user['execution_start_date'] ?? null;
             if (!empty($executionStartDate) && $executionStartDate !== '0000-00-00') {
                 $start = new DateTime($executionStartDate);
                 $end = clone $start;
                 $end->modify("+{$contractDuration} days");
-                $today = new DateTime();
-                $today->setTime(0, 0, 0);
-                $isContractActive = ($today <= $end);
+                $todayDate = new DateTime();
+                $todayDate->setTime(0, 0, 0);
+                $isContractActive = ($todayDate <= $end);
             }
 
             // Determine user's current status category
             if ($normalizedStatus === 'payment-confirmed') {
                 $user['current_status'] = 'completed';
-                $user['status_label'] = '✅ Completed (Payment Confirmed)';
-                $user['should_show_in_revenue'] = true; // Show but don't add to active totals
+                $user['status_label'] = 'Completed (Payment Confirmed)';
+                $user['should_show_in_revenue'] = true;
             } elseif ($normalizedStatus === 'payment-made' || $normalizedStatus === 'unpaid-payment') {
                 $user['current_status'] = 'active';
-                $user['status_label'] = '📈 Active (' . $normalizedStatus . ')';
+                $user['status_label'] = 'Active (' . $normalizedStatus . ')';
                 $user['should_show_in_revenue'] = true;
             } elseif ($isContractActive) {
                 $user['current_status'] = 'active';
-                $user['status_label'] = '📈 Active (Contract Running)';
-                $user['should_show_in_revenue'] = false; // Contract active but no profit split yet
+                $user['status_label'] = 'Active (Contract Running)';
+                $user['should_show_in_revenue'] = false;
             } else {
-                // Inactive users - contract ended with no profit or no contract
                 $user['current_status'] = 'inactive';
                 if ($profitAndLoss < 0) {
-                    $user['status_label'] = '⏹️ Inactive (Loss)';
+                    $user['status_label'] = 'Inactive (Loss)';
                 } elseif ($profitAndLoss > 0 && $profitAndLoss <= $minProfitForSplit) {
-                    $user['status_label'] = '⏹️ Inactive (Below Min Profit)';
+                    $user['status_label'] = 'Inactive (Below Min Profit)';
                 } elseif (empty($executionStartDate) || $executionStartDate === '0000-00-00') {
-                    $user['status_label'] = '⏹️ Inactive (No Contract)';
+                    $user['status_label'] = 'Inactive (No Contract)';
                 } else {
-                    $user['status_label'] = '⏹️ Inactive (Contract Ended)';
+                    $user['status_label'] = 'Inactive (Contract Ended)';
                 }
                 $user['should_show_in_revenue'] = false;
             }
@@ -4281,10 +4152,6 @@
                 $unpaidAge = calculateUnpaidAge($user['execution_start_date'], $contractDuration);
             }
             $user['unpaid_payment_age'] = $unpaidAge;
-            
-            $rawStatus = $user['loyalties'] ?? '';
-            $normalizedStatus = normalizePaymentStatus($rawStatus);
-            $user['loyalties_normalized'] = $normalizedStatus;
             
             // Determine display status for the table
             if (!$user['should_show_in_revenue']) {
@@ -4306,7 +4173,7 @@
             }
             $user['display_status'] = $displayStatus;
             
-            // Add to table summary ONLY for active users (not completed or inactive)
+            // Add to table summary ONLY for active users
             if ($user['current_status'] === 'active' && $user['should_show_in_revenue']) {
                 $tableSummary['total_broker_balance'] += $brokerBalance;
                 $tableSummary['total_profit'] += $profitAndLoss;
@@ -4340,7 +4207,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
-    <title>Admin Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>HCP</text></svg>">
+    <title>Harvhub CP</title>
     <?php include 'server_style.php' ?>
     <?php include 'server_script.php' ?>
 </head>
@@ -4351,7 +4219,7 @@
             <!-- SECTION 9: LOGIN / SETUP SCREEN               -->
             <!-- ============================================ -->
             <div class="container login-container">
-                <h2><?= $initialSetupRequired ? '🔑 Admin Setup' : '🔒 Admin Login' ?></h2>
+                <h2><?= $initialSetupRequired ? '🔑 Setup' : '🔒 Login' ?></h2>
                 <?php if ($message): ?>
                     <p class="message"><?= $message ?></p>
                 <?php endif; ?>
@@ -4373,10 +4241,9 @@
                 </form>
             </div>
 
-
             
     <!-- ============================================ -->
-    <!-- SECTION 10: AUTHENTICATED ADMIN DASHBOARD     -->
+    <!-- SECTION 10: AUTHENTICATED DASHBOARD     -->
     <!-- ============================================ -->
         <?php else: ?>
             <div class="container">
@@ -4386,13 +4253,12 @@
                     <a href="serveraccount.php?view=menu" class="back-btn">← Back to Menu</a>
                 <?php endif; ?>
 
-
                 
             <!-- ============================================ -->
             <!-- SECTION 10a: MENU / NAVIGATION                -->
             <!-- ============================================ -->
             <?php if ($currentView === 'menu'): ?>
-                <h2> Server Dashboard</h2>
+                <h2> Harvhub CP</h2>
                 <div class="nav-menu">
                     <a href="serveraccount.php?view=settings">
                         <span class="nav-icon">⚙️</span>
@@ -4401,7 +4267,8 @@
                             <span class="sub-text">Configuration &amp; Payment</span>
                         </span>
                     </a>
-                    <a href="serveraccount.php?view=system_config">
+                    
+                    <a href="serveraccount.php?view=vps">
                         <span class="nav-icon">🖥️</span>
                         <span class="nav-label">
                             Virtual Private Servers
@@ -4429,7 +4296,6 @@
                             <span class="sub-text">Data &amp; Insights</span>
                         </span>
                     </a>
-                    <!-- In the menu navigation section (around line ~1600) -->
                     <a href="serveraccount.php?view=risk_dictionary">
                         <span class="nav-icon">💹</span>
                         <span class="nav-label">
@@ -4456,8 +4322,8 @@
             <!-- ============================================ -->
             <?php elseif ($currentView === 'analytics'): ?>
                 <?php include 'analytics.php'; ?>     
-            <?php elseif ($currentView === 'system_config'): ?>
-                <?php include 'system_server_config.php'; ?>
+            <?php elseif ($currentView === 'vps'): ?>
+                <?php include 'vps_config.php'; ?>
             <?php elseif ($currentView === 'manual'): ?>
                 <?php include 'manual.php'; ?>
             <!-- ============================================ -->
@@ -4477,18 +4343,18 @@
             </div>
             
             <!-- ============================================ -->
-            <!-- SECTION 11: MODALS                           -->
+            <!-- SECTION 11: settings_modalS                           -->
             <!-- ============================================ -->
             
-            <!-- Password Modal -->
-            <div id="password-modal" class="modal">
-                <div class="modal-content">
-                    <h3 id="modal-title">SECURITY CHECK</h3>
-                    <p id="modal-paragraph">Please enter your Admin Password.</p>
-                    <input type="password" id="modal-password-input" placeholder="Admin Password" required>
-                    <div class="modal-buttons">
-                        <button type="button" id="modal-confirm-btn">Confirm</button>
-                        <button type="button" id="modal-cancel-btn">Cancel</button>
+            <!-- Password settings_modal -->
+            <div id="password-settings_modal" class="settings_modal">
+                <div class="settings_modal-content">
+                    <h3 id="settings_modal-title">SECURITY CHECK</h3>
+                    <p id="settings_modal-paragraph">Please enter your Password.</p>
+                    <input type="password" id="settings_modal-password-input" placeholder="Password" required>
+                    <div class="settings_modal-buttons">
+                        <button type="button" id="settings_modal-confirm-btn">Confirm</button>
+                        <button type="button" id="settings_modal-cancel-btn">Cancel</button>
                     </div>
                 </div>
             </div>
