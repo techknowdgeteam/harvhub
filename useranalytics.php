@@ -1,5 +1,5 @@
 <?php
-    //useranalytics.php
+    // useranalytics.php
     session_start();
 
     // Check for logged-in user
@@ -24,8 +24,12 @@
         die("Database connection failed.");
     }
 
-    // Fetch user data - NO application_status filter
-    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ?");
+    // Fetch user basics (id, fullname, balance, P&L, execution start)
+    $stmt = $pdo->prepare("
+        SELECT id, fullname, broker_balance, profitandloss, execution_start_date
+        FROM $tableName
+        WHERE email = ?
+    ");
     $stmt->execute([$email]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -34,28 +38,148 @@
         exit;
     }
 
+    $userid = (int)$user['id'];
+
     // Fetch server config
     $stmt = $pdo->prepare("SELECT * FROM $serverAccountTable LIMIT 1");
     $stmt->execute();
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
     $CONTRACT_DURATION = (int)($serverAccount['contract_duration'] ?? 30);
-    $MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
 
-    // Parse analytics data
-    $analyticsData = [];
-    if (!empty($user['analytics'])) {
-        $decoded = json_decode($user['analytics'], true);
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            $analyticsData = $decoded;
+    // =====================================================================
+    // Fetch analytics row from investors_analytics table
+    // =====================================================================
+    $authData = [];      // authorized aggregates (the only row we have now)
+    $unauthData = [];    // unauthorized trades come from the unauthorized_trades table
+    $summaries = [];
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT *
+            FROM investors_analytics
+            WHERE userid = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$userid]);
+        $authData = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    } catch (PDOException $e) {
+        $authData = [];
+    }
+
+    // =====================================================================
+    // Aggregate unauthorized trades from unauthorized_trades table
+    // =====================================================================
+    $unauthTotalTrades    = 0;
+    $unauthTotalPnl       = 0.0;
+    $unauthProfitTrades   = 0;
+    $unauthLossTrades     = 0;
+    $unauthProfitAmount   = 0.0;
+    $unauthLossAmount     = 0.0;
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT pnl
+            FROM unauthorized_trades
+            WHERE userid = ?
+        ");
+        $stmt->execute([$userid]);
+        $utRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($utRows as $r) {
+            $pnl = (float)($r['pnl'] ?? 0);
+            $unauthTotalTrades++;
+            $unauthTotalPnl += $pnl;
+            if ($pnl > 0) {
+                $unauthProfitTrades++;
+                $unauthProfitAmount += $pnl;
+            } elseif ($pnl < 0) {
+                $unauthLossTrades++;
+                $unauthLossAmount += abs($pnl);
+            }
         }
+    } catch (PDOException $e) {
+        // table may not exist yet — leave zeros
+    }
+
+    // =====================================================================
+    // Pull the analytics values into scalars (was: JSON nesting)
+    // =====================================================================
+    $authTotalTrades     = (int)($authData['total_trades'] ?? 0);
+    $authTotalPnl        = (float)($authData['total_pnl'] ?? 0);
+    $authProfitTrades    = (int)($authData['profit_trades'] ?? 0);
+    $authLossTrades      = (int)($authData['loss_trades'] ?? 0);
+    $authProfitAmount    = (float)($authData['profit_amount'] ?? 0);
+    $authLossAmount      = (float)($authData['loss_amount'] ?? 0);
+
+    // Trades per day — from table columns
+    $lowestTradesPerDay  = (int)($authData['lowest_trades_per_day'] ?? 0);
+    $highestTradesPerDay = (int)($authData['highest_trades_per_day'] ?? 0);
+    $averageTradesPerDay = (int)($authData['average_trades_per_day'] ?? 0);
+
+    // Trades per week — from table columns (NEW cards)
+    $lowestTradesPerWeek  = (int)($authData['lowest_trades_per_week'] ?? 0);
+    $highestTradesPerWeek = (int)($authData['highest_trades_per_week'] ?? 0);
+    $averageTradesPerWeek = (int)($authData['average_trades_per_week'] ?? 0);
+
+    // Highest loss per trade (kept for reference, no longer shown)
+    $highestLossPerTrade = (float)($authData['highest_loss_per_trade'] ?? 0);
+
+    // ▼ Highest drawdown — now the displayed metric
+    $highestDrawdown     = (float)($authData['highest_drawdown'] ?? 0);
+
+    // Symbols traded
+    $symbolsCount = (int)($authData['symbols_traded'] ?? 0);
+
+    // Sequential losses
+    $sequentialLossCount = (int)($authData['consecutive_losses_count'] ?? 0);
+    $sequentialLossTotal = (float)($authData['total_loss_pnl'] ?? 0);
+
+    // Sequential days in loss
+    $sequentialDaysCount = (int)($authData['consecutive_days_in_loss_count'] ?? 0);
+    $sequentialDaysTotal = (float)($authData['consecutive_days_in_loss_count_total_loss_pnl'] ?? 0);
+
+    // Revenue percentages
+    $revenuePercent       = (float)($authData['revenue_percentage'] ?? 0);
+    $revenueProfitPercent = (float)($authData['revenue_profit_percentage'] ?? 0);
+    $revenueLossPercent   = (float)($authData['revenue_loss_percentage'] ?? 0);
+
+    // Win rate (derived from profit/loss trade counts in table)
+    $winRate = ($authProfitTrades + $authLossTrades) > 0
+        ? round(($authProfitTrades / ($authProfitTrades + $authLossTrades)) * 100, 2)
+        : 0;
+
+    // =====================================================================
+    // Symbols breakdown — from authorized_trades table
+    //   Aggregate: for each symbol → sum of positive pnl & abs(sum of negative pnl)
+    // =====================================================================
+    $symbols = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT symbol,
+                   SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) AS total_profit,
+                   SUM(CASE WHEN pnl < 0 THEN -pnl ELSE 0 END) AS total_loss
+            FROM authorized_trades
+            WHERE userid = ?
+            GROUP BY symbol
+            ORDER BY symbol ASC
+        ");
+        $stmt->execute([$userid]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $symbols[$r['symbol']] = [
+                'total_profit' => (float)$r['total_profit'],
+                'total_loss'   => (float)$r['total_loss'],
+            ];
+        }
+    } catch (PDOException $e) {
+        $symbols = [];
     }
 
     // Extract user data for display
     $fullName = $user['fullname'] ?? 'User';
-    $brokerBalance = (float)($user['broker_balance'] ?? 0);
-    $profitAndLoss = (float)($user['profitandloss'] ?? 0);
-    $currentBalance = $brokerBalance + $profitAndLoss;
+    $brokerBalance   = (float)($user['broker_balance'] ?? 0);
+    $profitAndLoss   = (float)($user['profitandloss'] ?? 0);
+    $currentBalance  = $brokerBalance + $profitAndLoss;
 
     // Get execution dates
     $executionStartDate = $user['execution_start_date'] ?? null;
@@ -70,82 +194,6 @@
         $formatted_end_date = $end->format('M d, Y');
     }
 
-    function getNestedValue($data, $keys, $default = 0) {
-        $current = $data;
-        foreach ($keys as $key) {
-            if (!isset($current[$key])) {
-                return $default;
-            }
-            $current = $current[$key];
-        }
-        return $current;
-    }
-
-    // Extract trade metrics from analytics
-    $fromExecution = $analyticsData['from_execution_start_date'] ?? [];
-
-    // Get trade data (prioritize trades_within_risks_config)
-    $tradeType = 'trades_within_risks_config';
-    if (empty($fromExecution[$tradeType])) {
-        $tradeType = 'trades_outside_risks_config';
-    }
-
-    $tradeData = $fromExecution[$tradeType] ?? [];
-    $summaries = $tradeData['summaries']['summaries_of_profits_only'] ?? [];
-
-    // Get authorized trades data
-    $authData = $tradeData['regular_data']['authorized'] ?? [];
-    $unauthData = $tradeData['regular_data']['unauthorized'] ?? [];
-
-    // Summary values
-    $totalLostTrades = $summaries['total_lost_trades'] ?? 0;
-    $totalWonTrades = $summaries['total_won_trades'] ?? 0;
-    $winRate = $totalWonTrades + $totalLostTrades > 0 
-        ? round(($totalWonTrades / ($totalWonTrades + $totalLostTrades)) * 100, 2) 
-        : 0;
-
-    // Authorized trade metrics
-    $authTotalTrades = $authData['total_trades'] ?? 0;
-    $authTotalPnl = $authData['total_pnl'] ?? 0;
-    $authProfitTrades = $authData['profit_trades'] ?? 0;
-    $authLossTrades = $authData['loss_trades'] ?? 0;
-    $authProfitAmount = $authData['profit_amount'] ?? 0;
-    $authLossAmount = $authData['loss_amount'] ?? 0;
-
-    // Unauthorized trade metrics
-    $unauthTotalTrades = $unauthData['total_trades'] ?? 0;
-    $unauthTotalPnl = $unauthData['total_pnl'] ?? 0;
-    $unauthProfitTrades = $unauthData['profit_trades'] ?? 0;
-    $unauthLossTrades = $unauthData['loss_trades'] ?? 0;
-    $unauthProfitAmount = $unauthData['profit_amount'] ?? 0;
-    $unauthLossAmount = $unauthData['loss_amount'] ?? 0;
-
-    // Sequential losses
-    $sequentialLosses = $authData['highest_sequential_losses'] ?? [];
-    $sequentialLossCount = $sequentialLosses['consecutive_losses_count'] ?? 0;
-    $sequentialLossTotal = $sequentialLosses['total_loss_pnl'] ?? 0;
-
-    // Sequential days in loss
-    $sequentialDaysLoss = $authData['highest_sequential_days_in_loss'] ?? [];
-    $sequentialDaysCount = $sequentialDaysLoss['consecutive_days_count'] ?? 0;
-    $sequentialDaysTotal = $sequentialDaysLoss['total_loss_pnl'] ?? 0;
-
-    // Highest loss per trade
-    $highestLossPerTrade = $authData['highest_loss_per_trade'] ?? 0;
-
-    // Revenue percentages
-    $revenuePercent = $summaries['revenue_percentage'] ?? 0;
-    $revenueProfitPercent = $summaries['revenue_profit_percentage'] ?? 0;
-    $revenueLossPercent = $summaries['revenue_loss_percentage'] ?? 0;
-
-    // Recent risk reward
-    $recentRiskReward = $summaries['recent_risk_reward'] ?? 0;
-
-    // Symbols traded
-    $symbols = $authData['all_traded_symbols'] ?? [];
-    $symbolsCount = $authData['symbols_traded'] ?? 0;
-
-    // Determine if user has any data
     $hasData = ($authTotalTrades > 0) || ($unauthTotalTrades > 0);
 ?>
 <!DOCTYPE html>
@@ -163,33 +211,34 @@
         <div class="analytics-header">
             <h1> Analytics</h1>
             <p>Trading performance and metrics</p>
-            
+
             <div class="user-info">
                 <span><strong><?= htmlspecialchars($fullName) ?></strong></span>
                 <span><?= $formatted_start_date ?> to <?= $formatted_end_date ?></span>
                 <span>Current Balance: <strong>$<?= number_format($currentBalance, 2) ?></strong></span>
             </div>
         </div>
-            <!-- Revenue percentages summary -->
-            <div class="section-card" style="background: rgba(16, 185, 129, 0.04);">
-                <div class="section-title">
-                    <span>Revenue Summary</span>
+
+        <!-- Revenue percentages summary -->
+        <div class="section-card" style="background: rgba(16, 185, 129, 0.04);">
+            <div class="section-title">
+                <span>Revenue Summary</span>
+            </div>
+            <div style="display:flex; justify-content:space-around; flex-wrap:wrap; gap:10px;">
+                <div style="text-align:center;">
+                    <div style="font-size:24px;font-weight:bold;color:var(--success);"><?= number_format($revenueProfitPercent, 2) ?>%</div>
+                    <div style="font-size:12px;color:var(--text-muted);">Profit Revenue</div>
                 </div>
-                <div style="display:flex; justify-content:space-around; flex-wrap:wrap; gap:10px;">
-                    <div style="text-align:center;">
-                        <div style="font-size:24px;font-weight:bold;color:var(--success);"><?= number_format($revenueProfitPercent, 2) ?>%</div>
-                        <div style="font-size:12px;color:var(--text-muted);">Profit Revenue</div>
-                    </div>
-                    <div style="text-align:center;">
-                        <div style="font-size:24px;font-weight:bold;color:var(--danger);"><?= number_format($revenueLossPercent, 2) ?>%</div>
-                        <div style="font-size:12px;color:var(--text-muted);">Loss Revenue</div>
-                    </div>
-                    <div style="text-align:center;">
-                        <div style="font-size:24px;font-weight:bold;color:var(--text);"><?= number_format($revenuePercent, 2) ?>%</div>
-                        <div style="font-size:12px;color:var(--text-muted);">Total Revenue %</div>
-                    </div>
+                <div style="text-align:center;">
+                    <div style="font-size:24px;font-weight:bold;color:var(--danger);"><?= number_format($revenueLossPercent, 2) ?>%</div>
+                    <div style="font-size:12px;color:var(--text-muted);">Loss Revenue</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:24px;font-weight:bold;color:var(--text);"><?= number_format($revenuePercent, 2) ?>%</div>
+                    <div style="font-size:12px;color:var(--text-muted);">Total Revenue %</div>
                 </div>
             </div>
+        </div>
 
         <?php if ($hasData): ?>
             <!-- Summary Stats -->
@@ -200,14 +249,14 @@
                         $<?= number_format($authTotalPnl, 2) ?>
                     </div>
                 </div>
-                <!-- Highest Loss per Trade Card -->
+                <!-- Highest Drawdown (replaces Highest Loss/Trade) -->
                 <div class="stat-card">
-                    <div class="stat-label">Highest Loss/Trade</div>
+                    <div class="stat-label">Highest Drawdown</div>
                     <div class="stat-value loss">
-                        -$<?= number_format($highestLossPerTrade, 2) ?>
+                        -$<?= number_format($highestDrawdown, 2) ?>
                     </div>
                 </div>
-                <!-- Sequential Losses Card -->
+                <!-- Sequential Losses -->
                 <div class="stat-card">
                     <div class="stat-label">Sequential Losses</div>
                     <div class="stat-value loss">
@@ -220,7 +269,7 @@
                         </div>
                     <?php endif; ?>
                 </div>
-                <!-- Sequential Days in Loss Card -->
+                <!-- Sequential Days in Loss -->
                 <div class="stat-card">
                     <div class="stat-label">Sequential Days in Loss</div>
                     <div class="stat-value loss">
@@ -232,6 +281,35 @@
                             Total Loss: -$<?= number_format($sequentialDaysTotal, 2) ?>
                         </div>
                     <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- Trades per Week (NEW) -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Lowest Trades/Week</div>
+                    <div class="stat-value neutral">
+                        <?= $lowestTradesPerWeek ?>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Average Trades/Week</div>
+                    <div class="stat-value neutral">
+                        <?= $averageTradesPerWeek ?>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Highest Trades/Week</div>
+                    <div class="stat-value neutral">
+                        <?= $highestTradesPerWeek ?>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Trades per Day</div>
+                    <div class="stat-value neutral">
+                        <?= $lowestTradesPerDay ?> / <?= $averageTradesPerDay ?> / <?= $highestTradesPerDay ?>
+                    </div>
+                    <div class="stat-sub">low / avg / high</div>
                 </div>
             </div>
 
@@ -287,7 +365,9 @@
                         <div class="trade-stat-box">
                             <div class="trade-stat-label">Trade Ratio</div>
                             <div class="trade-stat-value neutral">
-                                <?= $unauthProfitTrades + $unauthLossTrades > 0 ? round(($unauthProfitTrades / ($unauthProfitTrades + $unauthLossTrades)) * 100, 1) : 0 ?>%
+                                <?= ($unauthProfitTrades + $unauthLossTrades) > 0
+                                        ? round(($unauthProfitTrades / ($unauthProfitTrades + $unauthLossTrades)) * 100, 1)
+                                        : 0 ?>%
                             </div>
                             <div class="trade-stat-count">win rate</div>
                         </div>

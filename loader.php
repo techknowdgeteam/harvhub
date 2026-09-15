@@ -21,7 +21,7 @@
     // Map page to actual file
     $pageMap = [
         'mydashboard' => 'mydashboard.php',
-        'trades' => 'trades.php',
+        'trades' => 'revenue_target.php',
         'analytics' => 'useranalytics.php',
         'menu' => 'menu.php',
         'activity' => 'activity.php',

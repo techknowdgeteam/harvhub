@@ -19,20 +19,10 @@ if (!isset($_SESSION['user_email'])) {
     header("Location: index.php");
     exit;
 }
-// ==================== DEVELOPER CHECK ====================
-$devStmt = $pdo->prepare("SELECT * FROM developers WHERE email = ? LIMIT 1");
-$devStmt->execute([$email]);
-$developer = $devStmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$developer) {
-    header("Location: dev_app.php");
-    exit;
-}
-
-$brokerConnected = !empty($developer['broker']) && !empty($developer['server']) && !empty($developer['login']);
 $email = strtolower($_SESSION['user_email']);
 
-// ==================== FETCH USER DATA ====================
+// ==================== FETCH USER DATA (harvhub — for display) ====================
 $stmt = $pdo->prepare("SELECT * FROM harvhub WHERE email = ?");
 $stmt->execute([$email]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -42,13 +32,13 @@ if (!$user) {
     exit;
 }
 
-$userId = (int)$user['id'];
+$userId   = (int)$user['id'];
 $fullName = $user['fullname'] ?? 'User';
 
-$darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
+$darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
-// ==================== DEVELOPER CHECK + SIDEBAR FLAG ====================
+// ==================== DEVELOPER CHECK ====================
 $devStmt = $pdo->prepare("SELECT * FROM developers WHERE email = ? LIMIT 1");
 $devStmt->execute([$email]);
 $developer = $devStmt->fetch(PDO::FETCH_ASSOC);
@@ -633,7 +623,7 @@ function showSpinner() {
                 setTimeout(function() {
                     overlay.classList.remove("active");
                 }, 300);
-            }
+            }z
         });
         document.addEventListener("DOMContentLoaded", function() {
             var overlay = document.getElementById("spinnerOverlay");

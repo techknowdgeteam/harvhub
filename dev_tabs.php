@@ -53,6 +53,12 @@
             </a>
         <?php endif; ?>
 
+        <!-- Accountmanagement -->
+        <a href="dev_accountmanagement.php" class="sidebar-menu-item <?= basename($_SERVER['PHP_SELF']) === 'app.php' ? 'active' : '' ?>">
+            <span class="nav-icon"><i class="fa-solid fa-wrench"></i></span>
+            <span class="nav-label">Accountmanagement</span>
+        </a>
+
         <!-- Invest -->
         <a href="app.php" class="sidebar-menu-item <?= basename($_SERVER['PHP_SELF']) === 'app.php' ? 'active' : '' ?>">
             <span class="nav-icon"><i class="fa-solid fa-hand-holding-dollar"></i></span>

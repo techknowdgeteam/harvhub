@@ -2857,6 +2857,20 @@
         color: var(--accent);
         animation: devPulse 2s ease-in-out infinite;
     }
+    /* Give the broker symbols select room to breathe */
+    .dd-symbol-select-group {
+        margin-bottom: 24px;
+        padding-bottom: 8px;
+    }
+
+    .dd-symbol-select-group .dd-select {
+        margin-bottom: 6px;
+    }
+
+    /* Ensure the card doesn't clip content */
+    .dd-card {
+        overflow: visible;
+    }
 
     @keyframes devPulse {
         0%, 100% { transform: scale(1); }
@@ -2957,11 +2971,158 @@
             font-size: 0.9rem;
         }
     }
+    /* ============================================================
+    CUSTOM CONFIRM DIALOG — DD
+    ============================================================ */
+    .dd-confirm-overlay {
+        position: fixed;
+        inset: 0;
+        background: var(--modal-overlay, rgba(0,0,0,0.5));
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        animation: ddConfirmFadeIn 0.22s ease;
+    }
+
+    @keyframes ddConfirmFadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+    }
+
+    @keyframes ddConfirmSlideUp {
+        from { opacity: 0; transform: translateY(20px) scale(0.96); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .dd-confirm-card {
+        background: var(--modal-bg, #fff);
+        color: var(--modal-text, #222);
+        border: 1px solid var(--glass-border, #e0e0e0);
+        border-radius: var(--radius, 14px);
+        box-shadow: var(--shadow-lg, 0 20px 50px rgba(0,0,0,0.25));
+        max-width: 420px;
+        width: 100%;
+        padding: 28px 24px 22px;
+        text-align: center;
+        animation: ddConfirmSlideUp 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .dd-confirm-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #e74c3c, #ff7675, #e74c3c);
+        background-size: 200% 100%;
+        animation: ddConfirmGradient 3s ease infinite;
+    }
+
+    @keyframes ddConfirmGradient {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+
+    .dd-confirm-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        background: rgba(231, 76, 60, 0.12);
+        color: #e74c3c;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 16px;
+        font-size: 1.75rem;
+    }
+
+    .dd-confirm-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin: 0 0 10px;
+        color: var(--text, #222);
+        letter-spacing: -0.2px;
+    }
+
+    .dd-confirm-text {
+        font-size: 0.9rem;
+        line-height: 1.6;
+        color: var(--text-secondary, #555);
+        margin: 0 0 22px;
+    }
+
+    .dd-confirm-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+    }
+
+    .dd-confirm-actions button {
+        flex: 1;
+        padding: 12px 18px;
+        border-radius: 10px;
+        border: none;
+        font-size: 0.9rem;
+        font-weight: 700;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.12s ease, opacity 0.2s ease;
+    }
+
+    .dd-confirm-cancel {
+        background: var(--bg, #f0f0f0);
+        color: var(--text, #222);
+        border: 1px solid var(--border-color, #e0e0e0);
+    }
+
+    .dd-confirm-cancel:hover {
+        background: var(--border-color, #e0e0e0);
+    }
+
+    .dd-confirm-danger {
+        background: #e74c3c;
+        color: #fff;
+    }
+
+    .dd-confirm-danger:hover {
+        background: #c0392b;
+    }
+
+    .dd-confirm-actions button:active {
+        transform: scale(0.97);
+    }
+
+    body.dark-mode .dd-confirm-cancel {
+        background: var(--bg-card, #1e1e2a);
+        color: var(--text, #eee);
+        border-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-confirm-cancel:hover {
+        background: var(--border-color, #333);
+    }
+
+    @media (max-width: 480px) {
+        .dd-confirm-card { padding: 24px 18px 20px; }
+        .dd-confirm-icon { width: 54px; height: 54px; font-size: 1.5rem; }
+        .dd-confirm-title { font-size: 1.1rem; }
+        .dd-confirm-text { font-size: 0.85rem; }
+        .dd-confirm-actions button { padding: 11px 14px; font-size: 0.85rem; }
+    }
 </style>
 
 <style>
     /* ============================================================
        DEVELOPER DASHBOARD — dd-*
+       All developer-dashboard-only styling lives here.
        Uses root CSS vars from style.php / dev_style.php
        ============================================================ */
 
@@ -2981,7 +3142,9 @@
         }
     }
 
-    /* Header */
+    /* ============================================================
+       HEADER
+       ============================================================ */
     .dd-page-header {
         text-align: center;
         margin-bottom: var(--spacing-lg, 28px);
@@ -3001,7 +3164,9 @@
         margin-top: var(--spacing-xs, 4px);
     }
 
-    /* Notices */
+    /* ============================================================
+       NOTICES
+       ============================================================ */
     .dd-notice {
         padding: 12px 16px;
         border-radius: var(--radius-sm, 8px);
@@ -3022,13 +3187,16 @@
     }
     .dd-notice-warning strong { color: #f39c12; }
 
-    /* Card */
+    /* ============================================================
+       CARD
+       ============================================================ */
     .dd-card {
         background: var(--bg, #f5f5f5);
         border: 1px solid var(--border-color, #e0e0e0);
         border-radius: var(--radius-sm, 8px);
         padding: var(--spacing-md, 20px);
         margin-bottom: var(--spacing-md, 20px);
+        overflow: visible;
     }
 
     .dd-card-head {
@@ -3053,7 +3221,9 @@
         margin: 0 0 var(--spacing-sm, 12px) 0;
     }
 
-    /* Form */
+    /* ============================================================
+       FORM ELEMENTS
+       ============================================================ */
     .dd-form-group {
         display: flex;
         flex-direction: column;
@@ -3089,58 +3259,28 @@
         border-color: var(--accent, #2e8b57);
     }
 
-    /* Search */
-    .dd-search-wrap {
-        position: relative;
-        margin-bottom: var(--spacing-sm, 12px);
-    }
-
-    .dd-suggestions {
-        display: none;
-        position: absolute;
-        top: calc(100% + 4px);
-        left: 0;
-        right: 0;
-        background: var(--bg-card, #fff);
-        border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: var(--radius-sm, 8px);
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-        max-height: 260px;
-        overflow-y: auto;
-        z-index: 20;
-    }
-    .dd-suggestions.active { display: block; }
-
-    .dd-suggestion-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px 14px;
-        cursor: pointer;
-        font-size: 0.9rem;
-        color: var(--text, #222);
-        transition: background 0.15s ease;
-    }
-    .dd-suggestion-item:hover { background: rgba(46, 139, 87, 0.08); }
-    .dd-suggestion-item.is-selected { opacity: 0.7; }
-    .dd-suggestion-tag {
-        font-size: 10px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
-        background: var(--accent, #2e8b57);
-        color: #fff;
-        padding: 2px 8px;
-        border-radius: 20px;
-    }
-    .dd-suggestion-empty {
-        padding: 12px 14px;
-        font-size: 0.85rem;
+    .dd-field-hint {
+        font-size: 0.72rem;
         color: var(--text-muted, #888);
-        text-align: center;
+        margin-top: 4px;
     }
 
-    /* Selected header */
+    .dd-link-btn {
+        background: transparent;
+        border: none;
+        color: var(--accent, #2e8b57);
+        font-family: inherit;
+        font-size: 0.78rem;
+        font-weight: 700;
+        cursor: pointer;
+        padding: 0;
+        text-decoration: underline;
+    }
+    .dd-link-btn:hover { opacity: 0.8; }
+
+    /* ============================================================
+       SELECTED SYMBOLS HEADER + CHIPS
+       ============================================================ */
     .dd-selected-header {
         display: flex;
         justify-content: space-between;
@@ -3150,7 +3290,7 @@
         letter-spacing: 0.5px;
         color: var(--text-muted, #888);
         font-weight: 700;
-        margin: var(--spacing-sm, 12px) 0 8px 0;
+        margin: var(--spacing-md, 16px) 0 8px 0;
     }
 
     .dd-count-badge {
@@ -3164,13 +3304,28 @@
         text-align: center;
     }
 
-    /* Chips */
     .dd-selected-list {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
         min-height: 44px;
         margin-bottom: var(--spacing-md, 16px);
+    }
+
+    /* Scroll container for selected symbols — max height with scroll */
+    .dd-selected-list-scroll {
+        max-height: 220px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 6px 4px 6px 0;
+        align-content: flex-start;
+    }
+
+    .dd-selected-list-scroll::-webkit-scrollbar { width: 6px; }
+    .dd-selected-list-scroll::-webkit-scrollbar-track { background: transparent; }
+    .dd-selected-list-scroll::-webkit-scrollbar-thumb {
+        background: var(--border-color, #ccc);
+        border-radius: 10px;
     }
 
     .dd-chip {
@@ -3200,7 +3355,9 @@
     }
     .dd-chip-remove:hover { opacity: 1; }
 
-    /* Empty state */
+    /* ============================================================
+       EMPTY STATE
+       ============================================================ */
     .dd-empty {
         display: flex;
         flex-direction: column;
@@ -3218,7 +3375,9 @@
     }
     .dd-empty p { font-size: 0.9rem; margin: 0; }
 
-    /* Buttons */
+    /* ============================================================
+       BUTTONS
+       ============================================================ */
     .dd-btn-primary,
     .dd-btn-secondary,
     .dd-btn-ghost,
@@ -3270,7 +3429,9 @@
     }
     .dd-btn-switch:hover { background: var(--accent-hover, #3cb371); }
 
-    /* Programmes */
+    /* ============================================================
+       PROGRAMMES
+       ============================================================ */
     .dd-programmes-list {
         display: flex;
         flex-direction: column;
@@ -3298,7 +3459,34 @@
         word-break: break-word;
     }
 
-    /* Modal */
+    /* Delete button on programmes */
+    .dd-programme-item .dd-programme-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .dd-btn-delete {
+        flex-shrink: 0;
+        background: #e74c3c;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.15s ease;
+    }
+    .dd-btn-delete:hover { background: #c0392b; }
+    .dd-btn-delete:active { transform: scale(0.97); }
+    .dd-btn-delete:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* ============================================================
+       MODALS (shared shell)
+       ============================================================ */
     .dd-modal {
         display: none;
         position: fixed;
@@ -3360,43 +3548,102 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+        margin-top: var(--spacing-md, 20px);
     }
 
-    /* Dark mode overrides */
-    body.dark-mode .dd-card,
-    body.dark-mode .dd-programme-item {
-        background: var(--bg, #2a2a3a);
-        border-color: var(--border-color, #333);
+    /* ============================================================
+       SYMBOLS PICKER MODAL
+       ============================================================ */
+    .dd-symbols-modal-content {
+        max-width: 540px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
     }
 
-    body.dark-mode .dd-input,
-    body.dark-mode .dd-select,
-    body.dark-mode .dd-suggestions,
-    body.dark-mode .dd-modal-content {
-        background: var(--bg-card, #1e1e2a);
-        border-color: var(--border-color, #333);
-        color: var(--text, #eee);
+    .dd-symbols-modal-search-wrap {
+        margin-bottom: 10px;
+        flex-shrink: 0;
     }
 
-    body.dark-mode .dd-btn-ghost {
-        background: var(--bg, #2a2a3a);
-        border-color: var(--border-color, #333);
-        color: var(--text, #eee);
+    .dd-symbols-modal-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.78rem;
+        color: var(--text-muted, #888);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        margin-bottom: 8px;
+        flex-shrink: 0;
     }
 
-    /* Responsive */
-    @media (max-width: 480px) {
-        .dd-page-wrapper {
-            padding: var(--spacing-md, 20px) var(--spacing-sm, 12px);
-        }
-        .dd-page-header h1 { font-size: 1.4rem; }
-        .dd-card-head { flex-direction: column; align-items: stretch; }
-        .dd-btn-secondary { width: 100%; text-align: center; }
-        .dd-programme-item {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .dd-btn-switch { width: 100%; text-align: center; }
+    .dd-symbols-modal-list {
+        flex: 1;
+        min-height: 180px;
+        max-height: 55vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        background: var(--bg, #f5f5f5);
+        padding: 6px 4px 6px 0;
+        margin-bottom: 4px;
+    }
+
+    .dd-symbols-modal-list::-webkit-scrollbar { width: 6px; }
+    .dd-symbols-modal-list::-webkit-scrollbar-track { background: transparent; }
+    .dd-symbols-modal-list::-webkit-scrollbar-thumb {
+        background: var(--border-color, #ccc);
+        border-radius: 10px;
+    }
+
+    .dd-symbols-modal-empty {
+        text-align: center;
+        padding: 30px 16px;
+        font-size: 0.85rem;
+        color: var(--text-muted, #888);
+        font-style: italic;
+    }
+
+    /* Symbol row (checkbox + label) */
+    .dd-symbol-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
+        border-radius: var(--radius-sm, 8px);
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.15s ease;
+        -webkit-tap-highlight-color: transparent;
+        margin: 0 4px 4px 4px;
+    }
+
+    .dd-symbol-row:hover {
+        background: rgba(46, 139, 87, 0.06);
+    }
+
+    .dd-symbol-row.is-checked {
+        background: rgba(46, 139, 87, 0.1);
+    }
+
+    .dd-symbol-row input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        accent-color: var(--accent, #2e8b57);
+        cursor: pointer;
+        flex-shrink: 0;
+        margin: 0;
+    }
+
+    .dd-symbol-row-name {
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--text, #222);
+        word-break: break-word;
+        flex: 1;
     }
 
     /* ============================================================
@@ -3673,12 +3920,6 @@
         margin-bottom: 0;
     }
 
-    .dd-field-hint {
-        font-size: 0.72rem;
-        color: var(--text-muted, #888);
-        margin-top: 4px;
-    }
-
     .dd-input-warn {
         border-color: #e74c3c !important;
         box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.15);
@@ -3696,7 +3937,29 @@
         line-height: 1.5;
     }
 
-    /* Dark mode */
+    /* ============================================================
+       DARK MODE OVERRIDES
+       ============================================================ */
+    body.dark-mode .dd-card,
+    body.dark-mode .dd-programme-item {
+        background: var(--bg, #2a2a3a);
+        border-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-input,
+    body.dark-mode .dd-select,
+    body.dark-mode .dd-modal-content {
+        background: var(--bg-card, #1e1e2a);
+        border-color: var(--border-color, #333);
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-btn-ghost {
+        background: var(--bg, #2a2a3a);
+        border-color: var(--border-color, #333);
+        color: var(--text, #eee);
+    }
+
     body.dark-mode .dd-subtabs {
         background: var(--bg, #2a2a3a);
         border-color: var(--border-color, #333);
@@ -3723,7 +3986,8 @@
     body.dark-mode .dd-visibility-name,
     body.dark-mode .dd-published-name,
     body.dark-mode .dd-investor-name,
-    body.dark-mode .dd-investor-stat-value {
+    body.dark-mode .dd-investor-stat-value,
+    body.dark-mode .dd-symbol-row-name {
         color: var(--text, #eee);
     }
 
@@ -3735,8 +3999,35 @@
         color: var(--text, #eee);
     }
 
-    /* Responsive */
+    body.dark-mode .dd-symbols-modal-list {
+        background: var(--bg, #2a2a3a);
+        border-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-symbol-row:hover {
+        background: rgba(46, 139, 87, 0.12);
+    }
+
+    body.dark-mode .dd-symbol-row.is-checked {
+        background: rgba(46, 139, 87, 0.18);
+    }
+
+    /* ============================================================
+       RESPONSIVE
+       ============================================================ */
     @media (max-width: 480px) {
+        .dd-page-wrapper {
+            padding: var(--spacing-md, 20px) var(--spacing-sm, 12px);
+        }
+        .dd-page-header h1 { font-size: 1.4rem; }
+        .dd-card-head { flex-direction: column; align-items: stretch; }
+        .dd-btn-secondary { width: 100%; text-align: center; }
+        .dd-programme-item {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .dd-btn-switch { width: 100%; text-align: center; }
+
         .dd-subtab {
             font-size: 0.78rem;
             padding: 8px 10px;
@@ -3778,6 +4069,20 @@
         .dd-investor-stat {
             text-align: left;
         }
+
+        .dd-selected-list-scroll {
+            max-height: 180px;
+        }
+
+        .dd-symbols-modal-content {
+            max-width: 100%;
+            padding: var(--spacing-md, 20px);
+        }
+
+        .dd-symbols-modal-list {
+            max-height: 50vh;
+        }
     }
 </style>
+
 
