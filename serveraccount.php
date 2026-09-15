@@ -1240,58 +1240,136 @@
             exit;
         }
 
-        // 5aa3: Get User Daily Balance Log
+        // ============================================================
+        // 5aa3: Get User Daily Balance Log + Daily Target (TABLE-BASED)
+        //
+        // Reads:
+        //   balance_log           → { 'dd-mm-yyyy': {...} }
+        //   daily_target_revenue  → { week_X: { Day: {...} } }
+        //   harvhub               → basic user fields
+        // ============================================================
         if ($action === 'get_user_daily_log') {
-            $user_id = $_POST['user_id'] ?? '';
+            $user_id      = (int)($_POST['user_id'] ?? 0);
             $source_table = $_POST['source_table'] ?? '';
-            
-            if (empty($user_id) || $source_table !== $harvhubTable) {
+
+            if ($user_id <= 0 || $source_table !== $harvhubTable) {
                 echo json_encode(['error' => 'Invalid user selection']);
                 exit;
             }
-            
+
+            // Basic user info
+            $userData = [];
             try {
-                $stmt = $pdo->prepare("SELECT daily_balance_log, daily_target_met, fullname, email, broker_balance, profitandloss FROM {$source_table} WHERE id = ?");
+                $stmt = $pdo->prepare("
+                    SELECT id, fullname, email, broker_balance, profitandloss
+                    FROM {$source_table}
+                    WHERE id = ?
+                ");
                 $stmt->execute([$user_id]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                $log = [];
-                $dailyTarget = [];
-                $userData = [];
-                
-                if ($result) {
-                    if (!empty($result['daily_balance_log'])) {
-                        $log = json_decode($result['daily_balance_log'], true);
-                        if (json_last_error() !== JSON_ERROR_NONE) {
-                            $log = [];
-                        }
-                    }
-                    if (!empty($result['daily_target_met'])) {
-                        $dailyTarget = $result['daily_target_met'];
-                        $parsed = json_decode($dailyTarget, true);
-                        if (json_last_error() === JSON_ERROR_NONE) {
-                            $dailyTarget = $parsed;
-                        }
-                    }
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($row) {
                     $userData = [
-                        'id' => $user_id,
-                        'fullname' => $result['fullname'] ?? 'N/A',
-                        'email' => $result['email'] ?? 'N/A',
-                        'broker_balance' => $result['broker_balance'] ?? 0,
-                        'profitandloss' => $result['profitandloss'] ?? 0,
-                        'source' => $source_table
+                        'id'             => $row['id'],
+                        'fullname'       => $row['fullname'] ?? 'N/A',
+                        'email'          => $row['email'] ?? 'N/A',
+                        'broker_balance' => $row['broker_balance'] ?? 0,
+                        'profitandloss'  => $row['profitandloss'] ?? 0,
+                        'source'         => $source_table,
                     ];
                 }
-                
-                echo json_encode([
-                    'success' => true, 
-                    'log' => $log,
-                    'daily_target' => $dailyTarget,
-                    'user' => $userData
-                ]);
             } catch (Exception $e) {
-                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+                $userData = [];
             }
+
+            // -------- Balance log (per-day) --------
+            // Key by dd-mm-yyyy so the JS side can reuse the existing parser.
+            $balanceLog = [];
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT date, day_starting_balance, day_authorized_trades_pnl,
+                        day_unauthorized_trades_pnl, day_unauthorized_withdrawals,
+                        day_closing_balance, unusual_activity,
+                        authorized_trades_count, unauthorized_trades_count
+                    FROM balance_log
+                    WHERE userid = ?
+                    ORDER BY id ASC
+                ");
+                $stmt->execute([$user_id]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($rows as $r) {
+                    $raw = trim((string)$r['date']);
+                    if ($raw === '') continue;
+
+                    // Try ISO first (Y-m-d), then d-m-Y
+                    $dt = DateTime::createFromFormat('Y-m-d', $raw);
+                    if (!$dt || $dt->format('Y-m-d') !== $raw) {
+                        $dt = DateTime::createFromFormat('d-m-Y', $raw);
+                    }
+                    if (!$dt) {
+                        $ts = strtotime($raw);
+                        if ($ts) $dt = new DateTime(date('Y-m-d', $ts));
+                    }
+                    if (!$dt) continue;
+
+                    $key = $dt->format('d-m-Y');
+
+                    $balanceLog[$key] = [
+                        'date'                          => $key,
+                        'day_starting_balance'          => (float)($r['day_starting_balance'] ?? 0),
+                        'day_authorized_trades_pnl'     => (float)($r['day_authorized_trades_pnl'] ?? 0),
+                        'day_unauthorized_trades_pnl'   => (float)($r['day_unauthorized_trades_pnl'] ?? 0),
+                        'day_unauthorized_withdrawals'  => (float)($r['day_unauthorized_withdrawals'] ?? 0),
+                        'day_closing_balance'           => (float)($r['day_closing_balance'] ?? 0),
+                        'unusual_activity'              => ((int)$r['unusual_activity'] === 1),
+                        'authorized_trades_count'       => (int)($r['authorized_trades_count'] ?? 0),
+                        'unauthorized_trades_count'     => (int)($r['unauthorized_trades_count'] ?? 0),
+                    ];
+                }
+            } catch (Exception $e) {
+                $balanceLog = [];
+            }
+
+            // -------- Daily target (nested: { week_X: { Day: {...} } }) --------
+            $dailyTarget = [];
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT week, day, date, daily_target, status,
+                        profit_allocated, remaining_needed
+                    FROM daily_target_revenue
+                    WHERE userid = ?
+                    ORDER BY
+                        CAST(REPLACE(week, 'week_', '') AS UNSIGNED) ASC,
+                        FIELD(day, 'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday') ASC
+                ");
+                $stmt->execute([$user_id]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($rows as $r) {
+                    $wk  = $r['week'];
+                    $day = $r['day'];
+                    if (!isset($dailyTarget[$wk])) $dailyTarget[$wk] = [];
+
+                    $dailyTarget[$wk][$day] = [
+                        'date'             => $r['date'],
+                        'daily_target'     => (float)($r['daily_target'] ?? 0),
+                        'status'           => $r['status'] ?? '',
+                        'profit_allocated' => (float)($r['profit_allocated'] ?? 0),
+                        'remaining_needed' => (float)($r['remaining_needed'] ?? 0),
+                        'is_listed'        => true,
+                    ];
+                }
+            } catch (Exception $e) {
+                $dailyTarget = [];
+            }
+
+            echo json_encode([
+                'success'      => true,
+                'log'          => $dailyTarget,     // retained key name for compatibility
+                'balance_log'  => $balanceLog,      // NEW: table-sourced daily balance log
+                'daily_target' => $dailyTarget,     // kept for backwards compat
+                'user'         => $userData,
+            ]);
             exit;
         }
 
@@ -2787,55 +2865,399 @@
             ]);
             exit;
         }
-        // 5z: Get User Analytics Data
+        // ============================================================
+        // 5z: Get User Analytics Data — NEW (table-based)
+        //
+        // Reads:
+        //   investors_analytics  (pre-aggregated row per userid)
+        //   authorized_trades    (raw trades → calendar, symbols, all trades, streaks)
+        //   unauthorized_trades  (same)
+        //
+        // Returns a structured JSON payload for analytics.php:
+        //   {
+        //     success: true,
+        //     start_date, end_date,
+        //     authorized:   { ...all summary fields + daily_trades_record + symbols + all_trades
+        //                     + highest_sequential_losses_trades + highest_sequential_days_in_loss_days },
+        //     unauthorized: { ...same shape... }
+        //   }
+        // ============================================================
         if ($action === 'get_user_analytics') {
-            $user_id = $_POST['user_id'] ?? '';
+            $user_id      = (int)($_POST['user_id'] ?? 0);
             $source_table = $_POST['source_table'] ?? '';
-            
-            if (!empty($user_id) && $source_table === $harvhubTable) {
-                try {
-                    // Debug log to see what's happening (optional, remove in production)
-                    error_log("Fetching analytics for user_id: $user_id, table: $source_table");
-                    
-                    // First, let's check what columns exist in the table
-                    $columns = $pdo->query("SHOW COLUMNS FROM {$source_table}")->fetchAll(PDO::FETCH_COLUMN);
-                    error_log("Available columns: " . implode(', ', $columns));
-                    
-                    // Check if analytics column exists (your column is named 'analytics' from the table structure)
-                    if (!in_array('analytics', $columns)) {
-                        // If not, check for 'analytics_history' as fallback
-                        if (in_array('analytics_history', $columns)) {
-                            $stmt = $pdo->prepare("SELECT analytics_history as analytics FROM {$source_table} WHERE id = ?");
-                        } else {
-                            echo json_encode(['success' => false, 'error' => 'Analytics column not found in table']);
-                            exit;
-                        }
-                    } else {
-                        $stmt = $pdo->prepare("SELECT analytics FROM {$source_table} WHERE id = ?");
-                    }
-                    
-                    $stmt->execute([$user_id]);
-                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    if ($result) {
-                        $analytics = $result['analytics'] ?? null;
-                        error_log("Raw analytics data length: " . strlen($analytics ?? 'null'));
-                        
-                        // Return the data as-is - don't try to parse it here
-                        echo json_encode(['success' => true, 'analytics' => $analytics]);
-                    } else {
-                        echo json_encode(['success' => false, 'error' => 'User not found']);
-                    }
-                } catch (Exception $e) {
-                    error_log("Error in get_user_analytics: " . $e->getMessage());
-                    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-                }
-            } else {
+
+            if ($user_id <= 0 || $source_table !== $harvhubTable) {
                 echo json_encode(['success' => false, 'error' => 'Invalid user selection']);
+                exit;
+            }
+
+            try {
+                // ----------------------------------------------------
+                // 1. Read the aggregated row from investors_analytics
+                // ----------------------------------------------------
+                $stmt = $pdo->prepare("
+                    SELECT *
+                    FROM investors_analytics
+                    WHERE userid = ?
+                    LIMIT 1
+                ");
+                $stmt->execute([$user_id]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                // Even if there is no row, we still return an empty structure so the UI shows defaults.
+                if (!$row) {
+                    $row = [];
+                }
+
+                // ----------------------------------------------------
+                // 2. Build the per-trade-type payloads
+                // ----------------------------------------------------
+                // Helper: given a raw-trades table, build a rich summary block.
+                $buildBlock = function($tableName) use ($pdo, $user_id, $row) {
+                    // ---- Pull all trades ordered by closed_time ----
+                    $tStmt = $pdo->prepare("
+                        SELECT id, userid, symbol, entry, stoploss, target, ticket, pnl, closed_time
+                        FROM {$tableName}
+                        WHERE userid = ?
+                        ORDER BY closed_time ASC, id ASC
+                    ");
+                    $tStmt->execute([$user_id]);
+                    $trades = $tStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                    // Normalize numeric fields
+                    foreach ($trades as &$t) {
+                        $t['pnl'] = (float)($t['pnl'] ?? 0);
+                    }
+                    unset($t);
+
+                    $totalTrades   = count($trades);
+                    $totalPnl      = 0.0;
+                    $profitTrades  = 0;
+                    $lossTrades    = 0;
+                    $profitAmount  = 0.0;
+                    $lossAmount    = 0.0;
+                    $highestLoss   = 0.0;
+
+                    // Per-day aggregation
+                    $dailyRecord = [];   // ['YYYY-MM-DD' => ['profit_and_loss'=>x,'trades_count'=>n,'trade_summary'=>[], 'all_trades'=>[]]]
+                    $perWeek     = [];   // ['YYYY-Www' => count]
+
+                    // Per-symbol aggregation
+                    $symbols     = [];
+
+                    // Sequential streaks
+                    $runningLossStreakCount = 0;
+                    $runningLossStreakSum   = 0.0;
+                    $bestLossStreakCount    = 0;
+                    $bestLossStreakSum      = 0.0;
+                    $bestLossStreakTrades   = [];
+
+                    $currentDayStreakDates  = [];
+                    $bestDayStreakDates     = [];
+                    $runningDayLossCount    = 0;
+                    $runningDayLossSum      = 0.0;
+                    $bestDayLossCount       = 0;
+                    $bestDayLossSum         = 0.0;
+
+                    foreach ($trades as $t) {
+                        $pnl    = $t['pnl'];
+                        $totalPnl += $pnl;
+
+                        if ($pnl > 0) {
+                            $profitTrades++;
+                            $profitAmount += $pnl;
+                            // Reset loss streak
+                            $runningLossStreakCount = 0;
+                            $runningLossStreakSum   = 0.0;
+                        } elseif ($pnl < 0) {
+                            $lossTrades++;
+                            $lossAmount += abs($pnl);
+                            if (abs($pnl) > $highestLoss) $highestLoss = abs($pnl);
+
+                            // Track sequential loss streak
+                            $runningLossStreakCount++;
+                            $runningLossStreakSum += abs($pnl);
+                            if ($runningLossStreakCount > $bestLossStreakCount) {
+                                $bestLossStreakCount  = $runningLossStreakCount;
+                                $bestLossStreakSum    = $runningLossStreakSum;
+                                // capture trades for that streak (last N trades)
+                                $bestLossStreakTrades = array_slice($trades, max(0, count($trades) - $runningLossStreakCount - 1));
+                            }
+                        }
+
+                        // ---- Symbols ----
+                        $sym = $t['symbol'] ?: 'UNKNOWN';
+                        if (!isset($symbols[$sym])) {
+                            $symbols[$sym] = [
+                                'symbol'       => $sym,
+                                'total_trades' => 0,
+                                'total_profit' => 0.0,
+                                'total_loss'   => 0.0,
+                            ];
+                        }
+                        $symbols[$sym]['total_trades']++;
+                        if ($pnl > 0) $symbols[$sym]['total_profit'] += $pnl;
+                        if ($pnl < 0) $symbols[$sym]['total_loss']   += abs($pnl);
+
+                        // ---- Daily ----
+                        $dateKey = $t['closed_time'] ? substr($t['closed_time'], 0, 10) : null;
+                        if ($dateKey) {
+                            if (!isset($dailyRecord[$dateKey])) {
+                                $dailyRecord[$dateKey] = [
+                                    'profit_and_loss' => 0.0,
+                                    'trades_count'    => 0,
+                                    'trade_summary'   => [],
+                                    'all_trades'      => [],
+                                ];
+                            }
+                            $dailyRecord[$dateKey]['profit_and_loss'] += $pnl;
+                            $dailyRecord[$dateKey]['trades_count']++;
+                            if (!isset($dailyRecord[$dateKey]['trade_summary'][$sym])) {
+                                $dailyRecord[$dateKey]['trade_summary'][$sym] = 0.0;
+                            }
+                            $dailyRecord[$dateKey]['trade_summary'][$sym] += $pnl;
+
+                            if (!isset($dailyRecord[$dateKey]['all_trades'][$sym])) {
+                                $dailyRecord[$dateKey]['all_trades'][$sym] = [];
+                            }
+                            $dailyRecord[$dateKey]['all_trades'][$sym][] = [
+                                'ticket'      => $t['ticket'],
+                                'symbol'      => $sym,
+                                'entry'       => $t['entry'],
+                                'stoploss'    => $t['stoploss'],
+                                'target'      => $t['target'],
+                                'pnl'         => $pnl,
+                                'closed_time' => $t['closed_time'],
+                            ];
+
+                            // ISO week key for weekly aggregation
+                            $ts   = strtotime($dateKey);
+                            $week = date('o-\WW', $ts);   // e.g. 2025-W03
+                            if (!isset($perWeek[$week])) $perWeek[$week] = 0;
+                            $perWeek[$week]++;
+                        }
+                    }
+
+                    // ---- Sequential days in loss ----
+                    ksort($dailyRecord);
+                    $prevWasLossDay = false;
+                    foreach ($dailyRecord as $date => $day) {
+                        if ($day['profit_and_loss'] < 0) {
+                            if (!$prevWasLossDay) {
+                                $runningDayLossCount = 0;
+                                $runningDayLossSum   = 0.0;
+                                $currentDayStreakDates = [];
+                            }
+                            $runningDayLossCount++;
+                            $runningDayLossSum += abs($day['profit_and_loss']);
+                            $currentDayStreakDates[] = $date;
+
+                            if ($runningDayLossCount > $bestDayLossCount) {
+                                $bestDayLossCount = $runningDayLossCount;
+                                $bestDayLossSum   = $runningDayLossSum;
+                                $bestDayStreakDates = $currentDayStreakDates;
+                            }
+                            $prevWasLossDay = true;
+                        } else {
+                            $prevWasLossDay = false;
+                        }
+                    }
+
+                    // Build the map of day => trades for the best day-streak modal
+                    $bestDayStreakDays = [];
+                    foreach ($bestDayStreakDates as $d) {
+                        $bestDayStreakDays[$d] = $dailyRecord[$d]['all_trades'] ?? [];
+                    }
+
+                    // Recompute best streak trades properly (walk forward)
+                    $bestLossStreakTrades = [];
+                    $runCount = 0; $runSum = 0.0; $runTrades = [];
+                    foreach ($trades as $t) {
+                        if (($t['pnl'] ?? 0) < 0) {
+                            $runCount++;
+                            $runSum += abs($t['pnl']);
+                            $runTrades[] = $t;
+                            if ($runCount > $bestLossStreakCount || ($runCount === $bestLossStreakCount && $runSum > $bestLossStreakSum)) {
+                                // If first time reaching this count in this loop, capture
+                                if (count($bestLossStreakTrades) < $runCount) {
+                                    $bestLossStreakTrades = $runTrades;
+                                }
+                            }
+                        } else {
+                            // finalize a streak before reset
+                            if ($runCount > $bestLossStreakCount ||
+                            ($runCount === $bestLossStreakCount && $runSum > $bestLossStreakSum)) {
+                                $bestLossStreakCount = $runCount;
+                                $bestLossStreakSum   = $runSum;
+                                $bestLossStreakTrades = $runTrades;
+                            }
+                            $runCount = 0; $runSum = 0.0; $runTrades = [];
+                        }
+                    }
+                    if ($runCount > $bestLossStreakCount ||
+                    ($runCount === $bestLossStreakCount && $runSum > $bestLossStreakSum)) {
+                        $bestLossStreakCount = $runCount;
+                        $bestLossStreakSum   = $runSum;
+                        $bestLossStreakTrades = $runTrades;
+                    }
+
+                    // ---- Weekly min/max/avg ----
+                    $weeklyCounts = array_values($perWeek);
+                    $lowestWeek  = $weeklyCounts ? min($weeklyCounts) : 0;
+                    $highestWeek = $weeklyCounts ? max($weeklyCounts) : 0;
+                    $avgWeek     = $weeklyCounts ? (int)round(array_sum($weeklyCounts) / count($weeklyCounts)) : 0;
+
+                    // ---- Daily min/max/avg ----
+                    $dailyCounts = array_map(fn($d) => $d['trades_count'], array_values($dailyRecord));
+                    $lowestDay  = $dailyCounts ? min($dailyCounts) : 0;
+                    $highestDay = $dailyCounts ? max($dailyCounts) : 0;
+                    $avgDay     = $dailyCounts ? (int)round(array_sum($dailyCounts) / count($dailyCounts)) : 0;
+
+                    // ---- Revenue % ----
+                    $revenuePercentage       = 0.0;
+                    $revenueProfitPercentage = 0.0;
+                    $revenueLossPercentage   = 0.0;
+                    if ($profitAmount + $lossAmount > 0) {
+                        $revenueProfitPercentage = round(($profitAmount / ($profitAmount + $lossAmount)) * 100, 2);
+                        $revenueLossPercentage   = round(($lossAmount   / ($profitAmount + $lossAmount)) * 100, 2);
+                    }
+                    if ($profitAmount > 0) {
+                        $revenuePercentage = round((($profitAmount - $lossAmount) / $profitAmount) * 100, 2);
+                    }
+
+                    return [
+                        // Totals
+                        'total_trades'    => $totalTrades,
+                        'total_pnl'       => $totalPnl,
+                        'profit_trades'   => $profitTrades,
+                        'loss_trades'     => $lossTrades,
+                        'profit_amount'   => $profitAmount,
+                        'loss_amount'     => $lossAmount,
+
+                        // Daily / weekly trade density
+                        'lowest_trades_per_day'    => $lowestDay,
+                        'highest_trades_per_day'   => $highestDay,
+                        'average_trades_per_day'   => $avgDay,
+                        'lowest_trades_per_week'   => $lowestWeek,
+                        'highest_trades_per_week'  => $highestWeek,
+                        'average_trades_per_week'  => $avgWeek,
+
+                        // Risk metrics
+                        'highest_loss_per_trade'   => $highestLoss,
+                        'highest_drawdown'         => 0,  // computed from row below
+                        'symbols_traded'           => count($symbols),
+                        'closed_deals_with_sl_tp'  => 0,
+                        'closed_deals_without_sl_tp' => 0,
+
+                        // Streaks
+                        'consecutive_losses_count'   => $bestLossStreakCount,
+                        'total_loss_pnl'             => $bestLossStreakSum,
+                        'highest_sequential_losses_trades' => array_map(function($t){
+                            return [
+                                'ticket'      => $t['ticket'],
+                                'symbol'      => $t['symbol'],
+                                'entry'       => $t['entry'],
+                                'stoploss'    => $t['stoploss'],
+                                'target'      => $t['target'],
+                                'pnl'         => (float)$t['pnl'],
+                                'closed_time' => $t['closed_time'],
+                            ];
+                        }, $bestLossStreakTrades),
+
+                        'consecutive_days_in_loss_count' => $bestDayLossCount,
+                        'consecutive_days_in_loss_count_total_loss_pnl' => $bestDayLossSum,
+                        'highest_sequential_days_in_loss_days' => $bestDayStreakDays,
+
+                        // Revenue
+                        'revenue_percentage'         => $revenuePercentage,
+                        'revenue_profit_percentage'  => $revenueProfitPercentage,
+                        'revenue_loss_percentage'    => $revenueLossPercentage,
+
+                        // Calendar / tables
+                        'daily_trades_record' => $dailyRecord,
+                        'symbols'             => $symbols,
+                        'all_trades'          => array_map(function($t){
+                            return [
+                                'ticket'      => $t['ticket'],
+                                'symbol'      => $t['symbol'],
+                                'entry'       => $t['entry'],
+                                'stoploss'    => $t['stoploss'],
+                                'target'      => $t['target'],
+                                'pnl'         => (float)$t['pnl'],
+                                'closed_time' => $t['closed_time'],
+                            ];
+                        }, $trades),
+                    ];
+                };
+
+                $authorizedBlock   = $buildBlock('authorized_trades');
+                $unauthorizedBlock = $buildBlock('unauthorized_trades');
+
+                // ----------------------------------------------------
+                // 3. Merge in the pre-aggregated investors_analytics row
+                //    (this is the authoritative source for the summary cards)
+                // ----------------------------------------------------
+                $map = [
+                    'total_trades'                   => 'total_trades',
+                    'total_pnl'                      => 'total_pnl',
+                    'profit_trades'                  => 'profit_trades',
+                    'loss_trades'                    => 'loss_trades',
+                    'profit_amount'                  => 'profit_amount',
+                    'loss_amount'                    => 'loss_amount',
+                    'lowest_trades_per_day'          => 'lowest_trades_per_day',
+                    'highest_trades_per_day'         => 'highest_trades_per_day',
+                    'average_trades_per_day'         => 'average_trades_per_day',
+                    'lowest_trades_per_week'         => 'lowest_trades_per_week',
+                    'highest_trades_per_week'        => 'highest_trades_per_week',
+                    'average_trades_per_week'        => 'average_trades_per_week',
+                    'highest_loss_per_trade'         => 'highest_loss_per_trade',
+                    'highest_drawdown'               => 'highest_drawdown',
+                    'symbols_traded'                 => 'symbols_traded',
+                    'closed_deals_with_sl_tp'        => 'closed_deals_with_sl_tp',
+                    'closed_deals_without_sl_tp'     => 'closed_deals_without_sl_tp',
+                    'consecutive_losses_count'       => 'consecutive_losses_count',
+                    'total_loss_pnl'                 => 'total_loss_pnl',
+                    'consecutive_days_in_loss_count' => 'consecutive_days_in_loss_count',
+                    'consecutive_days_in_loss_count_total_loss_pnl' => 'consecutive_days_in_loss_count_total_loss_pnl',
+                    'revenue_percentage'             => 'revenue_percentage',
+                    'revenue_profit_percentage'      => 'revenue_profit_percentage',
+                    'revenue_loss_percentage'        => 'revenue_loss_percentage',
+                ];
+
+                // investors_analytics holds one row per user; it doesn't distinguish auth/unauth.
+                // So we apply the row values to BOTH blocks only where the row has a value.
+                $applyRow = function(&$block, $row, $map) {
+                    foreach ($map as $jsonKey => $col) {
+                        if (array_key_exists($col, $row) && $row[$col] !== null && $row[$col] !== '') {
+                            $block[$jsonKey] = (strpos($col, 'percentage') !== false)
+                                ? (float)$row[$col]
+                                : (is_numeric($row[$col]) ? (float)$row[$col] : $row[$col]);
+                        }
+                    }
+                };
+                $applyRow($authorizedBlock,   $row, $map);
+                $applyRow($unauthorizedBlock, $row, $map);
+
+                // ----------------------------------------------------
+                // 4. Assemble payload
+                // ----------------------------------------------------
+                $payload = [
+                    'success'    => true,
+                    'user_id'    => $user_id,
+                    'start_date' => $row['start_date'] ?? null,
+                    'end_date'   => $row['end_date']   ?? null,
+                    'last_updated' => $row['last_updated'] ?? null,
+                    'authorized'   => $authorizedBlock,
+                    'unauthorized' => $unauthorizedBlock,
+                ];
+
+                echo json_encode($payload);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
             exit;
         }
-        
+                
         // Add this AJAX endpoint to get investor details including revenue history (add to SECTION 5)
         if ($action === 'get_investor_details') {
             $user_id = $_POST['user_id'] ?? '';

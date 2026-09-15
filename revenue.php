@@ -4,7 +4,7 @@
 // UPDATED: Uses revenue_history table instead of column
 // UPDATED: Understands contract-cancelled-* combined statuses
 // UPDATED: Fetches programme_investors for developer/investor percentages and contract duration
-// UPDATED: New columns - Programme Developer, Dev%, Dev Amount, Inv%, Inv Amount, Contract Duration
+// UPDATED: Daily Target + Balance Log now read from `daily_target_revenue` and `balance_log` tables
 ?>
 
 <div class="revenue-container" id="revenue-container">
@@ -39,7 +39,6 @@
     <!-- TAB: ACTIVE                                  -->
     <!-- ============================================ -->
     <div id="tab-active" class="tab-content active">
-        <!-- Active Sub Tabs -->
         <div class="revenue-tabs-wrapper sub-tabs-wrapper">
             <div class="revenue-tabs sub-tabs" id="active-sub-tabs">
                 <button class="tab-btn sub-tab-btn active" data-subtab="all" onclick="Revenue.switchActiveSubTab('all')">
@@ -69,7 +68,6 @@
             </div>
         </div>
 
-        <!-- Unusual Activity Sub-Sub Tabs (shown only when unusual tab is active) -->
         <div class="revenue-tabs-wrapper sub-sub-tabs-wrapper" id="unusual-sub-sub-tabs" style="display:none;">
             <div class="revenue-tabs sub-tabs" id="unusual-sub-tabs">
                 <button class="tab-btn sub-tab-btn active" data-unusual-subtab="all" onclick="Revenue.switchUnusualSubTab('all')">
@@ -87,7 +85,6 @@
             </div>
         </div>
 
-        <!-- Summary Cards for Active Tab -->
         <div class="summary-cubes" id="active-summary-cubes">
             <div class="summary-cube">
                 <div class="cube-value" id="active-total-investment">$0.00</div>
@@ -115,7 +112,6 @@
             </div>
         </div>
 
-        <!-- Search Bar - Dummy + Real Input -->
         <div class="search-bar-wrapper">
             <div class="search-bar search-bar-dummy" id="active-search-dummy" onclick="Revenue.activateSearch('active')">
                 <span class="search-icon">Q</span>
@@ -128,7 +124,6 @@
             </div>
         </div>
 
-        <!-- Active Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="active-users-table">
@@ -161,7 +156,6 @@
     <!-- TAB: COMPLETED                               -->
     <!-- ============================================ -->
     <div id="tab-completed" class="tab-content">
-        <!-- Completed Sub Tabs -->
         <div class="revenue-tabs-wrapper sub-tabs-wrapper">
             <div class="revenue-tabs sub-tabs" id="completed-sub-tabs">
                 <button class="tab-btn sub-tab-btn active" data-subtab="inactive-above" onclick="Revenue.switchCompletedSubTab('inactive-above')">
@@ -195,7 +189,6 @@
             </div>
         </div>
 
-        <!-- Search Bar - Dummy + Real Input -->
         <div class="search-bar-wrapper">
             <div class="search-bar search-bar-dummy" id="completed-search-dummy" onclick="Revenue.activateSearch('completed')">
                 <span class="search-icon">Q</span>
@@ -208,7 +201,6 @@
             </div>
         </div>
 
-        <!-- Completed Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="completed-users-table">
@@ -240,7 +232,6 @@
     <!-- TAB: INACTIVE                                -->
     <!-- ============================================ -->
     <div id="tab-inactive" class="tab-content">
-        <!-- Inactive Sub Tabs -->
         <div class="revenue-tabs-wrapper sub-tabs-wrapper">
             <div class="revenue-tabs sub-tabs" id="inactive-sub-tabs">
                 <button class="tab-btn sub-tab-btn active" data-subtab="all" onclick="Revenue.switchInactiveSubTab('all')">
@@ -262,7 +253,6 @@
             </div>
         </div>
 
-        <!-- Summary Cards for Inactive Tab -->
         <div class="summary-cubes" id="inactive-summary-cubes">
             <div class="summary-cube">
                 <div class="cube-value" id="inactive-total-investment">$0.00</div>
@@ -282,7 +272,6 @@
             </div>
         </div>
 
-        <!-- Search Bar - Dummy + Real Input -->
         <div class="search-bar-wrapper">
             <div class="search-bar search-bar-dummy" id="inactive-search-dummy" onclick="Revenue.activateSearch('inactive')">
                 <span class="search-icon">Q</span>
@@ -295,7 +284,6 @@
             </div>
         </div>
 
-        <!-- Inactive Users Table - UPDATED COLUMNS -->
         <div class="users-table-container">
             <div class="table-wrapper">
                 <table class="revenue-table" id="inactive-users-table">
@@ -323,7 +311,6 @@
     <!-- TAB: REVENUE HISTORY                         -->
     <!-- ============================================ -->
     <div id="tab-revenue-history" class="tab-content">
-        <!-- Global Summary Cards for Revenue History -->
         <div class="summary-cubes" id="revenue-history-global-cubes">
             <div class="summary-cube">
                 <div class="cube-value" id="rev-global-total-investment">$0.00</div>
@@ -355,7 +342,6 @@
             </div>
         </div>
 
-        <!-- Search Bar for Revenue History Users -->
         <div class="search-bar-wrapper" style="margin-bottom: 16px;">
             <div class="search-bar search-bar-dummy" id="rev-history-global-search-dummy" onclick="Revenue.activateRevenueHistoryGlobalSearch()">
                 <span class="search-icon">Q</span>
@@ -368,7 +354,6 @@
             </div>
         </div>
 
-        <!-- Revenue History Users List - Overview (shown when no user selected) -->
         <div id="revenue-history-overview">
             <div class="users-table-container">
                 <div class="table-wrapper">
@@ -379,23 +364,19 @@
             </div>
         </div>
 
-        <!-- Revenue History User Details (shown when a user is selected) -->
         <div id="revenue-history-user-details" style="display:none; margin-top: 20px;">
-            <!-- Back to Overview Button + Search Bar (below it) -->
             <div class="revenue-history-user-header">
                 <h3 id="revenue-history-user-name">User Name</h3>
                 <button class="back-to-overview-btn" onclick="Revenue.clearRevenueHistoryUserSelection()"><- Back to Overview</button>
             </div>
 
-            <!-- Search Bar - Below Back button, opens revenuemodal -->
             <div class="search-bar-wrapper" id="revenue-history-search-wrapper">
                 <div class="search-bar search-bar-dummy" id="rev-history-search-dummy" onclick="Revenue.showRevenueHistoryUsersrevenuemodal()">
                     <span class="search-icon">+</span>
                     <span class="search-placeholder" id="revenue-history-search-placeholder">Search users by name, email, or ID...</span>
                 </div>
             </div>
-            
-            <!-- Revenue History Sub Tabs -->
+
             <div class="revenue-tabs-wrapper sub-tabs-wrapper" id="revenue-history-sub-tabs-wrapper">
                 <div class="revenue-tabs sub-tabs" id="revenue-history-sub-tabs">
                     <button class="tab-btn sub-tab-btn active" data-revenue-subtab="all" onclick="Revenue.switchRevenueHistorySubTab('all')">
@@ -425,7 +406,6 @@
                 </div>
             </div>
 
-            <!-- User Summary Cards -->
             <div class="summary-cubes" id="revenue-history-user-cubes">
                 <div class="summary-cube">
                     <div class="cube-value" id="rev-user-total-investment">$0.00</div>
@@ -460,8 +440,7 @@
                     <div class="cube-label">Failed Payments</div>
                 </div>
             </div>
-            
-            <!-- Revenue History Records Table -->
+
             <div id="revenue-history-records-container" style="margin-top: 20px;">
                 <h4 style="margin-bottom: 10px;">Revenue Records</h4>
                 <div id="revenue-history-records-list" style="max-height: 400px; overflow-y: auto;">
@@ -473,7 +452,7 @@
 </div>
 
 <!-- ============================================ -->
-<!-- INITIALIZE ENROLLMENT revenuemodal                  -->
+<!-- INITIALIZE ENROLLMENT revenuemodal           -->
 <!-- ============================================ -->
 <div id="initialize-enrollment-revenuemodal" class="revenuemodal-overlay" style="display:none;">
     <div class="revenuemodal-container revenuemodal-medium">
@@ -486,14 +465,14 @@
                 Enter the broker balance to initialize enrollment for <strong id="init-enroll-user-name">User</strong>.
                 This will set the contract start date to today and reset relevant fields.
             </p>
-            
+
             <div style="margin-bottom: 16px;">
                 <label style="display: block; margin-bottom: 4px; font-weight: 500;">Broker Balance ($)</label>
-                <input type="number" id="init-enroll-broker-balance" step="0.01" min="0" 
+                <input type="number" id="init-enroll-broker-balance" step="0.01" min="0"
                        placeholder="Enter broker balance" style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-color); font-size:14px; box-sizing:border-box;">
                 <div style="font-size: 12px; color: #888; margin-top: 4px;">Minimum required: $<span id="init-enroll-min-deposit">0.00</span></div>
             </div>
-            
+
             <div style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107; padding: 12px; margin-bottom: 16px; border-radius: 4px;">
                 <strong style="color: #ffc107;">Warning: This will:</strong>
                 <ul style="margin: 8px 0 0 20px; color: #aaa; font-size: 13px;">
@@ -505,9 +484,9 @@
                     <li>Set reset_contract to 0</li>
                 </ul>
             </div>
-            
+
             <div id="init-enroll-error" style="color: #f44336; font-size: 13px; margin-bottom: 12px; display:none;"></div>
-            
+
             <div class="revenuemodal-buttons">
                 <button class="btn-cancel" onclick="Revenue.closeInitializeEnrollmentrevenuemodal()">Cancel</button>
                 <button class="btn-confirm" id="init-enroll-confirm-btn" onclick="Revenue.confirmInitializeEnrollment()">Initialize Enrollment</button>
@@ -517,7 +496,7 @@
 </div>
 
 <!-- ============================================ -->
-<!-- CUSTOM CONFIRMATION revenuemodal                    -->
+<!-- CUSTOM CONFIRMATION revenuemodal             -->
 <!-- ============================================ -->
 <div id="custom-confirm-revenuemodal" class="revenuemodal-overlay" style="display:none;">
     <div class="revenuemodal-container revenuemodal-small">
@@ -536,7 +515,7 @@
 </div>
 
 <!-- ============================================ -->
-<!-- PASSWORD revenuemodal                              -->
+<!-- PASSWORD revenuemodal                        -->
 <!-- ============================================ -->
 <div id="password-revenuemodal" class="revenuemodal-overlay" style="display:none;">
     <div class="revenuemodal-container revenuemodal-small">
@@ -557,7 +536,7 @@
 </div>
 
 <!-- ============================================ -->
-<!-- SUCCESS/ERROR NOTIFICATION revenuemodal             -->
+<!-- SUCCESS/ERROR NOTIFICATION revenuemodal      -->
 <!-- ============================================ -->
 <div id="notification-revenuemodal" class="revenuemodal-overlay" style="display:none;">
     <div class="revenuemodal-container revenuemodal-small">
@@ -575,7 +554,7 @@
 </div>
 
 <!-- ============================================ -->
-<!-- REVENUE HISTORY USERS revenuemodal                  -->
+<!-- REVENUE HISTORY USERS revenuemodal           -->
 <!-- ============================================ -->
 <div id="revenue-history-users-revenuemodal" class="revenuemodal-overlay" style="display:none;" onclick="Revenue.closeRevenueHistoryUsersrevenuemodalIfClickOutside(event)">
     <div class="revenuemodal-container revenuemodal-large" onclick="event.stopPropagation()">
@@ -630,10 +609,14 @@
         selectedRevenueHistoryUser: null,
         revenueHistoryData: {},
         selectedUserRevenueHistory: [],
-        
-        // Programme Investors data (userid => {developerid, developer_name, programme_name, contract_duration, developer_percentage, investor_percentage, ...})
+
+        // NEW: per-user caches for table-based daily target / balance log
+        dailyTargetCache: {},   // { userId: { week_1: { Monday: {...} } } }
+        balanceLogCache: {},    // { userId: { 'dd-mm-yyyy': {...} } }
+
+        // Programme Investors data (userid => {...})
         programmeInvestorsMap: {},
-        
+
         // State
         currentTab: 'active',
         currentActiveSubTab: 'all',
@@ -650,13 +633,11 @@
         isDetailViewOpen: false,
         isRevenueHistorySearchActive: false,
         isMobileView: false,
-        
-        // revenuemodal callbacks
+
         _confirmCallback: null,
         _passwordCallback: null,
         _initEnrollCallback: null,
-        
-        // Config (defaults - will be overridden per user from programme_investors)
+
         serverSharePercent: 30,
         userSharePercent: 70,
         minProfitForSplit: 30,
@@ -721,14 +702,13 @@
         },
 
         // ============================================
-        // GET PROGRAMME DATA FOR USER
+        // PROGRAMME HELPERS
         // ============================================
         getProgrammeDataForUser: function(userId) {
             const pid = parseInt(userId);
             if (this.programmeInvestorsMap[pid]) {
                 return this.programmeInvestorsMap[pid];
             }
-            // Fallback to server defaults
             return {
                 developerid: 0,
                 developer_name: 'N/A',
@@ -742,23 +722,12 @@
             };
         },
 
-        getDevPercent: function(userId) {
-            const data = this.getProgrammeDataForUser(userId);
-            return data.developer_percentage;
-        },
-
-        getInvPercent: function(userId) {
-            const data = this.getProgrammeDataForUser(userId);
-            return data.investor_percentage;
-        },
-
-        getContractDurationForUser: function(userId) {
-            const data = this.getProgrammeDataForUser(userId);
-            return data.contract_duration;
-        },
+        getDevPercent: function(userId) { return this.getProgrammeDataForUser(userId).developer_percentage; },
+        getInvPercent: function(userId) { return this.getProgrammeDataForUser(userId).investor_percentage; },
+        getContractDurationForUser: function(userId) { return this.getProgrammeDataForUser(userId).contract_duration; },
 
         // ============================================
-        // INITIALIZATION
+        // INIT
         // ============================================
         init: function() {
             const configEl = document.getElementById('revenue-config');
@@ -769,16 +738,15 @@
                 this.minBrokerBalance = parseFloat(configEl.dataset.minDeposit) || 30;
                 this.contractDuration = parseInt(configEl.dataset.contractDuration) || 30;
             } else {
-                // Fallback to data attributes
                 this.serverSharePercent = parseInt(document.querySelector('[data-server-share]')?.dataset?.serverShare) || 30;
                 this.userSharePercent = parseInt(document.querySelector('[data-user-share]')?.dataset?.userShare) || 70;
                 this.minProfitForSplit = parseFloat(document.querySelector('[data-min-profit]')?.dataset?.minProfit) || 30;
                 this.minBrokerBalance = parseFloat(document.querySelector('[data-min-deposit]')?.dataset?.minDeposit) || 30;
                 this.contractDuration = parseInt(document.querySelector('[data-contract-duration]')?.dataset?.contractDuration) || 30;
             }
-            
+
             document.getElementById('init-enroll-min-deposit').textContent = this.minBrokerBalance.toFixed(2);
-            
+
             this.loadUsers();
             this.bindEvents();
         },
@@ -786,9 +754,7 @@
         bindEvents: function() {
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
-                    if (Revenue.isDetailViewOpen) {
-                        Revenue.closeUserDetail();
-                    }
+                    if (Revenue.isDetailViewOpen) Revenue.closeUserDetail();
                     Revenue.closeConfirmrevenuemodal();
                     Revenue.closePasswordrevenuemodal();
                     Revenue.closeNotificationrevenuemodal();
@@ -799,15 +765,9 @@
                     Revenue.deactivateSearch('inactive');
                 }
                 if (e.key === 'Enter') {
-                    if (document.getElementById('password-revenuemodal').style.display === 'flex') {
-                        Revenue.confirmPasswordrevenuemodal();
-                    }
-                    if (document.getElementById('custom-confirm-revenuemodal').style.display === 'flex') {
-                        Revenue.confirmrevenuemodalAction();
-                    }
-                    if (document.getElementById('initialize-enrollment-revenuemodal').style.display === 'flex') {
-                        Revenue.confirmInitializeEnrollment();
-                    }
+                    if (document.getElementById('password-revenuemodal').style.display === 'flex') Revenue.confirmPasswordrevenuemodal();
+                    if (document.getElementById('custom-confirm-revenuemodal').style.display === 'flex') Revenue.confirmrevenuemodalAction();
+                    if (document.getElementById('initialize-enrollment-revenuemodal').style.display === 'flex') Revenue.confirmInitializeEnrollment();
                 }
             });
 
@@ -819,7 +779,7 @@
                     Revenue.viewUserDetail(userId, source);
                 }
             });
-            
+
             document.addEventListener('click', function(e) {
                 if (!e.target.closest('.search-bar-wrapper') && !e.target.closest('.search-bar')) {
                     Revenue.deactivateSearch('active');
@@ -830,7 +790,7 @@
         },
 
         // ============================================
-        // CUSTOM CONFIRM revenuemodal
+        // MODAL HELPERS
         // ============================================
         showConfirmrevenuemodal: function(title, message, callback) {
             document.getElementById('confirm-revenuemodal-title').textContent = title || 'Confirm Action';
@@ -838,23 +798,16 @@
             this._confirmCallback = callback;
             document.getElementById('custom-confirm-revenuemodal').style.display = 'flex';
         },
-
         closeConfirmrevenuemodal: function() {
             document.getElementById('custom-confirm-revenuemodal').style.display = 'none';
             this._confirmCallback = null;
         },
-
         confirmrevenuemodalAction: function() {
-            const callback = this._confirmCallback;
+            const cb = this._confirmCallback;
             this.closeConfirmrevenuemodal();
-            if (typeof callback === 'function') {
-                callback();
-            }
+            if (typeof cb === 'function') cb();
         },
 
-        // ============================================
-        // PASSWORD revenuemodal
-        // ============================================
         showPasswordrevenuemodal: function(title, message, callback) {
             document.getElementById('password-revenuemodal-title').textContent = title || 'Security Check';
             document.getElementById('password-revenuemodal-message').textContent = message || 'Please enter your admin password to continue.';
@@ -862,120 +815,80 @@
             document.getElementById('password-revenuemodal-error').style.display = 'none';
             this._passwordCallback = callback;
             document.getElementById('password-revenuemodal').style.display = 'flex';
-            setTimeout(() => {
-                document.getElementById('password-revenuemodal-input').focus();
-            }, 100);
+            setTimeout(() => document.getElementById('password-revenuemodal-input').focus(), 100);
         },
-
         closePasswordrevenuemodal: function() {
             document.getElementById('password-revenuemodal').style.display = 'none';
             this._passwordCallback = null;
             document.getElementById('password-revenuemodal-error').style.display = 'none';
         },
-
         confirmPasswordrevenuemodal: function() {
             const password = document.getElementById('password-revenuemodal-input').value;
             const errorEl = document.getElementById('password-revenuemodal-error');
-            
             if (!password) {
                 errorEl.textContent = 'Please enter your password.';
                 errorEl.style.display = 'block';
                 return;
             }
-            
-            const callback = this._passwordCallback;
+            const cb = this._passwordCallback;
             this.closePasswordrevenuemodal();
-            if (typeof callback === 'function') {
-                callback(password);
-            }
+            if (typeof cb === 'function') cb(password);
         },
 
-        // ============================================
-        // NOTIFICATION revenuemodal
-        // ============================================
         showNotification: function(message, title, isError) {
             document.getElementById('notification-revenuemodal-title').textContent = title || (isError ? 'Error' : 'Success');
             document.getElementById('notification-revenuemodal-message').textContent = message || '';
             document.getElementById('notification-revenuemodal').style.display = 'flex';
         },
-
         closeNotificationrevenuemodal: function() {
             document.getElementById('notification-revenuemodal').style.display = 'none';
         },
 
         // ============================================
-        // SEARCH FUNCTIONS - Dummy/Real toggle
+        // SEARCH toggle
         // ============================================
         activateSearch: function(tab) {
-            const dummyId = tab + '-search-dummy';
-            const realId = tab + '-search-real';
-            const dummy = document.getElementById(dummyId);
-            const real = document.getElementById(realId);
+            const dummy = document.getElementById(tab + '-search-dummy');
+            const real  = document.getElementById(tab + '-search-real');
             const input = document.getElementById(tab + '-search-input');
-            
             if (dummy) dummy.style.display = 'none';
             if (real) real.style.display = 'flex';
             if (input) {
                 input.focus();
-                if (tab === 'active' && this.activeSearchTerm) {
-                    input.value = this.activeSearchTerm;
-                } else if (tab === 'completed' && this.completedSearchTerm) {
-                    input.value = this.completedSearchTerm;
-                } else if (tab === 'inactive' && this.inactiveSearchTerm) {
-                    input.value = this.inactiveSearchTerm;
-                }
+                if (tab === 'active' && this.activeSearchTerm) input.value = this.activeSearchTerm;
+                else if (tab === 'completed' && this.completedSearchTerm) input.value = this.completedSearchTerm;
+                else if (tab === 'inactive' && this.inactiveSearchTerm) input.value = this.inactiveSearchTerm;
             }
         },
-
         deactivateSearch: function(tab) {
-            const dummyId = tab + '-search-dummy';
-            const realId = tab + '-search-real';
-            const dummy = document.getElementById(dummyId);
-            const real = document.getElementById(realId);
-            
-            if (tab === 'active' && !this.activeSearchTerm) {
-                if (dummy) dummy.style.display = 'flex';
-                if (real) real.style.display = 'none';
-            } else if (tab === 'completed' && !this.completedSearchTerm) {
-                if (dummy) dummy.style.display = 'flex';
-                if (real) real.style.display = 'none';
-            } else if (tab === 'inactive' && !this.inactiveSearchTerm) {
-                if (dummy) dummy.style.display = 'flex';
-                if (real) real.style.display = 'none';
-            } else if (tab === 'active' && this.activeSearchTerm) {
+            const dummy = document.getElementById(tab + '-search-dummy');
+            const real  = document.getElementById(tab + '-search-real');
+            const term = tab === 'active' ? this.activeSearchTerm
+                       : tab === 'completed' ? this.completedSearchTerm
+                       : this.inactiveSearchTerm;
+            if (term) {
                 if (dummy) dummy.style.display = 'none';
                 if (real) real.style.display = 'flex';
-            } else if (tab === 'completed' && this.completedSearchTerm) {
-                if (dummy) dummy.style.display = 'none';
-                if (real) real.style.display = 'flex';
-            } else if (tab === 'inactive' && this.inactiveSearchTerm) {
-                if (dummy) dummy.style.display = 'none';
-                if (real) real.style.display = 'flex';
+            } else {
+                if (dummy) dummy.style.display = 'flex';
+                if (real) real.style.display = 'none';
             }
         },
 
-        // ============================================
-        // REVENUE HISTORY GLOBAL SEARCH
-        // ============================================
         activateRevenueHistoryGlobalSearch: function() {
             const dummy = document.getElementById('rev-history-global-search-dummy');
-            const real = document.getElementById('rev-history-global-search-real');
+            const real  = document.getElementById('rev-history-global-search-real');
             const input = document.getElementById('rev-history-global-search-input');
-            
             if (dummy) dummy.style.display = 'none';
             if (real) real.style.display = 'flex';
             if (input) {
                 input.focus();
-                if (this.revenueHistorySearchTerm) {
-                    input.value = this.revenueHistorySearchTerm;
-                }
+                if (this.revenueHistorySearchTerm) input.value = this.revenueHistorySearchTerm;
             }
         },
-
         deactivateRevenueHistoryGlobalSearch: function() {
             const dummy = document.getElementById('rev-history-global-search-dummy');
-            const real = document.getElementById('rev-history-global-search-real');
-            
+            const real  = document.getElementById('rev-history-global-search-real');
             if (!this.revenueHistorySearchTerm) {
                 if (dummy) dummy.style.display = 'flex';
                 if (real) real.style.display = 'none';
@@ -984,35 +897,27 @@
                 if (real) real.style.display = 'flex';
             }
         },
-
         filterRevenueHistoryGlobalUsers: function() {
             const input = document.getElementById('rev-history-global-search-input');
             this.revenueHistorySearchTerm = input.value.trim();
             document.getElementById('rev-history-global-search-clear').style.display = this.revenueHistorySearchTerm ? 'block' : 'none';
-            
             this.filteredRevenueHistoryUsers = this.getFilteredRevenueHistoryUsers();
-            
             if (!this.selectedRevenueHistoryUser) {
                 this.renderRevenueHistoryUsersList(this.filteredRevenueHistoryUsers);
             }
         },
-
         clearRevenueHistoryGlobalSearch: function() {
             document.getElementById('rev-history-global-search-input').value = '';
             document.getElementById('rev-history-global-search-clear').style.display = 'none';
             this.revenueHistorySearchTerm = '';
             this.deactivateRevenueHistoryGlobalSearch();
-            
             this.filteredRevenueHistoryUsers = this.getFilteredRevenueHistoryUsers();
-            
             if (!this.selectedRevenueHistoryUser) {
                 this.renderRevenueHistoryUsersList(this.filteredRevenueHistoryUsers);
             }
         },
-
         getFilteredRevenueHistoryUsers: function() {
             let users = [...this.allRevenueHistoryUsers];
-            
             if (this.revenueHistorySearchTerm) {
                 const term = this.revenueHistorySearchTerm.toLowerCase();
                 users = users.filter(u => {
@@ -1022,7 +927,6 @@
                     return name.includes(term) || email.includes(term) || id.includes(term);
                 });
             }
-            
             return users;
         },
 
@@ -1030,7 +934,6 @@
         // LOAD USERS
         // ============================================
         loadUsers: function() {
-            // First load programme investors data, then load all user data
             this.loadProgrammeInvestors().then(() => {
                 this.loadActiveUsers();
                 this.loadCompletedUsers();
@@ -1048,15 +951,13 @@
                 },
                 body: 'action=get_programme_investors_map'
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
-                if (data.success && data.investors) {
-                    this.programmeInvestorsMap = data.investors;
-                }
+                if (data.success && data.investors) this.programmeInvestorsMap = data.investors;
                 return true;
             })
-            .catch(error => {
-                console.error('Error loading programme investors:', error);
+            .catch(err => {
+                console.error('Error loading programme investors:', err);
                 return true;
             });
         },
@@ -1070,7 +971,7 @@
                 },
                 body: 'action=get_active_investors'
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     this.allActiveUsers = data.users || [];
@@ -1084,8 +985,8 @@
                     this.renderActiveUsers();
                 }
             })
-            .catch(error => {
-                console.error('Error loading active users:', error);
+            .catch(err => {
+                console.error('Error loading active users:', err);
                 this.allActiveUsers = [];
                 this.filteredActiveUsers = [];
                 this.renderActiveUsers();
@@ -1101,7 +1002,7 @@
                 },
                 body: 'action=get_completed_investors'
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     this.allCompletedUsers = data.users || [];
@@ -1115,8 +1016,8 @@
                     this.renderCompletedUsers();
                 }
             })
-            .catch(error => {
-                console.error('Error loading completed users:', error);
+            .catch(err => {
+                console.error('Error loading completed users:', err);
                 this.allCompletedUsers = [];
                 this.filteredCompletedUsers = [];
                 this.renderCompletedUsers();
@@ -1132,7 +1033,7 @@
                 },
                 body: 'action=get_inactive_users'
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     this.allInactiveUsers = data.users || [];
@@ -1147,8 +1048,8 @@
                     this.renderInactiveUsers();
                 }
             })
-            .catch(error => {
-                console.error('Error loading inactive users:', error);
+            .catch(err => {
+                console.error('Error loading inactive users:', err);
                 this.allInactiveUsers = [];
                 this.filteredInactiveUsers = [];
                 this.renderInactiveUsers();
@@ -1164,35 +1065,22 @@
                 },
                 body: 'action=get_completed_investors'
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     this.allRevenueHistoryUsers = data.users || [];
-                    
                     this.allRevenueHistoryUsers = this.allRevenueHistoryUsers.map(user => {
-                        if (user.revenue_history) {
-                            if (typeof user.revenue_history === 'string') {
-                                try {
-                                    user.revenue_history = JSON.parse(user.revenue_history);
-                                } catch (e) {
-                                    user.revenue_history = [];
-                                }
-                            }
-                        } else {
-                            user.revenue_history = [];
+                        if (user.revenue_history && typeof user.revenue_history === 'string') {
+                            try { user.revenue_history = JSON.parse(user.revenue_history); }
+                            catch (e) { user.revenue_history = []; }
                         }
-                        if (!Array.isArray(user.revenue_history)) {
-                            user.revenue_history = [];
-                        }
+                        if (!Array.isArray(user.revenue_history)) user.revenue_history = [];
                         return user;
                     });
-                    
                     this.filteredRevenueHistoryUsers = this.getFilteredRevenueHistoryUsers();
                     this.updateBadge('revenue-history-count', this.allRevenueHistoryUsers.length);
-                    
                     this.selectedRevenueHistoryUser = null;
                     this.selectedUserRevenueHistory = [];
-                    
                     this.updateRevenueHistoryGlobalCubes();
                     this.showOverview();
                 } else {
@@ -1200,42 +1088,30 @@
                     this.filteredRevenueHistoryUsers = [];
                 }
             })
-            .catch(error => {
-                console.error('Error loading revenue history users:', error);
+            .catch(err => {
+                console.error('Error loading revenue history users:', err);
                 this.allRevenueHistoryUsers = [];
                 this.filteredRevenueHistoryUsers = [];
             });
         },
 
         // ============================================
-        // UPDATE REVENUE HISTORY GLOBAL CUBES
+        // REVENUE HISTORY GLOBAL CUBES
         // ============================================
         updateRevenueHistoryGlobalCubes: function() {
             let totals = {
-                totalInvestment: 0,
-                totalPnl: 0,
-                totalUnpaid: 0,
-                totalPaymentsMade: 0,
-                totalPaymentsConfirmed: 0,
-                totalFailed: 0,
-                totalCancelled: 0,
-                totalServerShare: 0,
-                totalUserShare: 0
+                totalInvestment: 0, totalPnl: 0, totalUnpaid: 0,
+                totalPaymentsMade: 0, totalPaymentsConfirmed: 0,
+                totalFailed: 0, totalCancelled: 0,
+                totalServerShare: 0, totalUserShare: 0
             };
 
             this.allRevenueHistoryUsers.forEach(user => {
                 let history = user.revenue_history || [];
-                
                 if (typeof history === 'string') {
-                    try {
-                        history = JSON.parse(history);
-                    } catch (e) {
-                        history = [];
-                    }
+                    try { history = JSON.parse(history); } catch (e) { history = []; }
                 }
-                if (!Array.isArray(history)) {
-                    history = [];
-                }
+                if (!Array.isArray(history)) history = [];
 
                 history.forEach(record => {
                     const loyaltiesRaw = record.loyalties || '';
@@ -1243,23 +1119,15 @@
                     const userShare = parseFloat(record.user_share || 0);
                     const profit = parseFloat(record.profit || 0);
                     const startingBalance = parseFloat(record.starting_balance || 0);
-                    
-                    if (String(loyaltiesRaw).toLowerCase().indexOf('active') !== -1) {
-                        return;
-                    }
-                    
-                    if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
-                        totals.totalPaymentsConfirmed += serverShare;
-                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
-                        totals.totalPaymentsMade += serverShare;
-                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
-                        totals.totalFailed += serverShare;
-                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid')) {
-                        totals.totalUnpaid += serverShare;
-                    } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
-                        totals.totalCancelled += 1;
-                    }
-                    
+
+                    if (String(loyaltiesRaw).toLowerCase().indexOf('active') !== -1) return;
+
+                    if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) totals.totalPaymentsConfirmed += serverShare;
+                    else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) totals.totalPaymentsMade += serverShare;
+                    else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) totals.totalFailed += serverShare;
+                    else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid')) totals.totalUnpaid += serverShare;
+                    else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) totals.totalCancelled += 1;
+
                     totals.totalInvestment += startingBalance;
                     totals.totalPnl += profit;
                     totals.totalServerShare += serverShare;
@@ -1282,7 +1150,6 @@
         showOverview: function() {
             document.getElementById('revenue-history-global-cubes').style.display = 'flex';
             document.getElementById('revenue-history-user-cubes').style.display = 'none';
-            
             document.getElementById('revenue-history-overview').style.display = 'block';
             document.getElementById('revenue-history-user-details').style.display = 'none';
             this.renderRevenueHistoryUsersList(this.filteredRevenueHistoryUsers);
@@ -1291,7 +1158,6 @@
         showUserDetails: function() {
             document.getElementById('revenue-history-global-cubes').style.display = 'none';
             document.getElementById('revenue-history-user-cubes').style.display = 'flex';
-            
             document.getElementById('revenue-history-overview').style.display = 'none';
             document.getElementById('revenue-history-user-details').style.display = 'block';
         },
@@ -1301,129 +1167,87 @@
         // ============================================
         renderRevenueHistoryUsersList: function(users) {
             const container = document.getElementById('revenue-history-users-list');
-            
             if (!container) return;
-            
+
             if (users.length === 0) {
                 container.innerHTML = '<div style="text-align:center;padding:30px;color:#888;">No users found</div>';
                 return;
             }
-            
+
             let html = '';
             users.forEach(user => {
                 let history = user.revenue_history || [];
                 if (typeof history === 'string') {
-                    try {
-                        history = JSON.parse(history);
-                    } catch (e) {
-                        history = [];
-                    }
+                    try { history = JSON.parse(history); } catch (e) { history = []; }
                 }
-                if (!Array.isArray(history)) {
-                    history = [];
-                }
+                if (!Array.isArray(history)) history = [];
                 const recordCount = history.length;
-                
+
                 html += `
-                    <div class="revenue-history-user-item" 
+                    <div class="revenue-history-user-item"
                         onclick="Revenue.selectRevenueHistoryUser('${user.id}', '${user.source}')">
                         <div class="user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
                         <div class="user-email">${this.escapeHtml(user.email || 'N/A')}</div>
                         <div class="user-id">ID: ${user.id}</div>
-                        ${recordCount > 0 ? 
-                            `<div class="user-record-count">${recordCount} records</div>` : 
-                            `<div class="user-record-count" style="color:#888;">No records</div>`
-                        }
+                        ${recordCount > 0
+                            ? `<div class="user-record-count">${recordCount} records</div>`
+                            : `<div class="user-record-count" style="color:#888;">No records</div>`}
                     </div>
                 `;
             });
-            
+
             container.innerHTML = html;
         },
 
-        // ============================================
-        // SELECT REVENUE HISTORY USER
-        // ============================================
         selectRevenueHistoryUser: function(userId, source) {
             const user = this.allRevenueHistoryUsers.find(u => u.id == userId && u.source === source);
             if (!user) return;
-            
             this.selectRevenueHistoryUserFromrevenuemodal(userId, source);
         },
 
-        // ============================================
-        // PROCESS SINGLE USER REVENUE HISTORY
-        // ============================================
         processUserRevenueHistory: function(user) {
             let history = user.revenue_history || [];
-            
             if (!Array.isArray(history)) {
                 if (typeof history === 'string') {
-                    try {
-                        history = JSON.parse(history);
-                    } catch (e) {
-                        history = [];
-                    }
-                } else {
-                    history = [];
-                }
+                    try { history = JSON.parse(history); } catch (e) { history = []; }
+                } else { history = []; }
             }
-            
+
             let totals = {
-                totalInvestment: 0,
-                totalPnl: 0,
-                totalServerShare: 0,
-                totalUserShare: 0,
-                totalPaymentsMade: 0,
-                totalPaymentsConfirmed: 0,
-                totalCancelled: 0,
-                totalFailed: 0
+                totalInvestment: 0, totalPnl: 0, totalServerShare: 0, totalUserShare: 0,
+                totalPaymentsMade: 0, totalPaymentsConfirmed: 0, totalCancelled: 0, totalFailed: 0
             };
-            
+
             history.forEach(record => {
                 const loyaltiesRaw = record.loyalties || '';
                 const serverShare = parseFloat(record.server_share || 0);
                 const userShare = parseFloat(record.user_share || 0);
                 const profit = parseFloat(record.profit || 0);
                 const startingBalance = parseFloat(record.starting_balance || 0);
-                
+
                 totals.totalInvestment += startingBalance;
                 totals.totalPnl += profit;
                 totals.totalUserShare += userShare;
                 totals.totalServerShare += serverShare;
-                
-                if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
-                    totals.totalPaymentsConfirmed += serverShare;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
-                    totals.totalPaymentsMade += serverShare;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
-                    totals.totalFailed += serverShare;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
-                    totals.totalCancelled += 1;
-                }
+
+                if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) totals.totalPaymentsConfirmed += serverShare;
+                else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) totals.totalPaymentsMade += serverShare;
+                else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) totals.totalFailed += serverShare;
+                else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) totals.totalCancelled += 1;
             });
-            
+
             return totals;
         },
 
-        // ============================================
-        // RENDER USER REVENUE HISTORY SUMMARY
-        // ============================================
         renderUserRevenueHistorySummary: function(user) {
             if (user.revenue_history && typeof user.revenue_history === 'string') {
-                try {
-                    user.revenue_history = JSON.parse(user.revenue_history);
-                } catch (e) {
-                    user.revenue_history = [];
-                }
+                try { user.revenue_history = JSON.parse(user.revenue_history); } catch (e) { user.revenue_history = []; }
             }
-            if (!Array.isArray(user.revenue_history)) {
-                user.revenue_history = [];
-            }
-            
+            if (!Array.isArray(user.revenue_history)) user.revenue_history = [];
+
             const totals = this.processUserRevenueHistory(user);
             this.selectedUserRevenueHistory = user.revenue_history || [];
-            
+
             this.updateCubeValue('rev-user-total-investment', totals.totalInvestment);
             this.updateCubeValue('rev-user-total-pnl', totals.totalPnl);
             this.updateCubeValue('rev-user-total-server-share', totals.totalServerShare);
@@ -1432,7 +1256,7 @@
             this.updateCubeValue('rev-user-total-payments-confirmed', totals.totalPaymentsConfirmed);
             this.updateCubeValueCount('rev-user-total-cancelled', totals.totalCancelled);
             this.updateCubeValue('rev-user-total-failed', totals.totalFailed);
-            
+
             this.renderUserRevenueRecords(this.selectedUserRevenueHistory);
             this.updateUserRevenueHistorySubTabBadges(user);
         },
@@ -1440,49 +1264,31 @@
         updateCubeValue: function(id, value) {
             const el = document.getElementById(id);
             if (!el) return;
-            const numValue = parseFloat(value) || 0;
-            el.textContent = '$' + this.formatNumber(numValue);
-            
-            if (numValue > 0) {
-                el.style.color = '#4caf50';
-            } else if (numValue < 0) {
-                el.style.color = '#f44336';
-            } else {
-                el.style.color = 'var(--text-color, #ffffff)';
-            }
+            const num = parseFloat(value) || 0;
+            el.textContent = '$' + this.formatNumber(num);
+            el.style.color = num > 0 ? '#4caf50' : (num < 0 ? '#f44336' : 'var(--text-color, #ffffff)');
         },
-
         updateCubeValueCount: function(id, value) {
             const el = document.getElementById(id);
             if (!el) return;
-            const numValue = parseInt(value) || 0;
-            el.textContent = numValue;
-            el.style.color = numValue > 0 ? '#4caf50' : 'var(--text-color, #ffffff)';
+            const num = parseInt(value) || 0;
+            el.textContent = num;
+            el.style.color = num > 0 ? '#4caf50' : 'var(--text-color, #ffffff)';
         },
 
-        // ============================================
-        // RENDER USER REVENUE RECORDS
-        // ============================================
         renderUserRevenueRecords: function(history) {
             const container = document.getElementById('revenue-history-records-list');
-            
-            if (!Array.isArray(history)) {
-                history = [];
-            }
-            
+            if (!Array.isArray(history)) history = [];
+
             let filteredHistory = this.filterRevenueHistoryBySubTab(history);
-            
+
             if (filteredHistory.length === 0) {
                 container.innerHTML = '<div style="text-align:center;padding:40px;color:#888;">No revenue records found for this filter</div>';
                 return;
             }
-            
-            const sortedHistory = [...filteredHistory].sort((a, b) => {
-                const idA = parseInt(a.id) || 0;
-                const idB = parseInt(b.id) || 0;
-                return idB - idA;
-            });
-            
+
+            const sortedHistory = [...filteredHistory].sort((a, b) => (parseInt(b.id) || 0) - (parseInt(a.id) || 0));
+
             let html = `
                 <div style="overflow-x:auto; border-radius: 8px; border: 1px solid var(--border-color);">
                     <table style="width:100%; border-collapse: collapse; font-size: 12px;">
@@ -1505,7 +1311,7 @@
                         </thead>
                         <tbody>
             `;
-            
+
             sortedHistory.forEach(record => {
                 const startingBalance = parseFloat(record.starting_balance) || 0;
                 const currentBalance = parseFloat(record.current_balance) || 0;
@@ -1515,13 +1321,12 @@
                 const status = this.normalizeLoyaltyStatus(record.loyalties || 'Unknown');
                 const statusClass = this.getStatusClass(status);
                 const investedWith = record.invested_with || 'N/A';
-                
-                // Get programme data for this user to get percentages
+
                 const progData = this.getProgrammeDataForUser(this.selectedRevenueHistoryUser?.id);
                 const devPercent = progData.developer_percentage;
                 const invPercent = progData.investor_percentage;
                 const duration = progData.contract_duration;
-                
+
                 html += `
                     <tr style="border-bottom: 1px solid var(--border-color);">
                         <td style="padding: 6px 10px; font-size: 10px; font-family: monospace;">${this.escapeHtml(record.contract_id || 'N/A')}</td>
@@ -1540,7 +1345,7 @@
                     </tr>
                 `;
             });
-            
+
             html += `
                         </tbody>
                     </table>
@@ -1549,53 +1354,30 @@
                     ${sortedHistory.length} record(s) found
                 </div>
             `;
-            
+
             container.innerHTML = html;
         },
 
-        // ============================================
-        // UPDATE USER REVENUE HISTORY SUB-TAB BADGES
-        // ============================================
         updateUserRevenueHistorySubTabBadges: function(user) {
             let history = user.revenue_history || [];
             if (!Array.isArray(history)) {
                 if (typeof history === 'string') {
-                    try {
-                        history = JSON.parse(history);
-                    } catch (e) {
-                        history = [];
-                    }
-                } else {
-                    history = [];
-                }
+                    try { history = JSON.parse(history); } catch (e) { history = []; }
+                } else { history = []; }
             }
-            
-            let counts = {
-                all: 0,
-                unpaid: 0,
-                'payment-made': 0,
-                'payment-confirmed': 0,
-                failed: 0,
-                cancelled: 0
-            };
-            
+
+            let counts = { all: 0, unpaid: 0, 'payment-made': 0, 'payment-confirmed': 0, failed: 0, cancelled: 0 };
+
             history.forEach(record => {
-                const loyaltiesRaw = record.loyalties || '';
+                const l = record.loyalties || '';
                 counts.all++;
-                
-                if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed')) {
-                    counts['payment-confirmed']++;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made')) {
-                    counts['payment-made']++;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed')) {
-                    counts.failed++;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid')) {
-                    counts.unpaid++;
-                } else if (Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled')) {
-                    counts.cancelled++;
-                }
+                if (Revenue.loyaltyIsFamily(l, 'payment-confirmed')) counts['payment-confirmed']++;
+                else if (Revenue.loyaltyIsFamily(l, 'payment-made')) counts['payment-made']++;
+                else if (Revenue.loyaltyIsFamily(l, 'failed')) counts.failed++;
+                else if (Revenue.loyaltyIsFamily(l, 'unpaid')) counts.unpaid++;
+                else if (Revenue.loyaltyIsFamily(l, 'cancelled')) counts.cancelled++;
             });
-            
+
             this.updateBadge('rev-all-count', counts.all);
             this.updateBadge('rev-unpaid-count', counts.unpaid);
             this.updateBadge('rev-payment-made-count', counts['payment-made']);
@@ -1604,190 +1386,133 @@
             this.updateBadge('rev-cancelled-count', counts.cancelled);
         },
 
-        // ============================================
-        // FILTER REVENUE HISTORY BY SUB-TAB
-        // ============================================
         filterRevenueHistoryBySubTab: function(history) {
             const subTab = this.currentRevenueHistorySubTab;
-            
-            if (subTab === 'all') {
-                return history;
-            }
-            
+            if (subTab === 'all') return history;
+
             return history.filter(record => {
-                const loyaltiesRaw = record.loyalties || '';
-                
-                switch(subTab) {
-                    case 'unpaid':
-                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'unpaid');
-                    case 'payment-made':
-                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-made');
-                    case 'payment-confirmed':
-                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'payment-confirmed');
-                    case 'failed':
-                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'failed');
-                    case 'cancelled':
-                        return Revenue.loyaltyIsFamily(loyaltiesRaw, 'cancelled');
-                    default:
-                        return true;
+                const l = record.loyalties || '';
+                switch (subTab) {
+                    case 'unpaid': return Revenue.loyaltyIsFamily(l, 'unpaid');
+                    case 'payment-made': return Revenue.loyaltyIsFamily(l, 'payment-made');
+                    case 'payment-confirmed': return Revenue.loyaltyIsFamily(l, 'payment-confirmed');
+                    case 'failed': return Revenue.loyaltyIsFamily(l, 'failed');
+                    case 'cancelled': return Revenue.loyaltyIsFamily(l, 'cancelled');
+                    default: return true;
                 }
             });
         },
 
-        // ============================================
-        // SWITCH REVENUE HISTORY SUB-TAB
-        // ============================================
         switchRevenueHistorySubTab: function(subTab) {
             this.currentRevenueHistorySubTab = subTab;
-            
             document.querySelectorAll('#revenue-history-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.revenueSubtab === subTab);
             });
-            
             if (this.selectedRevenueHistoryUser) {
                 this.renderUserRevenueRecords(this.selectedUserRevenueHistory);
             }
         },
 
-        // ============================================
-        // REVENUE HISTORY USERS revenuemodal
-        // ============================================
         showRevenueHistoryUsersrevenuemodal: function() {
-            const revenuemodal = document.getElementById('revenue-history-users-revenuemodal');
-            const searchInput = document.getElementById('revenue-history-revenuemodal-search-input');
-            
-            revenuemodal.style.display = 'flex';
-            searchInput.value = '';
-            
+            const modal = document.getElementById('revenue-history-users-revenuemodal');
+            const input = document.getElementById('revenue-history-revenuemodal-search-input');
+            modal.style.display = 'flex';
+            input.value = '';
             this.renderRevenueHistoryrevenuemodalUsers(this.allRevenueHistoryUsers);
-            searchInput.focus();
+            input.focus();
         },
-
         closeRevenueHistoryUsersrevenuemodal: function() {
             document.getElementById('revenue-history-users-revenuemodal').style.display = 'none';
         },
-
         closeRevenueHistoryUsersrevenuemodalIfClickOutside: function(event) {
             if (event.target.id === 'revenue-history-users-revenuemodal') {
                 this.closeRevenueHistoryUsersrevenuemodal();
             }
         },
-
         filterRevenueHistoryrevenuemodalUsers: function() {
-            const searchTerm = document.getElementById('revenue-history-revenuemodal-search-input').value.toLowerCase();
-            const filteredUsers = this.allRevenueHistoryUsers.filter(user => {
+            const term = document.getElementById('revenue-history-revenuemodal-search-input').value.toLowerCase();
+            const filtered = this.allRevenueHistoryUsers.filter(user => {
                 const name = (user.fullname || '').toLowerCase();
                 const email = (user.email || '').toLowerCase();
                 const id = String(user.id || '');
-                return name.includes(searchTerm) || email.includes(searchTerm) || id.includes(searchTerm);
+                return name.includes(term) || email.includes(term) || id.includes(term);
             });
-            this.renderRevenueHistoryrevenuemodalUsers(filteredUsers);
+            this.renderRevenueHistoryrevenuemodalUsers(filtered);
         },
-
-        // ============================================
-        // RENDER REVENUE HISTORY revenuemodal USERS
-        // ============================================
         renderRevenueHistoryrevenuemodalUsers: function(users) {
             const container = document.getElementById('revenue-history-revenuemodal-list');
-            
             if (users.length === 0) {
                 container.innerHTML = '<div style="text-align:center;padding:40px;color:#888;">No users found</div>';
                 return;
             }
-            
+
             let html = '';
             users.forEach(user => {
                 let history = user.revenue_history || [];
                 if (typeof history === 'string') {
-                    try {
-                        history = JSON.parse(history);
-                    } catch (e) {
-                        history = [];
-                    }
+                    try { history = JSON.parse(history); } catch (e) { history = []; }
                 }
-                if (!Array.isArray(history)) {
-                    history = [];
-                }
+                if (!Array.isArray(history)) history = [];
                 const recordCount = history.length;
-                
-                const isSelected = this.selectedRevenueHistoryUser && 
-                    this.selectedRevenueHistoryUser.id === user.id && 
+
+                const isSelected = this.selectedRevenueHistoryUser &&
+                    this.selectedRevenueHistoryUser.id === user.id &&
                     this.selectedRevenueHistoryUser.source === user.source;
+
                 html += `
-                    <div class="revenuemodal-user-item ${isSelected ? 'selected' : ''}" 
+                    <div class="revenuemodal-user-item ${isSelected ? 'selected' : ''}"
                         onclick="Revenue.selectRevenueHistoryUserFromrevenuemodal(${user.id}, '${user.source}')">
                         <div class="revenuemodal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
                         <div class="revenuemodal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
                         <div class="revenuemodal-user-id">ID: ${user.id}</div>
-                        ${recordCount > 0 ? 
-                            `<div style="font-size:10px;color:#888;margin-top:4px;">${recordCount} records</div>` : 
-                            `<div style="font-size:10px;color:#888;margin-top:4px;">No history records</div>`
-                        }
+                        ${recordCount > 0
+                            ? `<div style="font-size:10px;color:#888;margin-top:4px;">${recordCount} records</div>`
+                            : `<div style="font-size:10px;color:#888;margin-top:4px;">No history records</div>`}
                     </div>
                 `;
             });
-            
             container.innerHTML = html;
         },
-
-        // ============================================
-        // SELECT REVENUE HISTORY USER FROM revenuemodal
-        // ============================================
         selectRevenueHistoryUserFromrevenuemodal: function(userId, source) {
             const user = this.allRevenueHistoryUsers.find(u => u.id == userId && u.source === source);
             if (!user) return;
-            
+
             if (user.revenue_history && typeof user.revenue_history === 'string') {
-                try {
-                    user.revenue_history = JSON.parse(user.revenue_history);
-                } catch (e) {
-                    user.revenue_history = [];
-                }
+                try { user.revenue_history = JSON.parse(user.revenue_history); } catch (e) { user.revenue_history = []; }
             }
-            if (!Array.isArray(user.revenue_history)) {
-                user.revenue_history = [];
-            }
-            
+            if (!Array.isArray(user.revenue_history)) user.revenue_history = [];
+
             this.selectedRevenueHistoryUser = user;
             this.closeRevenueHistoryUsersrevenuemodal();
-            
             this.showUserDetails();
-            
+
             const placeholder = document.getElementById('revenue-history-search-placeholder');
-            if (placeholder) {
-                placeholder.textContent = this.escapeHtml(user.fullname || 'N/A') + ' (ID: ' + user.id + ')';
-            }
-            
-            document.getElementById('revenue-history-user-name').textContent = 
+            if (placeholder) placeholder.textContent = this.escapeHtml(user.fullname || 'N/A') + ' (ID: ' + user.id + ')';
+
+            document.getElementById('revenue-history-user-name').textContent =
                 this.escapeHtml(user.fullname || 'N/A') + ' - Revenue History';
-            
+
             this.currentRevenueHistorySubTab = 'all';
             document.querySelectorAll('#revenue-history-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.revenueSubtab === 'all');
             });
-            
+
             this.renderUserRevenueHistorySummary(user);
         },
-
         clearRevenueHistoryUserSelection: function() {
             this.selectedRevenueHistoryUser = null;
             this.selectedUserRevenueHistory = [];
-            
             this.showOverview();
             this.updateRevenueHistoryGlobalCubes();
-            
             const placeholder = document.getElementById('revenue-history-search-placeholder');
-            if (placeholder) {
-                placeholder.textContent = 'Search users by name, email, or ID...';
-            }
+            if (placeholder) placeholder.textContent = 'Search users by name, email, or ID...';
         },
 
         // ============================================
-        // LOAD UNUSUAL USERS
+        // UNUSUAL / ACTIVE / INACTIVE FILTERS
         // ============================================
         loadUnusualUsers: function() {
             const searchTerm = this.activeSearchTerm || '';
-            
             fetch(window.location.pathname, {
                 method: 'POST',
                 headers: {
@@ -1796,7 +1521,7 @@
                 },
                 body: `action=get_unusual_users&search=${encodeURIComponent(searchTerm)}`
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     this.unusualUsers = data.users || [];
@@ -1812,8 +1537,8 @@
                     this.renderActiveUsers();
                 }
             })
-            .catch(error => {
-                console.error('Error loading unusual users:', error);
+            .catch(err => {
+                console.error('Error loading unusual users:', err);
                 this.unusualUsers = [];
                 this.filteredUnusualUsers = [];
                 this.filteredActiveUsers = [];
@@ -1821,24 +1546,14 @@
             });
         },
 
-        // ============================================
-        // GET FILTERED UNUSUAL USERS
-        // ============================================
         getFilteredUnusualUsers: function() {
             let users = [...this.unusualUsers];
             const subTab = this.currentUnusualSubTab;
 
-            switch(subTab) {
-                case 'all':
-                    break;
-                case 'withdrawals':
-                    users = users.filter(u => (u.withdrawal_count || 0) > 0);
-                    break;
-                case 'trades':
-                    users = users.filter(u => (u.unauthorized_trade_count || 0) > 0);
-                    break;
-                default:
-                    break;
+            switch (subTab) {
+                case 'withdrawals': users = users.filter(u => (u.withdrawal_count || 0) > 0); break;
+                case 'trades':      users = users.filter(u => (u.unauthorized_trade_count || 0) > 0); break;
+                default: break;
             }
 
             if (this.activeSearchTerm) {
@@ -1850,14 +1565,15 @@
                     return name.includes(term) || email.includes(term) || id.includes(term);
                 });
             }
-
             return users;
         },
 
         // ============================================
-        // FETCH USER DATA
+        // USER DATA FETCHERS (for detail overlay) — now table-based
         // ============================================
         fetchUserData: function(userId, sourceTable) {
+            // 1) Daily target from `daily_target_revenue`
+            // 2) Balance log from `balance_log`
             return fetch(window.location.pathname, {
                 method: 'POST',
                 headers: {
@@ -1866,7 +1582,7 @@
                 },
                 body: `action=get_user_daily_log&user_id=${userId}&source_table=${sourceTable}`
             })
-            .then(response => response.json());
+            .then(r => r.json());
         },
 
         fetchUserBasicData: function(userId, sourceTable) {
@@ -1878,47 +1594,35 @@
                 },
                 body: `action=get_user_data&user_id=${userId}&source_table=${sourceTable}`
             })
-            .then(response => response.json());
+            .then(r => r.json());
         },
 
         // ============================================
-        // FILTER ACTIVE USERS
+        // FILTER ACTIVE / COMPLETED / INACTIVE
         // ============================================
         getFilteredActiveUsers: function() {
             let users = [...this.allActiveUsers];
             const subTab = this.currentActiveSubTab;
 
-            switch(subTab) {
-                case 'all':
-                    break;
-                case 'unusual':
-                    return this.filteredUnusualUsers;
+            switch (subTab) {
+                case 'all': break;
+                case 'unusual': return this.filteredUnusualUsers;
                 case 'above-threshold':
-                    users = users.filter(u => {
-                        const pnl = parseFloat(u.profitandloss) || 0;
-                        return pnl > this.minProfitForSplit;
-                    });
+                    users = users.filter(u => (parseFloat(u.profitandloss) || 0) > this.minProfitForSplit);
                     break;
                 case 'below-threshold':
                     users = users.filter(u => {
-                        const pnl = parseFloat(u.profitandloss) || 0;
-                        return pnl > 0 && pnl <= this.minProfitForSplit;
+                        const p = parseFloat(u.profitandloss) || 0;
+                        return p > 0 && p <= this.minProfitForSplit;
                     });
                     break;
                 case 'profit':
-                    users = users.filter(u => {
-                        const pnl = parseFloat(u.profitandloss) || 0;
-                        return pnl > 0;
-                    });
+                    users = users.filter(u => (parseFloat(u.profitandloss) || 0) > 0);
                     break;
                 case 'loss':
-                    users = users.filter(u => {
-                        const pnl = parseFloat(u.profitandloss) || 0;
-                        return pnl < 0;
-                    });
+                    users = users.filter(u => (parseFloat(u.profitandloss) || 0) < 0);
                     break;
-                default:
-                    break;
+                default: break;
             }
 
             if (this.activeSearchTerm && subTab !== 'unusual') {
@@ -1930,7 +1634,6 @@
                     return name.includes(term) || email.includes(term) || id.includes(term);
                 });
             }
-
             return users;
         },
 
@@ -1938,7 +1641,7 @@
             const input = document.getElementById('active-search-input');
             this.activeSearchTerm = input.value.trim();
             document.getElementById('active-search-clear').style.display = this.activeSearchTerm ? 'block' : 'none';
-            
+
             if (this.currentActiveSubTab === 'unusual') {
                 this.filteredUnusualUsers = this.getFilteredUnusualUsers();
                 this.filteredActiveUsers = this.filteredUnusualUsers;
@@ -1950,13 +1653,11 @@
                 this.updateActiveCubes();
             }
         },
-
         clearActiveSearch: function() {
             document.getElementById('active-search-input').value = '';
             document.getElementById('active-search-clear').style.display = 'none';
             this.activeSearchTerm = '';
             this.deactivateSearch('active');
-            
             if (this.currentActiveSubTab === 'unusual') {
                 this.filteredUnusualUsers = this.getFilteredUnusualUsers();
                 this.filteredActiveUsers = this.filteredUnusualUsers;
@@ -1969,9 +1670,6 @@
             }
         },
 
-        // ============================================
-        // FILTER COMPLETED USERS
-        // ============================================
         getFilteredCompletedUsers: function() {
             let users = [...this.allCompletedUsers];
             const subTab = this.currentCompletedSubTab;
@@ -1979,17 +1677,13 @@
             const isContractEnded = (user) => {
                 const execDate = user.execution_start_date;
                 if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
-                
-                const userId = user.id;
-                const duration = this.getContractDurationForUser(userId);
-                
+                const duration = this.getContractDurationForUser(user.id);
                 const start = new Date(execDate);
                 const end = new Date(start);
                 end.setDate(end.getDate() + duration);
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 end.setHours(0, 0, 0, 0);
-                
                 return today > end;
             };
 
@@ -2006,60 +1700,38 @@
                     || Revenue.loyaltyIsFamily(l, 'failed');
             };
 
-            switch(subTab) {
+            switch (subTab) {
                 case 'inactive-above':
                     users = users.filter(u => {
-                        const profit = parseFloat(u.profitandloss) || 0;
-                        return isContractEnded(u) && 
-                            profit > this.minProfitForSplit && 
-                            !hasPaymentStatus(u);
+                        const p = parseFloat(u.profitandloss) || 0;
+                        return isContractEnded(u) && p > this.minProfitForSplit && !hasPaymentStatus(u);
                     });
                     break;
                 case 'inactive-below':
                     users = users.filter(u => {
-                        const profit = parseFloat(u.profitandloss) || 0;
-                        return isContractEnded(u) && 
-                            profit > 0 && 
-                            profit <= this.minProfitForSplit && 
-                            !hasPaymentStatus(u) &&
-                            !isCancelled(u);
+                        const p = parseFloat(u.profitandloss) || 0;
+                        return isContractEnded(u) && p > 0 && p <= this.minProfitForSplit && !hasPaymentStatus(u) && !isCancelled(u);
                     });
                     break;
                 case 'inactive-loss':
                     users = users.filter(u => {
-                        const profit = parseFloat(u.profitandloss) || 0;
-                        return isContractEnded(u) && 
-                            profit < 0 && 
-                            !hasPaymentStatus(u) &&
-                            !isCancelled(u);
+                        const p = parseFloat(u.profitandloss) || 0;
+                        return isContractEnded(u) && p < 0 && !hasPaymentStatus(u) && !isCancelled(u);
                     });
                     break;
                 case 'unpaid':
-                    users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '');
-                        return Revenue.loyaltyIsFamily(l, 'unpaid');
-                    });
+                    users = users.filter(u => Revenue.loyaltyIsFamily(u.current_loyalties || u.loyalties || '', 'unpaid'));
                     break;
                 case 'payment-made':
-                    users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '');
-                        return Revenue.loyaltyIsFamily(l, 'payment-made');
-                    });
+                    users = users.filter(u => Revenue.loyaltyIsFamily(u.current_loyalties || u.loyalties || '', 'payment-made'));
                     break;
                 case 'payment-confirmed':
-                    users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '');
-                        return Revenue.loyaltyIsFamily(l, 'payment-confirmed');
-                    });
+                    users = users.filter(u => Revenue.loyaltyIsFamily(u.current_loyalties || u.loyalties || '', 'payment-confirmed'));
                     break;
                 case 'failed':
-                    users = users.filter(u => {
-                        const l = (u.current_loyalties || u.loyalties || '');
-                        return Revenue.loyaltyIsFamily(l, 'failed');
-                    });
+                    users = users.filter(u => Revenue.loyaltyIsFamily(u.current_loyalties || u.loyalties || '', 'failed'));
                     break;
-                default:
-                    break;
+                default: break;
             }
 
             if (this.completedSearchTerm) {
@@ -2071,7 +1743,6 @@
                     return name.includes(term) || email.includes(term) || id.includes(term);
                 });
             }
-
             return users;
         },
 
@@ -2082,7 +1753,6 @@
             this.filteredCompletedUsers = this.getFilteredCompletedUsers();
             this.renderCompletedUsers();
         },
-
         clearCompletedSearch: function() {
             document.getElementById('completed-search-input').value = '';
             document.getElementById('completed-search-clear').style.display = 'none';
@@ -2092,48 +1762,35 @@
             this.renderCompletedUsers();
         },
 
-        // ============================================
-        // FILTER INACTIVE USERS
-        // ============================================
         getFilteredInactiveUsers: function() {
             let users = [...this.allInactiveUsers];
             const subTab = this.currentInactiveSubTab;
 
-            switch(subTab) {
-                case 'all':
-                    break;
+            switch (subTab) {
                 case 'no-contract':
                     users = users.filter(u => {
-                        const execDate = u.execution_start_date;
-                        return !execDate || execDate === '0000-00-00' || execDate === null;
+                        const e = u.execution_start_date;
+                        return !e || e === '0000-00-00' || e === null;
                     });
                     break;
                 case 'expired':
                     users = users.filter(u => {
-                        const execDate = u.execution_start_date;
-                        if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
-                        
-                        const userId = u.id;
-                        const duration = this.getContractDurationForUser(userId);
-                        
-                        const start = new Date(execDate);
+                        const e = u.execution_start_date;
+                        if (!e || e === '0000-00-00' || e === null) return false;
+                        const duration = this.getContractDurationForUser(u.id);
+                        const start = new Date(e);
                         const end = new Date(start);
                         end.setDate(end.getDate() + duration);
                         const today = new Date();
                         today.setHours(0, 0, 0, 0);
                         end.setHours(0, 0, 0, 0);
-                        
                         return today > end;
                     });
                     break;
                 case 'cancelled':
-                    users = users.filter(u => {
-                        const l = (u.loyalties || '');
-                        return Revenue.loyaltyIsFamily(l, 'cancelled');
-                    });
+                    users = users.filter(u => Revenue.loyaltyIsFamily(u.loyalties || '', 'cancelled'));
                     break;
-                default:
-                    break;
+                default: break;
             }
 
             if (this.inactiveSearchTerm) {
@@ -2145,7 +1802,6 @@
                     return name.includes(term) || email.includes(term) || id.includes(term);
                 });
             }
-
             return users;
         },
 
@@ -2157,7 +1813,6 @@
             this.renderInactiveUsers();
             this.updateInactiveCubes();
         },
-
         clearInactiveSearch: function() {
             document.getElementById('inactive-search-input').value = '';
             document.getElementById('inactive-search-clear').style.display = 'none';
@@ -2169,7 +1824,7 @@
         },
 
         // ============================================
-        // RENDER ACTIVE USERS - NEW COLUMNS
+        // RENDER ACTIVE / COMPLETED / INACTIVE TABLES
         // ============================================
         renderActiveUsers: function() {
             const tbody = document.getElementById('active-users-body');
@@ -2177,9 +1832,7 @@
             const isUnusualTab = this.currentActiveSubTab === 'unusual';
 
             if (!users || users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:40px;color:#888;">' + 
-                    (isUnusualTab ? 'No unusual activity found' : 'No active users found') + 
-                    '</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:#888;">${isUnusualTab ? 'No unusual activity found' : 'No active users found'}</td></tr>`;
                 return;
             }
 
@@ -2190,47 +1843,32 @@
                 const currentBalance = brokerBalance + profitAndLoss;
                 const profitClass = profitAndLoss >= 0 ? 'profit' : 'loss';
                 const balanceClass = currentBalance >= 0 ? 'profit' : 'loss';
-                
-                // Get programme-specific percentages
+
                 const progData = this.getProgrammeDataForUser(user.id);
                 const devPercent = progData.developer_percentage;
                 const invPercent = progData.investor_percentage;
-                
-                // Calculate shares using programme-specific percentages
-                let investorAmount = 0;
-                let developerAmount = 0;
+
+                let investorAmount = 0, developerAmount = 0;
                 if (profitAndLoss > 0) {
                     investorAmount = (profitAndLoss * invPercent) / 100;
                     developerAmount = (profitAndLoss * devPercent) / 100;
                 }
-                
-                let status = 'Active';
-                let statusClass = 'status-active';
-                if (profitAndLoss > this.minProfitForSplit) {
-                    status = 'Above Threshold';
-                    statusClass = 'status-above';
-                } else if (profitAndLoss > 0) {
-                    status = 'In Profit';
-                    statusClass = 'status-profit';
-                } else if (profitAndLoss < 0) {
-                    status = 'In Loss';
-                    statusClass = 'status-loss';
-                } else {
-                    status = 'Break Even';
-                    statusClass = 'status-breakeven';
-                }
+
+                let status = 'Active', statusClass = 'status-active';
+                if (profitAndLoss > this.minProfitForSplit) { status = 'Above Threshold'; statusClass = 'status-above'; }
+                else if (profitAndLoss > 0) { status = 'In Profit'; statusClass = 'status-profit'; }
+                else if (profitAndLoss < 0) { status = 'In Loss'; statusClass = 'status-loss'; }
+                else { status = 'Break Even'; statusClass = 'status-breakeven'; }
 
                 let actionHtml = '';
-                let clickableClass = 'clickable-row';
-                let dataAttrs = `data-user-id="${user.id}" data-source="${user.source || 'harvhub'}"`;
-                
+                const clickableClass = 'clickable-row';
+                const dataAttrs = `data-user-id="${user.id}" data-source="${user.source || 'harvhub'}"`;
+
                 if (isUnusualTab) {
-                    const withdrawalCount = user.withdrawal_count || 0;
-                    const tradeCount = user.unauthorized_trade_count || 0;
-                    
-                    status = 'Unusual (W:' + withdrawalCount + ', T:' + tradeCount + ')';
+                    const wc = user.withdrawal_count || 0;
+                    const tc = user.unauthorized_trade_count || 0;
+                    status = 'Unusual (W:' + wc + ', T:' + tc + ')';
                     statusClass = 'status-unusual';
-                    
                     actionHtml = `
                         <select class="action-select" data-user-id="${user.id}" data-source="${user.source || 'harvhub'}" onchange="Revenue.handleUnusualAction(this)">
                             <option value="">Remain Active</option>
@@ -2246,7 +1884,6 @@
                     `;
                 }
 
-                // Programme Developer display
                 let devDisplay = '';
                 if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
                     devDisplay = `
@@ -2283,13 +1920,9 @@
                     </tr>
                 `;
             });
-
             tbody.innerHTML = html;
         },
 
-        // ============================================
-        // RENDER COMPLETED USERS - NEW COLUMNS
-        // ============================================
         renderCompletedUsers: function() {
             const tbody = document.getElementById('completed-users-body');
             const users = this.filteredCompletedUsers;
@@ -2304,41 +1937,29 @@
             users.forEach(user => {
                 const profit = parseFloat(user.profitandloss) || 0;
                 const profitClass = profit >= 0 ? 'profit' : 'loss';
-                
-                // Get programme-specific percentages
+
                 const progData = this.getProgrammeDataForUser(user.id);
                 const devPercent = progData.developer_percentage;
                 const invPercent = progData.investor_percentage;
-                
-                // Calculate shares using programme-specific percentages
-                let investorAmount = 0;
-                let developerAmount = 0;
+
+                let investorAmount = 0, developerAmount = 0;
                 if (profit > 0) {
                     investorAmount = (profit * invPercent) / 100;
                     developerAmount = (profit * devPercent) / 100;
                 }
-                
+
                 let displayStatus = '';
                 let statusClass = '';
-                
-                if (subTab === 'inactive-above') {
-                    displayStatus = 'Inactive (Above Threshold)';
-                    statusClass = 'status-above';
-                } else if (subTab === 'inactive-below') {
-                    displayStatus = 'Inactive (Below Threshold)';
-                    statusClass = 'status-below';
-                } else if (subTab === 'inactive-loss') {
-                    displayStatus = 'Inactive (Loss)';
-                    statusClass = 'status-loss';
-                } else {
-                    const statusLabel = this.getStatusLabel(user.current_loyalties || user.loyalties || '');
-                    const statusClassFromHelper = this.getStatusClass(user.current_loyalties || user.loyalties || '');
-                    displayStatus = statusLabel;
-                    statusClass = statusClassFromHelper;
+
+                if (subTab === 'inactive-above') { displayStatus = 'Inactive (Above Threshold)'; statusClass = 'status-above'; }
+                else if (subTab === 'inactive-below') { displayStatus = 'Inactive (Below Threshold)'; statusClass = 'status-below'; }
+                else if (subTab === 'inactive-loss') { displayStatus = 'Inactive (Loss)'; statusClass = 'status-loss'; }
+                else {
+                    displayStatus = this.getStatusLabel(user.current_loyalties || user.loyalties || '');
+                    statusClass = this.getStatusClass(user.current_loyalties || user.loyalties || '');
                 }
 
                 let actionHtml = '';
-                
                 if (subTab === 'inactive-above') {
                     actionHtml = `
                         <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
@@ -2347,15 +1968,11 @@
                         </select>
                     `;
                 } else if (subTab === 'inactive-below') {
-                    actionHtml = `
-                        <span style="color: #888; font-size: 12px;">Below threshold</span>
-                    `;
+                    actionHtml = '<span style="color:#888;font-size:12px;">Below threshold</span>';
                 } else if (subTab === 'inactive-loss') {
-                    actionHtml = `
-                        <span style="color: #888; font-size: 12px;">Loss completed</span>
-                    `;
+                    actionHtml = '<span style="color:#888;font-size:12px;">Loss completed</span>';
                 } else {
-                    switch(subTab) {
+                    switch (subTab) {
                         case 'unpaid':
                             actionHtml = `
                                 <select class="status-select" data-user-id="${user.id}" data-source="${user.source}" onchange="Revenue.updateUserStatus(this)">
@@ -2364,8 +1981,7 @@
                                     <option value="payment-confirmed">Payment Confirmed</option>
                                     <option value="failed-payment">Payment Failed</option>
                                     <option value="suspend">Suspend</option>
-                                </select>
-                            `;
+                                </select>`;
                             break;
                         case 'payment-made':
                             actionHtml = `
@@ -2373,8 +1989,7 @@
                                     <option value="">Select Status</option>
                                     <option value="payment-confirmed">Payment Confirmed</option>
                                     <option value="failed-payment">Payment Failed</option>
-                                </select>
-                            `;
+                                </select>`;
                             break;
                         case 'payment-confirmed':
                             actionHtml = `
@@ -2384,8 +1999,7 @@
                                     <option value="failed-payment">Payment Failed</option>
                                     <option value="unpaid-payment">Unpaid</option>
                                     <option value="suspend">Suspend</option>
-                                </select>
-                            `;
+                                </select>`;
                             break;
                         case 'failed':
                             actionHtml = `
@@ -2393,8 +2007,7 @@
                                     <option value="">Select Status</option>
                                     <option value="payment-confirmed">Payment Confirmed</option>
                                     <option value="payment-made">Payment Made</option>
-                                </select>
-                            `;
+                                </select>`;
                             break;
                         default:
                             actionHtml = `
@@ -2405,12 +2018,10 @@
                                     <option value="payment-confirmed">Payment Confirmed</option>
                                     <option value="failed-payment">Failed</option>
                                     <option value="suspend">Suspend</option>
-                                </select>
-                            `;
+                                </select>`;
                     }
                 }
 
-                // Programme Developer display
                 let devDisplay = '';
                 if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
                     devDisplay = `
@@ -2446,13 +2057,9 @@
                     </tr>
                 `;
             });
-
             tbody.innerHTML = html;
         },
 
-        // ============================================
-        // RENDER INACTIVE USERS - NEW COLUMNS
-        // ============================================
         renderInactiveUsers: function() {
             const tbody = document.getElementById('inactive-users-body');
             const users = this.filteredInactiveUsers;
@@ -2467,23 +2074,20 @@
                 const brokerBalance = parseFloat(user.broker_balance) || 0;
                 const profitAndLoss = parseFloat(user.profitandloss) || 0;
                 const profitClass = profitAndLoss >= 0 ? 'profit' : 'loss';
-                
-                // Get programme data for this user
+
                 const progData = this.getProgrammeDataForUser(user.id);
-                
+
                 let status = 'Inactive';
                 let statusClass = 'status-inactive';
-                
+
                 const execDate = user.execution_start_date;
                 const loyalties = (user.loyalties || '');
                 const duration = progData.contract_duration;
-                
+
                 if (Revenue.loyaltyIsFamily(loyalties, 'cancelled')) {
-                    status = 'Cancelled';
-                    statusClass = 'status-cancelled';
+                    status = 'Cancelled'; statusClass = 'status-cancelled';
                 } else if (!execDate || execDate === '0000-00-00' || execDate === null) {
-                    status = 'No Contract';
-                    statusClass = 'status-no-contract';
+                    status = 'No Contract'; statusClass = 'status-no-contract';
                 } else {
                     const start = new Date(execDate);
                     const end = new Date(start);
@@ -2491,14 +2095,9 @@
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
                     end.setHours(0, 0, 0, 0);
-                    
-                    if (today > end) {
-                        status = 'Contract Expired';
-                        statusClass = 'status-expired';
-                    }
+                    if (today > end) { status = 'Contract Expired'; statusClass = 'status-expired'; }
                 }
 
-                // Programme Developer display
                 let devDisplay = '';
                 if (progData.has_programme && progData.developer_name && progData.developer_name !== 'N/A') {
                     devDisplay = `
@@ -2535,135 +2134,87 @@
                     </tr>
                 `;
             });
-
             tbody.innerHTML = html;
         },
 
         // ============================================
-        // HANDLE ACTIVE ACTION
+        // ACTION HANDLERS
         // ============================================
         handleActiveAction: function(selectElement) {
             const userId = selectElement.dataset.userId;
             const source = selectElement.dataset.source;
             const action = selectElement.value;
-            
             if (!action) return;
-            
-            if (action === 'cancel-contract') {
-                this.cancelContract(userId, source);
-            }
-            
+            if (action === 'cancel-contract') this.cancelContract(userId, source);
             selectElement.value = '';
         },
-
-        // ============================================
-        // HANDLE UNUSUAL ACTION
-        // ============================================
         handleUnusualAction: function(selectElement) {
             const userId = selectElement.dataset.userId;
             const source = selectElement.dataset.source;
             const action = selectElement.value;
-            
             if (!action) return;
-            
-            if (action === 'cancel-contract') {
-                this.cancelContract(userId, source);
-            }
-            
+            if (action === 'cancel-contract') this.cancelContract(userId, source);
             selectElement.value = '';
         },
-
-        // ============================================
-        // HANDLE INACTIVE ACTION
-        // ============================================
         handleInactiveAction: function(selectElement) {
             const userId = selectElement.dataset.userId;
             const source = selectElement.dataset.source;
             const action = selectElement.value;
-            
             if (!action) return;
-            
-            if (action === 'initialize-enrollment') {
-                this.showInitializeEnrollmentrevenuemodal(userId, source);
-            }
-            
+            if (action === 'initialize-enrollment') this.showInitializeEnrollmentrevenuemodal(userId, source);
             selectElement.value = '';
         },
 
-        // ============================================
-        // INITIALIZE ENROLLMENT revenuemodal
-        // ============================================
         showInitializeEnrollmentrevenuemodal: function(userId, source) {
             const user = this.allInactiveUsers.find(u => u.id == userId && u.source === source);
             if (!user) {
                 this.showNotification('User not found', 'Error', true);
                 return;
             }
-            
             document.getElementById('init-enroll-user-name').textContent = user.fullname || 'User #' + userId;
             document.getElementById('init-enroll-broker-balance').value = user.broker_balance || '';
             document.getElementById('init-enroll-error').style.display = 'none';
-            
-            this._initEnrollCallback = {
-                userId: userId,
-                source: source
-            };
-            
+            this._initEnrollCallback = { userId, source };
             document.getElementById('initialize-enrollment-revenuemodal').style.display = 'flex';
-            setTimeout(() => {
-                document.getElementById('init-enroll-broker-balance').focus();
-            }, 100);
+            setTimeout(() => document.getElementById('init-enroll-broker-balance').focus(), 100);
         },
-
         closeInitializeEnrollmentrevenuemodal: function() {
             document.getElementById('initialize-enrollment-revenuemodal').style.display = 'none';
             this._initEnrollCallback = null;
             document.getElementById('init-enroll-error').style.display = 'none';
         },
-
         confirmInitializeEnrollment: function() {
             const brokerBalance = parseFloat(document.getElementById('init-enroll-broker-balance').value);
             const errorEl = document.getElementById('init-enroll-error');
-            
+
             if (isNaN(brokerBalance) || brokerBalance < 0) {
                 errorEl.textContent = 'Please enter a valid broker balance.';
                 errorEl.style.display = 'block';
                 return;
             }
-            
             if (brokerBalance < this.minBrokerBalance) {
                 errorEl.textContent = 'Broker balance must be at least $' + this.minBrokerBalance.toFixed(2) + '.';
                 errorEl.style.display = 'block';
                 return;
             }
-            
-            const callback = this._initEnrollCallback;
+            const cb = this._initEnrollCallback;
             this.closeInitializeEnrollmentrevenuemodal();
-            
-            if (callback) {
-                this.confirmInitializeEnrollmentWithPassword(callback.userId, callback.source, brokerBalance);
-            }
+            if (cb) this.confirmInitializeEnrollmentWithPassword(cb.userId, cb.source, brokerBalance);
         },
-
         confirmInitializeEnrollmentWithPassword: function(userId, source, brokerBalance) {
             const self = this;
-            
             this.showPasswordrevenuemodal(
                 'Initialize Enrollment',
                 'Enter admin password to initialize enrollment for User ID ' + userId,
                 function(password) {
                     const loginId = document.getElementById('login-id-hidden')?.value || '';
-                    
-                    if (!password) {
-                        self.showNotification('Password is required', 'Error', true);
-                        return;
-                    }
-                    
+                    if (!password) { self.showNotification('Password is required', 'Error', true); return; }
+
                     const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                     const originalText = confirmBtn.textContent;
                     confirmBtn.textContent = 'Processing...';
                     confirmBtn.disabled = true;
-                    
+
                     fetch(window.location.pathname, {
                         method: 'POST',
                         headers: {
@@ -2672,11 +2223,10 @@
                         },
                         body: 'action=initialize_enrollment&user_id=' + userId + '&source_table=' + source + '&broker_balance=' + brokerBalance + '&admin_password=' + encodeURIComponent(password) + '&login_id=' + encodeURIComponent(loginId)
                     })
-                    .then(response => response.json())
+                    .then(r => r.json())
                     .then(data => {
                         confirmBtn.textContent = originalText;
                         confirmBtn.disabled = false;
-                        
                         if (data.success) {
                             self.showNotification('Enrollment initialized successfully!', 'Success', false);
                             self.loadInactiveUsers();
@@ -2700,12 +2250,8 @@
             );
         },
 
-        // ============================================
-        // CANCEL CONTRACT
-        // ============================================
         cancelContract: function(userId, source) {
             const self = this;
-            
             this.showConfirmrevenuemodal(
                 'Cancel Contract',
                 'Are you sure you want to cancel the contract for User ID ' + userId + '? This action cannot be undone.',
@@ -2715,17 +2261,13 @@
                         'Enter admin password to cancel contract for User ID ' + userId,
                         function(password) {
                             const loginId = document.getElementById('login-id-hidden')?.value || '';
-                            
-                            if (!password) {
-                                self.showNotification('Password is required', 'Error', true);
-                                return;
-                            }
-                            
+                            if (!password) { self.showNotification('Password is required', 'Error', true); return; }
+
                             const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
-                            
+
                             fetch(window.location.pathname, {
                                 method: 'POST',
                                 headers: {
@@ -2734,20 +2276,17 @@
                                 },
                                 body: 'action=cancel_contract&user_id=' + userId + '&source_table=' + source + '&admin_password=' + encodeURIComponent(password) + '&login_id=' + encodeURIComponent(loginId)
                             })
-                            .then(response => response.json())
+                            .then(r => r.json())
                             .then(data => {
                                 confirmBtn.textContent = originalText;
                                 confirmBtn.disabled = false;
-                                
                                 if (data.success) {
                                     self.showNotification('Contract cancelled successfully! User moved to inactive tab.', 'Success', false);
                                     self.loadActiveUsers();
                                     self.loadCompletedUsers();
                                     self.loadRevenueHistoryUsers();
                                     self.loadInactiveUsers();
-                                    if (self.currentActiveSubTab === 'unusual') {
-                                        self.loadUnusualUsers();
-                                    }
+                                    if (self.currentActiveSubTab === 'unusual') self.loadUnusualUsers();
                                 } else {
                                     if (data.error === 'Invalid password') {
                                         self.showNotification('Password verification failed. Please try again.', 'Error', true);
@@ -2767,12 +2306,8 @@
             );
         },
 
-        // ============================================
-        // SUSPEND USER
-        // ============================================
         suspendUser: function(userId, source) {
             const self = this;
-            
             this.showConfirmrevenuemodal(
                 'Suspend User',
                 'Are you sure you want to suspend User ID ' + userId + '?',
@@ -2782,17 +2317,13 @@
                         'Enter admin password to suspend User ID ' + userId,
                         function(password) {
                             const loginId = document.getElementById('login-id-hidden')?.value || '';
-                            
-                            if (!password) {
-                                self.showNotification('Password is required', 'Error', true);
-                                return;
-                            }
-                            
+                            if (!password) { self.showNotification('Password is required', 'Error', true); return; }
+
                             const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
-                            
+
                             fetch(window.location.pathname, {
                                 method: 'POST',
                                 headers: {
@@ -2801,11 +2332,10 @@
                                 },
                                 body: 'action=update_application_status_batch&user_id=' + userId + '&source_table=' + source + '&application_status=suspended&admin_password=' + encodeURIComponent(password) + '&login_id=' + encodeURIComponent(loginId)
                             })
-                            .then(response => response.json())
+                            .then(r => r.json())
                             .then(data => {
                                 confirmBtn.textContent = originalText;
                                 confirmBtn.disabled = false;
-                                
                                 if (data.success) {
                                     self.showNotification('User suspended successfully!', 'Success', false);
                                     self.loadCompletedUsers();
@@ -2829,17 +2359,17 @@
         },
 
         // ============================================
-        // VIEW USER DETAIL - Full Screen Overlay
+        // VIEW USER DETAIL
         // ============================================
         viewUserDetail: function(userId, source) {
             this.selectedUserId = userId;
             this.selectedUserSource = source || 'harvhub';
             this.isDetailViewOpen = true;
-            
+
             const overlay = document.getElementById('user-detail-overlay');
             overlay.style.display = 'block';
             document.body.style.overflow = 'hidden';
-            
+
             document.getElementById('detail-user-name').textContent = 'User Details - ID: ' + userId;
             document.getElementById('detail-overlay-body').innerHTML = `
                 <div class="loading-spinner">
@@ -2847,7 +2377,7 @@
                     <p>Loading user details...</p>
                 </div>
             `;
-            
+
             this.fetchUserDetails(userId, source);
         },
 
@@ -2872,121 +2402,58 @@
         },
 
         // ============================================
-        // RENDER USER DETAIL
+        // RENDER USER DETAIL (now table-based)
         // ============================================
         renderUserDetail: function(detailData, basicData) {
             const container = document.getElementById('detail-overlay-body');
-            
+
             const user = basicData.user || {};
-            const dailyLog = detailData.log || {};
-            const dailyTarget = detailData.daily_target || {};
-            
-            // Get programme data for this user
+
+            // detailData.log   = daily_target_revenue (nested { week_X: { Day: {...} } })
+            // detailData.balance_log = balance_log keyed by dd-mm-yyyy
+            const dailyTargetData = (detailData && typeof detailData.log === 'object' && detailData.log !== null)
+                ? detailData.log : {};
+            const dailyLogData = (detailData && typeof detailData.balance_log === 'object' && detailData.balance_log !== null)
+                ? detailData.balance_log : {};
+
             const progData = this.getProgrammeDataForUser(user.id);
-            
-            let dailyTargetData = {};
-            if (dailyTarget) {
-                if (typeof dailyTarget === 'string') {
-                    try {
-                        const parsed = JSON.parse(dailyTarget);
-                        if (parsed && typeof parsed === 'object') {
-                            if (parsed.week_1 || parsed.week_2 || parsed.week_3) {
-                                dailyTargetData = parsed;
-                            } else if (parsed.daily_target_met) {
-                                dailyTargetData = parsed.daily_target_met;
-                            } else {
-                                dailyTargetData = parsed;
-                            }
-                        }
-                    } catch(e) {
-                        try {
-                            const lines = dailyTarget.split(',');
-                            const obj = {};
-                            lines.forEach(line => {
-                                const parts = line.trim().split(':');
-                                if (parts.length === 2) {
-                                    const key = parts[0].trim().replace(/["']/g, '');
-                                    const value = parts[1].trim().replace(/["']/g, '');
-                                    obj[key] = value;
-                                }
-                            });
-                            if (Object.keys(obj).length > 0) {
-                                dailyTargetData = obj;
-                            }
-                        } catch(e2) {
-                            dailyTargetData = {};
-                        }
-                    }
-                } else if (typeof dailyTarget === 'object') {
-                    if (dailyTarget.week_1 || dailyTarget.week_2 || dailyTarget.week_3) {
-                        dailyTargetData = dailyTarget;
-                    } else if (dailyTarget.daily_target_met) {
-                        dailyTargetData = dailyTarget.daily_target_met;
-                    } else {
-                        dailyTargetData = dailyTarget;
-                    }
-                }
-            }
-            
-            if (typeof dailyTargetData !== 'object' || Array.isArray(dailyTargetData)) {
-                dailyTargetData = {};
-            }
-            
-            let dailyLogData = {};
-            if (dailyLog) {
-                if (typeof dailyLog === 'string') {
-                    try {
-                        const parsed = JSON.parse(dailyLog);
-                        if (parsed && typeof parsed === 'object') {
-                            dailyLogData = parsed;
-                        }
-                    } catch(e) {
-                        dailyLogData = {};
-                    }
-                } else if (typeof dailyLog === 'object') {
-                    dailyLogData = dailyLog;
-                }
-            }
-            
+
             const brokerBalance = parseFloat(user.broker_balance) || 0;
             const profitAndLoss = parseFloat(user.profitandloss) || 0;
             const currentBalance = brokerBalance + profitAndLoss;
             const isAboveThreshold = profitAndLoss > this.minProfitForSplit;
             const isInProfit = profitAndLoss > 0;
-            
-            const weekKeys = Object.keys(dailyTargetData).filter(key => key.startsWith('week_')).sort();
-            
+
+            const weekKeys = Object.keys(dailyTargetData).filter(k => k.startsWith('week_')).sort((a, b) => {
+                const na = parseInt(a.replace('week_', '')) || 0;
+                const nb = parseInt(b.replace('week_', '')) || 0;
+                return na - nb;
+            });
+
             const logDates = Object.keys(dailyLogData).sort((a, b) => {
-                const partsA = a.split('-');
-                const partsB = b.split('-');
-                if (partsA.length === 3 && partsB.length === 3) {
-                    const dateA = new Date(partsA[2], partsA[1] - 1, partsA[0]);
-                    const dateB = new Date(partsB[2], partsB[1] - 1, partsB[0]);
-                    return dateB - dateA;
-                }
+                const da = Revenue.parseDMY(a);
+                const db = Revenue.parseDMY(b);
+                if (da && db) return db - da;
                 return b.localeCompare(a);
             });
-            
-            let totalDays = 0;
-            let totalMet = 0;
-            let totalOwed = 0;
-            let totalPending = 0;
-            let totalNotListed = 0;
-            
-            weekKeys.forEach(weekKey => {
-                const weekData = dailyTargetData[weekKey];
-                if (typeof weekData === 'object' && !Array.isArray(weekData)) {
-                    Object.keys(weekData).forEach(day => {
-                        const dayData = weekData[day];
+
+            let totalDays = 0, totalMet = 0, totalOwed = 0, totalPending = 0, totalNotListed = 0;
+            weekKeys.forEach(wk => {
+                const wd = dailyTargetData[wk];
+                if (wd && typeof wd === 'object' && !Array.isArray(wd)) {
+                    Object.keys(wd).forEach(day => {
+                        const dd = wd[day];
                         totalDays++;
-                        if (dayData.status === 'met') totalMet++;
-                        else if (dayData.status === 'owed') totalOwed++;
-                        else if (dayData.status === 'pending') totalPending++;
-                        else if (dayData.status === 'not_listed') totalNotListed++;
+                        if (dd.status === 'met') totalMet++;
+                        else if (dd.status === 'owed') totalOwed++;
+                        else if (dd.status === 'pending') totalPending++;
+                        else if (dd.status === 'not_listed') totalNotListed++;
                     });
                 }
             });
-            
+
+            const unusualDays = Object.values(dailyLogData).filter(d => d && d.unusual_activity).length;
+
             let html = `
                 <div class="user-detail-grid">
                     <div class="detail-card-full">
@@ -2997,7 +2464,7 @@
                                 <p class="detail-user-id">ID: ${user.id} | Source: ${this.escapeHtml(user.source || 'N/A')}</p>
                                 ${progData.has_programme ? `
                                     <p class="detail-programme-info" style="margin-top:8px;font-size:12px;color:#888;">
-                                        <strong>Developer:</strong> ${this.escapeHtml(progData.developer_name)} 
+                                        <strong>Developer:</strong> ${this.escapeHtml(progData.developer_name)}
                                         ${progData.programme_name ? ` | <strong>Programme:</strong> ${this.escapeHtml(progData.programme_name)}` : ''}
                                         | <strong>Duration:</strong> ${progData.contract_duration} days
                                         | <strong>Dev %:</strong> ${progData.developer_percentage}%
@@ -3012,7 +2479,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="detail-stats-grid">
                         <div class="detail-stat-card">
                             <div class="stat-label">Broker Balance</div>
@@ -3044,12 +2511,10 @@
                         </div>
                         <div class="detail-stat-card">
                             <div class="stat-label">Unusual Activity Days</div>
-                            <div class="stat-value ${Object.values(dailyLogData).filter(d => d.unusual_activity).length > 0 ? 'unusual' : ''}">
-                                ${Object.values(dailyLogData).filter(d => d.unusual_activity).length}
-                            </div>
+                            <div class="stat-value ${unusualDays > 0 ? 'unusual' : ''}">${unusualDays}</div>
                         </div>
                     </div>
-                    
+
                     <div class="detail-tabs-wrapper">
                         <div class="detail-tabs">
                             <button class="detail-tab-btn active" data-detail-tab="daily-target" onclick="Revenue.switchDetailTab('daily-target')">
@@ -3062,26 +2527,22 @@
                             </button>
                         </div>
                     </div>
-                    
+
                     <div id="detail-tab-daily-target" class="detail-tab-content active">
             `;
-            
+
             if (weekKeys.length > 0) {
-                html += `
-                    <div class="detail-section">
-                        <div class="section-content">
-                            <div class="weekly-target-container">
-                `;
-                
+                html += `<div class="detail-section"><div class="section-content"><div class="weekly-target-container">`;
+
                 weekKeys.forEach(weekKey => {
                     const weekData = dailyTargetData[weekKey];
                     if (typeof weekData !== 'object' || Array.isArray(weekData)) return;
-                    
+
                     const weekDays = Object.keys(weekData);
                     const weekMet = weekDays.filter(d => weekData[d].status === 'met').length;
                     const weekOwed = weekDays.filter(d => weekData[d].status === 'owed').length;
                     const weekPending = weekDays.filter(d => weekData[d].status === 'pending').length;
-                    
+
                     html += `
                         <div class="week-container">
                             <div class="week-header">
@@ -3092,48 +2553,33 @@
                             </div>
                             <div class="daily-target-list">
                     `;
-                    
+
                     weekDays.forEach(day => {
                         const dayData = weekData[day];
                         const status = dayData.status || 'unknown';
-                        const target = dayData.daily_target || 0;
-                        const allocated = dayData.profit_allocated || 0;
+                        const target = parseFloat(dayData.daily_target) || 0;
+                        const allocated = parseFloat(dayData.profit_allocated) || 0;
+                        const remaining = parseFloat(dayData.remaining_needed);
                         const dateStr = dayData.date || '';
-                        const isListed = dayData.is_listed !== false;
-                        
-                        if (!isListed) {
-                            html += `
-                                <div class="daily-target-item not-listed">
-                                    <div class="target-left">
-                                        <div class="target-day">${day}</div>
-                                        <div class="target-date">${dateStr}</div>
-                                        <span class="status-badge status-not-listed">Not Listed</span>
-                                    </div>
-                                    <div class="target-value" style="color:#888;">---</div>
-                                </div>
-                            `;
-                            return;
-                        }
-                        
-                        const statusClass = status === 'met' ? 'status-met' : status === 'owed' ? 'status-owed' : 'status-pending';
-                        
+
                         let isUnusual = false;
                         if (dateStr) {
-                            const parts = dateStr.split('-');
-                            const logKey = parts[2] + '-' + parts[1] + '-' + parts[0];
-                            if (dailyLogData[logKey] && dailyLogData[logKey].unusual_activity) {
-                                isUnusual = true;
+                            const parts = dateStr.split('-'); // YYYY-MM-DD
+                            if (parts.length === 3) {
+                                const logKey = parts[2] + '-' + parts[1] + '-' + parts[0]; // dd-mm-yyyy
+                                if (dailyLogData[logKey] && dailyLogData[logKey].unusual_activity) isUnusual = true;
                             }
                         }
-                        
-                        const remaining = target - allocated;
-                        const hasRemaining = remaining > 0 && status === 'owed';
-                        
+
+                        const statusClass = status === 'met' ? 'status-met' : status === 'owed' ? 'status-owed' : 'status-pending';
+                        const hasRemaining = !isNaN(remaining) && remaining > 0 && status === 'owed';
+                        const remainingDisplay = hasRemaining ? '$' + this.formatNumber(remaining) : '$0.00';
+
                         html += `
                             <div class="daily-target-item ${isUnusual ? 'unusual' : ''}">
                                 <div class="target-left">
-                                    <div class="target-day">${day}</div>
-                                    <div class="target-date">${dateStr}</div>
+                                    <div class="target-day">${this.escapeHtml(day)}</div>
+                                    <div class="target-date">${this.escapeHtml(dateStr)}</div>
                                     ${isUnusual ? '<span class="status-badge status-unusual" style="font-size:9px;">Unusual</span>' : ''}
                                 </div>
                                 <div class="target-right">
@@ -3147,28 +2593,21 @@
                                     </div>
                                     <div class="target-row">
                                         <span class="target-label">Remaining</span>
-                                        <span class="target-value ${hasRemaining ? 'remaining' : ''}">${hasRemaining ? '$' + this.formatNumber(remaining) : '$0.00'}</span>
+                                        <span class="target-value ${hasRemaining ? 'remaining' : ''}">${remainingDisplay}</span>
                                     </div>
                                     <div class="target-row">
                                         <span class="target-label">Status</span>
-                                        <span class="target-value"><span class="status-badge ${statusClass}" style="font-size:10px;">${status.toUpperCase()}</span></span>
+                                        <span class="target-value"><span class="status-badge ${statusClass}" style="font-size:10px;">${String(status).toUpperCase()}</span></span>
                                     </div>
                                 </div>
                             </div>
                         `;
                     });
-                    
-                    html += `
-                            </div>
-                        </div>
-                    `;
+
+                    html += `</div></div>`;
                 });
-                
-                html += `
-                            </div>
-                        </div>
-                    </div>
-                `;
+
+                html += `</div></div></div>`;
             } else {
                 html += `
                     <div class="empty-state">
@@ -3178,46 +2617,34 @@
                     </div>
                 `;
             }
-            
-            html += `
-                    </div>
-                    
-                    <div id="detail-tab-balance-log" class="detail-tab-content" style="display:none;">
-            `;
-            
+
+            html += `</div><div id="detail-tab-balance-log" class="detail-tab-content" style="display:none;">`;
+
             if (logDates.length > 0) {
-                html += `
-                    <div class="detail-section">
-                        <div class="section-content">
-                            <div class="balance-log-list">
-                `;
-                
+                html += `<div class="detail-section"><div class="section-content"><div class="balance-log-list">`;
+
                 logDates.forEach(date => {
                     const dayData = dailyLogData[date];
                     if (!dayData) return;
-                    
-                    const parts = date.split('-');
-                    let dateObj;
-                    if (parts.length === 3) {
-                        dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
-                    } else {
-                        dateObj = new Date(date);
-                    }
-                    const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
-                    const formattedDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
-                    
-                    const isUnusual = dayData.unusual_activity || false;
+
+                    const dateObj = Revenue.parseDMY(date);
+                    const dayName = dateObj ? dateObj.toLocaleDateString('en-US', { weekday: 'long' }) : '';
+                    const formattedDate = dateObj
+                        ? dateObj.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+                        : date;
+
+                    const isUnusual = !!dayData.unusual_activity;
                     const hasWithdrawals = parseFloat(dayData.day_unauthorized_withdrawals) > 0;
-                    const hasUnauthorizedTrades = (dayData.unauthorized_trades_count || 0) > 0;
-                    
+                    const hasUnauthorizedTrades = (parseInt(dayData.unauthorized_trades_count) || 0) > 0;
+
                     let unusualBadge = '';
                     if (isUnusual) {
-                        let badges = [];
+                        const badges = [];
                         if (hasWithdrawals) badges.push('Withdrawal');
                         if (hasUnauthorizedTrades) badges.push('Trades');
-                        unusualBadge = `<span class="status-badge status-unusual">${badges.join(' + ')}</span>`;
+                        unusualBadge = `<span class="status-badge status-unusual">${badges.join(' + ') || 'Unusual'}</span>`;
                     }
-                    
+
                     html += `
                         <div class="balance-log-item ${isUnusual ? 'unusual' : ''}">
                             <div class="log-header" onclick="Revenue.toggleBalanceLogDetails(this.parentElement)">
@@ -3256,33 +2683,23 @@
                                     <span class="log-value">$${this.formatNumber(dayData.day_closing_balance)}</span>
                                 </div>
                                 <div class="log-row">
+                                    <span class="log-label">Authorized Trades Count</span>
+                                    <span class="log-value">${parseInt(dayData.authorized_trades_count) || 0}</span>
+                                </div>
+                                <div class="log-row">
+                                    <span class="log-label">Unauthorized Trades Count</span>
+                                    <span class="log-value">${parseInt(dayData.unauthorized_trades_count) || 0}</span>
+                                </div>
+                                <div class="log-row">
                                     <span class="log-label">Unusual Activity</span>
                                     <span class="log-value ${isUnusual ? 'unusual' : ''}">${isUnusual ? 'Yes' : 'No'}</span>
                                 </div>
-                                ${hasUnauthorizedTrades && dayData.day_unauthorized_trades ? `
-                                    <div class="unauthorized-trades-section">
-                                        <div class="log-label">Unauthorized Trades</div>
-                                        ${dayData.day_unauthorized_trades.map(trade => `
-                                            <div class="trade-row-detail">
-                                                <span class="trade-symbol">${this.escapeHtml(trade.symbol || 'N/A')}</span>
-                                                <span class="trade-pnl ${parseFloat(trade.pnl) < 0 ? 'loss' : 'profit'}">
-                                                    $${this.formatNumber(trade.pnl)}
-                                                </span>
-                                                <span class="trade-meta">Ticket: ${trade.ticket || 'N/A'}</span>
-                                            </div>
-                                        `).join('')}
-                                    </div>
-                                ` : ''}
                             </div>
                         </div>
                     `;
                 });
-                
-                html += `
-                            </div>
-                        </div>
-                    </div>
-                `;
+
+                html += `</div></div></div>`;
             } else {
                 html += `
                     <div class="empty-state">
@@ -3292,20 +2709,26 @@
                     </div>
                 `;
             }
-            
-            html += `
-                    </div>
-                </div>
-            `;
-            
+
+            html += `</div></div>`;
+
             container.innerHTML = html;
+        },
+
+        parseDMY: function(s) {
+            if (!s) return null;
+            const m = String(s).match(/^(\d{2})-(\d{2})-(\d{4})$/);
+            if (m) return new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+            const m2 = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (m2) return new Date(parseInt(m2[1]), parseInt(m2[2]) - 1, parseInt(m2[3]));
+            const d = new Date(s);
+            return isNaN(d.getTime()) ? null : d;
         },
 
         switchDetailTab: function(tabId) {
             document.querySelectorAll('.detail-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.detailTab === tabId);
             });
-            
             document.querySelectorAll('.detail-tab-content').forEach(content => {
                 const isActive = content.id === 'detail-tab-' + tabId;
                 content.classList.toggle('active', isActive);
@@ -3342,17 +2765,15 @@
             const userId = selectElement.dataset.userId;
             const source = selectElement.dataset.source;
             const newStatus = selectElement.value;
-            
             if (!newStatus) return;
-            
+
             if (newStatus === 'suspend') {
                 this.suspendUser(userId, source);
                 selectElement.value = '';
                 return;
             }
-            
+
             const self = this;
-            
             this.showConfirmrevenuemodal(
                 'Update Status',
                 'Update status to "' + newStatus + '" for User ID ' + userId + '?',
@@ -3362,17 +2783,13 @@
                         'Enter admin password to update status for User ID ' + userId,
                         function(password) {
                             const loginId = document.getElementById('login-id-hidden')?.value || '';
-                            
-                            if (!password) {
-                                self.showNotification('Password is required', 'Error', true);
-                                return;
-                            }
-                            
+                            if (!password) { self.showNotification('Password is required', 'Error', true); return; }
+
                             const confirmBtn = document.getElementById('password-revenuemodal-confirm-btn');
                             const originalText = confirmBtn.textContent;
                             confirmBtn.textContent = 'Processing...';
                             confirmBtn.disabled = true;
-                            
+
                             fetch(window.location.pathname, {
                                 method: 'POST',
                                 headers: {
@@ -3381,11 +2798,10 @@
                                 },
                                 body: 'action=update_payment_status&user_id=' + userId + '&source_table=' + source + '&payment_status=' + encodeURIComponent(newStatus) + '&admin_password=' + encodeURIComponent(password) + '&login_id=' + encodeURIComponent(loginId)
                             })
-                            .then(response => response.json())
+                            .then(r => r.json())
                             .then(data => {
                                 confirmBtn.textContent = originalText;
                                 confirmBtn.disabled = false;
-                                
                                 if (data.success) {
                                     self.showNotification('Status updated successfully!', 'Success', false);
                                     self.loadCompletedUsers();
@@ -3414,15 +2830,13 @@
         },
 
         // ============================================
-        // SWITCH UNUSUAL SUB TAB
+        // SUB TAB SWITCHERS
         // ============================================
         switchUnusualSubTab: function(subTab) {
             this.currentUnusualSubTab = subTab;
-            
             document.querySelectorAll('#unusual-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.unusualSubtab === subTab);
             });
-            
             this.filteredUnusualUsers = this.getFilteredUnusualUsers();
             this.filteredActiveUsers = this.filteredUnusualUsers;
             this.renderActiveUsers();
@@ -3430,65 +2844,47 @@
             this.updateUnusualBadges();
         },
 
-        // ============================================
-        // UPDATE UNUSUAL BADGES
-        // ============================================
         updateUnusualBadges: function() {
             const allCount = this.unusualUsers.length;
             const withdrawalCount = this.unusualUsers.filter(u => (u.withdrawal_count || 0) > 0).length;
             const tradeCount = this.unusualUsers.filter(u => (u.unauthorized_trade_count || 0) > 0).length;
-            
+
             this.updateBadge('unusual-all-count', allCount);
             this.updateBadge('unusual-withdrawals-count', withdrawalCount);
             this.updateBadge('unusual-trades-count', tradeCount);
             this.updateBadge('active-unusual-count', allCount);
         },
 
-        // ============================================
-        // SWITCH INACTIVE SUB TAB
-        // ============================================
         switchInactiveSubTab: function(subTab) {
             this.currentInactiveSubTab = subTab;
-            
             document.querySelectorAll('#inactive-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.subtab === subTab);
             });
-            
             this.filteredInactiveUsers = this.getFilteredInactiveUsers();
             this.renderInactiveUsers();
             this.updateInactiveCubes();
         },
 
         // ============================================
-        // SUMMARY CUBES
+        // CUBES
         // ============================================
         updateActiveCubes: function() {
             const users = this.filteredActiveUsers;
-            let totalInvestment = 0;
-            let totalPnl = 0;
-            let totalBalance = 0;
-            let totalUserShare = 0;
-            let totalServerShare = 0;
-            let totalInProfit = 0;
+            let totalInvestment = 0, totalPnl = 0, totalBalance = 0;
+            let totalUserShare = 0, totalServerShare = 0, totalInProfit = 0;
 
             users.forEach(user => {
-                const brokerBalance = parseFloat(user.broker_balance) || 0;
+                const bb = parseFloat(user.broker_balance) || 0;
                 const pnl = parseFloat(user.profitandloss) || 0;
-                totalInvestment += brokerBalance;
+                totalInvestment += bb;
                 totalPnl += pnl;
-                totalBalance += brokerBalance + pnl;
+                totalBalance += bb + pnl;
 
                 if (pnl > 0) {
                     totalInProfit++;
-                    // Use programme-specific percentages
                     const progData = this.getProgrammeDataForUser(user.id);
-                    const devPercent = progData.developer_percentage;
-                    const invPercent = progData.investor_percentage;
-                    
-                    const serverShare = (pnl * devPercent) / 100;
-                    const userShare = (pnl * invPercent) / 100;
-                    totalServerShare += serverShare;
-                    totalUserShare += userShare;
+                    totalServerShare += (pnl * progData.developer_percentage) / 100;
+                    totalUserShare += (pnl * progData.investor_percentage) / 100;
                 }
             });
 
@@ -3497,36 +2893,30 @@
             this.updateCubeValue('active-current-balance', totalBalance);
             this.updateCubeValue('active-user-share', totalUserShare);
             this.updateCubeValue('active-server-share', totalServerShare);
-            
+
             const profitEl = document.getElementById('active-investors-profit');
             if (profitEl) {
                 profitEl.textContent = totalInProfit + '/' + users.length;
-                if (totalInProfit > 0) {
-                    profitEl.style.color = '#4caf50';
-                } else {
-                    profitEl.style.color = 'var(--text-color, #ffffff)';
-                }
+                profitEl.style.color = totalInProfit > 0 ? '#4caf50' : 'var(--text-color, #ffffff)';
             }
         },
 
         updateInactiveCubes: function() {
             const users = this.filteredInactiveUsers;
-            let totalInvestment = 0;
-            let totalPnl = 0;
-            let totalBalance = 0;
+            let totalInvestment = 0, totalPnl = 0, totalBalance = 0;
 
             users.forEach(user => {
-                const brokerBalance = parseFloat(user.broker_balance) || 0;
+                const bb = parseFloat(user.broker_balance) || 0;
                 const pnl = parseFloat(user.profitandloss) || 0;
-                totalInvestment += brokerBalance;
+                totalInvestment += bb;
                 totalPnl += pnl;
-                totalBalance += brokerBalance + pnl;
+                totalBalance += bb + pnl;
             });
 
             this.updateCubeValue('inactive-total-investment', totalInvestment);
             this.updateCubeValue('inactive-total-pnl', totalPnl);
             this.updateCubeValue('inactive-current-balance', totalBalance);
-            
+
             const countEl = document.getElementById('inactive-count-total');
             if (countEl) {
                 countEl.textContent = users.length;
@@ -3534,9 +2924,6 @@
             }
         },
 
-        // ============================================
-        // BADGE UPDATES
-        // ============================================
         updateBadge: function(id, count) {
             const el = document.getElementById(id);
             if (el) el.textContent = count || 0;
@@ -3544,14 +2931,7 @@
 
         updateActiveBadges: function() {
             const users = this.allActiveUsers;
-            const counts = {
-                all: users.length,
-                unusual: 0,
-                'above-threshold': 0,
-                'below-threshold': 0,
-                profit: 0,
-                loss: 0
-            };
+            const counts = { all: users.length, unusual: 0, 'above-threshold': 0, 'below-threshold': 0, profit: 0, loss: 0 };
 
             users.forEach(u => {
                 const pnl = parseFloat(u.profitandloss) || 0;
@@ -3562,50 +2942,28 @@
             });
 
             this.updateBadge('active-unusual-count', this.unusualUsers.length || 0);
-
-            Object.keys(counts).forEach(key => {
-                if (key !== 'unusual') {
-                    this.updateBadge('active-' + key + '-count', counts[key]);
-                }
+            Object.keys(counts).forEach(k => {
+                if (k !== 'unusual') this.updateBadge('active-' + k + '-count', counts[k]);
             });
             this.updateBadge('active-count', users.length);
         },
 
         updateCompletedBadges: function() {
             const users = this.allCompletedUsers;
-            const counts = {
-                'inactive-above': 0,
-                'inactive-below': 0,
-                'inactive-loss': 0,
-                unpaid: 0,
-                'payment-made': 0,
-                'payment-confirmed': 0,
-                failed: 0
-            };
+            const counts = { 'inactive-above': 0, 'inactive-below': 0, 'inactive-loss': 0, unpaid: 0, 'payment-made': 0, 'payment-confirmed': 0, failed: 0 };
 
             const isContractEnded = (user) => {
-                const execDate = user.execution_start_date;
-                if (!execDate || execDate === '0000-00-00' || execDate === null) return false;
-                
+                const e = user.execution_start_date;
+                if (!e || e === '0000-00-00' || e === null) return false;
                 const duration = this.getContractDurationForUser(user.id);
-                
-                const start = new Date(execDate);
-                const end = new Date(start);
-                end.setDate(end.getDate() + duration);
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                end.setHours(0, 0, 0, 0);
-                
+                const start = new Date(e);
+                const end = new Date(start); end.setDate(end.getDate() + duration);
+                const today = new Date(); today.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
                 return today > end;
             };
-
-            const isCancelled = (user) => {
-                const l = (user.current_loyalties || user.loyalties || '');
-                return Revenue.loyaltyIsFamily(l, 'cancelled');
-            };
-
+            const isCancelled = (user) => Revenue.loyaltyIsFamily(user.current_loyalties || user.loyalties || '', 'cancelled');
             const hasPaymentStatus = (user) => {
-                const l = (user.current_loyalties || user.loyalties || '');
+                const l = user.current_loyalties || user.loyalties || '';
                 return Revenue.loyaltyIsFamily(l, 'payment-confirmed')
                     || Revenue.loyaltyIsFamily(l, 'payment-made')
                     || Revenue.loyaltyIsFamily(l, 'unpaid')
@@ -3613,76 +2971,44 @@
             };
 
             users.forEach(u => {
-                const profit = parseFloat(u.profitandloss) || 0;
-                const l = (u.current_loyalties || u.loyalties || '');
-                
+                const p = parseFloat(u.profitandloss) || 0;
+                const l = u.current_loyalties || u.loyalties || '';
                 if (isContractEnded(u)) {
-                    if (isCancelled(u) && profit > this.minProfitForSplit) {
-                        counts['inactive-above']++;
-                    }
+                    if (isCancelled(u) && p > this.minProfitForSplit) counts['inactive-above']++;
                     else if (!hasPaymentStatus(u) && !isCancelled(u)) {
-                        if (profit > this.minProfitForSplit) {
-                            counts['inactive-above']++;
-                        } else if (profit > 0 && profit <= this.minProfitForSplit) {
-                            counts['inactive-below']++;
-                        } else if (profit < 0) {
-                            counts['inactive-loss']++;
-                        }
+                        if (p > this.minProfitForSplit) counts['inactive-above']++;
+                        else if (p > 0 && p <= this.minProfitForSplit) counts['inactive-below']++;
+                        else if (p < 0) counts['inactive-loss']++;
                     }
                 }
-                
-                if (Revenue.loyaltyIsFamily(l, 'unpaid')) {
-                    counts.unpaid++;
-                } else if (Revenue.loyaltyIsFamily(l, 'payment-made')) {
-                    counts['payment-made']++;
-                } else if (Revenue.loyaltyIsFamily(l, 'payment-confirmed')) {
-                    counts['payment-confirmed']++;
-                } else if (Revenue.loyaltyIsFamily(l, 'failed')) {
-                    counts.failed++;
-                }
+                if (Revenue.loyaltyIsFamily(l, 'unpaid')) counts.unpaid++;
+                else if (Revenue.loyaltyIsFamily(l, 'payment-made')) counts['payment-made']++;
+                else if (Revenue.loyaltyIsFamily(l, 'payment-confirmed')) counts['payment-confirmed']++;
+                else if (Revenue.loyaltyIsFamily(l, 'failed')) counts.failed++;
             });
 
-            Object.keys(counts).forEach(key => {
-                this.updateBadge(key + '-count', counts[key]);
-            });
+            Object.keys(counts).forEach(k => this.updateBadge(k + '-count', counts[k]));
         },
 
         updateInactiveBadges: function() {
             const users = this.allInactiveUsers;
-            const counts = {
-                all: users.length,
-                'no-contract': 0,
-                expired: 0,
-                cancelled: 0
-            };
+            const counts = { all: users.length, 'no-contract': 0, expired: 0, cancelled: 0 };
 
             users.forEach(u => {
-                const execDate = u.execution_start_date;
-                const loyalties = (u.loyalties || '');
-                
-                if (Revenue.loyaltyIsFamily(loyalties, 'cancelled')) {
-                    counts.cancelled++;
-                } else if (!execDate || execDate === '0000-00-00' || execDate === null) {
-                    counts['no-contract']++;
-                } else {
+                const e = u.execution_start_date;
+                const l = u.loyalties || '';
+                if (Revenue.loyaltyIsFamily(l, 'cancelled')) counts.cancelled++;
+                else if (!e || e === '0000-00-00' || e === null) counts['no-contract']++;
+                else {
                     const duration = this.getContractDurationForUser(u.id);
-                    
-                    const start = new Date(execDate);
-                    const end = new Date(start);
-                    end.setDate(end.getDate() + duration);
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    end.setHours(0, 0, 0, 0);
-                    
-                    if (today > end) {
-                        counts.expired++;
-                    }
+                    const start = new Date(e);
+                    const end = new Date(start); end.setDate(end.getDate() + duration);
+                    const today = new Date(); today.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
+                    if (today > end) counts.expired++;
                 }
             });
 
-            Object.keys(counts).forEach(key => {
-                this.updateBadge('inactive-' + key + '-count', counts[key]);
-            });
+            Object.keys(counts).forEach(k => this.updateBadge('inactive-' + k + '-count', counts[k]));
             this.updateBadge('inactive-count', users.length);
         },
 
@@ -3707,7 +3033,6 @@
                 default: return status || 'Unknown';
             }
         },
-
         getStatusClass: function(status) {
             const n = this.normalizeLoyaltyStatus(status);
             if (n === 'payment-confirmed' || n === 'contract-cancelled-payment-confirmed') return 'status-confirmed';
@@ -3726,15 +3051,12 @@
         // ============================================
         switchTab: function(tab) {
             this.currentTab = tab;
-
             document.querySelectorAll('.main-tabs .tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.tab === tab);
             });
-
             document.querySelectorAll('.tab-content').forEach(el => {
                 el.classList.toggle('active', el.id === 'tab-' + tab);
             });
-            
             if (tab === 'completed') {
                 this.filteredCompletedUsers = this.getFilteredCompletedUsers();
                 this.renderCompletedUsers();
@@ -3750,11 +3072,9 @@
 
         switchActiveSubTab: function(subTab) {
             this.currentActiveSubTab = subTab;
-
             document.querySelectorAll('#active-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.subtab === subTab);
             });
-
             const unusualSubTabs = document.getElementById('unusual-sub-sub-tabs');
             if (subTab === 'unusual') {
                 unusualSubTabs.style.display = 'block';
@@ -3769,38 +3089,28 @@
 
         switchCompletedSubTab: function(subTab) {
             this.currentCompletedSubTab = subTab;
-
             document.querySelectorAll('#completed-sub-tabs .sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.subtab === subTab);
             });
-
             this.filteredCompletedUsers = this.getFilteredCompletedUsers();
             this.renderCompletedUsers();
         },
 
         // ============================================
-        // UTILITY FUNCTIONS
+        // UTILS
         // ============================================
         formatNumber: function(num) {
             if (num === undefined || num === null || isNaN(num)) return '0.00';
             return parseFloat(num).toFixed(2);
         },
-
         formatDate: function(dateStr) {
             if (!dateStr || dateStr === '0000-00-00') return 'N/A';
             try {
                 const d = new Date(dateStr + 'T00:00:00');
                 if (isNaN(d.getTime())) return dateStr;
-                return d.toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: '2-digit',
-                    year: 'numeric'
-                });
-            } catch(e) {
-                return dateStr;
-            }
+                return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+            } catch (e) { return dateStr; }
         },
-
         escapeHtml: function(str) {
             if (!str) return '';
             return String(str).replace(/[&<>]/g, function(m) {

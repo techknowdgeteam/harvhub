@@ -1,6 +1,6 @@
 <?php
 // analytics.php
-// This file is included in serveraccount.php when view=analytics
+// Included from serveraccount.php when view=analytics
 ?>
 
 <h2>Analytics Dashboard</h2>
@@ -21,7 +21,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="analytics-content" id="analytics-content">
             <div class="info-message">
                 Select a user to view their trading analytics
@@ -52,1290 +52,902 @@
 </div>
 
 <script>
-    const Analytics = {
-        users: [],
-        selectedUser: null,
-        analyticsData: null,
-        
-        // State
-        currentTradeType: 'trades_within_risks_config',
-        currentAuthType: 'authorized',
-        
-        getDefaultAnalyticsStructure: function() {
-            return {
-                from_execution_start_date: {
-                    start_date: null,
-                    end_date: null,
-                    last_updated: null,
-                    trades_within_risks_config: {
-                        summaries: {
-                            summaries_of_profits_only: {
-                                total_lost_trades: 0,
-                                total_won_trades: 0,
-                                total_lost_trades_amount: 0,
-                                total_won_trades_amount: 0,
-                                lowest_trades_per_day: 0,
-                                highest_trades_per_day: 0,
-                                average_trades_per_day: 0,
-                                lowest_trade_dates: [],
-                                highest_trade_dates: [],
-                                average_trade_dates: [],
-                                recent_risk_reward: 0,
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            }
-                        },
-                        regular_data: {
-                            authorized: {
-                                total_trades: 0,
-                                total_pnl: 0,
-                                profit_trades: 0,
-                                loss_trades: 0,
-                                profit_amount: 0,
-                                loss_amount: 0,
-                                all_traded_symbols: {},
-                                symbols_traded: 0,
-                                closed_deals_with_sl_tp: 0,
-                                closed_deals_without_sl_tp: 0,
-                                highest_sequential_losses: {},
-                                highest_sequential_days_in_loss: {},
-                                highest_loss_per_trade: 0,
-                                daily_trades_record: {},
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            },
-                            unauthorized: {
-                                total_trades: 0,
-                                total_pnl: 0,
-                                profit_trades: 0,
-                                loss_trades: 0,
-                                profit_amount: 0,
-                                loss_amount: 0,
-                                all_traded_symbols: {},
-                                symbols_traded: 0,
-                                closed_deals_with_sl_tp: 0,
-                                closed_deals_without_sl_tp: 0,
-                                highest_sequential_losses: {},
-                                highest_sequential_days_in_loss: {},
-                                highest_loss_per_trade: 0,
-                                daily_trades_record: {},
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            }
-                        }
-                    },
-                    trades_outside_risks_config: {
-                        summaries: {
-                            summaries_of_profits_only: {
-                                total_lost_trades: 0,
-                                total_won_trades: 0,
-                                total_lost_trades_amount: 0,
-                                total_won_trades_amount: 0,
-                                lowest_trades_per_day: 0,
-                                highest_trades_per_day: 0,
-                                average_trades_per_day: 0,
-                                lowest_trade_dates: [],
-                                highest_trade_dates: [],
-                                average_trade_dates: [],
-                                recent_risk_reward: 0,
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            }
-                        },
-                        regular_data: {
-                            authorized: {
-                                total_trades: 0,
-                                total_pnl: 0,
-                                profit_trades: 0,
-                                loss_trades: 0,
-                                profit_amount: 0,
-                                loss_amount: 0,
-                                all_traded_symbols: {},
-                                symbols_traded: 0,
-                                closed_deals_with_sl_tp: 0,
-                                closed_deals_without_sl_tp: 0,
-                                highest_sequential_losses: {},
-                                highest_sequential_days_in_loss: {},
-                                highest_loss_per_trade: 0,
-                                daily_trades_record: {},
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            },
-                            unauthorized: {
-                                total_trades: 0,
-                                total_pnl: 0,
-                                profit_trades: 0,
-                                loss_trades: 0,
-                                profit_amount: 0,
-                                loss_amount: 0,
-                                all_traded_symbols: {},
-                                symbols_traded: 0,
-                                closed_deals_with_sl_tp: 0,
-                                closed_deals_without_sl_tp: 0,
-                                highest_sequential_losses: {},
-                                highest_sequential_days_in_loss: {},
-                                highest_loss_per_trade: 0,
-                                daily_trades_record: {},
-                                revenue_percentage: 0.0,
-                                revenue_profit_percentage: 0.0,
-                                revenue_loss_percentage: 0.0
-                            }
-                        }
-                    }
-                }
-            };
-        },
-        
-        mergeWithDefault: function(receivedData) {
-            const defaultData = this.getDefaultAnalyticsStructure();
-            if (!receivedData || typeof receivedData !== 'object') return defaultData;
-            
-            const deepMerge = (target, source) => {
-                for (const key in source) {
-                    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-                        if (!target[key]) target[key] = {};
-                        deepMerge(target[key], source[key]);
-                    } else {
-                        if (source[key] !== undefined && source[key] !== null) {
-                            target[key] = source[key];
-                        }
-                    }
-                }
-                return target;
-            };
-            
-            return deepMerge(JSON.parse(JSON.stringify(defaultData)), receivedData);
-        },
-        
-        showCustomAlert: function(message, icon = '⚠️') {
-            const alertDiv = document.getElementById('custom-alert');
-            const iconDiv = document.getElementById('custom-alert-icon');
-            const messageDiv = document.getElementById('custom-alert-message');
-            
-            iconDiv.textContent = icon;
-            messageDiv.textContent = message;
-            alertDiv.style.display = 'flex';
-            
-            setTimeout(() => {
-                this.hideCustomAlert();
-            }, 3000);
-        },
-        
-        hideCustomAlert: function() {
-            document.getElementById('custom-alert').style.display = 'none';
-        },
+const Analytics = {
+    users: [],
+    selectedUser: null,
+    payload: null,          // full response from server
+    currentTradeType: 'authorized',   // 'authorized' | 'unauthorized'
 
-        
-        init: function() {
-            this.loadUsers();
-            this.bindEvents();
-        },
-        
-        bindEvents: function() {
-            document.getElementById('floating-stats-btn').addEventListener('click', () => this.toggleStatsPanel());
-        },
-        
-        loadUsers: function() {
-            fetch(window.location.pathname, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: 'action=get_all_users_for_management'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    this.users = data.users;
-                    if (this.users.length > 0) {
-                        this.setDefaultUser(this.users[0]);
-                    }
-                    this.renderDefaultUser();
-                } else {
-                    document.getElementById('default-user-card').innerHTML = '<div class="info-message-small">Error loading users</div>';
-                }
-            })
-            .catch(error => {
-                console.error('Error loading users:', error);
-                document.getElementById('default-user-card').innerHTML = '<div class="info-message-small">Error loading users</div>';
-            });
-        },
-        
-        setDefaultUser: function(user) {
-            this.selectedUser = user;
-            this.loadAnalytics(user.id, user.source);
-        },
-        
-        renderDefaultUser: function() {
-            const container = document.getElementById('default-user-card');
-            if (this.selectedUser) {
-                container.innerHTML = `
-                    <div class="default-user-info" onclick="Analytics.showAllUsersanalyticsmodal()">
-                        <div class="default-user-name">${this.escapeHtml(this.selectedUser.fullname || 'N/A')}</div>
-                        <div class="default-user-email">${this.escapeHtml(this.selectedUser.email || 'N/A')}</div>
-                        <div class="default-user-id">ID: ${this.selectedUser.id}</div>
-                    </div>
-                `;
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+    formatNumber: function(num, dp = 2) {
+        if (num === undefined || num === null || num === '') return '0.00';
+        const n = parseFloat(num);
+        if (isNaN(n)) return '0.00';
+        return n.toFixed(dp);
+    },
+
+    escapeHtml: function(str) {
+        if (str === undefined || str === null) return '';
+        return String(str).replace(/[&<>"']/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            if (m === '"') return '&quot;';
+            if (m === "'") return '&#39;';
+            return m;
+        });
+    },
+
+    formatDateDisplay: function(dateStr) {
+        if (!dateStr) return 'N/A';
+        try {
+            const d = new Date(dateStr + 'T00:00:00');
+            if (isNaN(d.getTime())) return dateStr;
+            return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+        } catch (e) { return dateStr; }
+    },
+
+    showCustomAlert: function(message, icon = '⚠️') {
+        const a = document.getElementById('custom-alert');
+        document.getElementById('custom-alert-icon').textContent = icon;
+        document.getElementById('custom-alert-message').textContent = message;
+        a.style.display = 'flex';
+        setTimeout(() => this.hideCustomAlert(), 3000);
+    },
+
+    hideCustomAlert: function() {
+        document.getElementById('custom-alert').style.display = 'none';
+    },
+
+    addBodyBlur: function() {
+        const c = document.getElementById('analytics-container');
+        if (c) c.classList.add('blur-background');
+    },
+
+    removeBodyBlur: function() {
+        const c = document.getElementById('analytics-container');
+        if (c) c.classList.remove('blur-background');
+    },
+
+    // ------------------------------------------------------------------
+    // Init / users
+    // ------------------------------------------------------------------
+    init: function() {
+        this.loadUsers();
+        this.bindEvents();
+    },
+
+    bindEvents: function() {
+        const btn = document.getElementById('floating-stats-btn');
+        if (btn) btn.addEventListener('click', () => this.toggleStatsPanel());
+    },
+
+    loadUsers: function() {
+        fetch(window.location.pathname, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: 'action=get_all_users_for_management'
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.users && data.users.length) {
+                this.users = data.users;
+                this.selectedUser = this.users[0];
+                this.renderDefaultUser();
+                this.loadAnalytics(this.selectedUser.id, this.selectedUser.source);
+            } else {
+                document.getElementById('default-user-card').innerHTML =
+                    '<div class="info-message-small">No users found</div>';
             }
-        },
-        
-        showAllUsersanalyticsmodal: function() {
-            this.addBodyBlur();
-            
-            const analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="users-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutside(event)">
-                    <div class="analyticsmodal-container users-analyticsmodal" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>All Users (${this.users.length})</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeanalyticsmodal()">✕</span>
+        })
+        .catch(err => {
+            console.error(err);
+            document.getElementById('default-user-card').innerHTML =
+                '<div class="info-message-small">Error loading users</div>';
+        });
+    },
+
+    renderDefaultUser: function() {
+        const c = document.getElementById('default-user-card');
+        if (!this.selectedUser) return;
+        c.innerHTML = `
+            <div class="default-user-info" onclick="Analytics.showAllUsersanalyticsmodal()">
+                <div class="default-user-name">${this.escapeHtml(this.selectedUser.fullname || 'N/A')}</div>
+                <div class="default-user-email">${this.escapeHtml(this.selectedUser.email || 'N/A')}</div>
+                <div class="default-user-id">ID: ${this.selectedUser.id}</div>
+            </div>`;
+    },
+
+    // ------------------------------------------------------------------
+    // User picker modal
+    // ------------------------------------------------------------------
+    showAllUsersanalyticsmodal: function() {
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="users-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutside(event)">
+                <div class="analyticsmodal-container users-analyticsmodal" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>All Users (${this.users.length})</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeanalyticsmodal()">✕</span>
+                    </div>
+                    <div class="analyticsmodal-body">
+                        <div class="users-analyticsmodal-search">
+                            <input type="text" id="users-analyticsmodal-search-input"
+                                   class="user-search-input" placeholder="Search users..."
+                                   onkeyup="Analytics.filteranalyticsmodalUsers()">
                         </div>
-                        <div class="analyticsmodal-body">
-                            <div class="users-analyticsmodal-search">
-                                <input type="text" id="users-analyticsmodal-search-input" class="user-search-input" placeholder="Search users..." onkeyup="Analytics.filteranalyticsmodalUsers()">
+                    </div>
+                    <div class="analyticsmodal-body" id="users-analyticsmodal-list">
+                        ${this.renderanalyticsmodalUsersList(this.users)}
+                    </div>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    renderanalyticsmodalUsersList: function(users) {
+        if (!users || !users.length) return '<div class="info-message-small">No users found</div>';
+        return users.map(u => `
+            <div class="analyticsmodal-user-item ${this.selectedUser && this.selectedUser.id === u.id ? 'selected' : ''}"
+                 onclick="Analytics.selectUserFromanalyticsmodal(${u.id}, '${u.source}')">
+                <div class="analyticsmodal-user-name">${this.escapeHtml(u.fullname || 'N/A')}</div>
+                <div class="analyticsmodal-user-email">${this.escapeHtml(u.email || 'N/A')}</div>
+                <div class="analyticsmodal-user-id">ID: ${u.id}</div>
+            </div>`).join('');
+    },
+
+    filteranalyticsmodalUsers: function() {
+        const t = document.getElementById('users-analyticsmodal-search-input').value.toLowerCase();
+        const f = this.users.filter(u =>
+            (u.fullname && u.fullname.toLowerCase().includes(t)) ||
+            (u.email && u.email.toLowerCase().includes(t)) ||
+            String(u.id).includes(t));
+        const c = document.getElementById('users-analyticsmodal-list');
+        if (c) c.innerHTML = this.renderanalyticsmodalUsersList(f);
+    },
+
+    selectUserFromanalyticsmodal: function(userId) {
+        const u = this.users.find(x => x.id == userId);
+        if (!u) return;
+        this.selectedUser = u;
+        this.renderDefaultUser();
+        this.loadAnalytics(u.id, u.source);
+        this.closeanalyticsmodal();
+    },
+
+    closeanalyticsmodal: function() {
+        const o = document.getElementById('users-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutside: function(e) {
+        if (e.target.id === 'users-analyticsmodal-overlay') this.closeanalyticsmodal();
+    },
+
+    // ------------------------------------------------------------------
+    // Fetch
+    // ------------------------------------------------------------------
+    loadAnalytics: function(userId, source) {
+        this.showLoading();
+        fetch(window.location.pathname, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: `action=get_user_analytics&user_id=${encodeURIComponent(userId)}&source_table=${encodeURIComponent(source)}`
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                this.payload = data;
+                this.renderAnalytics();
+                this.showFloatingButton();
+            } else {
+                this.payload = null;
+                this.showNoAnalyticsMessage();
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            this.payload = null;
+            this.showNoAnalyticsMessage();
+        });
+    },
+
+    // ------------------------------------------------------------------
+    // Render
+    // ------------------------------------------------------------------
+    showFloatingButton: function() {
+        document.getElementById('floating-stats-btn').style.display = 'flex';
+    },
+
+    toggleStatsPanel: function() {
+        const o = document.getElementById('stats-panel-overlay');
+        if (o.style.display === 'flex') {
+            o.style.display = 'none';
+            this.removeBodyBlur();
+        } else {
+            o.style.display = 'flex';
+            this.addBodyBlur();
+            this.renderStatsPanel();
+        }
+    },
+
+    renderStatsPanel: function() {
+        const c = document.getElementById('stats-panel-content');
+        c.innerHTML = `
+            <div style="margin-bottom: 15px;">
+                <div class="stat-option-title" style="margin-bottom: 8px;">Trade Type</div>
+                <div class="stat-option ${this.currentTradeType === 'authorized' ? 'active' : ''}"
+                     onclick="Analytics.setTradeType('authorized'); Analytics.toggleStatsPanel();">
+                    <div class="stat-option-title">Authorized Trades</div>
+                </div>
+                <div class="stat-option ${this.currentTradeType === 'unauthorized' ? 'active' : ''}"
+                     onclick="Analytics.setTradeType('unauthorized'); Analytics.toggleStatsPanel();">
+                    <div class="stat-option-title">Unauthorized Trades</div>
+                </div>
+            </div>
+            <div style="padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <div class="stat-option-title" style="margin-bottom: 8px;">View Trades</div>
+                <div class="stat-option" onclick="Analytics.showAllTradesanalyticsmodal(); Analytics.toggleStatsPanel();">
+                    <div class="stat-option-title">All Trades</div>
+                    <div class="stat-option-desc">View complete trade history</div>
+                </div>
+            </div>`;
+    },
+
+    setTradeType: function(t) {
+        this.currentTradeType = t;
+        this.renderAnalytics();
+    },
+
+    getSummary: function() {
+        if (!this.payload) return null;
+        return this.currentTradeType === 'authorized'
+            ? this.payload.authorized
+            : this.payload.unauthorized;
+    },
+
+    renderAnalytics: function() {
+        if (!this.payload) { this.showNoAnalyticsMessage(); return; }
+        const s = this.getSummary();
+        if (!s) { this.showNoAnalyticsMessage(); return; }
+
+        const container = document.getElementById('analytics-content');
+        const startDate = this.formatDateDisplay(this.payload.start_date);
+        const endDate = this.formatDateDisplay(this.payload.end_date);
+
+        container.innerHTML = `
+            <div class="analytics-header">
+                <h2>${this.escapeHtml(this.selectedUser?.fullname || 'User')} - Trading Analytics</h2>
+                <div class="selected-user-info">
+                    <strong>From:</strong> ${startDate} &nbsp; <strong>To:</strong> ${endDate}
+                </div>
+            </div>
+
+            <div style="text-align: center; margin: 20px 0;">
+                <button class="calendar-toggle-btn" onclick="Analytics.showCalendarOverlay()">
+                    <span>📅</span> View Daily Trades Calendar
+                </button>
+            </div>
+
+            <div class="section-title">
+                ${this.currentTradeType === 'authorized' ? 'Authorized Trades' : 'Unauthorized Trades'}
+            </div>
+
+            <!-- ============== Primary P&L cards ============== -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Loss Amount</div>
+                    <div class="stat-value loss">$${this.formatNumber(s.loss_amount)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Profit Amount</div>
+                    <div class="stat-value profit">$${this.formatNumber(s.profit_amount)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total P&L</div>
+                    <div class="stat-value ${(s.total_pnl || 0) >= 0 ? 'profit' : 'loss'}">
+                        $${this.formatNumber(s.total_pnl)}
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value profit">${this.formatNumber(s.revenue_profit_percentage, 2)}%</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Total Trades</div>
+                    <div class="stat-value">${s.total_trades || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Won / Lost Trades</div>
+                    <div class="stat-value">
+                        <span class="profit">${s.profit_trades || 0}</span> /
+                        <span class="loss">${s.loss_trades || 0}</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Highest Loss/Trade</div>
+                    <div class="stat-value loss">$${this.formatNumber(s.highest_loss_per_trade)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Highest Drawdown</div>
+                    <div class="stat-value loss">$${this.formatNumber(s.highest_drawdown)}</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Deals w/ SL-TP</div>
+                    <div class="stat-value">${s.closed_deals_with_sl_tp || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Deals w/o SL-TP</div>
+                    <div class="stat-value">${s.closed_deals_without_sl_tp || 0}</div>
+                </div>
+                <div class="stat-card clickable" onclick="Analytics.showTradedSymbolsanalyticsmodal()" style="cursor:pointer;">
+                    <div class="stat-label">Symbols Traded</div>
+                    <div class="stat-value">${s.symbols_traded || 0}</div>
+                    <div style="font-size:10px;color:#888;margin-top:5px;">Click to view</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Revenue %</div>
+                    <div class="stat-value ${(s.revenue_percentage || 0) >= 0 ? 'profit' : 'loss'}">
+                        ${this.formatNumber(s.revenue_percentage, 2)}%
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============== Per-day (weekly + daily) ============== -->
+            <div class="section-title">Trades per Day / Week</div>
+            <div class="stats-grid">
+                <div class="stat-card daily-stat-card lowest">
+                    <div class="stat-label">📉 Lowest Trades / Day</div>
+                    <div class="stat-value">${s.lowest_trades_per_day || 0}</div>
+                </div>
+                <div class="stat-card daily-stat-card average">
+                    <div class="stat-label">⚖️ Average Trades / Day</div>
+                    <div class="stat-value">${s.average_trades_per_day || 0}</div>
+                </div>
+                <div class="stat-card daily-stat-card highest">
+                    <div class="stat-label">📈 Highest Trades / Day</div>
+                    <div class="stat-value">${s.highest_trades_per_day || 0}</div>
+                </div>
+                <div class="stat-card daily-stat-card lowest">
+                    <div class="stat-label">📉 Lowest Trades / Week</div>
+                    <div class="stat-value">${s.lowest_trades_per_week || 0}</div>
+                </div>
+                <div class="stat-card daily-stat-card average">
+                    <div class="stat-label">⚖️ Average Trades / Week</div>
+                    <div class="stat-value">${s.average_trades_per_week || 0}</div>
+                </div>
+                <div class="stat-card daily-stat-card highest">
+                    <div class="stat-label">📈 Highest Trades / Week</div>
+                    <div class="stat-value">${s.highest_trades_per_week || 0}</div>
+                </div>
+            </div>
+
+            <!-- ============== Revenue split ============== -->
+            <div class="section-title">Revenue Split</div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Profit Revenue %</div>
+                    <div class="stat-value profit">${this.formatNumber(s.revenue_profit_percentage, 2)}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Loss Revenue %</div>
+                    <div class="stat-value loss">${this.formatNumber(s.revenue_loss_percentage, 2)}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Revenue %</div>
+                    <div class="stat-value">${this.formatNumber(s.revenue_percentage, 2)}%</div>
+                </div>
+            </div>
+
+            <!-- ============== Sequential loss / days ============== -->
+            <div class="section-title">Drawdown Streaks</div>
+            <div class="stats-grid">
+                <div class="stat-card daily-stat-card sequential-loss clickable"
+                     onclick="Analytics.showSequentialLossesanalyticsmodal()"
+                     style="cursor:pointer; border-left:4px solid ${s.consecutive_losses_count ? '#ff6b6b' : '#888'};">
+                    <div class="stat-label">📉 Consecutive Lost Trades</div>
+                    <div class="stat-value" style="color:${s.consecutive_losses_count ? '#ff6b6b' : '#888'};">
+                        ${s.consecutive_losses_count || 0}
+                    </div>
+                    ${s.consecutive_losses_count
+                        ? `<div style="font-size:10px;color:#888;margin-top:5px;">Total Loss: $${this.formatNumber(s.total_loss_pnl)}</div>`
+                        : '<div class="stat-dates">No data</div>'}
+                </div>
+                <div class="stat-card daily-stat-card sequential-days clickable"
+                     onclick="Analytics.showSequentialDaysLossanalyticsmodal()"
+                     style="cursor:pointer; border-left:4px solid ${s.consecutive_days_in_loss_count ? '#ff6b6b' : '#888'};">
+                    <div class="stat-label">📉 Consecutive Losing Days</div>
+                    <div class="stat-value" style="color:${s.consecutive_days_in_loss_count ? '#ff6b6b' : '#888'};">
+                        ${s.consecutive_days_in_loss_count || 0}
+                    </div>
+                    ${s.consecutive_days_in_loss_count
+                        ? `<div style="font-size:10px;color:#888;margin-top:5px;">Total Loss: $${this.formatNumber(s.consecutive_days_in_loss_count_total_loss_pnl)}</div>`
+                        : '<div class="stat-dates">No data</div>'}
+                </div>
+            </div>
+        `;
+    },
+
+    showLoading: function() {
+        document.getElementById('analytics-content').innerHTML = `
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <div>Loading analytics...</div>
+            </div>`;
+    },
+
+    showNoAnalyticsMessage: function() {
+        document.getElementById('analytics-content').innerHTML = `
+            <div class="info-message">
+                No analytics data available for this user yet.<br>
+                Analytics will appear once trading data has been collected.
+            </div>`;
+    },
+
+    // ------------------------------------------------------------------
+    // Calendar
+    // ------------------------------------------------------------------
+    showCalendarOverlay: function() {
+        if (!this.payload) { this.showCustomAlert('No data available', '📊'); return; }
+        const s = this.getSummary();
+        const dailyRecord = (s && s.daily_trades_record) ? s.daily_trades_record : {};
+
+        this.addBodyBlur();
+        const startDate = this.formatDateDisplay(this.payload.start_date);
+        const endDate   = this.formatDateDisplay(this.payload.end_date);
+
+        const html = `
+            <div class="analyticsmodal-overlay" id="calendar-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideCalendar(event)">
+                <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>📅 Trades from ${startDate} to ${endDate}</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeCalendaranalyticsmodal()">✕</span>
+                    </div>
+                    <div class="analyticsmodal-body" style="max-height:70vh;overflow-y:auto;">
+                        ${this.renderDailyCalendar(dailyRecord, s)}
+                    </div>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    renderDailyCalendar: function(dailyRecord, s) {
+        const dates = Object.keys(dailyRecord || {}).sort();
+        if (!dates.length) {
+            return `<div class="section-card" style="text-align:center;color:#888;padding:40px;">
+                        <div style="font-size:48px;margin-bottom:10px;">📅</div>
+                        <div>No daily trades recorded</div>
+                    </div>`;
+        }
+
+        const firstDate = new Date(dates[0] + 'T00:00:00');
+        const lastDate  = new Date(dates[dates.length - 1] + 'T00:00:00');
+        const dateSet   = new Set(dates);
+
+        let html = '<div class="calendar-grid">';
+        const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        html += '<div class="calendar-header">';
+        dayHeaders.forEach(d => { html += `<div class="calendar-header-cell">${d}</div>`; });
+        html += '</div>';
+
+        const firstDow = firstDate.getDay();
+        const totalDays = Math.ceil((lastDate - firstDate) / 86400000) + 1;
+
+        let current = new Date(firstDate);
+        let count = 0;
+
+        for (let i = 0; i < firstDow; i++) { html += '<div class="calendar-empty"></div>'; count++; }
+
+        for (let i = 0; i < totalDays; i++) {
+            const y = current.getFullYear();
+            const m = String(current.getMonth() + 1).padStart(2, '0');
+            const d = String(current.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${d}`;
+            const monthName = current.toLocaleString('default', { month: 'short' });
+            const dayNum = current.getDate();
+            const hasData = dateSet.has(dateStr);
+
+            if (hasData) {
+                const row = dailyRecord[dateStr];
+                const pnl = row.profit_and_loss || 0;
+                const trades = row.trades_count || 0;
+                const cls = pnl >= 0 ? 'calendar-profit' : 'calendar-loss';
+                html += `
+                    <div class="calendar-day ${cls}" onclick="Analytics.showDayDetailanalyticsmodal('${dateStr}')">
+                        <div class="calendar-day-date">${monthName} ${dayNum}</div>
+                        <div class="calendar-day-pnl">$${this.formatNumber(pnl)}</div>
+                        <div class="calendar-day-trades">${trades} ${trades === 1 ? 'trade' : 'trades'}</div>
+                    </div>`;
+            } else {
+                html += `
+                    <div class="calendar-day calendar-empty-day">
+                        <div class="calendar-day-date">${monthName} ${dayNum}</div>
+                        <div class="calendar-day-pnl" style="color:#888;">—</div>
+                        <div class="calendar-day-trades" style="color:#888;">📊 0</div>
+                    </div>`;
+            }
+            current.setDate(current.getDate() + 1);
+            count++;
+        }
+        while (count % 7 !== 0) { html += '<div class="calendar-empty"></div>'; count++; }
+        html += '</div>';
+
+        html += `
+            <div style="margin-top:10px;padding:5px;background:var(--bg-secondary,#f5f5f5);font-size:12px;">
+                <span>Revenue: </span>
+                <span class="${(s.revenue_percentage || 0) >= 0 ? 'profit' : 'loss'}" style="font-weight:bold;">
+                    ${this.formatNumber(s.revenue_percentage, 2)}%
+                </span>
+            </div>`;
+        return html;
+    },
+
+    closeCalendaranalyticsmodal: function() {
+        const o = document.getElementById('calendar-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideCalendar: function(e) {
+        if (e.target.id === 'calendar-analyticsmodal-overlay') this.closeCalendaranalyticsmodal();
+    },
+
+    showDayDetailanalyticsmodal: function(dateStr) {
+        if (!this.payload) return;
+        const s = this.getSummary();
+        const dailyRecord = (s && s.daily_trades_record) || {};
+        const dayData = dailyRecord[dateStr];
+        if (!dayData) { this.showCustomAlert('No data for this date', '📅'); return; }
+
+        const d = new Date(dateStr + 'T00:00:00');
+        const month = d.toLocaleString('default', { month: 'long' });
+        const dayNum = d.getDate();
+        const year = d.getFullYear();
+        const dow = d.toLocaleString('default', { weekday: 'long' });
+        const pnl = dayData.profit_and_loss || 0;
+        const tradesCount = dayData.trades_count || 0;
+        const tradeSummary = dayData.trade_summary || {};
+        const allTrades = dayData.all_trades || {};
+
+        // Flatten
+        let flat = [];
+        for (const sym in allTrades) {
+            if (Array.isArray(allTrades[sym])) {
+                allTrades[sym].forEach(t => flat.push(Object.assign({}, t, { symbol: sym })));
+            }
+        }
+        flat.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
+
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="daydetail-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideDayDetail(event)">
+                <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>📅 ${dow}, ${month} ${dayNum}, ${year}</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeDayDetailanalyticsmodal()">✕</span>
+                    </div>
+                    <div class="analyticsmodal-body" style="max-height:70vh;overflow-y:auto;padding:20px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+                            <div class="stat-card" style="padding:15px;">
+                                <div class="stat-label">Daily P&L</div>
+                                <div class="stat-value ${pnl >= 0 ? 'profit' : 'loss'}" style="font-size:28px;">
+                                    $${this.formatNumber(pnl)}
+                                </div>
+                            </div>
+                            <div class="stat-card" style="padding:15px;">
+                                <div class="stat-label">Total Trades</div>
+                                <div class="stat-value" style="font-size:28px;">${tradesCount}</div>
                             </div>
                         </div>
-                        <div class="analyticsmodal-body" id="users-analyticsmodal-list">
-                                ${this.renderanalyticsmodalUsersList(this.users)}
+
+                        <div class="section-title" style="margin-bottom:10px;">Trade Summary by Symbol</div>
+                        <div class="contest-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:20px;">
+                            ${Object.entries(tradeSummary).map(([sym, val]) => `
+                                <div class="contest-card" style="padding:12px;">
+                                    <h4 style="margin-bottom:5px;font-size:14px;">${this.escapeHtml(sym)}</h4>
+                                    <div class="symbol-info" style="font-size:13px;">
+                                        <span>P&L:</span>
+                                        <span class="${val >= 0 ? 'profit' : 'loss'}" style="font-size:16px;font-weight:bold;">
+                                            $${this.formatNumber(val)}
+                                        </span>
+                                    </div>
+                                    <div class="symbol-info" style="font-size:12px;">
+                                        <span>Trades:</span>
+                                        <span>${(allTrades[sym] || []).length}</span>
+                                    </div>
+                                </div>`).join('') || `
+                                <div style="grid-column:1/-1;text-align:center;color:#888;padding:10px;">
+                                    No symbol data available for this day
+                                </div>`}
                         </div>
+
+                        <div class="section-title" style="margin-bottom:10px;">📊 Individual Trades (${flat.length})</div>
+                        ${flat.length ? `
+                            <div style="display:flex;flex-direction:column;gap:10px;">
+                                ${flat.map(t => {
+                                    const prof = (t.pnl || 0) >= 0;
+                                    return `
+                                        <div style="background:var(--bg-secondary,#f5f5f5);border-radius:8px;padding:12px 15px;border-left:4px solid ${prof ? '#4caf50' : '#f44336'};">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                                                <span style="font-weight:bold;font-size:16px;">${this.escapeHtml(t.symbol || 'N/A')}</span>
+                                                <span style="font-size:12px;color:#888;">${this.escapeHtml(t.ticket || 'N/A')}</span>
+                                            </div>
+                                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 15px;font-size:13px;">
+                                                <div><span style="color:#888;">Entry:</span> ${this.escapeHtml(t.entry || 'N/A')}</div>
+                                                <div><span style="color:#888;">SL:</span> ${this.escapeHtml(t.stoploss || 'N/A')}</div>
+                                                <div><span style="color:#888;">Target:</span> ${this.escapeHtml(t.target || 'N/A')}</div>
+                                                <div><span style="color:#888;">Closed:</span> ${this.escapeHtml(t.closed_time || 'N/A')}</div>
+                                                <div style="grid-column:1/-1;margin-top:3px;font-weight:bold;font-size:15px;color:${prof ? '#4caf50' : '#f44336'};">
+                                                    PnL: $${this.formatNumber(t.pnl)}
+                                                </div>
+                                            </div>
+                                        </div>`;
+                                }).join('')}
+                            </div>` : `
+                            <div style="text-align:center;color:#888;padding:20px;background:#f9f9f9;border-radius:8px;">
+                                No individual trade data available for this day
+                            </div>`}
                     </div>
                 </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        renderanalyticsmodalUsersList: function(users) {
-            if (users.length === 0) {
-                return '<div class="info-message-small">No users found</div>';
-            }
-            
-            return users.map(user => `
-                <div class="analyticsmodal-user-item ${this.selectedUser && this.selectedUser.id === user.id ? 'selected' : ''}" 
-                    onclick="Analytics.selectUserFromanalyticsmodal(${user.id}, '${user.source}')">
-                    <div class="analyticsmodal-user-name">${this.escapeHtml(user.fullname || 'N/A')}</div>
-                    <div class="analyticsmodal-user-email">${this.escapeHtml(user.email || 'N/A')}</div>
-                    <div class="analyticsmodal-user-id">ID: ${user.id}</div>
-                </div>
-            `).join('');
-        },
-        
-        filteranalyticsmodalUsers: function() {
-            const searchTerm = document.getElementById('users-analyticsmodal-search-input').value.toLowerCase();
-            const filteredUsers = this.users.filter(user => 
-                (user.fullname && user.fullname.toLowerCase().includes(searchTerm)) ||
-                (user.email && user.email.toLowerCase().includes(searchTerm)) ||
-                user.id.toString().includes(searchTerm)
-            );
-            
-            const container = document.getElementById('users-analyticsmodal-list');
-            if (container) {
-                container.innerHTML = this.renderanalyticsmodalUsersList(filteredUsers);
-            }
-        },
-        
-        selectUserFromanalyticsmodal: function(userId, source) {
-            const user = this.users.find(u => u.id == userId);
-            if (!user) return;
-            
-            this.selectedUser = user;
-            this.renderDefaultUser();
-            this.loadAnalytics(userId, source);
-            this.closeanalyticsmodal();
-        },
-        
-        closeanalyticsmodal: function() {
-            const overlay = document.getElementById('users-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutside: function(event) {
-            if (event.target.id === 'users-analyticsmodal-overlay') {
-                this.closeanalyticsmodal();
-            }
-        },
-        
-        addBodyBlur: function() {
-            const container = document.getElementById('analytics-container');
-            if (container) {
-                container.classList.add('blur-background');
-            }
-        },
-        
-        removeBodyBlur: function() {
-            const container = document.getElementById('analytics-container');
-            if (container) {
-                container.classList.remove('blur-background');
-            }
-        },
-        
-        selectUser: function(userId, source) {
-            const user = this.users.find(u => u.id == userId);
-            if (!user) return;
-            
-            this.selectedUser = user;
-            this.renderDefaultUser();
-            this.loadAnalytics(userId, source);
-        },
-        
-        loadAnalytics: function(userId, source) {
-            this.showLoading();
-            
-            fetch(window.location.pathname, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: `action=get_user_analytics&user_id=${userId}&source_table=${source}`
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    let analyticsData = null;
-                    if (data.analytics && data.analytics !== 'null' && data.analytics !== '') {
-                        try {
-                            analyticsData = typeof data.analytics === 'string' ? JSON.parse(data.analytics) : data.analytics;
-                        } catch(e) {
-                            console.error('JSON parse error:', e);
-                        }
-                    }
-                    this.analyticsData = this.mergeWithDefault(analyticsData);
-                    this.renderAnalytics();
-                    this.showFloatingButton();
-                } else {
-                    this.analyticsData = this.getDefaultAnalyticsStructure();
-                    this.renderAnalytics();
-                }
-            })
-            .catch(error => {
-                console.error('Error loading analytics:', error);
-                this.analyticsData = this.getDefaultAnalyticsStructure();
-                this.renderAnalytics();
-            });
-        },
-        
-        showFloatingButton: function() {
-            document.getElementById('floating-stats-btn').style.display = 'flex';
-        },
-        
-        toggleStatsPanel: function() {
-            const overlay = document.getElementById('stats-panel-overlay');
-            if (overlay.style.display === 'flex') {
-                overlay.style.display = 'none';
-                this.removeBodyBlur();
-            } else {
-                overlay.style.display = 'flex';
-                this.addBodyBlur();
-                this.renderStatsPanel();
-            }
-        },
-        
-        renderStatsPanel: function() {
-            const container = document.getElementById('stats-panel-content');
-            
-            container.innerHTML = `
-                <div style="margin-bottom: 15px;">
-                    <div class="stat-option-title" style="margin-bottom: 8px;">Trade Type</div>
-                    <div class="stat-option ${this.currentTradeType === 'trades_within_risks_config' ? 'active' : ''}" onclick="Analytics.setTradeType('trades_within_risks_config'); Analytics.toggleStatsPanel();">
-                        <div class="stat-option-title">Within Risk Config</div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeDayDetailanalyticsmodal: function() {
+        const o = document.getElementById('daydetail-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideDayDetail: function(e) {
+        if (e.target.id === 'daydetail-analyticsmodal-overlay') this.closeDayDetailanalyticsmodal();
+    },
+
+    // ------------------------------------------------------------------
+    // Symbols modal (built from authorized_trades / unauthorized_trades grouping)
+    // ------------------------------------------------------------------
+    showTradedSymbolsanalyticsmodal: function() {
+        if (!this.payload) { this.showCustomAlert('No data available', '📊'); return; }
+        const s = this.getSummary();
+        const symbols = (s && s.symbols) ? s.symbols : {};
+        const hasAny = Object.keys(symbols).length > 0;
+
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="symbols-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideSymbols(event)">
+                <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>Traded Symbols (${Object.keys(symbols).length})</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeSymbolsanalyticsmodal()">✕</span>
                     </div>
-                    <div class="stat-option ${this.currentTradeType === 'trades_outside_risks_config' ? 'active' : ''}" onclick="Analytics.setTradeType('trades_outside_risks_config'); Analytics.toggleStatsPanel();">
-                        <div class="stat-option-title">Outside Risk Config</div>
+                    <div class="analyticsmodal-body" style="max-height:60vh;overflow-y:auto;">
+                        ${hasAny ? `
+                            <div class="contest-grid">
+                                ${Object.values(symbols).map(sym => `
+                                    <div class="contest-card">
+                                        <h4>${this.escapeHtml(sym.symbol)}</h4>
+                                        <div class="symbol-info"><span>Total Trades:</span><span>${sym.total_trades || 0}</span></div>
+                                        <div class="symbol-info"><span>Total Profit:</span><span class="${(sym.total_profit || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber(sym.total_profit)}</span></div>
+                                        <div class="symbol-info"><span>Total Loss:</span><span class="loss">$${this.formatNumber(sym.total_loss)}</span></div>
+                                        <div class="symbol-info"><span>Net P&L:</span><span class="${(sym.total_profit || 0) - (sym.total_loss || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber((sym.total_profit || 0) - (sym.total_loss || 0))}</span></div>
+                                    </div>`).join('')}
+                            </div>` : `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">📊</div>
+                                <div class="empty-state-text">No symbols traded</div>
+                            </div>`}
                     </div>
                 </div>
-                <div style="margin-bottom: 15px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                    <div class="stat-option-title" style="margin-bottom: 8px;">Authorization</div>
-                    <div class="stat-option ${this.currentAuthType === 'authorized' ? 'active' : ''}" onclick="Analytics.setAuthType('authorized'); Analytics.toggleStatsPanel();">
-                        <div class="stat-option-title">Authorized Trades</div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeSymbolsanalyticsmodal: function() {
+        const o = document.getElementById('symbols-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideSymbols: function(e) {
+        if (e.target.id === 'symbols-analyticsmodal-overlay') this.closeSymbolsanalyticsmodal();
+    },
+
+    // ------------------------------------------------------------------
+    // All trades modal
+    // ------------------------------------------------------------------
+    showAllTradesanalyticsmodal: function() {
+        if (!this.payload) { this.showCustomAlert('No data available', '📊'); return; }
+        const s = this.getSummary();
+        const trades = (s && s.all_trades) ? s.all_trades : [];
+
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="trades-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideTrades(event)">
+                <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>All Trades (${trades.length})</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeTradesanalyticsmodal()">✕</span>
                     </div>
-                    <div class="stat-option ${this.currentAuthType === 'unauthorized' ? 'active' : ''}" onclick="Analytics.setAuthType('unauthorized'); Analytics.toggleStatsPanel();">
-                        <div class="stat-option-title">Unauthorized Trades</div>
+                    <div class="analyticsmodal-body" style="max-height:60vh;overflow-y:auto;">
+                        ${trades.length ? `
+                            <div class="trades-table-wrapper">
+                                <table class="trades-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th><th>Ticket</th><th>Symbol</th>
+                                            <th>Entry</th><th>SL</th><th>Target</th><th>P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${trades.map(t => `
+                                            <tr>
+                                                <td>${t.closed_time ? String(t.closed_time).split(' ')[0] : 'N/A'}</td>
+                                                <td>${this.escapeHtml(t.ticket || 'N/A')}</td>
+                                                <td>${this.escapeHtml(t.symbol || 'N/A')}</td>
+                                                <td>${this.escapeHtml(t.entry || 'N/A')}</td>
+                                                <td>${this.escapeHtml(t.stoploss || 'N/A')}</td>
+                                                <td>${this.escapeHtml(t.target || 'N/A')}</td>
+                                                <td class="${(t.pnl || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber(t.pnl)}</td>
+                                            </tr>`).join('')}
+                                    </tbody>
+                                </table>
+                            </div>` : `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">📭</div>
+                                <div class="empty-state-text">No trades available</div>
+                            </div>`}
                     </div>
                 </div>
-                <div style="padding-top: 10px; border-top: 1px solid var(--border-color);">
-                    <div class="stat-option-title" style="margin-bottom: 8px;">View Trades</div>
-                    <div class="stat-option" onclick="Analytics.showAllTradesanalyticsmodal(); Analytics.toggleStatsPanel();">
-                        <div class="stat-option-title">All Trades</div>
-                        <div class="stat-option-desc">View complete trade history</div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeTradesanalyticsmodal: function() {
+        const o = document.getElementById('trades-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideTrades: function(e) {
+        if (e.target.id === 'trades-analyticsmodal-overlay') this.closeTradesanalyticsmodal();
+    },
+
+    // ------------------------------------------------------------------
+    // Sequential losses / days in loss
+    // ------------------------------------------------------------------
+    showSequentialLossesanalyticsmodal: function() {
+        if (!this.payload) return;
+        const s = this.getSummary();
+        const trades = (s && s.highest_sequential_losses_trades) ? s.highest_sequential_losses_trades : [];
+        const count = s.consecutive_losses_count || 0;
+        const totalLoss = s.total_loss_pnl || 0;
+
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="losses-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideLosses(event)">
+                <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>Highest Sequential Losses</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeLossesanalyticsmodal()">✕</span>
                     </div>
-                </div>
-            `;
-        },
-        
-        showAllTradesanalyticsmodal: function() {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available for the selected filters', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            
-            let allTradesList = [];
-            const sequentialLosses = regularData?.highest_sequential_losses || {};
-            if (sequentialLosses.trades && Array.isArray(sequentialLosses.trades)) {
-                allTradesList.push(...sequentialLosses.trades);
-            }
-            
-            const daysLoss = regularData?.highest_sequential_days_in_loss || {};
-            if (daysLoss.days) {
-                for (const date in daysLoss.days) {
-                    if (daysLoss.days[date] && Array.isArray(daysLoss.days[date])) {
-                        allTradesList.push(...daysLoss.days[date]);
-                    }
-                }
-            }
-            
-            const uniqueTrades = [];
-            const tickets = new Set();
-            for (const trade of allTradesList) {
-                if (trade.ticket && !tickets.has(trade.ticket)) {
-                    tickets.add(trade.ticket);
-                    uniqueTrades.push(trade);
-                }
-            }
-            
-            const hasNoTrades = uniqueTrades.length === 0;
-            
-            uniqueTrades.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
-            
-            let analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="trades-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideTrades(event)">
-                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>All Trades (${uniqueTrades.length})</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeTradesanalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
-                            ${hasNoTrades ? `
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">📭</div>
-                                    <div class="empty-state-text">No trades available for the selected filters</div>
-                                    <div class="empty-state-sub">Try changing the trade type or authorization filter</div>
-                                </div>
-                            ` : `
+                    <div class="analyticsmodal-body" style="max-height:60vh;overflow-y:auto;">
+                        ${count ? `
+                            <div class="losses-card">
+                                <div class="loss-value">${count} Consecutive Losses</div>
+                                <div style="margin-top:10px;">Total Loss: $${this.formatNumber(totalLoss)}</div>
+                            </div>
+                            ${trades.length ? `
                                 <div class="trades-table-wrapper">
                                     <table class="trades-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Date</th>
-                                                <th>Ticket</th>
-                                                <th>Symbol</th>
-                                                <th>Type</th>
-                                                <th>Volume</th>
-                                                <th>P&L</th>
-                                            </tr>
-                                        </thead>
+                                        <thead><tr><th>Ticket</th><th>Symbol</th><th>Entry</th><th>SL</th><th>Target</th><th>P&L</th><th>Closed</th></tr></thead>
                                         <tbody>
-                                            ${uniqueTrades.map(trade => `
+                                            ${trades.map(t => `
                                                 <tr>
-                                                    <td>${trade.time_open ? trade.time_open.split(' ')[0] : 'N/A'}</td>
-                                                    <td>${trade.ticket || 'N/A'}</td>
-                                                    <td>${this.escapeHtml(trade.symbol || 'N/A')}</td>
-                                                    <td>${trade.type || 'N/A'}</td>
-                                                    <td>${trade.volume || 'N/A'}</td>
-                                                    <td class="${(trade.total_pnl || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber(trade.total_pnl || 0)}</td>
-                                                </tr>
-                                            `).join('')}
+                                                    <td>${this.escapeHtml(t.ticket || 'N/A')}</td>
+                                                    <td>${this.escapeHtml(t.symbol || 'N/A')}</td>
+                                                    <td>${this.escapeHtml(t.entry || 'N/A')}</td>
+                                                    <td>${this.escapeHtml(t.stoploss || 'N/A')}</td>
+                                                    <td>${this.escapeHtml(t.target || 'N/A')}</td>
+                                                    <td class="loss">$${this.formatNumber(t.pnl)}</td>
+                                                    <td>${t.closed_time ? String(t.closed_time).split(' ')[0] : 'N/A'}</td>
+                                                </tr>`).join('')}
                                         </tbody>
                                     </table>
-                                </div>
-                            `}
-                        </div>
+                                </div>` : ''}
+                        ` : `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">✅</div>
+                                <div class="empty-state-text">No sequential losses recorded</div>
+                            </div>`}
                     </div>
                 </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        closeTradesanalyticsmodal: function() {
-            const overlay = document.getElementById('trades-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideTrades: function(event) {
-            if (event.target.id === 'trades-analyticsmodal-overlay') {
-                this.closeTradesanalyticsmodal();
-            }
-        },
-        
-        showSequentialLossesanalyticsmodal: function() {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available for the selected filters', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            const losses = regularData?.highest_sequential_losses || {};
-            
-            const hasNoData = !losses.consecutive_losses_count;
-            
-            let analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="losses-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideLosses(event)">
-                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>Highest Sequential Losses</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeLossesanalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
-                            ${hasNoData ? `
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">✅</div>
-                                    <div class="empty-state-text">No sequential losses recorded</div>
-                                    <div class="empty-state-sub">The user has no consecutive losing trades</div>
-                                </div>
-                            ` : `
-                                <div class="losses-card">
-                                    <div class="loss-value">${losses.consecutive_losses_count} Consecutive Losses</div>
-                                    <div style="margin-top: 10px;">Total Loss: $${this.formatNumber(losses.total_loss_pnl || 0)}</div>
-                                </div>
-                                ${losses.trades && losses.trades.length > 0 ? `
-                                    <div class="trades-table-wrapper">
-                                        <table class="trades-table">
-                                            <thead>
-                                                <tr>
-                                                    <th>Ticket</th>
-                                                    <th>Symbol</th>
-                                                    <th>Type</th>
-                                                    <th>Volume</th>
-                                                    <th>P&L</th>
-                                                    <th>Time</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                ${losses.trades.map(trade => `
-                                                    <tr>
-                                                        <td>${trade.ticket || 'N/A'}</td>
-                                                        <td>${this.escapeHtml(trade.symbol || 'N/A')}</td>
-                                                        <td>${trade.type || 'N/A'}</td>
-                                                        <td>${trade.volume || 'N/A'}</td>
-                                                        <td class="loss">$${this.formatNumber(trade.total_pnl || 0)}</td>
-                                                        <td>${trade.time_open ? trade.time_open.split(' ')[0] : 'N/A'}</td>
-                                                    </tr>
-                                                `).join('')}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ` : ''}
-                            `}
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        closeLossesanalyticsmodal: function() {
-            const overlay = document.getElementById('losses-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideLosses: function(event) {
-            if (event.target.id === 'losses-analyticsmodal-overlay') {
-                this.closeLossesanalyticsmodal();
-            }
-        },
-        
-        showSequentialDaysLossanalyticsmodal: function() {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available for the selected filters', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            const daysLoss = regularData?.highest_sequential_days_in_loss || {};
-            
-            const hasNoData = !daysLoss.consecutive_days_count;
-            
-            let analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="daysloss-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideDaysLoss(event)">
-                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>Highest Sequential Days in Loss</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeDaysLossanalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
-                            ${hasNoData ? `
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">✅</div>
-                                    <div class="empty-state-text">No sequential days in loss recorded</div>
-                                    <div class="empty-state-sub">The user has no consecutive losing days</div>
-                                </div>
-                            ` : `
-                                <div class="losses-card">
-                                    <div class="loss-value">${daysLoss.consecutive_days_count} Consecutive Days in Loss</div>
-                                    <div style="margin-top: 10px;">Total Loss: $${this.formatNumber(daysLoss.total_loss_pnl || 0)}</div>
-                                </div>
-                                ${daysLoss.days ? `
-                                    <div class="section-title">Daily Breakdown</div>
-                                    <div class="stats-grid">
-                                        ${Object.entries(daysLoss.days).map(([date, trades]) => {
-                                            const dailyTotal = trades.reduce((sum, t) => sum + (t.total_pnl || 0), 0);
-                                            return `
-                                                <div class="stat-card">
-                                                    <div class="stat-label">${date}</div>
-                                                    <div class="stat-value loss">$${this.formatNumber(dailyTotal)}</div>
-                                                    <div class="stat-label">${trades.length} trades</div>
-                                                </div>
-                                            `;
-                                        }).join('')}
-                                    </div>
-                                ` : ''}
-                            `}
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        closeDaysLossanalyticsmodal: function() {
-            const overlay = document.getElementById('daysloss-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideDaysLoss: function(event) {
-            if (event.target.id === 'daysloss-analyticsmodal-overlay') {
-                this.closeDaysLossanalyticsmodal();
-            }
-        },
-        
-        setTradeType: function(tradeType) {
-            this.currentTradeType = tradeType;
-            this.renderAnalytics();
-        },
-        
-        setAuthType: function(authType) {
-            this.currentAuthType = authType;
-            this.renderAnalytics();
-        },
-        
-        getCurrentData: function() {
-            return this.analyticsData?.from_execution_start_date;
-        },
-        
-        renderAnalytics: function() {
-            if (!this.analyticsData) {
-                this.showNoAnalyticsMessage();
-                return;
-            }
-            
-            const container = document.getElementById('analytics-content');
-            const currentData = this.getCurrentData();
-            
-            if (!currentData) {
-                container.innerHTML = '<div class="info-message">No data available for the selected options</div>';
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const summaries = tradeData?.summaries?.summaries_of_profits_only || {
-                total_lost_trades: 0,
-                total_won_trades: 0,
-                total_lost_trades_amount: 0,
-                total_won_trades_amount: 0,
-                lowest_trades_per_day: 0,
-                highest_trades_per_day: 0,
-                average_trades_per_day: 0,
-                lowest_trade_dates: [],
-                highest_trade_dates: [],
-                average_trade_dates: [],
-                recent_risk_reward: 0,
-                revenue_percentage: 0.0,
-                revenue_profit_percentage: 0.0,
-                revenue_loss_percentage: 0.0
-            };
-            
-            const regularData = tradeData?.regular_data?.[this.currentAuthType] || {
-                total_trades: 0,
-                total_pnl: 0,
-                profit_trades: 0,
-                loss_trades: 0,
-                profit_amount: 0,
-                loss_amount: 0,
-                all_traded_symbols: {},
-                symbols_traded: 0,
-                closed_deals_with_sl_tp: 0,
-                closed_deals_without_sl_tp: 0,
-                highest_sequential_losses: {},
-                highest_sequential_days_in_loss: {},
-                highest_loss_per_trade: 0,
-                daily_trades_record: {},
-                revenue_percentage: 0.0,
-                revenue_profit_percentage: 0.0,
-                revenue_loss_percentage: 0.0
-            };
-            
-            // Format dates for display
-            const startDate = currentData.start_date ? this.formatDateDisplay(currentData.start_date) : 'N/A';
-            const endDate = currentData.end_date ? this.formatDateDisplay(currentData.end_date) : 'N/A';
-            
-            // Check if sequential losses exist
-            const hasSequentialLosses = regularData.highest_sequential_losses && regularData.highest_sequential_losses.consecutive_losses_count;
-            const hasSequentialDaysLoss = regularData.highest_sequential_days_in_loss && regularData.highest_sequential_days_in_loss.consecutive_days_count;
-            
-            // Get recent risk reward
-            const recentRiskReward = summaries.recent_risk_reward || 0;
-            
-            container.innerHTML = `
-                <div class="analytics-header">
-                    <h2>${this.escapeHtml(this.selectedUser?.fullname || 'User')} - Trading Analytics</h2>
-                    <div class="selected-user-info">
-                        <strong>From </strong> ${startDate}
-                        <strong>To:</strong> ${endDate}
-                    </div>
-                </div>
-                
-                <!-- Daily Trades Calendar Button -->
-                <div style="text-align: center; margin: 20px 0;">
-                    <button class="calendar-toggle-btn" onclick="Analytics.showCalendarOverlay()">
-                        <span>📅</span> View Daily Trades Calendar
-                    </button>
-                </div>
-                
-                <div class="section-title">
-                    ${this.currentAuthType === 'authorized' ? 'Authorized Trades' : 'Unauthorized Trades'} ${this.currentTradeType === 'trades_within_risks_config' ? 'Within Risk Configuration' : 'Outside Risk Configuration'}
-                </div>
-                
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">Loss Amount</div>
-                        <div class="stat-value loss">$${this.formatNumber(regularData.loss_amount || 0)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Profit Amount</div>
-                        <div class="stat-value profit">$${this.formatNumber(regularData.profit_amount || 0)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Risk-Reward</div>
-                        <div class="stat-value profit">
-                            ${recentRiskReward > 0 ? `1:${recentRiskReward}` : 'N/A'}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Win rate</div>
-                        <div class="stat-value profit">${this.formatNumber(regularData.revenue_profit_percentage || 0)}%</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Lost Trades (Count)</div>
-                        <div class="stat-value loss">${summaries.total_lost_trades || 0}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Won Trades (Count)</div>
-                        <div class="stat-value profit">${summaries.total_won_trades || 0}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Highest Loss/Trade</div>
-                        <div class="stat-value loss">$${this.formatNumber(regularData.highest_loss_per_trade || 0)}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Deals w/o SL/TP</div>
-                        <div class="stat-value">${regularData.closed_deals_without_sl_tp || 0}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Deals with SL/TP</div>
-                        <div class="stat-value">${regularData.closed_deals_with_sl_tp || 0}</div>
-                    </div>
-                    <div class="stat-card clickable" onclick="Analytics.showTradedSymbolsanalyticsmodal()" style="cursor: pointer;">
-                        <div class="stat-label">Total Trades</div>
-                        <div class="stat-value">${regularData.total_trades || 0}</div>
-                        <div style="font-size: 10px; color: #888; margin-top: 5px;">Click to view symbols</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Total P&L</div>
-                        <div class="stat-value ${(regularData.total_pnl || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber(regularData.total_pnl || 0)}</div>
-                    </div>
-                    <div class="stat-card daily-stat-card lowest">
-                        <div class="stat-label">📉 Lowest Trades/Day</div>
-                        <div class="stat-value">${summaries.lowest_trades_per_day || 0}</div>
-                        ${summaries.lowest_trade_dates && summaries.lowest_trade_dates.length > 0 ? `<div class="stat-dates">${summaries.lowest_trade_dates.map(d => this.escapeHtml(d)).join(', ')}</div>` : '<div class="stat-dates">—</div>'}
-                    </div>
-                    <div class="stat-card daily-stat-card average">
-                        <div class="stat-label">⚖️ Average Trades/Day</div>
-                        <div class="stat-value">${typeof summaries.average_trades_per_day === 'number' ? summaries.average_trades_per_day.toFixed(2) : (summaries.average_trades_per_day || 0)}</div>
-                        ${summaries.average_trade_dates && summaries.average_trade_dates.length > 0 ? `<div class="stat-dates">${summaries.average_trade_dates.map(d => this.escapeHtml(d)).join(', ')}</div>` : '<div class="stat-dates">—</div>'}
-                    </div>
-                    <div class="stat-card daily-stat-card highest">
-                        <div class="stat-label">📈 Highest Trades/Day</div>
-                        <div class="stat-value">${summaries.highest_trades_per_day || 0}</div>
-                        ${summaries.highest_trade_dates && summaries.highest_trade_dates.length > 0 ? `<div class="stat-dates">${summaries.highest_trade_dates.map(d => this.escapeHtml(d)).join(', ')}</div>` : '<div class="stat-dates">—</div>'}
-                    </div>
-                    <div class="stat-card daily-stat-card sequential-loss clickable" onclick="Analytics.showSequentialLossesanalyticsmodal()" style="cursor: pointer; ${hasSequentialLosses ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
-                        <div class="stat-label">📉 Consecutive Lost Trades</div>
-                        <div class="stat-value" style="color: ${hasSequentialLosses ? '#ff6b6b' : '#888'};">${hasSequentialLosses ? regularData.highest_sequential_losses.consecutive_losses_count : '0'}</div>
-                        ${hasSequentialLosses ? `<div style="font-size: 10px; color: #888; margin-top: 5px;">Total Loss: $${this.formatNumber(regularData.highest_sequential_losses.total_loss_pnl || 0)}</div>` : '<div class="stat-dates">No data</div>'}
-                        <div style="font-size: 9px; color: #888; margin-top: 3px;">Click to view details</div>
-                    </div>
-                    <div class="stat-card daily-stat-card sequential-days clickable" onclick="Analytics.showSequentialDaysLossanalyticsmodal()" style="cursor: pointer; ${hasSequentialDaysLoss ? 'border-left: 4px solid #ff6b6b;' : 'border-left: 4px solid #888;'}">
-                        <div class="stat-label">📉 Consecutive Losing Days</div>
-                        <div class="stat-value" style="color: ${hasSequentialDaysLoss ? '#ff6b6b' : '#888'};">${hasSequentialDaysLoss ? regularData.highest_sequential_days_in_loss.consecutive_days_count : '0'}</div>
-                        ${hasSequentialDaysLoss ? `<div style="font-size: 10px; color: #888; margin-top: 5px;">Total Loss: $${this.formatNumber(regularData.highest_sequential_days_in_loss.total_loss_pnl || 0)}</div>` : '<div class="stat-dates">No data</div>'}
-                        <div style="font-size: 9px; color: #888; margin-top: 3px;">Click to view details</div>
-                    </div>
-                </div>
-            `;
-        },
-        
-        showTradedSymbolsanalyticsmodal: function() {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available for the selected filters', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            const symbols = regularData?.all_traded_symbols || {};
-            
-            const hasNoSymbols = Object.keys(symbols).length === 0;
-            
-            let analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="symbols-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideSymbols(event)">
-                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>Traded Symbols (${Object.keys(symbols).length})</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeSymbolsanalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 60vh; overflow-y: auto;">
-                            ${hasNoSymbols ? `
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">📊</div>
-                                    <div class="empty-state-text">No symbols traded</div>
-                                    <div class="empty-state-sub">No trading data available for the selected filters</div>
-                                </div>
-                            ` : `
-                                <div class="contest-grid">
-                                    ${Object.values(symbols).map(symbol => `
-                                        <div class="contest-card">
-                                            <h4>${this.escapeHtml(symbol.symbol)}</h4>
-                                            <div class="symbol-info">
-                                                <span>Total Trades:</span>
-                                                <span>${symbol.total_trades || 0}</span>
-                                            </div>
-                                            <div class="symbol-info">
-                                                <span>Total Profit:</span>
-                                                <span class="${(symbol.total_profit || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber(symbol.total_profit || 0)}</span>
-                                            </div>
-                                            <div class="symbol-info">
-                                                <span>Total Loss:</span>
-                                                <span class="loss">$${this.formatNumber(symbol.total_loss || 0)}</span>
-                                            </div>
-                                            <div class="symbol-info">
-                                                <span>Net P&L:</span>
-                                                <span class="${(symbol.total_profit || 0) - (symbol.total_loss || 0) >= 0 ? 'profit' : 'loss'}">$${this.formatNumber((symbol.total_profit || 0) - (symbol.total_loss || 0))}</span>
-                                            </div>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            `}
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        closeSymbolsanalyticsmodal: function() {
-            const overlay = document.getElementById('symbols-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideSymbols: function(event) {
-            if (event.target.id === 'symbols-analyticsmodal-overlay') {
-                this.closeSymbolsanalyticsmodal();
-            }
-        },
-        
-        formatDateDisplay: function(dateStr) {
-            if (!dateStr) return 'N/A';
-            try {
-                const date = new Date(dateStr + 'T00:00:00');
-                if (isNaN(date.getTime())) return dateStr;
-                return date.toLocaleDateString('en-US', { 
-                    month: 'short', 
-                    day: '2-digit', 
-                    year: 'numeric' 
-                });
-            } catch(e) {
-                return dateStr;
-            }
-        },
-        
-        showCalendarOverlay: function() {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available for the selected filters', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            const dailyRecord = regularData?.daily_trades_record || {};
-            
-            const startDate = currentData.start_date ? this.formatDateDisplay(currentData.start_date) : 'N/A';
-            const endDate = currentData.end_date ? this.formatDateDisplay(currentData.end_date) : 'N/A';
-            
-            const analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="calendar-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideCalendar(event)">
-                    <div class="analyticsmodal-container analyticsmodal-large" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>📅 Trades from ${startDate} to ${endDate}</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeCalendaranalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 70vh; overflow-y: auto;">
-                            ${this.renderDailyCalendaranalyticsmodal(dailyRecord, regularData)}
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        renderDailyCalendaranalyticsmodal: function(dailyRecord, regularData) {
-            if (!dailyRecord || Object.keys(dailyRecord).length === 0) {
-                return `
-                    <div class="section-card" style="text-align: center; color: #888; padding: 40px;">
-                        <div style="font-size: 48px; margin-bottom: 10px;">📅</div>
-                        <div>No daily trades recorded for the selected filters</div>
-                    </div>
-                `;
-            }
-            
-            // Get revenue percentage
-            const revenuePercentage = regularData?.revenue_percentage || 0;
-            
-            // Get all dates and sort them
-            const dates = Object.keys(dailyRecord).sort();
-            
-            // Get the first and last date to determine the calendar grid
-            const firstDate = new Date(dates[0] + 'T00:00:00');
-            const lastDate = new Date(dates[dates.length - 1] + 'T00:00:00');
-            
-            // Create a set of dates that have data
-            const dateSet = new Set(dates);
-            
-            // Generate calendar grid - FIXED: proper day alignment
-            let html = `
-                <div class="calendar-grid">
-            `;
-            
-            // Day headers
-            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            html += '<div class="calendar-header">';
-            dayHeaders.forEach(day => {
-                html += `<div class="calendar-header-cell">${day}</div>`;
-            });
-            html += '</div>';
-            
-            // Get the day of week for the first date (0 = Sunday)
-            const firstDayOfWeek = firstDate.getDay();
-            
-            // Calculate total days in range
-            const totalDays = Math.ceil((lastDate - firstDate) / (1000 * 60 * 60 * 24)) + 1;
-            
-            // Generate all days in the range
-            let currentDate = new Date(firstDate);
-            let dayCount = 0;
-            
-            // Add empty cells before the first day
-            for (let i = 0; i < firstDayOfWeek; i++) {
-                html += '<div class="calendar-empty"></div>';
-                dayCount++;
-            }
-            
-            // Add each day
-            for (let i = 0; i < totalDays; i++) {
-                const year = currentDate.getFullYear();
-                const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-                const day = String(currentDate.getDate()).padStart(2, '0');
-                const dateStr = `${year}-${month}-${day}`;
-                const hasData = dateSet.has(dateStr);
-                const dayOfWeek = currentDate.getDay(); // 0 = Sunday
-                const monthName = currentDate.toLocaleString('default', { month: 'short' });
-                const dayNumber = currentDate.getDate();
-                
-                if (hasData) {
-                    const data = dailyRecord[dateStr];
-                    const pnl = data.profit_and_loss || 0;
-                    const tradesCount = data.trades_count || 0;
-                    const pnlClass = pnl >= 0 ? 'calendar-profit' : 'calendar-loss';
-                    
-                    html += `
-                        <div class="calendar-day ${pnlClass}" onclick="Analytics.showDayDetailanalyticsmodal('${dateStr}')">
-                            <div class="calendar-day-date">${monthName} ${dayNumber}</div>
-                            <div class="calendar-day-pnl">$${this.formatNumber(pnl)}</div>
-                            <div class="calendar-day-trades">${tradesCount} ${tradesCount > 1 ? 'trades' : 'trade'}</div>
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div class="calendar-day calendar-empty-day">
-                            <div class="calendar-day-date">${monthName} ${dayNumber}</div>
-                            <div class="calendar-day-pnl" style="color: #888;">—</div>
-                            <div class="calendar-day-trades" style="color: #888;">📊 0</div>
-                        </div>
-                    `;
-                }
-                
-                // Move to next day
-                currentDate.setDate(currentDate.getDate() + 1);
-                dayCount++;
-            }
-            
-            // Add empty cells at the end if needed
-            while (dayCount % 7 !== 0) {
-                html += '<div class="calendar-empty"></div>';
-                dayCount++;
-            }
-            html += '</div>';
-            html += `
-                <div style="margin-top: 10px; padding: 5px; background: var(--bg-secondary, #f5f5f5); font-size: 12px;">
-                    <span>Revenue: </span>
-                    <span class="${revenuePercentage >= 0 ? 'profit' : 'loss'}" font-weight: bold;">${revenuePercentage}%
-                    </span>
-                </div>
-            `;
-            
-            return html;
-        },
-        
-        closeCalendaranalyticsmodal: function() {
-            const overlay = document.getElementById('calendar-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideCalendar: function(event) {
-            if (event.target.id === 'calendar-analyticsmodal-overlay') {
-                this.closeCalendaranalyticsmodal();
-            }
-        },
-        
-        showDayDetailanalyticsmodal: function(dateStr) {
-            this.addBodyBlur();
-            
-            const currentData = this.getCurrentData();
-            if (!currentData) {
-                this.showCustomAlert('No data available', '📊');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const tradeData = currentData[this.currentTradeType];
-            const regularData = tradeData?.regular_data?.[this.currentAuthType];
-            const dailyRecord = regularData?.daily_trades_record || {};
-            const dayData = dailyRecord[dateStr];
-            
-            if (!dayData) {
-                this.showCustomAlert('No data for this date', '📅');
-                this.removeBodyBlur();
-                return;
-            }
-            
-            const dateObj = new Date(dateStr + 'T00:00:00');
-            const month = dateObj.toLocaleString('default', { month: 'long' });
-            const day = dateObj.getDate();
-            const year = dateObj.getFullYear();
-            const dayOfWeek = dateObj.toLocaleString('default', { weekday: 'long' });
-            const pnl = dayData.profit_and_loss || 0;
-            const tradesCount = dayData.trades_count || 0;
-            const tradeSummary = dayData.trade_summary || {};
-            const allTrades = dayData.all_trades || {};
-            const pnlClass = pnl >= 0 ? 'profit' : 'loss';
-            
-            // Flatten all trades from all symbols into a single list
-            let allTradesList = [];
-            for (const symbol in allTrades) {
-                if (Array.isArray(allTrades[symbol])) {
-                    // Add the symbol to each trade object
-                    const tradesWithSymbol = allTrades[symbol].map(trade => ({
-                        ...trade,
-                        symbol: symbol  // Add the symbol from the parent key
-                    }));
-                    allTradesList = allTradesList.concat(tradesWithSymbol);
-                }
-            }
-            
-            // Sort trades by time (newest first)
-            allTradesList.sort((a, b) => (b.time_open || '').localeCompare(a.time_open || ''));
-            
-            let analyticsmodalHtml = `
-                <div class="analyticsmodal-overlay" id="daydetail-analyticsmodal-overlay" onclick="Analytics.closeanalyticsmodalIfClickOutsideDayDetail(event)">
-                    <div class="analyticsmodal-container" onclick="event.stopPropagation()">
-                        <div class="analyticsmodal-header">
-                            <span>📅 ${dayOfWeek}, ${month} ${day}, ${year}</span>
-                            <span class="analyticsmodal-close" onclick="Analytics.closeDayDetailanalyticsmodal()">✕</span>
-                        </div>
-                        <div class="analyticsmodal-body" style="max-height: 70vh; overflow-y: auto; padding: 20px;">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-                                <div class="stat-card" style="padding: 15px;">
-                                    <div class="stat-label">Daily P&L</div>
-                                    <div class="stat-value ${pnlClass}" style="font-size: 28px;">$${this.formatNumber(pnl)}</div>
-                                </div>
-                                <div class="stat-card" style="padding: 15px;">
-                                    <div class="stat-label">Total Trades</div>
-                                    <div class="stat-value" style="font-size: 28px;">${tradesCount}</div>
-                                </div>
-                            </div>
-                            
-                            <div class="section-title" style="margin-bottom: 10px;">Trade Summary by Symbol</div>
-                            <div class="contest-grid" style="margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
-                                ${Object.entries(tradeSummary).map(([symbol, pnlValue]) => `
-                                    <div class="contest-card" style="padding: 12px;">
-                                        <h4 style="margin-bottom: 5px; font-size: 14px;">${this.escapeHtml(symbol)}</h4>
-                                        <div class="symbol-info" style="font-size: 13px;">
-                                            <span>P&L:</span>
-                                            <span class="${pnlValue >= 0 ? 'profit' : 'loss'}" style="font-size: 16px; font-weight: bold;">
-                                                $${this.formatNumber(pnlValue)}
-                                            </span>
-                                        </div>
-                                        <div class="symbol-info" style="font-size: 12px;">
-                                            <span>Trades:</span>
-                                            <span>${(allTrades[symbol] || []).length}</span>
-                                        </div>
-                                    </div>
-                                `).join('')}
-                                ${Object.keys(tradeSummary).length === 0 ? `
-                                    <div style="grid-column: 1 / -1; text-align: center; color: #888; padding: 10px;">
-                                        No symbol data available for this day
-                                    </div>
-                                ` : ''}
-                            </div>
-                            
-                            <div class="section-title" style="margin-bottom: 10px;">📊 Individual Trades (${allTradesList.length})</div>
-                            ${allTradesList.length > 0 ? `
-                                <div style="display: flex; flex-direction: column; gap: 10px;">
-                                    ${allTradesList.map(trade => {
-                                        const isProfit = (trade.pnl || 0) >= 0;
-                                        return `
-                                            <div style="background: var(--bg-secondary, #f5f5f5); border-radius: 8px; padding: 12px 15px; border-left: 4px solid ${isProfit ? '#4caf50' : '#f44336'};">
-                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                                    <span style="font-weight: bold; font-size: 16px;">${this.escapeHtml(trade.symbol || 'N/A')}</span>
-                                                    <span style="font-size: 13px; color: #888;">${trade.order_type || trade.type || 'N/A'}</span>
-                                                    <span style="font-size: 13px; color: #888;">1:${trade.risk_reward || 'N/A'}</span>
-                                                </div>
-                                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 15px; font-size: 13px;">
-                                                    <div><span style="color: #888;">Exit:</span> ${trade.exit_price || 'N/A'}</div>
-                                                    <div><span style="color: #888;">Entry:</span> ${trade.entry_price || 'N/A'}</div>
-                                                    <div><span style="color: #888;">TP:</span> ${trade.take_profit || trade.tp || 'N/A'}</div>
-                                                    <div><span style="color: #888;">Volume:</span> ${trade.volume || 'N/A'}</div>
-                                                    <div style="grid-column: 1 / -1; margin-top: 3px; font-weight: bold; font-size: 15px; color: ${isProfit ? '#4caf50' : '#f44336'};">
-                                                        PnL: $${this.formatNumber(trade.pnl || 0)}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        `;
-                                    }).join('')}
-                                </div>
-                            ` : `
-                                <div style="text-align: center; color: #888; padding: 20px; background: #f9f9f9; border-radius: 8px;">
-                                    No individual trade data available for this day
-                                </div>
-                            `}
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.insertAdjacentHTML('beforeend', analyticsmodalHtml);
-        },
-        
-        closeDayDetailanalyticsmodal: function() {
-            const overlay = document.getElementById('daydetail-analyticsmodal-overlay');
-            if (overlay) {
-                overlay.remove();
-            }
-            this.removeBodyBlur();
-        },
-        
-        closeanalyticsmodalIfClickOutsideDayDetail: function(event) {
-            if (event.target.id === 'daydetail-analyticsmodal-overlay') {
-                this.closeDayDetailanalyticsmodal();
-            }
-        },
-        
-        showLoading: function() {
-            document.getElementById('analytics-content').innerHTML = `
-                <div class="loading-spinner">
-                    <div class="spinner"></div>
-                    <div>Loading analytics...</div>
-                </div>
-            `;
-        },
-        
-        showNoAnalyticsMessage: function() {
-            document.getElementById('analytics-content').innerHTML = `
-                <div class="info-message">
-                    No analytics data available for this user yet.<br>
-                    Analytics will appear once trading data is collected.
-                </div>
-            `;
-        },
-        
-        formatNumber: function(num) {
-            if (num === undefined || num === null) return '0.00';
-            return parseFloat(num).toFixed(2);
-        },
-        
-        escapeHtml: function(str) {
-            if (!str) return '';
-            return String(str).replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
-        }
-    };
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
 
-    document.addEventListener('DOMContentLoaded', () => {
-        Analytics.init();
-    });
+    closeLossesanalyticsmodal: function() {
+        const o = document.getElementById('losses-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideLosses: function(e) {
+        if (e.target.id === 'losses-analyticsmodal-overlay') this.closeLossesanalyticsmodal();
+    },
+
+    showSequentialDaysLossanalyticsmodal: function() {
+        if (!this.payload) return;
+        const s = this.getSummary();
+        const count = s.consecutive_days_in_loss_count || 0;
+        const totalLoss = s.consecutive_days_in_loss_count_total_loss_pnl || 0;
+        const days = (s && s.highest_sequential_days_in_loss_days) ? s.highest_sequential_days_in_loss_days : {};
+
+        this.addBodyBlur();
+        const html = `
+            <div class="analyticsmodal-overlay" id="daysloss-analyticsmodal-overlay"
+                 onclick="Analytics.closeanalyticsmodalIfClickOutsideDaysLoss(event)">
+                <div class="analyticsmodal-container" onclick="event.stopPropagation()">
+                    <div class="analyticsmodal-header">
+                        <span>Highest Sequential Days in Loss</span>
+                        <span class="analyticsmodal-close" onclick="Analytics.closeDaysLossanalyticsmodal()">✕</span>
+                    </div>
+                    <div class="analyticsmodal-body" style="max-height:60vh;overflow-y:auto;">
+                        ${count ? `
+                            <div class="losses-card">
+                                <div class="loss-value">${count} Consecutive Days in Loss</div>
+                                <div style="margin-top:10px;">Total Loss: $${this.formatNumber(totalLoss)}</div>
+                            </div>
+                            ${Object.keys(days).length ? `
+                                <div class="section-title">Daily Breakdown</div>
+                                <div class="stats-grid">
+                                    ${Object.entries(days).map(([date, trades]) => {
+                                        const dailyTotal = (trades || []).reduce((sum, t) => sum + (parseFloat(t.pnl) || 0), 0);
+                                        return `
+                                            <div class="stat-card">
+                                                <div class="stat-label">${this.escapeHtml(date)}</div>
+                                                <div class="stat-value loss">$${this.formatNumber(dailyTotal)}</div>
+                                                <div class="stat-label">${(trades || []).length} trades</div>
+                                            </div>`;
+                                    }).join('')}
+                                </div>` : ''}
+                        ` : `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">✅</div>
+                                <div class="empty-state-text">No sequential days in loss recorded</div>
+                            </div>`}
+                    </div>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeDaysLossanalyticsmodal: function() {
+        const o = document.getElementById('daysloss-analyticsmodal-overlay');
+        if (o) o.remove();
+        this.removeBodyBlur();
+    },
+
+    closeanalyticsmodalIfClickOutsideDaysLoss: function(e) {
+        if (e.target.id === 'daysloss-analyticsmodal-overlay') this.closeDaysLossanalyticsmodal();
+    }
+};
+
+document.addEventListener('DOMContentLoaded', () => Analytics.init());
 </script>
