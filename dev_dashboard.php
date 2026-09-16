@@ -70,7 +70,6 @@ function parseList($str) {
     if (!is_string($str) || trim($str) === '') return [];
     $str = trim($str);
 
-    // If it looks like JSON array, decode it
     if (strlen($str) > 0 && $str[0] === '[') {
         $decoded = json_decode($str, true);
         if (is_array($decoded)) {
@@ -83,10 +82,33 @@ function parseList($str) {
         }
     }
 
-    // Otherwise treat as comma-separated
     $parts = array_map('trim', explode(',', $str));
     $parts = array_filter($parts, function ($v) { return $v !== ''; });
     return array_values(array_unique($parts));
+}
+
+// ==================== HELPER: current global selected TFs for this user ====================
+// Reads from any existing real symbol row that already has selected_timeframes set.
+function getCurrentGlobalTimeframes(PDO $pdo, int $userId): array {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT selected_timeframes
+            FROM broker_symbols
+            WHERE userid = ?
+              AND symbol_selected = 1
+              AND selected_timeframes IS NOT NULL
+              AND selected_timeframes <> ''
+              AND selected_timeframes <> '[]'
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['selected_timeframes'])) {
+            return parseList($row['selected_timeframes']);
+        }
+    } catch (PDOException $e) {}
+    return [];
 }
 
 // ==================== HANDLE AJAX: SAVE SELECTED SYMBOLS ====================
@@ -110,29 +132,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_selected_symbols
     }
     $clean = array_values(array_unique($clean));
 
+    // Current global timeframe selection — we replicate this onto every
+    // selected symbol row so `selected_timeframes` is always populated.
+    $currentTfs = getCurrentGlobalTimeframes($pdo, $userId);
+    $tfJson = !empty($currentTfs) ? json_encode(array_values($currentTfs)) : null;
+
     try {
         $pdo->beginTransaction();
 
-        $reset = $pdo->prepare("UPDATE broker_symbols SET symbol_selected = 0 WHERE userid = ?");
+        // Unselect everything and clear its selected_timeframes
+        $reset = $pdo->prepare("
+            UPDATE broker_symbols
+            SET symbol_selected = 0,
+                selected_timeframes = NULL
+            WHERE userid = ?
+        ");
         $reset->execute([$userId]);
 
         if (!empty($clean)) {
-            $check = $pdo->prepare("SELECT id FROM broker_symbols WHERE userid = ? AND symbol = ? LIMIT 1");
-            $insert = $pdo->prepare("INSERT INTO broker_symbols (userid, symbol, symbol_selected) VALUES (?, ?, 1)");
-            $update = $pdo->prepare("UPDATE broker_symbols SET symbol_selected = 1 WHERE userid = ? AND symbol = ?");
+            $check  = $pdo->prepare("SELECT id FROM broker_symbols WHERE userid = ? AND symbol = ? LIMIT 1");
+            $insert = $pdo->prepare("
+                INSERT INTO broker_symbols (userid, symbol, symbol_selected, selected_timeframes)
+                VALUES (?, ?, 1, ?)
+            ");
+            $update = $pdo->prepare("
+                UPDATE broker_symbols
+                SET symbol_selected = 1,
+                    selected_timeframes = ?
+                WHERE userid = ? AND symbol = ?
+            ");
 
             foreach ($clean as $sym) {
                 $check->execute([$userId, $sym]);
                 if ($check->fetch(PDO::FETCH_ASSOC)) {
-                    $update->execute([$userId, $sym]);
+                    $update->execute([$tfJson, $userId, $sym]);
                 } else {
-                    $insert->execute([$userId, $sym]);
+                    $insert->execute([$userId, $sym, $tfJson]);
                 }
             }
         }
 
         $pdo->commit();
-        echo json_encode(['success' => true, 'message' => 'Selected symbols saved.']);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Selected symbols saved.',
+            'timeframes_applied' => $currentTfs
+        ]);
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Failed to save selected symbols.']);
@@ -140,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_selected_symbols
     exit;
 }
 
-// ==================== HANDLE AJAX: SAVE SELECTED TIMEFRAMES (GLOBAL) ====================
+// ==================== HANDLE AJAX: SAVE SELECTED TIMEFRAMES (GLOBAL, PROPAGATED) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_selected_timeframes'])) {
     header('Content-Type: application/json');
 
@@ -161,29 +206,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_selected_timefra
     }
     $clean = array_values(array_unique($clean));
 
+    $tfJson = !empty($clean) ? json_encode($clean) : null;
+
     try {
-        // GLOBAL timeframes are stored as JSON in a dedicated row.
-        $globalSymbol = '__GLOBAL_TF__';
-        $jsonValue = json_encode($clean);
+        $pdo->beginTransaction();
 
-        $chk = $pdo->prepare("SELECT id FROM broker_symbols WHERE userid = ? AND symbol = ? LIMIT 1");
-        $chk->execute([$userId, $globalSymbol]);
-        $row = $chk->fetch(PDO::FETCH_ASSOC);
+        // 1) Propagate the selection onto every real selected symbol row.
+        $upd = $pdo->prepare("
+            UPDATE broker_symbols
+            SET selected_timeframes = ?
+            WHERE userid = ?
+              AND symbol_selected = 1
+              AND symbol <> '__GLOBAL_TF__'
+        ");
+        $upd->execute([$tfJson, $userId]);
+        $affected = $upd->rowCount();
 
-        if ($row) {
-            $upd = $pdo->prepare("UPDATE broker_symbols SET selected_timeframes = ? WHERE id = ?");
-            $upd->execute([$jsonValue, (int)$row['id']]);
-        } else {
-            $ins = $pdo->prepare("INSERT INTO broker_symbols (userid, symbol, symbol_selected, selected_timeframes) VALUES (?, ?, 0, ?)");
-            $ins->execute([$userId, $globalSymbol, $jsonValue]);
-        }
+        // 2) Also nuke the legacy __GLOBAL_TF__ row if it exists — no longer needed.
+        $delLegacy = $pdo->prepare("
+            DELETE FROM broker_symbols
+            WHERE userid = ? AND symbol = '__GLOBAL_TF__'
+        ");
+        $delLegacy->execute([$userId]);
+
+        $pdo->commit();
 
         echo json_encode([
-            'success' => true,
-            'message' => 'Timeframes saved.',
-            'timeframes' => $clean
+            'success'    => true,
+            'message'    => 'Timeframes saved.',
+            'timeframes' => $clean,
+            'applied_to' => $affected
         ]);
     } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Failed to save timeframes.']);
     }
     exit;
@@ -457,26 +512,33 @@ try {
     $brokerSymbols = [];
 }
 
-// Separate real symbols from the global timeframes row
-$allBrokerSymbols = [];
+// Real symbols list + selected symbols + selected timeframes
+$allBrokerSymbols        = [];
+$selectedSymbols         = [];
 $globalTimeframesSelected = [];
+
 foreach ($brokerSymbols as $r) {
+    // Legacy global row: only use it to seed TFs if no per-symbol data exists yet.
     if ($r['symbol'] === '__GLOBAL_TF__') {
-        $globalTimeframesSelected = parseList($r['selected_timeframes'] ?? '');
-    } else {
-        $allBrokerSymbols[] = $r['symbol'];
+        if (empty($globalTimeframesSelected)) {
+            $globalTimeframesSelected = parseList($r['selected_timeframes'] ?? '');
+        }
+        continue;
     }
-}
 
-// Selected symbols (only real symbols with symbol_selected = 1)
-$selectedSymbols = [];
-foreach ($brokerSymbols as $r) {
-    if ($r['symbol'] !== '__GLOBAL_TF__' && (int)$r['symbol_selected'] === 1) {
+    $allBrokerSymbols[] = $r['symbol'];
+
+    if ((int)$r['symbol_selected'] === 1) {
         $selectedSymbols[] = $r['symbol'];
+
+        // Prefer the per-symbol selected_timeframes (new schema).
+        if (empty($globalTimeframesSelected)) {
+            $globalTimeframesSelected = parseList($r['selected_timeframes'] ?? '');
+        }
     }
 }
 
-// Available timeframes – collected from all real broker symbols
+// Available timeframes – collected from catalog column
 $availableTimeframes = [];
 foreach ($brokerSymbols as $r) {
     if ($r['symbol'] === '__GLOBAL_TF__') continue;
@@ -804,7 +866,6 @@ function showSpinner() {
         </div>
 
         <!-- ==================== SUB-TAB: TIMEFRAMES ==================== -->
-        <!-- Timeframes are GLOBAL — not tied to any symbol -->
         <div class="dd-subtab-content" id="ddSubTimeframes">
             <section class="dd-card">
                 <div class="dd-card-head">
@@ -1100,19 +1161,14 @@ function showSpinner() {
     var SERVER_MIN_BROKER_BALANCE = <?= json_encode((float)$serverMinBrokerBalance) ?>;
 
     // ==================== STATE ====================
-    // All real broker symbols (used by Symbols tab)
     var ALL_BROKER_SYMBOLS = <?= json_encode(array_values($allBrokerSymbols)) ?>;
-
-    // Selected symbols (Symbols tab)
     var SELECTED_SYMBOLS = <?= json_encode(array_values($selectedSymbols)) ?>;
 
-    // GLOBAL timeframes — available and selected (clean string arrays)
     var AVAILABLE_TIMEFRAMES = <?= json_encode(array_values($availableTimeframes)) ?>;
     var SELECTED_TIMEFRAMES = <?= json_encode(array_values($globalTimeframesSelected)) ?>;
 
-    // Modal drafts
-    var MODAL_DRAFT_SELECTION = [];         // symbols modal
-    var MODAL_TF_DRAFT = [];                // TF modal draft
+    var MODAL_DRAFT_SELECTION = [];
+    var MODAL_TF_DRAFT = [];
 
     // ==================== HELPERS ====================
     function escapeHtml(t) {
@@ -1125,11 +1181,9 @@ function showSpinner() {
         return String(t).replace(/'/g, "\\'").replace(/"/g, '&quot;');
     }
 
-    // Ensure value is a clean string (never JSON, never bracketed)
     function cleanString(v) {
         if (v == null) return '';
         var s = String(v).trim();
-        // Strip surrounding quotes and brackets if present
         if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
             s = s.slice(1, -1);
         }
@@ -1210,20 +1264,10 @@ function showSpinner() {
         okBtn.classList.remove('dd-confirm-danger', 'dd-confirm-primary');
         okBtn.classList.add(danger ? 'dd-confirm-danger' : 'dd-confirm-primary');
 
-        var onOk = function () {
-            cleanup();
-            if (callback) callback(true);
-        };
-        var onCancel = function () {
-            cleanup();
-            if (callback) callback(false);
-        };
-        var onBackdrop = function (e) {
-            if (e.target === modal) onCancel();
-        };
-        var onKey = function (e) {
-            if (e.key === 'Escape') onCancel();
-        };
+        var onOk = function () { cleanup(); if (callback) callback(true); };
+        var onCancel = function () { cleanup(); if (callback) callback(false); };
+        var onBackdrop = function (e) { if (e.target === modal) onCancel(); };
+        var onKey = function (e) { if (e.key === 'Escape') onCancel(); };
 
         function cleanup() {
             modal.style.display = 'none';
@@ -1267,7 +1311,7 @@ function showSpinner() {
         }
     }
 
-    // ==================== RENDER SELECTED SYMBOLS (Symbols tab) ====================
+    // ==================== RENDER SELECTED SYMBOLS ====================
     function renderSelectedSymbols() {
         var list = document.getElementById('selectedSymbolsList');
         var count = document.getElementById('selectedCount');
@@ -1414,13 +1458,12 @@ function showSpinner() {
         });
     }
 
-    // ==================== TIMEFRAMES — GLOBAL (no symbol) ====================
+    // ==================== TIMEFRAMES — GLOBAL ====================
     function renderSelectedTimeframes() {
         var list = document.getElementById('selectedTimeframesList');
         var count = document.getElementById('selectedTfCount');
         if (!list) return;
 
-        // Ensure we have a clean array of strings
         SELECTED_TIMEFRAMES = cleanArray(SELECTED_TIMEFRAMES);
 
         if (count) count.textContent = String(SELECTED_TIMEFRAMES.length);
@@ -1481,7 +1524,7 @@ function showSpinner() {
         });
     }
 
-    // ==================== TIMEFRAMES PICKER MODAL (GLOBAL) ====================
+    // ==================== TIMEFRAMES PICKER MODAL ====================
     function openTimeframesModal() {
         if (!AVAILABLE_TIMEFRAMES.length) {
             showDdAlert('No timeframes available.', 'Notice');
@@ -2017,7 +2060,6 @@ function showSpinner() {
 
     // ==================== INIT ====================
     document.addEventListener('DOMContentLoaded', function () {
-        // Clean arrays before rendering
         SELECTED_SYMBOLS = cleanArray(SELECTED_SYMBOLS);
         SELECTED_TIMEFRAMES = cleanArray(SELECTED_TIMEFRAMES);
         AVAILABLE_TIMEFRAMES = cleanArray(AVAILABLE_TIMEFRAMES);
@@ -2119,7 +2161,6 @@ function showSpinner() {
     // ==================== EXPORTS ====================
     window.switchDdSubTab          = switchDdSubTab;
 
-    // Symbols
     window.openSymbolsModal        = openSymbolsModal;
     window.closeSymbolsModal       = closeSymbolsModal;
     window.filterSymbolsModal      = filterSymbolsModal;
@@ -2129,7 +2170,6 @@ function showSpinner() {
     window.removeSelectedSymbol    = removeSelectedSymbol;
     window.saveSelectedSymbols     = saveSelectedSymbols;
 
-    // Timeframes — GLOBAL
     window.openTimeframesModal     = openTimeframesModal;
     window.closeTimeframesModal    = closeTimeframesModal;
     window.toggleModalTf           = toggleModalTf;
@@ -2138,19 +2178,16 @@ function showSpinner() {
     window.removeSelectedTf        = removeSelectedTf;
     window.saveSelectedTimeframes  = saveSelectedTimeframes;
 
-    // Programmes
     window.openCreateProgrammeModal  = openCreateProgrammeModal;
     window.closeCreateProgrammeModal = closeCreateProgrammeModal;
     window.submitCreateProgramme     = submitCreateProgramme;
     window.goToProgrammeTraining     = goToProgrammeTraining;
     window.deleteProgramme           = deleteProgramme;
 
-    // Alerts / Confirm
     window.closeDdAlert              = closeDdAlert;
     window.showDdAlert               = showDdAlert;
     window.showDdConfirm             = showDdConfirm;
 
-    // Visibility / Requirements
     window.saveVisibility            = saveVisibility;
     window.toggleRequirement         = toggleRequirement;
     window.saveRequirements          = saveRequirements;
