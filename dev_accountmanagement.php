@@ -1,6 +1,8 @@
 <?php
     // dev_accountmanagement.php — Account Management (Standalone)
     session_start();
+    file_put_contents('debug_hit.log', date('Y-m-d H:i:s') . " - dev_accountmanagement.php was reached\n", FILE_APPEND);
+die("STOP - dev_accountmanagement.php reached successfully");
 
     // ==================== DATABASE CONNECTION ====================
     try {
