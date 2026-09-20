@@ -2,6 +2,7 @@
 // programme_configuration.php
 // Modal-only configuration builder for a programme.
 // Refined: multi-root with heir inheritance, authority selection, one-ref-per-root.
+// NEW: per-tree global timeframe (dictator) + GLOBAL anchor candle (across all trees).
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -65,6 +66,7 @@ $pcDrawingTools = ['trendline'];
 $pcDrawingColors = ['green','blue','red','purple','custom'];
 $pcTargetTypes = ['risk_reward','set_target'];
 $pcRiskRewardModes = ['fixed_risk_reward','minimum_risk_reward'];
+$pcAnchorIndexes = ['open_time','close_time'];
 
 // ==================== CANDLE NAMES ====================
 $pcCandleNames = [];
@@ -96,7 +98,8 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at
+                   root_ref_count, resolved_root_id, triggered_at,
+                   anchor_candle_id, anchor_candle_index
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -109,8 +112,11 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
             if (!isset($byTree[$tid])) {
                 $byTree[$tid] = [
                     'tree_id'   => $tid,
+                    'timeframe' => '',
+                    'anchor_candle_id'    => null,
+                    'anchor_candle_index' => '',
                     'collapsed' => true,
-                    'roots'     => [],       // NEW: multiple roots per tree
+                    'roots'     => [],
                     'drawings'  => [],
                     'trades'    => [],
                 ];
@@ -150,25 +156,32 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
+                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
+                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
             if ($r['row_role'] === 'root') {
                 $byTree[$tid]['roots'][] = $row;
+                if ($byTree[$tid]['timeframe'] === '' && !empty($row['timeframe'])) {
+                    $byTree[$tid]['timeframe'] = $row['timeframe'];
+                }
+                // Tree-level anchor: first root that carries one wins
+                if ($byTree[$tid]['anchor_candle_id'] === null && $row['anchor_candle_id'] !== null) {
+                    $byTree[$tid]['anchor_candle_id']    = $row['anchor_candle_id'];
+                    $byTree[$tid]['anchor_candle_index'] = $row['anchor_candle_index'];
+                }
             } elseif ($r['row_role'] === 'drawing') {
                 $byTree[$tid]['drawings'][] = $row;
             } elseif ($r['row_role'] === 'trade') {
                 $byTree[$tid]['trades'][] = $row;
             } else {
-                // root_ref / re_ref_author / re_ref_servant — attach to root later
                 $byTree[$tid]['_orphan_rows'][] = $row;
             }
         }
 
-        // Nest refs under their parent roots
         foreach ($byTree as $tid => &$tree) {
             $roots = &$tree['roots'];
             $orphans = isset($tree['_orphan_rows']) ? $tree['_orphan_rows'] : [];
 
-            // Build ref index: root_id => [refs]
             $refsByRoot = [];
             foreach ($orphans as $row) {
                 if ($row['row_role'] === 'root_ref') {
@@ -177,15 +190,12 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 }
             }
 
-            // Attach re_ref pairs
             foreach ($orphans as $row) {
                 if ($row['row_role'] === 're_ref_author'
                     && $row['parent_id'] !== null) {
-                    // find the root_ref that owns this author
                     foreach ($refsByRoot as $rootId => &$refList) {
                         foreach ($refList as &$ref) {
                             if ($ref['id'] === $row['parent_id']) {
-                                // find servant
                                 $servant = null;
                                 foreach ($orphans as $cand) {
                                     if ($cand['row_role'] === 're_ref_servant'
@@ -206,7 +216,6 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 }
             }
 
-            // Attach refs to their roots
             foreach ($roots as &$root) {
                 $root['root_refs'] = isset($refsByRoot[$root['id']])
                     ? $refsByRoot[$root['id']] : [];
@@ -216,6 +225,13 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
             unset($tree['_orphan_rows']);
         }
         unset($tree);
+
+        foreach ($byTree as &$t) {
+            if ($t['timeframe'] === '' && !empty($t['roots'])) {
+                $t['timeframe'] = $t['roots'][0]['timeframe'] ?: $pcCurrentTf;
+            }
+        }
+        unset($t);
 
         $pcTrees = array_values($byTree);
     } catch (PDOException $e) { $pcTrees = []; }
@@ -248,8 +264,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     $trees       = is_array($payload['trees'] ?? null) ? $payload['trees'] : [];
     $singleTreeId = isset($payload['tree_id']) ? (int)$payload['tree_id'] : 0;
 
-    // ★ Optional R:R overrides coming from the editable inputs in the modal.
-    //   These are only applied when they differ from the current account row.
     $rrOverrides = is_array($payload['accountManagement'] ?? null) ? $payload['accountManagement'] : [];
 
     try {
@@ -279,39 +293,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                  target, target_price_level,
                  authority_source_id, authority_source_role,
                  root_order, evaluation_priority, is_foundation_root,
-                 root_ref_count, resolved_root_id, triggered_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 root_ref_count, resolved_root_id, triggered_at,
+                 anchor_candle_id, anchor_candle_index)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         foreach ($insertTrees as $tree) {
             $treeId = $singleTreeId > 0 ? $singleTreeId : $nextTreeId++;
 
+            $treeTimeframe = isset($tree['timeframe']) ? trim((string)$tree['timeframe']) : '';
+            $treeAnchorLocalKey = isset($tree['anchor_local_key']) ? (string)$tree['anchor_local_key'] : '';
+            $treeAnchorIndex    = isset($tree['anchor_candle_index']) ? trim((string)$tree['anchor_candle_index']) : '';
+
             $roots = is_array($tree['roots'] ?? null) ? $tree['roots'] : [];
             if (!$roots) continue;
 
-            // Sort roots by evaluation priority
             usort($roots, function ($a, $b) {
                 return ((int)($a['evaluation_priority'] ?? 1)) - ((int)($b['evaluation_priority'] ?? 1));
             });
 
-            // Map local root keys to DB ids for authority_source_id resolution
-            $rootLocalToDb = [];
+            $rootLocalToDb        = [];
+            $rootDbIds            = [];
+            $rootLocalKeyByIndex  = [];
 
-            // ---- 1) INSERT ROOTS (foundation first, then heirs) ----
-            $rootLocalToDb = [];   // local_key => db id
-            $rootDbIds     = [];   // index    => db id
-            $rootLocalKeyByIndex = []; // index => local_key (for ref-key resolution)
-
+            // ---- 1) INSERT ROOTS (anchor written at tree level below) ----
             foreach ($roots as $rIdx => $rootRow) {
                 $isFoundation = ($rIdx === 0) ? 1 : 0;
                 $rootOrder    = $rIdx + 1;
                 $evalPriority = $rootOrder;
 
+                $rowTf = $treeTimeframe !== '' ? $treeTimeframe : self_tf($rootRow['timeframe'] ?? null);
+
                 $ins->execute([
                     $uId, $programmeId, $treeId, 'root', null, null,
                     $rootRow['candle_name'] ?? null,
                     $rootRow['price_level'] ?? null,
-                    self_tf($rootRow['timeframe'] ?? null),
+                    $rowTf,
                     self_ct($rootRow['candle_type'] ?? null),
                     $rootRow['candle_position'] ?? '0',
                     null,
@@ -321,7 +338,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     null, null, null, null, null, null,
                     null, 'none',
                     $rootOrder, $evalPriority, $isFoundation,
-                    0, null, null
+                    0, null, null,
+                    null, null
                 ]);
 
                 $rootDbId = (int)$pdo->lastInsertId();
@@ -334,8 +352,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 }
             }
 
-            // ---- 2) INSERT ROOT REFERENCES (max 1 per root) ----
-            $refLocalToDb = []; // ref-local-key ("ROOT:<i>:REF:<j>") => db id
+            // ---- 2) INSERT ROOT REFERENCES ----
+            $refLocalToDb = [];
 
             foreach ($roots as $rIdx => $rootRow) {
                 $rootDbId = isset($rootDbIds[$rIdx]) ? (int)$rootDbIds[$rIdx] : 0;
@@ -343,7 +361,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
                 $rootRefs = is_array($rootRow['root_refs'] ?? null) ? $rootRow['root_refs'] : [];
                 if (count($rootRefs) > 1) {
-                    $rootRefs = [ $rootRefs[0] ]; // enforce one ref per root
+                    $rootRefs = [ $rootRefs[0] ];
                 }
 
                 foreach ($rootRefs as $refIdx => $ref) {
@@ -351,7 +369,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                         $uId, $programmeId, $treeId, 'root_ref', $rootDbId, $rootDbId,
                         $ref['candle_name'] ?? null,
                         $ref['price_level'] ?? null,
-                        self_tf($ref['timeframe'] ?? null),
+                        $treeTimeframe !== '' ? $treeTimeframe : self_tf($ref['timeframe'] ?? null),
                         self_ct($ref['candle_type'] ?? null),
                         $ref['candle_position'] ?? '0',
                         self_search($ref['candle_search'] ?? null),
@@ -360,15 +378,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                         null, null, null, null, null, null,
                         null, 'none',
                         1, 1, 0,
-                        0, null, null
+                        0, null, null,
+                        null, null
                     ]);
                     $refDbId = (int)$pdo->lastInsertId();
 
-                    // Track for authority resolution + re-ref parents
                     $refLocalKey = 'ROOT:' . $rIdx . ':REF:' . $refIdx;
                     $refLocalToDb[$refLocalKey] = $refDbId;
 
-                    // Mark root_ref_count on the parent root
                     $upd = $pdo->prepare("UPDATE programme_configuration SET root_ref_count = 1 WHERE id = ?");
                     $upd->execute([$rootDbId]);
 
@@ -379,12 +396,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                         $servant = $pair['referenced'] ?? null;
                         if (!$author || !$servant) continue;
 
-                        // author row: role 're_ref_author', parent = the root_ref
                         $ins->execute([
                             $uId, $programmeId, $treeId, 're_ref_author', $refDbId, $refDbId,
                             $ref['candle_name'] ?? null,
                             $author['price_level'] ?? null,
-                            self_tf($ref['timeframe'] ?? null),
+                            $treeTimeframe !== '' ? $treeTimeframe : self_tf($ref['timeframe'] ?? null),
                             self_ct($ref['candle_type'] ?? null),
                             $ref['candle_position'] ?? '0',
                             self_search($ref['candle_search'] ?? null),
@@ -393,29 +409,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                             null, null, null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, 'none',
-                            1, 1, 0, 0, null, null
+                            1, 1, 0, 0, null, null,
+                            null, null
                         ]);
                         $authorDbId = (int)$pdo->lastInsertId();
 
-                        // servant row: role 're_ref_servant', parent = the author row
                         $ins->execute([
                             $uId, $programmeId, $treeId, 're_ref_servant', $authorDbId, $authorDbId,
                             $rootRow['candle_name'] ?? null,
                             $servant['price_level'] ?? null,
-                            self_tf($rootRow['timeframe'] ?? null),
+                            $treeTimeframe !== '' ? $treeTimeframe : self_tf($rootRow['timeframe'] ?? null),
                             self_ct($rootRow['candle_type'] ?? null),
                             $rootRow['candle_position'] ?? '0',
                             null, null, null,
                             null, null, null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, 'none',
-                            1, 1, 0, 0, null, null
+                            1, 1, 0, 0, null, null,
+                            null, null
                         ]);
                     }
                 }
             }
 
-            // ---- 4) UPDATE AUTHORITY SOURCE IDS (roots and refs) ----
+            // ---- 4) UPDATE AUTHORITY SOURCE IDS ----
             foreach ($roots as $rIdx => $rootRow) {
                 if (empty($rootRow['authority_local_key'])) continue;
                 $childDbId = isset($rootDbIds[$rIdx]) ? (int)$rootDbIds[$rIdx] : 0;
@@ -423,11 +440,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
                 $srcLocalKey = (string)$rootRow['authority_local_key'];
 
-                // Try roots first
                 $srcDbId = isset($rootLocalToDb[$srcLocalKey]) ? (int)$rootLocalToDb[$srcLocalKey] : 0;
                 $srcRole = 'root';
 
-                // Then refs
                 if ($srcDbId <= 0 && isset($refLocalToDb[$srcLocalKey])) {
                     $srcDbId = (int)$refLocalToDb[$srcLocalKey];
                     $srcRole = 'root_ref';
@@ -453,6 +468,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $upd->execute([$srcDbId, $srcRole, $childDbId]);
             }
 
+            // ---- 4.5) APPLY TREE-LEVEL ANCHOR TO ALL ROOTS ----
+            if ($treeAnchorLocalKey !== '') {
+                $anchorDbId = isset($rootLocalToDb[$treeAnchorLocalKey])
+                    ? (int)$rootLocalToDb[$treeAnchorLocalKey] : 0;
+
+                if ($anchorDbId > 0) {
+                    $anchorIndex = in_array($treeAnchorIndex, ['open_time','close_time'], true)
+                        ? $treeAnchorIndex : null;
+
+                    foreach ($rootDbIds as $rdb) {
+                        $upd2 = $pdo->prepare("
+                            UPDATE programme_configuration
+                            SET anchor_candle_id = ?, anchor_candle_index = ?
+                            WHERE id = ?
+                        ");
+                        $upd2->execute([$anchorDbId, $anchorIndex, (int)$rdb]);
+                    }
+                }
+            }
+
             // ---- 5) DRAWINGS ----
             $drawings = is_array($tree['drawings'] ?? null) ? $tree['drawings'] : [];
             foreach ($drawings as $d) {
@@ -475,7 +510,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
                 $ins->execute([
                     $uId, $programmeId, $treeId, 'drawing', null, null,
-                    null, null, null, null, null, null, null, null,
+                    null, null,
+                    $treeTimeframe !== '' ? $treeTimeframe : null,
+                    null, null, null, null, null,
                     $dId, $tool,
                     $drawFrom, $drawFromLvl,
                     $drawTo,
@@ -483,7 +520,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     $color,
                     null, null, null, null, null, null,
                     null, 'none',
-                    1, 1, 0, 0, null, null
+                    1, 1, 0, 0, null, null,
+                    null, null
                 ]);
             }
 
@@ -516,20 +554,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
                 $ins->execute([
                     $uId, $programmeId, $treeId, 'trade', null, null,
-                    null, null, null, null, null, null, null, $orderType,
+                    null, null,
+                    $treeTimeframe !== '' ? $treeTimeframe : null,
+                    null, null, null, null, $orderType,
                     null, null, null, null, null, null, null,
                     $entryFrom, $entryLvl,
                     $exitAt, $exitLvl,
                     $target, $targetLvl,
                     null, 'none',
-                    1, 1, 0, 0, null, null
+                    1, 1, 0, 0, null, null,
+                    null, null
                 ]);
             }
         }
 
-        // ---- 6.5) PERSIST R:R OVERRIDES INTO accountmanagement ----
-        //          Only touches the row belonging to this developer.
-        //          Creates one if none exists yet.
+        // ---- 6.5) PERSIST R:R OVERRIDES ----
         $amFixed   = null;
         $amMin     = null;
         if (array_key_exists('fixed_risk_reward', $rrOverrides)) {
@@ -546,7 +585,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         }
 
         if ($amFixed !== null || $amMin !== null) {
-            // Check whether an accountmanagement row exists for this developer
             $chk = $pdo->prepare("
                 SELECT id, fixed_risk_reward, minimum_risk_reward
                 FROM accountmanagement
@@ -598,7 +636,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at
+                   root_ref_count, resolved_root_id, triggered_at,
+                   anchor_candle_id, anchor_candle_index
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -641,10 +680,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
+                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
+                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
         }
 
-        // Return the freshest accountmanagement values so the JS can update its local copy.
         $amOut = [
             'enable_risk_reward_correction' => 0,
             'minimum_risk_reward'           => '0.00',
@@ -683,6 +723,7 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 
 <!-- ============================================================
      PROGRAMME CONFIGURATION — MODAL (Multi-Root / Heir Model)
+     Tree-level global timeframe + GLOBAL anchor candle.
      ============================================================ -->
 <div id="pcModal" class="pc-modal" aria-hidden="true"
      data-programme-id="<?= (int)$pcProgrammeId ?>"
@@ -783,6 +824,7 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 <script type="application/json" id="pcTargetTypesJson"><?= json_encode(array_values($pcTargetTypes)) ?></script>
 <script type="application/json" id="pcRiskRewardModesJson"><?= json_encode(array_values($pcRiskRewardModes)) ?></script>
 <script type="application/json" id="pcAccountManagementJson"><?= json_encode($pcAccountManagement) ?></script>
+<script type="application/json" id="pcAnchorIndexesJson"><?= json_encode(array_values($pcAnchorIndexes)) ?></script>
 
 <!-- ============================================================ TEMPLATES ============================================================ -->
 
@@ -803,6 +845,41 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
             </button>
         </div>
         <div class="pc-tree-body">
+            <!-- TREE-LEVEL GLOBAL TIMEFRAME (the dictator) -->
+            <div class="pc-tree-timeframe-bar">
+                <div class="pc-tree-timeframe-field">
+                    <label class="pc-label">
+                        <i class="fa-solid fa-clock"></i>
+                        Global timeframe <span class="pc-req">*</span>
+                    </label>
+                    <select class="pc-input pc-select pc-tree-timeframe" data-field="tree_timeframe"></select>
+                    <span class="pc-section-hint">
+                        Applied to every root, ref, drawing and trade in this tree.
+                    </span>
+                </div>
+            </div>
+
+            <!-- GLOBAL ANCHOR CANDLE (across all trees) -->
+            <div class="pc-tree-anchor-bar" data-role="treeAnchorBar">
+                <div class="pc-tree-anchor-field">
+                    <label class="pc-label">
+                        <i class="fa-solid fa-anchor"></i>
+                        Anchor candle
+                        <span class="pc-section-hint" style="display:inline;margin-left:4px;">(optional — sync every root to one candle's time)</span>
+                    </label>
+                    <div class="pc-tree-anchor-grid">
+                        <div class="pc-field">
+                            <label class="pc-label">Anchor to candle</label>
+                            <select class="pc-input pc-select pc-tree-anchor-root" data-field="tree_anchor_root"></select>
+                        </div>
+                        <div class="pc-field pc-tree-anchor-index-field" data-role="treeAnchorIndexField" style="display:none;">
+                            <label class="pc-label">Select <span data-role="treeAnchorNameLabel">candle</span> index time:</label>
+                            <select class="pc-input pc-select pc-tree-anchor-index" data-field="tree_anchor_index"></select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="pc-tree-section">
                 <div class="pc-tree-section-title">
                     Roots
@@ -844,6 +921,7 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
             </button>
         </div>
         <div data-role="rootCandleHost"></div>
+
         <div class="pc-root-ref-section">
             <div class="pc-tree-section-title" style="margin-top:8px;">
                 Root Reference
@@ -917,8 +995,8 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
                 <label class="pc-label">Price level</label>
                 <select class="pc-input pc-select pc-price-level" data-field="price_level"></select>
             </div>
-            <div class="pc-field">
-                <label class="pc-label">Timeframe <span class="pc-req">*</span></label>
+            <div class="pc-field pc-timeframe-field" data-role="timeframeField">
+                <label class="pc-label">Timeframe</label>
                 <select class="pc-input pc-select pc-timeframe" data-field="timeframe"></select>
             </div>
             <div class="pc-field">
@@ -1111,6 +1189,50 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
     letter-spacing: 0.4px; color: var(--accent, #2e8b57); margin-bottom: 8px; display: flex; gap: 6px; align-items: baseline; }
 .pc-section-hint { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-muted, #888); font-size: 0.7rem; }
 
+/* Tree-level global timeframe bar */
+.pc-tree-timeframe-bar {
+    margin-bottom: 10px; padding: 12px 14px; border-radius: 10px;
+    background: rgba(46,139,87,0.07);
+    border: 1px solid rgba(46,139,87,0.25);
+}
+.pc-tree-timeframe-field { display: flex; flex-direction: column; gap: 4px; }
+.pc-tree-timeframe-field .pc-label {
+    font-size: 0.76rem; color: var(--accent, #2e8b57); font-weight: 800;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+.pc-tree-timeframe-field .pc-select { max-width: 260px; }
+.pc-tree-timeframe-field .pc-section-hint { display: block; margin-top: 4px; }
+body.dark-mode .pc-tree-timeframe-bar {
+    background: rgba(46,139,87,0.16); border-color: rgba(46,139,87,0.5);
+}
+
+/* GLOBAL anchor candle bar (across all trees) */
+.pc-tree-anchor-bar {
+    margin-bottom: 14px; padding: 12px 14px; border-radius: 10px;
+    background: rgba(74,123,216,0.05);
+    border: 1px dashed rgba(74,123,216,0.5);
+}
+.pc-tree-anchor-field { display: flex; flex-direction: column; gap: 6px; }
+.pc-tree-anchor-field > .pc-label {
+    font-size: 0.76rem; color: #4a7bd8; font-weight: 800;
+    display: inline-flex; align-items: center; gap: 6px; margin: 0;
+}
+.pc-tree-anchor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.pc-tree-anchor-grid .pc-field { min-width: 0; }
+.pc-tree-anchor-grid .pc-label { color: #4a7bd8; }
+@media (max-width: 600px) {
+    .pc-tree-anchor-grid { grid-template-columns: 1fr; }
+}
+body.dark-mode .pc-tree-anchor-bar {
+    background: rgba(74,123,216,0.1); border-color: rgba(74,123,216,0.5);
+}
+body.dark-mode .pc-tree-anchor-field > .pc-label,
+body.dark-mode .pc-tree-anchor-grid .pc-label { color: #6c93e0; }
+
 .pc-root-list { display: flex; flex-direction: column; gap: 12px; }
 .pc-root-wrap { border-left: 3px solid var(--accent, #2e8b57); border-radius: 8px;
     padding-left: 8px; padding-top: 4px; padding-bottom: 4px; }
@@ -1278,6 +1400,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     var PC_TARGET_TYPES    = JSON.parse(document.getElementById('pcTargetTypesJson').textContent      || '[]');
     var PC_RR_MODES        = JSON.parse(document.getElementById('pcRiskRewardModesJson').textContent  || '[]');
     var PC_ACCOUNT_MGMT    = JSON.parse(document.getElementById('pcAccountManagementJson').textContent|| '{}');
+    var PC_ANCHOR_INDEXES  = JSON.parse(document.getElementById('pcAnchorIndexesJson').textContent   || '["open_time","close_time"]');
 
     var PC = {
         programmeId:   <?= (int)$pcProgrammeId ?>,
@@ -1326,7 +1449,87 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     }
 
     // ============================================================
-    // SOURCE OPTIONS (per root — now includes ALL roots in the tree)
+    // GLOBAL CANDLE COLLECTION (across ALL trees)
+    // ============================================================
+    function buildGlobalAnchorOptions() {
+        var opts = [];
+        var seen = {};
+
+        PC.trees.forEach(function (tree, treeIdx) {
+            (tree.roots || []).forEach(function (root, rootIdx) {
+                var nm = (root.fields.candle_name || '').trim();
+                if (!nm) return;
+
+                var key = nm + '::root::' + tree.localId + '::' + root.localId;
+                if (seen[key]) return;
+                seen[key] = true;
+
+                opts.push({
+                    value: key,
+                    label: nm + ' (Tree ' + (treeIdx + 1) + ' Root #' + (rootIdx + 1) + ')'
+                });
+
+                (root.refs || []).forEach(function (ref, refIdx) {
+                    var refNm = (ref.fields.candle_name || '').trim();
+                    if (!refNm) return;
+
+                    var refKey = refNm + '::ref::' + tree.localId + '::' + ref.localId;
+                    if (seen[refKey]) return;
+                    seen[refKey] = true;
+
+                    opts.push({
+                        value: refKey,
+                        label: refNm + ' (Tree ' + (treeIdx + 1) + ' Root#' + (rootIdx + 1) + ' Ref#' + (refIdx + 1) + ')'
+                    });
+                });
+            });
+        });
+
+        return opts;
+    }
+
+    // Resolve an anchor selection value to a concrete root in the CURRENT tree.
+    // Anchor values are global: "candleName::root::treeLocalId::rootLocalId"
+    // or "candleName::ref::treeLocalId::refLocalId"
+    function resolveAnchorForTree(tree, anchorValue) {
+        if (!anchorValue || !tree) return null;
+
+        var parts = anchorValue.split('::');
+        if (parts.length < 4) return null;
+
+        var kind      = parts[1]; // 'root' or 'ref'
+        var treeLid   = parts[2];
+        var entityLid = parts[3];
+
+        // Only return a match when the anchor lives in the tree being saved.
+        if (treeLid !== tree.localId) return null;
+
+        if (kind === 'root') {
+            var root = (tree.roots || []).filter(function (r) { return r.localId === entityLid; })[0];
+            if (root) return { type: 'root', localId: root.localId };
+
+            // Fallback: anchor stored as a root local key from a previous save
+            var asRoot = (tree.roots || []).filter(function (r) { return r.localId === parts[0]; })[0];
+            if (asRoot) return { type: 'root', localId: asRoot.localId };
+            return null;
+        }
+
+        if (kind === 'ref') {
+            var found = null;
+            (tree.roots || []).forEach(function (r) {
+                (r.refs || []).forEach(function (ref) {
+                    if (ref.localId === entityLid) found = ref.localId;
+                });
+            });
+            if (found) return { type: 'ref', localId: found };
+            return null;
+        }
+
+        return null;
+    }
+
+    // ============================================================
+    // SOURCE OPTIONS
     // ============================================================
     function buildSourceOptions(tree, rootLocalId) {
         var opts = [];
@@ -1336,7 +1539,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var rootName = (root.fields.candle_name || '').trim() || 'Root';
         opts.push({ value: 'ROOT', label: rootName });
 
-        // Include refs from ALL roots in the tree (team model)
         (tree.roots || []).forEach(function (r, ri) {
             (r.refs || []).forEach(function (ref, refIdx) {
                 var nm = (ref.fields.candle_name || '').trim() || ('Root#' + (ri+1) + ' Ref#' + (refIdx+1));
@@ -1410,31 +1612,44 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     window.pcShowSuccess = pcShowSuccess;
 
     // ============================================================
-    // HYDRATE FROM SERVER (multi-root)
+    // HYDRATE FROM SERVER
     // ============================================================
     function hydrateFromServer() {
         PC.trees = [];
         PC_TREES_SERVER.forEach(function (t) {
+            var treeTf = (t.timeframe || '').trim();
+            if (!treeTf) {
+                treeTf = (t.roots && t.roots[0] && t.roots[0].timeframe)
+                    ? t.roots[0].timeframe : (PC_CURRENT_TF || '');
+            }
+
             var tree = {
                 localId:  uid(),
                 dbTreeId: t.tree_id,
                 collapsed: true,
+                timeframe: treeTf,
+                anchorLocalKey: null,      // global anchor value (new format) or local key fallback
+                anchorDbId: t.anchor_candle_id || null,
+                anchorIndex: t.anchor_candle_index || '',
                 roots:    [],
                 drawings: [],
                 trades:   []
             };
 
+            var dbIdToLocal = {};
+
             (t.roots || []).forEach(function (rootRow, rIdx) {
+                var rootLocal = uid();
                 var root = {
-                    localId: uid(),
+                    localId: rootLocal,
                     dbId: rootRow.id,
                     rootOrder: rIdx + 1,
                     isFoundation: rIdx === 0,
-                    authorityLocalKey: null, // resolved later
+                    authorityLocalKey: null,
                     fields: {
                         candle_name:     rootRow.candle_name || '',
                         price_level:     rootRow.price_level || '',
-                        timeframe:       rootRow.timeframe || PC_CURRENT_TF || '',
+                        timeframe:       treeTf || rootRow.timeframe || PC_CURRENT_TF || '',
                         candle_type:     rootRow.candle_type || '',
                         candle_position: rootRow.candle_position || '0',
                         operator:        rootRow.operator || ''
@@ -1442,6 +1657,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     refs: []
                 };
                 tree.roots.push(root);
+                if (rootRow.id) dbIdToLocal[rootRow.id] = rootLocal;
 
                 (rootRow.root_refs || []).forEach(function (rf) {
                     var refBlock = {
@@ -1450,7 +1666,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                         fields: {
                             candle_name:     rf.candle_name || '',
                             price_level:     rf.price_level || '',
-                            timeframe:       rf.timeframe || PC_CURRENT_TF || '',
+                            timeframe:       treeTf || rf.timeframe || PC_CURRENT_TF || '',
                             candle_type:     rf.candle_type || '',
                             candle_position: rf.candle_position || '0',
                             candle_search:   rf.candle_search || ''
@@ -1468,7 +1684,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                                 fields: {
                                     candle_name:     refBlock.fields.candle_name,
                                     price_level:     pair.author.price_level || '',
-                                    timeframe:       refBlock.fields.timeframe,
+                                    timeframe:       treeTf,
                                     candle_type:     refBlock.fields.candle_type,
                                     candle_position: refBlock.fields.candle_position,
                                     candle_search:   refBlock.fields.candle_search,
@@ -1480,7 +1696,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                                 fields: {
                                     candle_name:     root.fields.candle_name,
                                     price_level:     pair.referenced.price_level || '',
-                                    timeframe:       root.fields.timeframe,
+                                    timeframe:       treeTf,
                                     candle_type:     root.fields.candle_type,
                                     candle_position: root.fields.candle_position,
                                     candle_search:   ''
@@ -1491,6 +1707,54 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     });
                 });
             });
+
+            // Resolve tree-level anchor db id to a GLOBAL anchor value.
+            // The anchor is stored as anchor_candle_id pointing at a root row.
+            if (tree.anchorDbId) {
+                // Search all trees' roots for the matching db id; anchor is global.
+                var foundGlobal = null;
+                PC.trees.forEach(function (otherTree) {
+                    (otherTree.roots || []).forEach(function (otherRoot) {
+                        if (otherRoot.dbId === tree.anchorDbId) {
+                            var nm = (otherRoot.fields.candle_name || '').trim();
+                            if (nm) {
+                                foundGlobal = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
+                            }
+                        }
+                        (otherRoot.refs || []).forEach(function (otherRef) {
+                            if (otherRef.dbId === tree.anchorDbId) {
+                                var refNm = (otherRef.fields.candle_name || '').trim();
+                                if (refNm) {
+                                    foundGlobal = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
+                                }
+                            }
+                        });
+                    });
+                });
+
+                // Fallback: anchor may be in the tree currently being hydrated
+                if (!foundGlobal) {
+                    tree.roots.forEach(function (r) {
+                        if (r.dbId === tree.anchorDbId) {
+                            var nm2 = (r.fields.candle_name || '').trim();
+                            if (nm2) foundGlobal = nm2 + '::root::' + tree.localId + '::' + r.localId;
+                        }
+                        (r.refs || []).forEach(function (rf) {
+                            if (rf.dbId === tree.anchorDbId) {
+                                var refNm2 = (rf.fields.candle_name || '').trim();
+                                if (refNm2) foundGlobal = refNm2 + '::ref::' + tree.localId + '::' + rf.localId;
+                            }
+                        });
+                    });
+                }
+
+                // Legacy fallback: local key from dbIdToLocal
+                if (!foundGlobal && dbIdToLocal[tree.anchorDbId]) {
+                    foundGlobal = dbIdToLocal[tree.anchorDbId];
+                }
+
+                tree.anchorLocalKey = foundGlobal || null;
+            }
 
             (t.drawings || []).forEach(function (dr) {
                 tree.drawings.push({
@@ -1515,7 +1779,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 var targetRaw = tr.target || '';
                 var isRR = (targetRaw === 'fixed_risk_reward' || targetRaw === 'minimum_risk_reward');
                 var rrMode = isRR ? targetRaw : 'fixed_risk_reward';
-                // Initialise the editable R:R value from account management
                 var rrValue = (rrMode === 'minimum_risk_reward')
                     ? (PC_ACCOUNT_MGMT.minimum_risk_reward || '0.00')
                     : (PC_ACCOUNT_MGMT.fixed_risk_reward   || '0.00');
@@ -1551,7 +1814,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 if (!pair.servant) return;
                 if (fieldKey === 'candle_name')     pair.servant.fields.candle_name     = newValue;
                 if (fieldKey === 'candle_type')     pair.servant.fields.candle_type     = newValue;
-                if (fieldKey === 'timeframe')       pair.servant.fields.timeframe       = newValue;
                 if (fieldKey === 'candle_position') pair.servant.fields.candle_position = newValue;
             });
         });
@@ -1561,7 +1823,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             if (!pair.author) return;
             if (fieldKey === 'candle_name')     pair.author.fields.candle_name     = newValue;
             if (fieldKey === 'candle_type')     pair.author.fields.candle_type     = newValue;
-            if (fieldKey === 'timeframe')       pair.author.fields.timeframe       = newValue;
             if (fieldKey === 'candle_position') pair.author.fields.candle_position = newValue;
             if (fieldKey === 'candle_search')   pair.author.fields.candle_search   = newValue;
         });
@@ -1631,23 +1892,22 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var editable;
         switch (opts.role) {
             case 'root':
-                editable = { candle_name:true, candle_type:true, timeframe:true, price_level:true, candle_position:true, candle_search:true, operator:true };
+                editable = { candle_name:true, candle_type:true, price_level:true, candle_position:true, candle_search:true, operator:true };
                 break;
             case 'heirRoot':
-                // Heir roots: only price_level and operator are configurable
-                editable = { candle_name:false, candle_type:false, timeframe:false, price_level:true, candle_position:false, candle_search:false, operator:true };
+                editable = { candle_name:false, candle_type:false, price_level:true, candle_position:false, candle_search:false, operator:true };
                 break;
             case 'ref':
-                editable = { candle_name:true, candle_type:true, timeframe:true, price_level:true, candle_position:true, candle_search:true, operator:false };
+                editable = { candle_name:true, candle_type:true, price_level:true, candle_position:true, candle_search:true, operator:false };
                 break;
             case 'rerefAuthor':
-                editable = { candle_name:false, candle_type:false, timeframe:false, price_level:true, candle_position:false, candle_search:false, operator:true };
+                editable = { candle_name:false, candle_type:false, price_level:true, candle_position:false, candle_search:false, operator:true };
                 break;
             case 'rerefServant':
-                editable = { candle_name:false, candle_type:false, timeframe:false, price_level:true, candle_position:false, candle_search:false, operator:false };
+                editable = { candle_name:false, candle_type:false, price_level:true, candle_position:false, candle_search:false, operator:false };
                 break;
             default:
-                editable = { candle_name:true, candle_type:true, timeframe:true, price_level:true, candle_position:true, candle_search:true, operator:true };
+                editable = { candle_name:true, candle_type:true, price_level:true, candle_position:true, candle_search:true, operator:true };
         }
 
         var nameInp = node.querySelector('[data-field="candle_name"]');
@@ -1689,18 +1949,8 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             levelSel.disabled = true; levelSel.classList.add('pc-locked');
         }
 
-        var tfSel = node.querySelector('[data-field="timeframe"]');
-        fillSelect(tfSel, PC_TIMEFRAMES, { placeholder: '— timeframe —' });
-        tfSel.value = block.fields.timeframe || PC_CURRENT_TF || '';
-        if (!block.fields.timeframe) block.fields.timeframe = tfSel.value;
-        if (!editable.timeframe) {
-            tfSel.disabled = true; tfSel.classList.add('pc-locked');
-        } else {
-            tfSel.addEventListener('change', function () {
-                block.fields.timeframe = tfSel.value;
-                if (opts.onTfChange) opts.onTfChange(tfSel.value);
-            });
-        }
+        var tfField = node.querySelector('[data-role="timeframeField"]');
+        if (tfField) tfField.style.display = 'none';
 
         var posInp = node.querySelector('[data-field="candle_position"]');
         posInp.value = (block.fields.candle_position === '' || block.fields.candle_position == null)
@@ -1751,15 +2001,15 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var hintEl = node.querySelector('[data-role="hint"]');
         if (hintEl) {
             if (opts.role === 'root') {
-                hintEl.textContent = 'Foundation root — sets ALL terms. Must match first before other roots are evaluated.';
+                hintEl.textContent = 'Foundation root — sets ALL terms. Uses the tree\'s global timeframe.';
             } else if (opts.role === 'heirRoot') {
                 hintEl.textContent = 'Heir root — inherits everything from its authority. Only price level & operator are configurable.';
             } else if (opts.role === 'ref') {
-                hintEl.textContent = 'Sets its OWN name, type, timeframe, position & search. No operator — governed by the root.';
+                hintEl.textContent = 'Sets its OWN name, type, position & search. Uses the tree\'s global timeframe.';
             } else if (opts.role === 'rerefAuthor') {
-                hintEl.textContent = 'Inherits from the ref (name, type, timeframe, position, search). Sets its OWN price level & operator.';
+                hintEl.textContent = 'Inherits from the ref (name, type, position, search). Sets its OWN price level & operator.';
             } else if (opts.role === 'rerefServant') {
-                hintEl.textContent = 'Inherits from the root (name, type, timeframe, position). Only price level is configurable.';
+                hintEl.textContent = 'Inherits from the root (name, type, position). Only price level is configurable.';
             }
         }
     }
@@ -1882,7 +2132,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         targetSel.value  = trade.fields.target || '';
         targetLvl.value  = trade.fields.target_price_level || '';
 
-        // Default the R:R value from the mode's current account-management value
         function defaultRRValueFor(mode) {
             if (mode === 'minimum_risk_reward') {
                 return (PC_ACCOUNT_MGMT.minimum_risk_reward || '0.00');
@@ -1890,7 +2139,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             return (PC_ACCOUNT_MGMT.fixed_risk_reward || '0.00');
         }
 
-        // The current local editable value (lives only on the block)
         if (!trade.fields.rr_value) {
             trade.fields.rr_value = defaultRRValueFor(rrMode.value);
         }
@@ -1946,8 +2194,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             trade.fields.target_rr_mode = rrMode.value;
             if (targetType.value === 'risk_reward') {
                 trade.fields.target = rrMode.value;
-                // When switching mode, reset to the mode's stored AM value only if the
-                // current field still equals the previous mode's value.
                 var prev = defaultRRValueFor(trade.fields.target_rr_mode === rrMode.value
                     ? (rrMode.value === 'minimum_risk_reward' ? 'fixed_risk_reward' : 'minimum_risk_reward')
                     : rrMode.value);
@@ -2007,6 +2253,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             var sub = group.querySelector('[data-role="treeSub"]');
             if (sub) {
                 var bits = [];
+                if (tree.timeframe) bits.push(tree.timeframe);
                 bits.push(tree.roots.length + ' root' + (tree.roots.length > 1 ? 's' : ''));
                 if (tree.drawings.length) bits.push(tree.drawings.length + ' draw');
                 if (tree.trades.length)   bits.push(tree.trades.length + ' trade');
@@ -2021,6 +2268,82 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             group.querySelector('[data-action="save-tree"]').addEventListener('click', function () {
                 pcSaveTree(tree, this);
             });
+
+            // ── GLOBAL TIMEFRAME SELECT ──
+            var treeTfSel = group.querySelector('[data-field="tree_timeframe"]');
+            if (treeTfSel) {
+                fillSelect(treeTfSel, PC_TIMEFRAMES, { placeholder: '— select timeframe —' });
+                if (tree.timeframe) treeTfSel.value = tree.timeframe;
+                treeTfSel.addEventListener('change', function () {
+                    var newTf = treeTfSel.value;
+                    tree.timeframe = newTf;
+                    applyTreeTimeframe(tree, newTf);
+                    renderTrees();
+                });
+            }
+
+            // ── GLOBAL ANCHOR CANDLE (across all trees) ──
+            var treeAnchorRootSel    = group.querySelector('[data-field="tree_anchor_root"]');
+            var treeAnchorIndexField = group.querySelector('[data-role="treeAnchorIndexField"]');
+            var treeAnchorIndexSel   = group.querySelector('[data-field="tree_anchor_index"]');
+            var treeAnchorNameLabel  = group.querySelector('[data-role="treeAnchorNameLabel"]');
+
+            if (treeAnchorRootSel) {
+                var anchorOpts = buildGlobalAnchorOptions();
+
+                if (anchorOpts.length === 0) {
+                    fillSelect(treeAnchorRootSel, [
+                        { value: '', label: 'No named candles to anchor to' }
+                    ]);
+                    treeAnchorRootSel.disabled = true;
+                    if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
+                } else {
+                    treeAnchorRootSel.disabled = false;
+                    fillSelect(treeAnchorRootSel, anchorOpts, { placeholder: '— none —' });
+
+                    // Restore selection if it still exists; otherwise clear model state
+                    var validValues = anchorOpts.map(function (o) { return o.value; });
+                    if (tree.anchorLocalKey && validValues.indexOf(tree.anchorLocalKey) !== -1) {
+                        treeAnchorRootSel.value = tree.anchorLocalKey;
+                    } else {
+                        tree.anchorLocalKey = null;
+                        tree.anchorIndex    = '';
+                        treeAnchorRootSel.value = '';
+                    }
+
+                    function syncTreeAnchorIndexField() {
+                        var chosen = treeAnchorRootSel.value;
+                        if (!chosen) {
+                            if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
+                            tree.anchorLocalKey = null;
+                            tree.anchorIndex = '';
+                            if (treeAnchorIndexSel) treeAnchorIndexSel.value = '';
+                            return;
+                        }
+                        tree.anchorLocalKey = chosen;
+
+                        // Derive a display name from the global option label
+                        var chosenOpt = anchorOpts.filter(function (o) { return o.value === chosen; })[0];
+                        var chosenName = chosenOpt ? chosenOpt.label : 'candle';
+                        if (treeAnchorNameLabel) treeAnchorNameLabel.textContent = chosenName;
+
+                        fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
+                        if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
+                            treeAnchorIndexSel.value = tree.anchorIndex;
+                        }
+                        if (treeAnchorIndexField) treeAnchorIndexField.style.display = '';
+                    }
+
+                    treeAnchorRootSel.addEventListener('change', syncTreeAnchorIndexField);
+                    if (treeAnchorIndexSel) {
+                        treeAnchorIndexSel.addEventListener('change', function () {
+                            tree.anchorIndex = treeAnchorIndexSel.value;
+                        });
+                    }
+
+                    syncTreeAnchorIndexField();
+                }
+            }
 
             var rootList = group.querySelector('[data-role="rootList"]');
             tree.roots.forEach(function (root, rIdx) {
@@ -2057,6 +2380,19 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         });
     }
 
+    function applyTreeTimeframe(tree, tf) {
+        (tree.roots || []).forEach(function (root) {
+            root.fields.timeframe = tf;
+            (root.refs || []).forEach(function (ref) {
+                ref.fields.timeframe = tf;
+                (ref.reRefPairs || []).forEach(function (pair) {
+                    if (pair.author)  pair.author.fields.timeframe  = tf;
+                    if (pair.servant) pair.servant.fields.timeframe = tf;
+                });
+            });
+        });
+    }
+
     function renderRootWrap(rootList, tree, root, rIdx, groupEl) {
         var tpl = $('pcRootWrapTpl');
         var wrap = tpl.content.firstElementChild.cloneNode(true);
@@ -2068,7 +2404,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
 
         var authorityEl = wrap.querySelector('[data-role="rootAuthority"]');
         if (authorityEl && rIdx > 0 && root.authorityLocalKey) {
-            // Find the authority's candle name
             var found = null;
             tree.roots.forEach(function (r, ri) {
                 if (r.localId === root.authorityLocalKey) found = { name: r.fields.candle_name, type: 'Root #' + (ri+1) };
@@ -2088,7 +2423,10 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             removable: true,
             removeHandler: function () { removeRoot(tree.localId, root.localId); },
             onNameChange: function (newVal) {
-                if (titleEl && rIdx === 0) titleEl.textContent = 'Root #1 (Foundation)';
+                // NO renderTrees() here — that would destroy the input being typed in.
+                // Instead, update the tree header + GLOBAL anchor dropdowns in place.
+                refreshTreeHeaderInPlace(tree);
+                refreshAllAnchorDropdownsInPlace();
                 updateServantsFromRoot(tree, root, 'candle_name', newVal);
                 updateServantDOMs(tree, root, 'candle_name', newVal);
                 refreshDynamicSelects(tree, groupEl);
@@ -2096,10 +2434,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             onTypeChange: function (newVal) {
                 updateServantsFromRoot(tree, root, 'candle_type', newVal);
                 updateServantDOMs(tree, root, 'candle_type', newVal);
-            },
-            onTfChange: function (newVal) {
-                updateServantsFromRoot(tree, root, 'timeframe', newVal);
-                updateServantDOMs(tree, root, 'timeframe', newVal);
             },
             onPositionChange: function (newVal) {
                 updateServantsFromRoot(tree, root, 'candle_position', newVal || '0');
@@ -2114,7 +2448,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             authSelectWrap.hidden = false;
             var authOpts = [];
             tree.roots.forEach(function (r, ri) {
-                if (r.localId === root.localId) return; // can't inherit from self
+                if (r.localId === root.localId) return;
                 authOpts.push({ value: r.localId, label: 'Root #' + (ri+1) + ': ' + (r.fields.candle_name || 'unnamed') });
                 (r.refs || []).forEach(function (ref, refIdx) {
                     authOpts.push({
@@ -2129,7 +2463,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             authSelect.addEventListener('change', function () {
                 var chosenKey = authSelect.value;
                 root.authorityLocalKey = chosenKey;
-                // Copy all readonly fields from authority
                 var src = null;
                 tree.roots.forEach(function (r) {
                     if (r.localId === chosenKey) src = r;
@@ -2140,21 +2473,19 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 if (src) {
                     root.fields.candle_name     = src.fields.candle_name;
                     root.fields.candle_type     = src.fields.candle_type;
-                    root.fields.timeframe       = src.fields.timeframe;
                     root.fields.candle_position = src.fields.candle_position;
                     root.fields.candle_search   = src.fields.candle_search || '';
                 }
+                // Select change → full re-render is fine here (no text focus to lose).
                 renderTrees();
             });
         }
 
-        // Root refs
         var refList = wrap.querySelector('[data-role="refList"]');
         var addRefBtn = wrap.querySelector('[data-action="add-ref"]');
         root.refs.forEach(function (ref) {
             renderRefWrap(refList, tree, root, ref, groupEl);
         });
-        // Enforce: one ref per root — hide add button if a ref exists
         if (root.refs && root.refs.length >= 1) {
             addRefBtn.style.display = 'none';
         } else {
@@ -2165,6 +2496,98 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         }
 
         rootList.appendChild(wrap);
+    }
+
+    // ============================================================
+    // IN-PLACE REFRESHERS (avoid nuking focus while typing)
+    // ============================================================
+    function refreshTreeHeaderInPlace(tree) {
+        var group = document.querySelector('.pc-tree[data-tree-local-id="' + tree.localId + '"]');
+        if (!group) return;
+
+        var titleEl = group.querySelector('[data-role="treeTitle"]');
+        if (titleEl) {
+            var firstRoot = tree.roots[0];
+            titleEl.textContent = (firstRoot && firstRoot.fields.candle_name && firstRoot.fields.candle_name.trim())
+                ? firstRoot.fields.candle_name : 'Tree';
+        }
+        var sub = group.querySelector('[data-role="treeSub"]');
+        if (sub) {
+            var bits = [];
+            if (tree.timeframe) bits.push(tree.timeframe);
+            bits.push(tree.roots.length + ' root' + (tree.roots.length > 1 ? 's' : ''));
+            if (tree.drawings.length) bits.push(tree.drawings.length + ' draw');
+            if (tree.trades.length)   bits.push(tree.trades.length + ' trade');
+            sub.textContent = bits.length ? '· ' + bits.join(' · ') : '';
+        }
+    }
+
+    // Refresh EVERY tree's global anchor dropdown (since anchors span all trees)
+    function refreshAllAnchorDropdownsInPlace() {
+        var anchorOpts = buildGlobalAnchorOptions();
+        var validValues = anchorOpts.map(function (o) { return o.value; });
+
+        PC.trees.forEach(function (tree) {
+            var group = document.querySelector('.pc-tree[data-tree-local-id="' + tree.localId + '"]');
+            if (!group) return;
+
+            var treeAnchorRootSel    = group.querySelector('[data-field="tree_anchor_root"]');
+            var treeAnchorIndexField = group.querySelector('[data-role="treeAnchorIndexField"]');
+            var treeAnchorIndexSel   = group.querySelector('[data-field="tree_anchor_index"]');
+            var treeAnchorNameLabel  = group.querySelector('[data-role="treeAnchorNameLabel"]');
+
+            if (!treeAnchorRootSel) return;
+
+            var curVal = treeAnchorRootSel.value;
+
+            if (anchorOpts.length === 0) {
+                fillSelect(treeAnchorRootSel, [
+                    { value: '', label: 'No named candles to anchor to' }
+                ]);
+                treeAnchorRootSel.disabled = true;
+                if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
+                return;
+            }
+
+            treeAnchorRootSel.disabled = false;
+            treeAnchorRootSel.innerHTML = '';
+            var ph = document.createElement('option');
+            ph.value = ''; ph.textContent = '— none —';
+            treeAnchorRootSel.appendChild(ph);
+            anchorOpts.forEach(function (o) {
+                var opt = document.createElement('option');
+                opt.value = o.value; opt.textContent = o.label;
+                treeAnchorRootSel.appendChild(opt);
+            });
+
+            // Restore prior value if it still exists; otherwise clear model state
+            if (curVal && validValues.indexOf(curVal) !== -1) {
+                treeAnchorRootSel.value = curVal;
+            } else if (tree.anchorLocalKey && validValues.indexOf(tree.anchorLocalKey) !== -1) {
+                treeAnchorRootSel.value = tree.anchorLocalKey;
+            } else {
+                treeAnchorRootSel.value = '';
+                tree.anchorLocalKey = null;
+                tree.anchorIndex    = '';
+            }
+
+            // Refresh the index-time label/field for whatever is selected now
+            var chosen = treeAnchorRootSel.value;
+            if (chosen) {
+                var chosenOpt = anchorOpts.filter(function (o) { return o.value === chosen; })[0];
+                var chosenName = chosenOpt ? chosenOpt.label : 'candle';
+                if (treeAnchorNameLabel) treeAnchorNameLabel.textContent = chosenName;
+                if (treeAnchorIndexField) treeAnchorIndexField.style.display = '';
+                if (treeAnchorIndexSel) {
+                    fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
+                    if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
+                        treeAnchorIndexSel.value = tree.anchorIndex;
+                    }
+                }
+            } else {
+                if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
+            }
+        });
     }
 
     function refreshDynamicSelects(tree, groupEl) {
@@ -2218,15 +2641,12 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             onNameChange: function (newVal) {
                 updateAuthorsFromRef(tree, ref, 'candle_name', newVal);
                 updateAuthorDOMs(tree, ref, 'candle_name', newVal);
+                refreshAllAnchorDropdownsInPlace();
                 refreshDynamicSelects(tree, groupEl);
             },
             onTypeChange: function (newVal) {
                 updateAuthorsFromRef(tree, ref, 'candle_type', newVal);
                 updateAuthorDOMs(tree, ref, 'candle_type', newVal);
-            },
-            onTfChange: function (newVal) {
-                updateAuthorsFromRef(tree, ref, 'timeframe', newVal);
-                updateAuthorDOMs(tree, ref, 'timeframe', newVal);
             },
             onPositionChange: function (newVal) {
                 updateAuthorsFromRef(tree, ref, 'candle_position', newVal || '0');
@@ -2270,8 +2690,16 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // ============================================================
     // MUTATORS
     // ============================================================
-    function blankFields() {
-        return { candle_name: '', price_level: '', timeframe: PC_CURRENT_TF || '', candle_type: '', candle_position: '0', candle_search: '', operator: '' };
+    function blankFields(tf) {
+        return {
+            candle_name: '',
+            price_level: '',
+            timeframe: tf || PC_CURRENT_TF || '',
+            candle_type: '',
+            candle_position: '0',
+            candle_search: '',
+            operator: ''
+        };
     }
 
     function addTree() {
@@ -2279,15 +2707,17 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             localId: uid(),
             dbTreeId: null,
             collapsed: false,
+            timeframe: PC_CURRENT_TF || (PC_TIMEFRAMES[0] || ''),
+            anchorLocalKey: null,
+            anchorIndex: '',
             roots: [],
             drawings: [],
             trades: []
         };
-        // Create foundation root automatically
         tree.roots.push({
             localId: uid(), dbId: null, rootOrder: 1, isFoundation: true,
             authorityLocalKey: null,
-            fields: blankFields(),
+            fields: blankFields(tree.timeframe),
             refs: []
         });
         PC.trees.push(tree); renderTrees(); return tree;
@@ -2299,7 +2729,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         tree.roots.push({
             localId: uid(), dbId: null, rootOrder: tree.roots.length + 1, isFoundation: false,
             authorityLocalKey: null,
-            fields: blankFields(),
+            fields: blankFields(tree.timeframe),
             refs: []
         });
         tree.collapsed = false;
@@ -2311,10 +2741,14 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         if (!tree) return;
         var root = tree.roots.filter(function (r) { return r.localId === rootLocalId; })[0];
         if (!root) return;
-        // Enforce one ref per root
         if (root.refs.length >= 1) return;
         var ref = { localId: uid(), dbId: null,
-            fields: { candle_name: '', candle_type: '', timeframe: PC_CURRENT_TF || '', price_level: '', candle_position: '0', candle_search: '', operator: '' },
+            fields: {
+                candle_name: '', candle_type: '',
+                timeframe: tree.timeframe || PC_CURRENT_TF || '',
+                price_level: '', candle_position: '0',
+                candle_search: '', operator: ''
+            },
             reRefPairs: [] };
         root.refs.push(ref); tree.collapsed = false; renderTrees(); return ref;
     }
@@ -2330,9 +2764,22 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var pair = {
             localId: uid(),
             author: { localId: uid(), dbId: null,
-                fields: { candle_name: ref.fields.candle_name, candle_type: ref.fields.candle_type, timeframe: ref.fields.timeframe, candle_position: ref.fields.candle_position, candle_search: ref.fields.candle_search, price_level: '', operator: '' } },
+                fields: {
+                    candle_name: ref.fields.candle_name,
+                    candle_type: ref.fields.candle_type,
+                    timeframe: tree.timeframe || '',
+                    candle_position: ref.fields.candle_position,
+                    candle_search: ref.fields.candle_search,
+                    price_level: '', operator: ''
+                } },
             servant: { localId: uid(), dbId: null,
-                fields: { candle_name: root.fields.candle_name, candle_type: root.fields.candle_type, timeframe: root.fields.timeframe, candle_position: root.fields.candle_position, candle_search: '', price_level: '' } }
+                fields: {
+                    candle_name: root.fields.candle_name,
+                    candle_type: root.fields.candle_type,
+                    timeframe: tree.timeframe || '',
+                    candle_position: root.fields.candle_position,
+                    candle_search: '', price_level: ''
+                } }
         };
         if (!ref.reRefPairs) ref.reRefPairs = [];
         ref.reRefPairs.push(pair);
@@ -2345,7 +2792,13 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var tree = PC.trees.filter(function (t) { return t.localId === treeLocalId; })[0];
         if (!tree) return;
         tree.drawings.push({ localId: uid(), dbId: null,
-            fields: { drawing_id: nextDrawingId(), drawing_tools: 'trendline', draw_from: '', draw_from_price_level: '', draw_to: '', draw_to_price_level: '', drawing_color: '' } });
+            fields: {
+                drawing_id: nextDrawingId(),
+                drawing_tools: 'trendline',
+                draw_from: '', draw_from_price_level: '',
+                draw_to: '', draw_to_price_level: '',
+                drawing_color: ''
+            } });
         tree.collapsed = false;
         renderTrees();
     }
@@ -2375,11 +2828,14 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     function removeRoot(treeLocalId, rootLocalId) {
         var tree = PC.trees.filter(function (t) { return t.localId === treeLocalId; })[0];
         if (!tree) return;
-        // Prevent removing the foundation root directly; instead clear it
         if (tree.roots.length <= 1) return;
         tree.roots = tree.roots.filter(function (r) { return r.localId !== rootLocalId; });
-        // Re-number rootOrder
         tree.roots.forEach(function (r, i) { r.rootOrder = i + 1; r.isFoundation = (i === 0); });
+        // Clear tree-level anchor if it pointed at the removed root
+        if (tree.anchorLocalKey && tree.anchorLocalKey.indexOf('::' + tree.localId + '::' + rootLocalId) !== -1) {
+            tree.anchorLocalKey = null;
+            tree.anchorIndex = '';
+        }
         renderTrees();
     }
 
@@ -2396,17 +2852,27 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // SNAPSHOT
     // ============================================================
     function pcBuildTreeSnapshot(tree) {
+        // Resolve the global anchor value to a local key that exists in THIS tree.
+        var resolvedAnchorLocalKey = null;
+        if (tree.anchorLocalKey) {
+            var resolved = resolveAnchorForTree(tree, tree.anchorLocalKey);
+            if (resolved) resolvedAnchorLocalKey = resolved.localId;
+        }
+
         var t = {
-            roots:    [],
-            drawings: [],
-            trades:   []
+            timeframe:           tree.timeframe || '',
+            anchor_local_key:    resolvedAnchorLocalKey,
+            anchor_candle_index: tree.anchorIndex || '',
+            roots:               [],
+            drawings:            [],
+            trades:              []
         };
         (tree.roots || []).forEach(function (root, rIdx) {
             var rootSnap = {
                 local_key:         root.localId,
                 candle_name:       root.fields.candle_name || '',
                 price_level:       root.fields.price_level || '',
-                timeframe:         root.fields.timeframe || '',
+                timeframe:         tree.timeframe || root.fields.timeframe || '',
                 candle_type:       root.fields.candle_type || '',
                 candle_position:   root.fields.candle_position === '' ? '0' : root.fields.candle_position,
                 candle_search:     root.fields.candle_search || '',
@@ -2418,7 +2884,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 var refSnap = {
                     candle_name:     ref.fields.candle_name || '',
                     candle_type:     ref.fields.candle_type || '',
-                    timeframe:       ref.fields.timeframe || '',
+                    timeframe:       tree.timeframe || ref.fields.timeframe || '',
                     price_level:     ref.fields.price_level || '',
                     candle_position: ref.fields.candle_position === '' ? '0' : ref.fields.candle_position,
                     candle_search:   ref.fields.candle_search || null,
@@ -2474,11 +2940,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         var trees = [];
         PC.trees.forEach(function (tree) { trees.push(pcBuildTreeSnapshot(tree)); });
 
-        // ★ Collect the newest R:R values from all trade blocks so the server
-        //   can persist them into accountmanagement.
-        //   Rule: last-wins — if multiple trades edited the same mode, the last
-        //   non-empty value encountered is sent. It's one row per developer
-        //   in accountmanagement, so only one value per mode is meaningful.
         var amFixed = null;
         var amMin   = null;
         PC.trees.forEach(function (tree) {
@@ -2509,7 +2970,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // SAVE SINGLE TREE
     // ============================================================
     function pcSaveTree(tree, btnEl) {
-        // Only send the R:R overrides that appear inside THIS tree.
         var amFixed = null;
         var amMin   = null;
         (tree.trades || []).forEach(function (tr) {
@@ -2549,7 +3009,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 return;
             }
             PC_TREES_SERVER = data.rows || [];
-            // Keep the local copy of Account Management in sync
             if (data.accountManagement) PC_ACCOUNT_MGMT = data.accountManagement;
             var oldTrees = PC.trees.slice();
             hydrateFromServer();
@@ -2650,7 +3109,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         catch (err) {
             var ev = document.createEvent('CustomEvent');
             ev.initCustomEvent(name, true, true, detail);
-            window.dispatchEvent(ev);
+            ev.dispatchEvent && window.dispatchEvent(ev);
         }
     }
 

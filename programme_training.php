@@ -1,6 +1,21 @@
 <?php
 // programme_training.php — Candlestick chart viewer for a programme
 // Multi-root team model: Root #1 is foundation, heirs inherit from existing roots/refs.
+// Supports re-projection of a configured higher-TF configuration onto a lower TF.
+//
+// CHANGES IN THIS VERSION:
+//  * Client-side scanner now persists native matches on EVERY chart load
+//    (page load, symbol change, timeframe change, candles-modal change).
+//  * persist_matches is now a "full snapshot" endpoint: it ALWAYS wipes
+//    rows for the current (user, programme, symbol, timeframe) tuple and
+//    re-inserts whatever the client sent. Empty payload = table cleaned.
+//  * Client tracks a signature of the last persisted snapshot to avoid
+//    redundant round-trips when nothing changed.
+//  * Persist also fires once full older-candle history has been loaded,
+//    so trades whose exit_at is far in the past can resolve.
+//  * TIMEFRAME SWITCHING: No modal. Clicking a timeframe directly loads the
+//    chart and displays BOTH its native configuration AND all applicable
+//    higher-TF projections simultaneously on the same chart.
 session_start();
 
 try {
@@ -182,7 +197,6 @@ try {
             }
         }
 
-        // Nest refs under their parent roots
         foreach ($byTree as $tid => &$tree) {
             $roots   = &$tree['roots'];
             $orphans = isset($tree['_orphans']) ? $tree['_orphans'] : [];
@@ -195,7 +209,6 @@ try {
                 }
             }
 
-            // Attach re_ref pairs to their owning root_ref
             foreach ($orphans as $row) {
                 if ($row['row_role'] === 're_ref_author' && $row['parent_id'] !== null) {
                     foreach ($refsByRoot as $rootId => &$refList) {
@@ -221,7 +234,6 @@ try {
                 }
             }
 
-            // Attach refs to roots
             foreach ($roots as &$root) {
                 $root['root_refs'] = isset($refsByRoot[$root['id']])
                     ? $refsByRoot[$root['id']] : [];
@@ -232,7 +244,6 @@ try {
         }
         unset($tree);
 
-        // Sort roots by evaluation priority (foundation first)
         foreach ($byTree as &$tree) {
             usort($tree['roots'], function ($a, $b) {
                 $pa = (int)$a['evaluation_priority']; if ($pa <= 0) $pa = 1;
@@ -265,6 +276,410 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['count_candles'])) {
     exit;
 }
 
+// ==================== AJAX: CANDLE BOUNDS (min/max time) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_bounds'])) {
+    header('Content-Type: application/json');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    }
+
+    $symbol    = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
+    if ($symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'symbol and timeframe required.']); exit;
+    }
+
+    try {
+        $q = $pdo->prepare("
+            SELECT MIN(candle_time) AS min_time, MAX(candle_time) AS max_time, COUNT(*) AS total
+            FROM candle_records
+            WHERE userid=? AND symbol=? AND timeframe=?
+        ");
+        $q->execute([$userId, $symbol, $timeframe]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        echo json_encode([
+            'success'  => true,
+            'min_time' => $row ? $row['min_time'] : null,
+            'max_time' => $row ? $row['max_time'] : null,
+            'total'    => $row ? (int)$row['total'] : 0,
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false,'message'=>'Query failed: '.$e->getMessage()]);
+    }
+    exit;
+}
+
+// ==================== AJAX: FETCH RECENT CANDLES (most recent N) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_recent'])) {
+    header('Content-Type: application/json');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    }
+
+    $symbol    = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
+    $limit     = isset($_POST['limit']) ? max(1, min(20000, (int)$_POST['limit'])) : 5000;
+
+    if ($symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'symbol and timeframe required.','candles'=>[]]); exit;
+    }
+
+    try {
+        $q = $pdo->prepare("
+            SELECT id, candle_time, open_time, close_time,
+                   open, high, low, close,
+                   candle_center, body_center,
+                   high_wick_center, low_wick_center, candle_width_center,
+                   volume
+            FROM candle_records
+            WHERE userid=? AND symbol=? AND timeframe=?
+            ORDER BY candle_time DESC LIMIT $limit
+        ");
+        $q->execute([$userId, $symbol, $timeframe]);
+
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        $rowsAsc = array_reverse($rows);
+
+        $candles = [];
+        foreach ($rowsAsc as $r) {
+            $candles[] = [
+                'id'                  => (int)$r['id'],
+                'time'                => $r['candle_time'],
+                'open_time'           => $r['open_time'],
+                'close_time'          => $r['close_time'],
+                'open'                => (float)$r['open'],
+                'high'                => (float)$r['high'],
+                'low'                 => (float)$r['low'],
+                'close'               => (float)$r['close'],
+                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
+                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center']         : null,
+                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
+                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
+                'candle_width_center' => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
+                'volume'              => $r['volume']              !== null ? (float)$r['volume']              : null,
+            ];
+        }
+
+        echo json_encode(['success'=>true, 'candles'=>$candles, 'count'=>count($candles)]);
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage(), 'candles'=>[]]);
+    }
+    exit;
+}
+
+// ==================== AJAX: PERSIST MATCHES ====================
+// Full-snapshot semantics: for the (user, programme, symbol, timeframe)
+// tuple we ALWAYS delete existing rows, then insert what the client sent.
+// If the client sent an empty `trees` array, the table ends up clean —
+// this is the self-cleansing behaviour we want.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
+    header('Content-Type: application/json');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    }
+
+    $raw = (string)($_POST['payload'] ?? '');
+    $payload = json_decode($raw, true);
+    if (!is_array($payload)) {
+        echo json_encode(['success'=>false,'message'=>'Invalid payload.']); exit;
+    }
+
+    $programmeId = (int)($payload['programmeId'] ?? 0);
+    $symbol      = trim((string)($payload['symbol'] ?? ''));
+    $timeframe   = trim((string)($payload['timeframe'] ?? ''));
+    $runToken    = trim((string)($payload['run_token'] ?? ''));
+    $trees       = is_array($payload['trees'] ?? null) ? $payload['trees'] : [];
+
+    if ($programmeId <= 0 || $symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'programmeId, symbol and timeframe are required.']); exit;
+    }
+    if ($runToken === '') {
+        $runToken = bin2hex(random_bytes(16));
+    }
+
+    // Guard: ensure the programme actually belongs to this user.
+    try {
+        $owner = $pdo->prepare("SELECT id FROM programme WHERE id = ? AND userid = ? LIMIT 1");
+        $owner->execute([$programmeId, $userId]);
+        if (!$owner->fetch(PDO::FETCH_ASSOC)) {
+            echo json_encode(['success'=>false,'message'=>'Programme not found for this user.']); exit;
+        }
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false,'message'=>'Ownership check failed: '.$e->getMessage()]); exit;
+    }
+
+    // Pre-scan the payload so we can short-circuit the whole transaction
+    // when there is genuinely nothing to insert. We still want the DELETE
+    // to run in that case, to enforce "self-cleansing".
+    $totalRows = 0;
+    foreach ($trees as $tree) {
+        $matched = is_array($tree['matched'] ?? null) ? $tree['matched'] : [];
+        $totalRows += count($matched);
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        $del = $pdo->prepare("
+            DELETE FROM programme_candles_configuration
+            WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
+        ");
+        $del->execute([$userId, $programmeId, $symbol, $timeframe]);
+        $deleted = $del->rowCount();
+
+        $insertedRows = 0;
+
+        if ($totalRows > 0) {
+            $ins = $pdo->prepare("
+                INSERT INTO programme_candles_configuration
+                    (userid, programmeid, tree_id, run_token, row_role, parent_id, author_id, source_row_id,
+                     candle_record_id, symbol, timeframe, candle_time, open_time, close_time,
+                     open, high, low, close,
+                     candle_center, body_center, high_wick_center, low_wick_center, candle_width_center, volume,
+                     candle_name, price_level, candle_type, candle_position, candle_search, operator, order_type,
+                     drawing_id, drawing_tools, draw_from, draw_from_price_level,
+                     draw_to, draw_to_price_level, drawing_color,
+                     draw_from_price, draw_to_price, draw_to_candle_time, draw_to_candle_id,
+                     entry_from, entry_from_price_level, exit_at, exit_at_price_level,
+                     target, target_price_level,
+                     entry_price, exit_price, target_price,
+                     resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
+                     outcome_status, outcome_candle_time, outcome_price,
+                     is_foundation, evaluation_priority, status, triggered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?)
+            ");
+
+            $now = date('Y-m-d H:i:s');
+
+            foreach ($trees as $tree) {
+                $treeId  = (int)($tree['tree_id'] ?? 0);
+                $matched = is_array($tree['matched'] ?? null) ? $tree['matched'] : [];
+
+                foreach ($matched as $m) {
+                    $role = (string)($m['row_role'] ?? 'matched_candle');
+
+                    $ins->execute([
+                        $userId, $programmeId, $treeId, $runToken, $role,
+                        isset($m['parent_id'])     ? (int)$m['parent_id']     : null,
+                        isset($m['author_id'])     ? (int)$m['author_id']     : null,
+                        isset($m['source_row_id']) ? (int)$m['source_row_id'] : null,
+
+                        isset($m['candle_record_id']) ? (int)$m['candle_record_id'] : null,
+                        $symbol, $timeframe,
+                        $m['candle_time']  ?? null,
+                        $m['open_time']    ?? null,
+                        $m['close_time']   ?? null,
+
+                        $m['open']  ?? null,
+                        $m['high']  ?? null,
+                        $m['low']   ?? null,
+                        $m['close'] ?? null,
+
+                        $m['candle_center']       ?? null,
+                        $m['body_center']         ?? null,
+                        $m['high_wick_center']    ?? null,
+                        $m['low_wick_center']     ?? null,
+                        $m['candle_width_center'] ?? null,
+                        $m['volume']              ?? null,
+
+                        $m['candle_name']     ?? null,
+                        $m['price_level']     ?? null,
+                        $m['candle_type']     ?? null,
+                        $m['candle_position'] ?? null,
+                        $m['candle_search']   ?? null,
+                        $m['operator']        ?? null,
+                        $m['order_type']      ?? null,
+
+                        isset($m['drawing_id']) ? (int)$m['drawing_id'] : null,
+                        $m['drawing_tools']         ?? null,
+                        $m['draw_from']             ?? null,
+                        $m['draw_from_price_level'] ?? null,
+                        $m['draw_to']               ?? null,
+                        $m['draw_to_price_level']   ?? null,
+                        $m['drawing_color']         ?? null,
+
+                        $m['draw_from_price']     ?? null,
+                        $m['draw_to_price']       ?? null,
+                        $m['draw_to_candle_time'] ?? null,
+                        isset($m['draw_to_candle_id']) ? (int)$m['draw_to_candle_id'] : null,
+
+                        $m['entry_from']             ?? null,
+                        $m['entry_from_price_level'] ?? null,
+                        $m['exit_at']                ?? null,
+                        $m['exit_at_price_level']    ?? null,
+                        $m['target']                 ?? null,
+                        $m['target_price_level']     ?? null,
+
+                        $m['entry_price']  ?? null,
+                        $m['exit_price']   ?? null,
+                        $m['target_price'] ?? null,
+
+                        $m['resolved_price']     ?? null,
+                        isset($m['resolved_direction']) ? (int)$m['resolved_direction'] : 0,
+                        $m['resolved_risk']      ?? null,
+                        $m['resolved_reward']    ?? null,
+                        $m['resolved_ratio']     ?? null,
+
+                        $m['outcome_status']      ?? null,
+                        $m['outcome_candle_time'] ?? null,
+                        $m['outcome_price']       ?? null,
+
+                        !empty($m['is_foundation']) ? 1 : 0,
+                        isset($m['evaluation_priority']) ? (int)$m['evaluation_priority'] : 1,
+                        $m['status'] ?? 'matched',
+                        $m['triggered_at'] ?? $now,
+                    ]);
+                    $insertedRows++;
+                }
+            }
+        }
+
+        $pdo->commit();
+
+        echo json_encode([
+            'success'   => true,
+            'run_token' => $runToken,
+            'deleted'   => (int)$deleted,
+            'inserted'  => (int)$insertedRows,
+            'empty'     => ($totalRows === 0),
+        ]);
+    } catch (Exception $ex) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success'=>false, 'message'=>$ex->getMessage()]);
+    }
+    exit;
+}
+
+// ==================== AJAX: FETCH PERSISTED MATCHES ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_matches'])) {
+    header('Content-Type: application/json');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    }
+
+    $programmeId = isset($_POST['programmeid']) ? (int)$_POST['programmeid'] : 0;
+    $symbol      = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe   = trim((string)($_POST['timeframe'] ?? ''));
+
+    if ($programmeId <= 0 || $symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'programmeid, symbol and timeframe required.']); exit;
+    }
+
+    try {
+        $q = $pdo->prepare("
+            SELECT id, tree_id, run_token, row_role, parent_id, author_id, source_row_id,
+                   candle_record_id, symbol, timeframe, candle_time, open_time, close_time,
+                   open, high, low, close,
+                   candle_center, body_center, high_wick_center, low_wick_center, candle_width_center, volume,
+                   candle_name, price_level, candle_type, candle_position, candle_search, operator, order_type,
+                   drawing_id, drawing_tools, draw_from, draw_from_price_level,
+                   draw_to, draw_to_price_level, drawing_color,
+                   draw_from_price, draw_to_price, draw_to_candle_time, draw_to_candle_id,
+                   entry_from, entry_from_price_level, exit_at, exit_at_price_level,
+                   target, target_price_level,
+                   entry_price, exit_price, target_price,
+                   resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
+                   outcome_status, outcome_candle_time, outcome_price,
+                   is_foundation, evaluation_priority, status, triggered_at, created_at
+            FROM programme_candles_configuration
+            WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
+            ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
+        ");
+        $q->execute([$userId, $programmeId, $symbol, $timeframe]);
+
+        $rows = [];
+        while ($r = $q->fetch(PDO::FETCH_ASSOC)) {
+            $rows[] = [
+                'id'                    => (int)$r['id'],
+                'tree_id'               => (int)$r['tree_id'],
+                'run_token'             => $r['run_token'],
+                'row_role'              => $r['row_role'],
+                'parent_id'             => $r['parent_id'] !== null ? (int)$r['parent_id'] : null,
+                'author_id'             => $r['author_id'] !== null ? (int)$r['author_id'] : null,
+                'source_row_id'         => $r['source_row_id'] !== null ? (int)$r['source_row_id'] : null,
+                'candle_record_id'      => $r['candle_record_id'] !== null ? (int)$r['candle_record_id'] : null,
+                'symbol'                => $r['symbol'],
+                'timeframe'             => $r['timeframe'],
+                'candle_time'           => $r['candle_time'],
+                'open_time'             => $r['open_time'],
+                'close_time'            => $r['close_time'],
+                'open'                  => $r['open']  !== null ? (float)$r['open']  : null,
+                'high'                  => $r['high']  !== null ? (float)$r['high']  : null,
+                'low'                   => $r['low']   !== null ? (float)$r['low']   : null,
+                'close'                 => $r['close'] !== null ? (float)$r['close'] : null,
+                'candle_center'         => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
+                'body_center'           => $r['body_center']         !== null ? (float)$r['body_center']         : null,
+                'high_wick_center'      => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
+                'low_wick_center'       => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
+                'candle_width_center'   => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
+                'volume'                => $r['volume']              !== null ? (float)$r['volume']              : null,
+                'candle_name'           => $r['candle_name'],
+                'price_level'           => $r['price_level'],
+                'candle_type'           => $r['candle_type'],
+                'candle_position'       => $r['candle_position'],
+                'candle_search'         => $r['candle_search'],
+                'operator'              => $r['operator'],
+                'order_type'            => $r['order_type'],
+                'drawing_id'            => $r['drawing_id'] !== null ? (int)$r['drawing_id'] : null,
+                'drawing_tools'         => $r['drawing_tools'],
+                'draw_from'             => $r['draw_from'],
+                'draw_from_price_level' => $r['draw_from_price_level'],
+                'draw_to'               => $r['draw_to'],
+                'draw_to_price_level'   => $r['draw_to_price_level'],
+                'drawing_color'         => $r['drawing_color'],
+                'draw_from_price'       => $r['draw_from_price'] !== null ? (float)$r['draw_from_price'] : null,
+                'draw_to_price'         => $r['draw_to_price']   !== null ? (float)$r['draw_to_price']   : null,
+                'draw_to_candle_time'   => $r['draw_to_candle_time'],
+                'draw_to_candle_id'     => $r['draw_to_candle_id'] !== null ? (int)$r['draw_to_candle_id'] : null,
+                'entry_from'            => $r['entry_from'],
+                'entry_from_price_level'=> $r['entry_from_price_level'],
+                'exit_at'               => $r['exit_at'],
+                'exit_at_price_level'   => $r['exit_at_price_level'],
+                'target'                => $r['target'],
+                'target_price_level'    => $r['target_price_level'],
+                'entry_price'           => $r['entry_price']   !== null ? (float)$r['entry_price']   : null,
+                'exit_price'            => $r['exit_price']    !== null ? (float)$r['exit_price']    : null,
+                'target_price'          => $r['target_price']  !== null ? (float)$r['target_price']  : null,
+                'resolved_price'        => $r['resolved_price']   !== null ? (float)$r['resolved_price']   : null,
+                'resolved_direction'    => (int)$r['resolved_direction'],
+                'resolved_risk'         => $r['resolved_risk']    !== null ? (float)$r['resolved_risk']    : null,
+                'resolved_reward'       => $r['resolved_reward']  !== null ? (float)$r['resolved_reward']  : null,
+                'resolved_ratio'        => $r['resolved_ratio']   !== null ? (float)$r['resolved_ratio']   : null,
+                'outcome_status'        => $r['outcome_status'],
+                'outcome_candle_time'   => $r['outcome_candle_time'],
+                'outcome_price'         => $r['outcome_price'] !== null ? (float)$r['outcome_price'] : null,
+                'is_foundation'         => (int)$r['is_foundation'],
+                'evaluation_priority'   => (int)$r['evaluation_priority'],
+                'status'                => $r['status'],
+                'triggered_at'          => $r['triggered_at'],
+                'created_at'            => $r['created_at'],
+            ];
+        }
+
+        echo json_encode(['success'=>true, 'rows'=>$rows]);
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage()]);
+    }
+    exit;
+}
+
 // ==================== AJAX: FETCH CANDLES ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
     header('Content-Type: application/json');
@@ -280,9 +695,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
     try {
         if ($before !== '') {
             $q = $pdo->prepare("
-                SELECT candle_time, open, high, low, close,
+                SELECT id, candle_time, open_time, close_time,
+                       open, high, low, close,
                        candle_center, body_center,
-                       high_wick_center, low_wick_center, candle_width_center
+                       high_wick_center, low_wick_center, candle_width_center,
+                       volume
                 FROM candle_records
                 WHERE userid=? AND symbol=? AND timeframe=? AND candle_time < ?
                 ORDER BY candle_time DESC LIMIT $limit
@@ -290,9 +707,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
             $q->execute([$userId, $symbol, $timeframe, $before]);
         } else {
             $q = $pdo->prepare("
-                SELECT candle_time, open, high, low, close,
+                SELECT id, candle_time, open_time, close_time,
+                       open, high, low, close,
                        candle_center, body_center,
-                       high_wick_center, low_wick_center, candle_width_center
+                       high_wick_center, low_wick_center, candle_width_center,
+                       volume
                 FROM candle_records
                 WHERE userid=? AND symbol=? AND timeframe=?
                 ORDER BY candle_time DESC LIMIT $limit
@@ -305,16 +724,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
         $candles = [];
         foreach ($rowsAsc as $r) {
             $candles[] = [
+                'id'                  => (int)$r['id'],
                 'time'                => $r['candle_time'],
+                'open_time'           => $r['open_time'],
+                'close_time'          => $r['close_time'],
                 'open'                => (float)$r['open'],
                 'high'                => (float)$r['high'],
                 'low'                 => (float)$r['low'],
                 'close'               => (float)$r['close'],
-                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center'] : null,
-                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center'] : null,
-                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center'] : null,
-                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center'] : null,
+                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
+                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center']         : null,
+                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
+                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
                 'candle_width_center' => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
+                'volume'              => $r['volume']              !== null ? (float)$r['volume']              : null,
             ];
         }
 
@@ -330,6 +753,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
         ]);
     } catch (PDOException $e) {
         echo json_encode(['success'=>false,'message'=>'Query failed: '.$e->getMessage(),'candles'=>[],'has_more'=>false]);
+    }
+    exit;
+}
+
+// ==================== AJAX: FETCH CANDLES IN RANGE (bulk) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_range'])) {
+    header('Content-Type: application/json');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    }
+
+    $symbol     = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe  = trim((string)($_POST['timeframe'] ?? ''));
+    $fromTime   = trim((string)($_POST['from_time'] ?? ''));
+    $toTime     = trim((string)($_POST['to_time'] ?? ''));
+    $limit      = isset($_POST['limit']) ? max(1, min(100000, (int)$_POST['limit'])) : 100000;
+
+    if ($symbol === '' || $timeframe === '' || $fromTime === '' || $toTime === '') {
+        echo json_encode(['success'=>false,'message'=>'symbol, timeframe, from_time, to_time required.','candles'=>[]]); exit;
+    }
+
+    function ptNormTime($t) {
+        $s = str_replace('T', ' ', trim((string)$t));
+        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/', $s, $m)) return $m[1];
+        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/', $s, $m)) return $m[1] . ':00';
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})$/', $s, $m)) return $m[1] . ' 00:00:00';
+        return $s;
+    }
+    $fromTime = ptNormTime($fromTime);
+    $toTime   = ptNormTime($toTime);
+
+    try {
+        $q = $pdo->prepare("
+            SELECT id, candle_time, open_time, close_time,
+                   open, high, low, close,
+                   candle_center, body_center,
+                   high_wick_center, low_wick_center, candle_width_center,
+                   volume
+            FROM candle_records
+            WHERE userid=? AND symbol=? AND timeframe=?
+              AND candle_time >= ? AND candle_time < ?
+            ORDER BY candle_time ASC LIMIT $limit
+        ");
+        $q->execute([$userId, $symbol, $timeframe, $fromTime, $toTime]);
+
+        $candles = [];
+        while ($r = $q->fetch(PDO::FETCH_ASSOC)) {
+            $candles[] = [
+                'id'                  => (int)$r['id'],
+                'time'                => $r['candle_time'],
+                'open_time'           => $r['open_time'],
+                'close_time'          => $r['close_time'],
+                'open'                => (float)$r['open'],
+                'high'                => (float)$r['high'],
+                'low'                 => (float)$r['low'],
+                'close'               => (float)$r['close'],
+                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
+                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center']         : null,
+                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
+                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
+                'candle_width_center' => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
+                'volume'              => $r['volume']              !== null ? (float)$r['volume']              : null,
+            ];
+        }
+
+        echo json_encode([
+            'success'  => true,
+            'candles'  => $candles,
+            'count'    => count($candles),
+            'from'     => $fromTime,
+            'to'       => $toTime,
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage(), 'candles'=>[]]);
     }
     exit;
 }
@@ -467,12 +965,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         .pt-cfg-btn span { display: none; } }
     #ptDrawCanvas { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
-    /* === Trades button === */
     .pt-trades-btn { position: relative; }
     .pt-trades-count { background: #27ae60; color: #fff; border-radius: 10px;
         font-size: 0.68rem; font-weight: 800; padding: 1px 6px; margin-left: 4px; }
 
-    /* === Trades modal === */
     .pt-trades-modal { position: fixed; inset: 0; z-index: 10002; display: none;
         align-items: center; justify-content: center;
         background: rgba(0,0,0,0.6);
@@ -550,7 +1046,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     body.dark-mode .pt-trade-card { background: var(--bg-card, #1e1e2a); border-color: var(--border-color, #333); }
     body.dark-mode .pt-trade-kv .v { color: var(--text, #eee); }
 
-    /* === Debug console === */
     .pt-debug-modal { position: fixed; inset: 0; z-index: 10003; display: none;
         align-items: center; justify-content: center;
         background: rgba(0,0,0,0.7);
@@ -592,7 +1087,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     .pt-debug-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 6px; }
     .pt-debug-body::-webkit-scrollbar-track { background: #0e1116; }
 
-    /* === Trades summary card === */
     .pt-trades-summary-card {
         background: linear-gradient(135deg, rgba(39,174,96,0.10), rgba(39,174,96,0.03));
         border: 1px solid rgba(39,174,96,0.35);
@@ -636,7 +1130,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         border-color: rgba(39,174,96,0.5);
     }
 
-    /* === Long/Short toggle button === */
     .pt-longshort-btn .pt-ls-state {
         background: rgba(128,128,128,0.25); color: var(--text-muted, #888);
         border-radius: 10px; font-size: 0.68rem; font-weight: 800;
@@ -648,7 +1141,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
     .pt-longshort-btn.pt-ls-on i { color: #27ae60; }
 
-    /* === New summary cards: consecutive losses + drawdown === */
     .pt-tsc-danger .pt-tsc-value { color: #e74c3c; }
     .pt-tsc-info   .pt-tsc-value { color: #4a7bd8; }
     .pt-tsc-sub {
@@ -661,11 +1153,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         line-height: 1.3;
     }
     body.dark-mode .pt-tsc-sub { color: var(--text-muted, #aaa); }
-    /* Winrate value is always white (readable on both themes) */
     .pt-tsc-winrate-value { color: #ffffff !important; }
     body:not(.dark-mode) .pt-tsc-winrate-value { color: #222 !important; }
-
-    /* Trading-days sub-line under Weekly Trades Count */
     .pt-tsc-days {
         font-weight: 600;
         font-style: italic;
@@ -673,6 +1162,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         opacity: 0.85;
         margin-top: 4px;
     }
+
+    .pt-proj-banner {
+        position: absolute;
+        top: 70px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 9;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 20px;
+        background: rgba(39,174,96,0.92);
+        color: #fff;
+        font: 700 0.75rem system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        letter-spacing: 0.3px;
+        box-shadow: 0 3px 14px rgba(0,0,0,0.2);
+        pointer-events: none;
+        white-space: nowrap;
+    }
+    .pt-proj-banner.active { display: inline-flex; }
+    .pt-proj-banner i { font-size: 0.8rem; }
 </style>
 </head>
 <body class="pt-fullbody <?= htmlspecialchars($darkModeClass) ?>">
@@ -726,6 +1237,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 <polyline points="12 6 18 12 12 18"></polyline>
             </svg>
         </button>
+
+        <div class="pt-proj-banner" id="ptProjBanner">
+            <i class="fa-solid fa-layer-group"></i>
+            <span id="ptProjBannerText">Projection mode active</span>
+        </div>
 
         <div id="ptChartEmpty" class="pt-chart-empty" style="display:none;">
             <span class="pt-empty-icon">—</span>
@@ -797,7 +1313,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         </div>
     </div>
 
-    <!-- ============ TRADES MODAL ============ -->
     <div id="ptTradesModal" class="pt-trades-modal">
         <div class="pt-trades-box">
             <div class="pt-trades-head">
@@ -813,7 +1328,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         </div>
     </div>
 
-    <!-- ============ DEBUG CONSOLE ============ -->
     <div id="ptDebugModal" class="pt-debug-modal">
         <div class="pt-debug-box">
             <div class="pt-debug-head">
@@ -932,12 +1446,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     var PT_HOVER_INDEX = -1;
     var PT_CURSOR_Y    = null;
 
-    // ★ Cached trade-scan results so the button badge doesn't re-scan on every redraw.
     var PT_TRADE_MATCH_COUNT  = 0;
-    var PT_TRADE_SCAN_DIRTY   = true;   // true = cache invalid, needs rescan
+    var PT_TRADE_SCAN_DIRTY   = true;
 
-    // ★ Long/Short overlay toggle — UI only, resets OFF on every page load.
     var PT_LONG_SHORT_ON      = false;
+
+    var PT_PERSISTED_MATCHES      = [];
+    var PT_PERSISTED_RUN_TOKEN    = '';
+    var PT_PERSISTED_DIRTY        = true;
+    var PT_PERSISTED_LOADED       = false;
+    var PT_LAST_PERSISTED_SIG     = '';
+
+    // Projection mode: now supports MULTIPLE higher-TF projections at once.
+    // Array of { sourceTF, targetTF } entries.
+    var PT_PROJECTION_MODES   = [];
+    // Projected matches per sourceTF: { sourceTF: [rows...] }
+    var PT_PROJECTED_BY_TF    = {};
+
+    var PT_CONFIGURED_ROWS_BY_TF = {};
 
     var PT_LOAD_TOKEN         = 0;
     var PT_IS_LOADING_OLDER   = false;
@@ -946,6 +1472,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     var PT_REQUESTED_AMOUNT   = PT_DEFAULT_AMOUNT;
     var PT_CONSECUTIVE_ERRORS = 0;
     var PT_MAX_CONSECUTIVE_ERRORS = 4;
+    var PT_FULL_HISTORY_DONE  = false;
 
     var PT_VIEW = {
         candleWidth:    9,
@@ -1014,6 +1541,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
     }
 
+    function ptParseTime(ts) {
+        if (!ts) return null;
+        var s = String(ts).replace('T', ' ');
+        if (s.length === 16) s += ':00';
+        var d = new Date(s.replace(' ', 'T') + 'Z');
+        if (isNaN(d.getTime())) return null;
+        return d;
+    }
+
+    function ptTfMs(tf) {
+        if (!tf) return null;
+        var s = String(tf).toLowerCase().trim();
+        var m = /^(\d+)\s*([mhdw])$/.exec(s);
+        if (!m) return null;
+        var n = parseInt(m[1], 10);
+        var unit = m[2];
+        if (unit === 'm') return n * 60 * 1000;
+        if (unit === 'h') return n * 60 * 60 * 1000;
+        if (unit === 'd') return n * 24 * 60 * 60 * 1000;
+        if (unit === 'w') return n * 7 * 24 * 60 * 60 * 1000;
+        return null;
+    }
+
+    function ptIsLowerTF(a, b) {
+        var am = ptTfMs(a), bm = ptTfMs(b);
+        if (am == null || bm == null) return false;
+        return bm < am;
+    }
+
+    function ptSnapshotSignature(treeResults) {
+        // Simple, cheap signature of the current snapshot. Used to avoid
+        // redundant persist round-trips when nothing changed.
+        var s = PT_CURRENT_SYMBOL + '|' + PT_CURRENT_TIMEFRAME + '|' + PT_CANDLES.length;
+        var total = 0;
+        var tids = [];
+        (treeResults || []).forEach(function (r) {
+            tids.push(r.tree.tree_id + ':' + (r._matchedFlat ? r._matchedFlat.length : 0));
+            total += (r._matchedFlat ? r._matchedFlat.length : 0);
+        });
+        tids.sort();
+        return s + '|' + total + '|' + tids.join(',');
+    }
+
     // ==================== INIT ====================
     document.addEventListener('DOMContentLoaded', function () {
         PT_CANVAS      = document.getElementById('ptChartCanvas');
@@ -1064,17 +1634,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var tradesBtn = document.getElementById('ptTradesBtn');
         if (tradesBtn) tradesBtn.addEventListener('click', ptOpenTradesModal);
 
-        // ★ Long/Short toggle button
         var lsBtn = document.getElementById('ptLongShortBtn');
         if (lsBtn) lsBtn.addEventListener('click', ptToggleLongShort);
-
-        window.addEventListener('pc:timeframeChange', function (ev) {
-            var tf = ev && ev.detail && ev.detail.timeframe;
-            if (!tf || tf === PT_CURRENT_TIMEFRAME) return;
-            PT_CURRENT_TIMEFRAME = tf;
-            ptRenderTimeframeStrip();
-            ptLoadChart();
-        });
 
         window.addEventListener('pc:save', function (ev) {
             if (!ev || !ev.detail) return;
@@ -1096,6 +1657,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ptRenderTimeframeStrip();
         ptUpdateSymbolLabel();
         ptRefreshTradesButton();
+        ptUpdateProjBanner();
 
         if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
             ptLoadChart();
@@ -1154,11 +1716,548 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (modal) modal.classList.remove('active');
     }
 
+    // ==================== TIMEFRAME SWITCHING (NO MODAL) ====================
+    // Clicking a timeframe now simply:
+    //   1. Sets PT_CURRENT_TIMEFRAME.
+    //   2. Clears any projection state.
+    //   3. For every OTHER configured timeframe in PT_ALL_TIMEFRAMES that is
+    //      HIGHER than the target, schedules a projection of that timeframe's
+    //      saved matches onto the target.
+    //   4. Loads the target chart. Everything is drawn on the same canvas.
+
+    function ptSwitchToTimeframe(targetTF) {
+        if (!targetTF) return;
+        if (targetTF === PT_CURRENT_TIMEFRAME && !PT_PROJECTION_MODES.length) return;
+
+        ptDebugLine('cfg', 'Switching timeframe (no modal)', { to: targetTF });
+
+        PT_CURRENT_TIMEFRAME = targetTF;
+        PT_REQUESTED_AMOUNT  = PT_DEFAULT_AMOUNT;
+        PT_FULL_HISTORY_DONE = false;
+
+        // Reset native persisted state
+        PT_PERSISTED_MATCHES   = [];
+        PT_PERSISTED_LOADED    = false;
+        PT_PERSISTED_DIRTY     = true;
+        PT_LAST_PERSISTED_SIG  = '';
+
+        // Reset projection state
+        PT_PROJECTION_MODES = [];
+        PT_PROJECTED_BY_TF  = {};
+
+        // Find all higher configured timeframes and request projections
+        var higherTFs = [];
+        PT_ALL_TIMEFRAMES.forEach(function (tf) {
+            if (tf === targetTF) return;
+            if (!ptIsLowerTF(tf, targetTF)) return;
+            higherTFs.push(tf);
+        });
+
+        // Sort descending by duration (highest first)
+        higherTFs.sort(function (a, b) {
+            return (ptTfMs(b) || 0) - (ptTfMs(a) || 0);
+        });
+
+        ptDebugLine('cfg', 'Higher TFs to project', { target: targetTF, sources: higherTFs });
+
+        ptRenderTimeframeStrip();
+        ptUpdateProjBanner();
+        ptRefreshTradesButton();
+        ptLoadChart();
+
+        // Kick off projection for each higher TF as soon as we have that TF's
+        // saved rows. Each projection appends to PT_PROJECTED_BY_TF and
+        // triggers a redraw once it completes.
+        higherTFs.forEach(function (srcTF) {
+            PT_PROJECTION_MODES.push({ sourceTF: srcTF, targetTF: targetTF });
+            ptEnsureConfiguredRows(srcTF, function () {
+                ptProjectConfiguredRowsOnto(srcTF, targetTF);
+            });
+        });
+
+        ptUpdateProjBanner();
+    }
+
+    function ptUpdateProjBanner() {
+        var b = document.getElementById('ptProjBanner');
+        var t = document.getElementById('ptProjBannerText');
+        if (!b || !t) return;
+        if (PT_PROJECTION_MODES.length) {
+            var total = 0;
+            PT_PROJECTION_MODES.forEach(function (m) {
+                total += (PT_PROJECTED_BY_TF[m.sourceTF] || []).length;
+            });
+            var labels = PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ');
+            t.textContent = 'Projections: ' + labels + ' → ' + PT_CURRENT_TIMEFRAME
+                          + '  (' + total + ' projected rows)';
+            b.classList.add('active');
+        } else {
+            b.classList.remove('active');
+        }
+    }
+
+    function ptEnsureConfiguredRows(sourceTF, onReady) {
+        if (PT_CONFIGURED_ROWS_BY_TF[sourceTF]) {
+            onReady();
+            return;
+        }
+
+        var body = 'fetch_persisted_matches=1'
+                 + '&programmeid=' + encodeURIComponent(PT_PROGRAMME_ID)
+                 + '&symbol='      + encodeURIComponent(PT_CURRENT_SYMBOL)
+                 + '&timeframe='   + encodeURIComponent(sourceTF);
+
+        ptDebugLine('net', 'POST fetch_persisted_matches (projection source)', {
+            programmeId: PT_PROGRAMME_ID, symbol: PT_CURRENT_SYMBOL, timeframe: sourceTF
+        });
+
+        fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                PT_CONFIGURED_ROWS_BY_TF[sourceTF] = data.rows || [];
+            } else {
+                PT_CONFIGURED_ROWS_BY_TF[sourceTF] = [];
+            }
+            ptDebugLine('net', 'Projection source rows fetched', {
+                timeframe: sourceTF, count: PT_CONFIGURED_ROWS_BY_TF[sourceTF].length
+            });
+            onReady();
+        })
+        .catch(function (err) {
+            ptDebugLine('error', 'Projection source fetch failed: ' + (err && err.message ? err.message : 'Unknown'));
+            PT_CONFIGURED_ROWS_BY_TF[sourceTF] = [];
+            onReady();
+        });
+    }
+
+    function ptFetchRange(symbol, timeframe, fromTime, toTime, limit) {
+        var body = 'fetch_candles_range=1'
+                 + '&symbol='    + encodeURIComponent(symbol)
+                 + '&timeframe=' + encodeURIComponent(timeframe)
+                 + '&from_time=' + encodeURIComponent(fromTime)
+                 + '&to_time='   + encodeURIComponent(toTime)
+                 + '&limit='     + (limit || 100000);
+
+        return fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) return data.candles || [];
+            return [];
+        })
+        .catch(function () { return []; });
+    }
+
+    function ptFetchRecent(symbol, timeframe, limit) {
+        var body = 'fetch_candles_recent=1'
+                 + '&symbol='    + encodeURIComponent(symbol)
+                 + '&timeframe=' + encodeURIComponent(timeframe)
+                 + '&limit='     + (limit || 5000);
+
+        return fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) return data.candles || [];
+            return [];
+        })
+        .catch(function () { return []; });
+    }
+
+    function ptFetchBounds(symbol, timeframe) {
+        var body = 'fetch_candles_bounds=1'
+                 + '&symbol='    + encodeURIComponent(symbol)
+                 + '&timeframe=' + encodeURIComponent(timeframe);
+
+        return fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .catch(function () { return { success: false }; });
+    }
+
+    function ptNormTs(t) {
+        if (!t) return '';
+        var s = String(t).replace('T', ' ').trim();
+        var m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/.exec(s);
+        if (m) return m[1];
+        m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/.exec(s);
+        if (m) return m[1] + ':00';
+        m = /^(\d{4}-\d{2}-\d{2})$/.exec(s);
+        if (m) return m[1] + ' 00:00:00';
+        return s;
+    }
+
+    function ptDateFromTs(ts) {
+        var n = ptNormTs(ts);
+        if (!n) return null;
+        var d = new Date(n.replace(' ', 'T') + 'Z');
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    function ptTsFromDate(d) {
+        if (!d) return '';
+        function pad(n) { return n < 10 ? '0' + n : '' + n; }
+        return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate())
+             + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
+    }
+
+    function ptProjectConfiguredRowsOnto(sourceTF, targetTF) {
+        var rows = PT_CONFIGURED_ROWS_BY_TF[sourceTF] || [];
+        if (!rows.length) {
+            PT_PROJECTED_BY_TF[sourceTF] = [];
+            ptUpdateProjBanner();
+            ptRefreshTradesButton();
+            ptScheduleDraw();
+            ptDebugLine('warn', 'No source rows to project', { sourceTF: sourceTF });
+            return;
+        }
+
+        var windows = {};
+        rows.forEach(function (r) {
+            if (!r.open_time || !r.close_time) return;
+            var key = ptNormTs(r.open_time) + '|' + ptNormTs(r.close_time);
+            windows[key] = { open_time: ptNormTs(r.open_time), close_time: ptNormTs(r.close_time) };
+        });
+
+        var winKeys = Object.keys(windows);
+        if (!winKeys.length) {
+            PT_PROJECTED_BY_TF[sourceTF] = [];
+            ptUpdateProjBanner();
+            ptRefreshTradesButton();
+            ptScheduleDraw();
+            ptDebugLine('warn', 'No windows found in source rows', {});
+            return;
+        }
+
+        var minOpen = null, maxClose = null;
+        winKeys.forEach(function (k) {
+            var w = windows[k];
+            if (minOpen === null || w.open_time < minOpen) minOpen = w.open_time;
+            if (maxClose === null || w.close_time > maxClose) maxClose = w.close_time;
+        });
+
+        ptDebugLine('data', 'Projection: requested span', {
+            sourceTF: sourceTF, targetTF: targetTF,
+            from: minOpen, to: maxClose, windows: winKeys.length
+        });
+
+        ptFetchBounds(PT_CURRENT_SYMBOL, targetTF).then(function (bounds) {
+            var effFrom = minOpen;
+            var effTo   = maxClose;
+
+            if (bounds && bounds.success && bounds.min_time && bounds.max_time) {
+                var bMin = ptNormTs(bounds.min_time);
+                var bMax = ptNormTs(bounds.max_time);
+                if (bMin > effFrom) effFrom = bMin;
+                var bMaxDate = ptDateFromTs(bMax);
+                if (bMaxDate) {
+                    bMaxDate.setUTCSeconds(bMaxDate.getUTCSeconds() + 1);
+                    var bMaxPlus = ptTsFromDate(bMaxDate);
+                    if (bMaxPlus < effTo) effTo = bMaxPlus;
+                }
+                ptDebugLine('data', 'Projection: intersected span', {
+                    boundsMin: bMin, boundsMax: bMax,
+                    effFrom: effFrom, effTo: effTo,
+                    lowerTotal: bounds.total
+                });
+            } else {
+                ptDebugLine('warn', 'Projection: could not fetch lower-TF bounds, using raw span', {});
+            }
+
+            if (effFrom >= effTo) {
+                ptDebugLine('warn', 'Projection: empty intersection — falling back to recent candles', {
+                    rawFrom: minOpen, rawTo: maxClose, effFrom: effFrom, effTo: effTo
+                });
+                ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF);
+                return;
+            }
+
+            var chunks = ptBuildWeeklyChunks(effFrom, effTo);
+            ptDebugLine('data', 'Projection: fetching in chunks', { chunkCount: chunks.length });
+
+            var allSubs = [];
+            var chain = Promise.resolve();
+            chunks.forEach(function (ch) {
+                chain = chain.then(function () {
+                    return ptFetchRange(PT_CURRENT_SYMBOL, targetTF, ch.from, ch.to, 100000)
+                        .then(function (list) {
+                            if (list && list.length) {
+                                allSubs = allSubs.concat(list);
+                            }
+                            return null;
+                        });
+                });
+            });
+
+            chain.then(function () {
+                ptDebugLine('data', 'Projection: chunks fetched', {
+                    totalCandles: allSubs.length, chunks: chunks.length
+                });
+
+                if (!allSubs.length) {
+                    ptDebugLine('warn', 'Projection: chunked fetch returned 0 — falling back to recent', {});
+                    ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF);
+                    return;
+                }
+
+                ptBuildProjectionFromSubs(rows, windows, allSubs, sourceTF, targetTF);
+            });
+        });
+    }
+
+    function ptBuildWeeklyChunks(fromTs, toTs) {
+        var out = [];
+        var cur = ptDateFromTs(fromTs);
+        var end = ptDateFromTs(toTs);
+        if (!cur || !end) return [{ from: fromTs, to: toTs }];
+
+        while (cur < end) {
+            var next = new Date(cur.getTime() + 7 * 24 * 60 * 60 * 1000);
+            if (next > end) next = end;
+            out.push({ from: ptTsFromDate(cur), to: ptTsFromDate(next) });
+            cur = next;
+        }
+        if (!out.length) out.push({ from: fromTs, to: toTs });
+        return out;
+    }
+
+    function ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF) {
+        ptFetchRecent(PT_CURRENT_SYMBOL, targetTF, 5000).then(function (recent) {
+            if (!recent.length) {
+                ptDebugLine('error', 'Projection fallback: no recent candles available', {});
+                PT_PROJECTED_BY_TF[sourceTF] = [];
+                ptUpdateProjBanner();
+                ptRefreshTradesButton();
+                ptScheduleDraw();
+                return;
+            }
+
+            var firstTs = ptNormTs(recent[0].time);
+            var lastTs  = ptNormTs(recent[recent.length - 1].time);
+            ptDebugLine('data', 'Projection fallback: recent range', {
+                count: recent.length, first: firstTs, last: lastTs
+            });
+
+            var overlapping = rows.filter(function (r) {
+                var o = ptNormTs(r.open_time || r.candle_time || '');
+                var c = ptNormTs(r.close_time || r.candle_time || '');
+                if (!o || !c) return false;
+                return !(c < firstTs || o > lastTs);
+            });
+
+            if (!overlapping.length) {
+                ptDebugLine('warn', 'Projection fallback: no source rows overlap the recent window', {});
+                PT_PROJECTED_BY_TF[sourceTF] = [];
+                ptUpdateProjBanner();
+                ptRefreshTradesButton();
+                ptScheduleDraw();
+                return;
+            }
+
+            ptDebugLine('data', 'Projection fallback: overlapping source rows', {
+                count: overlapping.length
+            });
+
+            ptBuildProjectionFromSubs(overlapping, windows, recent, sourceTF, targetTF);
+        });
+    }
+
+    function ptBuildProjectionFromSubs(rows, windows, subs, sourceTF, targetTF) {
+        var winKeys = Object.keys(windows);
+        var subsByWindow = {};
+        winKeys.forEach(function (k) {
+            var w = windows[k];
+            subsByWindow[k] = subs.filter(function (c) {
+                var t = ptNormTs(c.time);
+                return t >= w.open_time && t < w.close_time;
+            });
+        });
+
+        var projected = [];
+        rows.forEach(function (r) {
+            var o = ptNormTs(r.open_time || '');
+            var c = ptNormTs(r.close_time || '');
+            if (!o || !c) return;
+            var winKey = o + '|' + c;
+            var list = subsByWindow[winKey];
+            if (!list || !list.length) return;
+
+            var level = (r.price_level || r.entry_from_price_level || r.draw_from_price_level || 'close').toLowerCase();
+            var sub = ptPickSubBar(list, level, r);
+            if (!sub) return;
+
+            var projectedRow = ptCloneRowWithSubBar(r, sub, level);
+            projected.push(projectedRow);
+        });
+
+        PT_PROJECTED_BY_TF[sourceTF] = projected;
+        ptUpdateProjBanner();
+        ptRefreshTradesButton();
+
+        ptReevaluateProjectedTradeOutcomes();
+
+        ptDebugLine('info', 'Projection complete', {
+            sourceTF: sourceTF,
+            sourceRows: rows.length,
+            subsFetched: subs.length,
+            projectedRows: projected.length
+        });
+
+        var modal = document.getElementById('ptTradesModal');
+        if (modal && modal.classList.contains('active')) ptRenderTradesResults();
+
+        ptScheduleDraw();
+    }
+
+    function ptPickSubBar(list, level, sourceRow) {
+        if (!list || !list.length) return null;
+
+        switch (level) {
+            case 'open':
+                return list[0];
+            case 'close':
+                return list[list.length - 1];
+            case 'high': {
+                var best = list[0];
+                for (var i = 1; i < list.length; i++) {
+                    if (list[i].high > best.high) best = list[i];
+                }
+                return best;
+            }
+            case 'low': {
+                var best2 = list[0];
+                for (var j = 1; j < list.length; j++) {
+                    if (list[j].low < best2.low) best2 = list[j];
+                }
+                return best2;
+            }
+            default: {
+                var srcVal = sourceRow ? sourceRow[level] : null;
+                if (srcVal == null) return list[0];
+                var bestIdx = 0;
+                var bestDiff = Infinity;
+                for (var k = 0; k < list.length; k++) {
+                    var v = list[k][level];
+                    if (v == null) continue;
+                    var d = Math.abs(v - srcVal);
+                    if (d < bestDiff) { bestDiff = d; bestIdx = k; }
+                }
+                return list[bestIdx];
+            }
+        }
+    }
+
+    function ptCloneRowWithSubBar(src, sub, level) {
+        var out = {};
+        for (var k in src) {
+            if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
+        }
+
+        out.candle_record_id    = sub.id;
+        out.candle_time         = sub.time;
+        out.open_time           = sub.open_time;
+        out.close_time          = sub.close_time;
+        out.open                = sub.open;
+        out.high                = sub.high;
+        out.low                 = sub.low;
+        out.close               = sub.close;
+        out.candle_center       = sub.candle_center;
+        out.body_center         = sub.body_center;
+        out.high_wick_center    = sub.high_wick_center;
+        out.low_wick_center     = sub.low_wick_center;
+        out.candle_width_center = sub.candle_width_center;
+        out.volume              = sub.volume;
+
+        out._projected_from      = src.timeframe || null;
+        out._projected_level     = level;
+        out._projected_sub_time  = sub.time;
+        out._projected_is_sub    = true;
+
+        return out;
+    }
+
+    // Re-evaluate every projected trade (across ALL source TFs) against the
+    // currently loaded candle set.
+    function ptReevaluateProjectedTradeOutcomes() {
+        if (!PT_CANDLES.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        Object.keys(PT_PROJECTED_BY_TF).forEach(function (srcTF) {
+            var list = PT_PROJECTED_BY_TF[srcTF] || [];
+            list.forEach(function (r) {
+                if (r.row_role !== 'matched_trade') return;
+                if (r.entry_from_price_level == null) return;
+
+                var entryIdx = idxByTime[r.candle_time];
+                if (entryIdx == null) return;
+
+                var direction = r.resolved_direction || 0;
+                if (direction === 0) return;
+
+                var entryPrice = r.entry_price != null ? r.entry_price
+                                : (r.candle_center != null ? r.candle_center
+                                    : (r.entry_from_price_level && r[r.entry_from_price_level] != null
+                                        ? r[r.entry_from_price_level]
+                                        : r.close));
+                var exitPrice = r.exit_price != null ? r.exit_price : null;
+                if (exitPrice == null && r.resolved_risk != null) {
+                    exitPrice = entryPrice - direction * r.resolved_risk;
+                }
+                var targetPrice = r.target_price != null ? r.target_price
+                                : (r.resolved_price != null ? r.resolved_price : null);
+
+                if (exitPrice == null && targetPrice == null) return;
+
+                var hitStatus = 'pending';
+                var hitTime   = null;
+                var hitPrice  = null;
+
+                for (var i = entryIdx; i < PT_CANDLES.length; i++) {
+                    var c = PT_CANDLES[i];
+                    var hitStop = false;
+                    var hitTarget = false;
+
+                    if (direction > 0) {
+                        if (exitPrice  != null) hitStop   = (c.low  <= exitPrice);
+                        if (targetPrice != null) hitTarget = (c.high >= targetPrice);
+                    } else {
+                        if (exitPrice  != null) hitStop   = (c.high >= exitPrice);
+                        if (targetPrice != null) hitTarget = (c.low  <= targetPrice);
+                    }
+
+                    if (hitStop)   { hitStatus = 'stop';   hitTime = c.time; hitPrice = exitPrice;   break; }
+                    if (hitTarget) { hitStatus = 'profit'; hitTime = c.time; hitPrice = targetPrice; break; }
+                }
+
+                r.outcome_status       = hitStatus;
+                r.outcome_candle_time  = hitTime;
+                r.outcome_price        = hitPrice;
+                r._projected_outcome   = true;
+            });
+        });
+    }
+
+    function ptRefreshTradeButtonSafe() {
+        try { ptRefreshTradesButton(); } catch (e) {}
+    }
+
     // ==================== LONG/SHORT TOGGLE ====================
-    /**
-     * Toggle the Long/Short overlay on/off. Pure UI, no backend.
-     * Default is OFF on every page load.
-     */
     function ptToggleLongShort() {
         PT_LONG_SHORT_ON = !PT_LONG_SHORT_ON;
         var btn = document.getElementById('ptLongShortBtn');
@@ -1169,46 +2268,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ptScheduleDraw();
     }
 
-    /**
-     * Render the trades results (summary + per-tree hit lists) into the
-     * results container inside the Trades modal.
-     *
-     * Uses ONLY the currently loaded chart data.
-     */
+    // ==================== COMBINED MATCH ROWS ====================
+    // Returns the "active" match rows for the current chart. If any
+    // projections exist, returns the concatenation of all projected sets.
+    // Otherwise returns the native persisted matches.
+    function ptActiveMatchRows() {
+        if (PT_PROJECTION_MODES.length) {
+            var combined = [];
+            PT_PROJECTION_MODES.forEach(function (m) {
+                var list = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+                for (var i = 0; i < list.length; i++) combined.push(list[i]);
+            });
+            return combined;
+        }
+        return PT_PERSISTED_MATCHES;
+    }
+
+    function ptActiveNativeMatches() {
+        // Native matches are always drawn (even when projections exist),
+        // so the chart shows "everything at once".
+        if (PT_PERSISTED_MATCHES.length) return PT_PERSISTED_MATCHES;
+        return [];
+    }
+
     function ptRenderTradesResults() {
         var resultsEl = document.getElementById('ptTradesResults');
         if (!resultsEl) return;
 
-        if (!PT_CANDLES.length) {
-            resultsEl.innerHTML = '<div class="pt-trades-empty">No candles loaded.</div>';
-            return;
-        }
+        var treeResults = ptScanTrades();
 
-        var results = ptScanTrades();
         var allHits = [];
-        results.forEach(function (r) { allHits = allHits.concat(r.hits); });
+        var byTree  = {};
+
+        treeResults.forEach(function (r) {
+            if (!r.hits || !r.hits.length) return;
+            var tid = r.tree.tree_id;
+            if (!byTree[tid]) byTree[tid] = { tree: r.tree, hits: [] };
+            r.hits.forEach(function (h) {
+                byTree[tid].hits.push(h);
+                allHits.push(h);
+            });
+        });
+
+        var srcLabel = PT_PROJECTION_MODES.length
+            ? ('Projected — ' + PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ')
+                + ' → ' + PT_CURRENT_TIMEFRAME + ' view')
+            : ('From live scan — ' + PT_CURRENT_SYMBOL + ' @ ' + PT_CURRENT_TIMEFRAME);
 
         if (!allHits.length) {
-            resultsEl.innerHTML = '<div class="pt-trades-empty">No trade matches found on the loaded candles.</div>';
+            resultsEl.innerHTML = '<div class="pt-trades-empty">'
+                + (PT_PROJECTION_MODES.length
+                    ? 'No projected trade matches for this symbol/timeframe.'
+                    : 'No trade matches found for this symbol/timeframe.')
+                + '</div>';
             return;
         }
 
-        var html = ptRenderTradeSummaryCard(allHits,
-            'Global Summary — ' + PT_CURRENT_SYMBOL + ' @ ' + PT_CURRENT_TIMEFRAME);
+        var html = ptRenderTradeSummaryCard(allHits, 'Global Summary — ' + srcLabel);
 
-        results.forEach(function (tr, ti) {
-            html += '<div class="pt-trades-tree" data-open="1" data-tree-idx="' + ti + '">';
+        Object.keys(byTree).forEach(function (tid) {
+            var grp = byTree[tid];
+            if (!grp.hits.length) return;
+
+            var rootName = ptFirstRootName(grp.tree);
+
+            html += '<div class="pt-trades-tree" data-open="1" data-tree-idx="' + tid + '">';
             html += '  <div class="pt-trades-tree-head">';
             html += '    <i class="fa-solid fa-chevron-right pt-trades-tree-caret"></i>';
             html += '    <i class="fa-solid fa-sitemap pt-trades-tree-icon"></i>';
-            html += '    <span class="pt-trades-tree-name">' + ptEscapeHtml(tr.rootName) + '</span>';
-            html += '    <span class="pt-trades-tree-count">' + tr.hits.length + ' match' + (tr.hits.length > 1 ? 'es' : '') + '</span>';
+            html += '    <span class="pt-trades-tree-name">' + ptEscapeHtml(rootName) + '</span>';
+            html += '    <span class="pt-trades-tree-count">' + grp.hits.length + ' match'
+                +      (grp.hits.length > 1 ? 'es' : '') + '</span>';
             html += '  </div>';
             html += '  <div class="pt-trades-tree-body">';
 
-            html += ptRenderTradeSummaryCard(tr.hits, 'Summary — ' + tr.rootName);
+            html += ptRenderTradeSummaryCard(grp.hits, 'Summary — ' + rootName);
 
-            var sortedHits = tr.hits.slice().sort(function (a, b) {
+            var sortedHits = grp.hits.slice().sort(function (a, b) {
                 var ta = a.entry && a.entry.candle ? a.entry.candle.time : '';
                 var tb = b.entry && b.entry.candle ? b.entry.candle.time : '';
                 if (ta === tb) {
@@ -1218,6 +2354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 }
                 return String(tb).localeCompare(String(ta));
             });
+
             sortedHits.forEach(function (hit, idx) {
                 html += ptRenderTradeHitCard(hit, idx);
             });
@@ -1241,12 +2378,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     function ptRefreshTradesButton() {
-        var btn = document.getElementById('ptTradesBtn');
+        var btn   = document.getElementById('ptTradesBtn');
         var lsBtn = document.getElementById('ptLongShortBtn');
-        var cnt = document.getElementById('ptTradesCount');
+        var cnt   = document.getElementById('ptTradesCount');
         if (!btn) return;
 
-        // Rule count → do we even show the button?
         var ruleCount = 0;
         (PT_TREES || []).forEach(function (t) {
             if (t.trades && t.trades.length) ruleCount += t.trades.length;
@@ -1259,26 +2395,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
 
         btn.style.display = 'inline-flex';
-        // ★ Long/Short uses the exact same conditional display rule as Trades.
         if (lsBtn) lsBtn.style.display = 'inline-flex';
 
-        // Badge shows match count when available; "…" while pending.
         if (cnt) {
-            if (PT_TRADE_SCAN_DIRTY || !PT_CANDLES.length) {
+            if (!PT_CANDLES.length) {
                 cnt.textContent = '…';
-                cnt.title = 'Scanning for trade matches…';
+                cnt.title = 'Waiting for candles to load…';
             } else {
-                cnt.textContent = PT_TRADE_MATCH_COUNT;
-                cnt.title = PT_TRADE_MATCH_COUNT + ' trade match' + (PT_TRADE_MATCH_COUNT === 1 ? '' : 'es');
+                var results = ptScanTrades();
+                var total = 0;
+                results.forEach(function (r) { total += r.hits.length; });
+                PT_TRADE_MATCH_COUNT = total;
+
+                cnt.textContent = total;
+                cnt.title = total + ' trade match' + (total === 1 ? '' : 'es')
+                        + (PT_PROJECTION_MODES.length ? ' (projected)' : ' (live scan)');
             }
         }
     }
 
     /**
-     * Rescan all loaded candles for trade matches, cache the count,
-     * and refresh the button badge.
+     * Rescan the current chart with the current tree configuration.
+     * When `persist` is truthy, the resulting snapshot is written to the DB
+     * (deleting the previous snapshot for this symbol/TF first, via the
+     * server-side full-snapshot semantics).
      */
-    function ptRescanTradeMatches() {
+    function ptRescanTradeMatches(persist) {
         PT_TRADE_SCAN_DIRTY = true;
         ptRefreshTradesButton();
         setTimeout(function () {
@@ -1287,9 +2429,128 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             results.forEach(function (r) { total += r.hits.length; });
             PT_TRADE_MATCH_COUNT = total;
             PT_TRADE_SCAN_DIRTY  = false;
-            ptDebugLine('info', 'Trade match count updated', { total: total });
+            ptDebugLine('info', 'Trade match count updated', { total: total, persist: !!persist });
             ptRefreshTradesButton();
+
+            if (persist) {
+                ptPersistMatches(results);
+            }
         }, 0);
+    }
+
+    function ptPersistMatches(results) {
+        var treesPayload = [];
+        (results || []).forEach(function (r) {
+            var flat = r._matchedFlat || [];
+            if (!flat.length) return;
+            treesPayload.push({
+                tree_id: r.tree.tree_id,
+                matched: flat
+            });
+        });
+
+        var sig = ptSnapshotSignature(results);
+        if (sig === PT_LAST_PERSISTED_SIG) {
+            ptDebugLine('data', 'persist_matches skipped (no change)', { sig: sig });
+            ptLoadPersistedMatches();
+            return;
+        }
+
+        var payload = {
+            programmeId: PT_PROGRAMME_ID,
+            symbol:      PT_CURRENT_SYMBOL,
+            timeframe:   PT_CURRENT_TIMEFRAME,
+            run_token:   PT_PERSISTED_RUN_TOKEN || '',
+            trees:       treesPayload
+        };
+
+        ptDebugLine('net', 'POST persist_matches', {
+            trees: treesPayload.length,
+            totalMatched: treesPayload.reduce(function (a, t) { return a + t.matched.length; }, 0),
+            sig: sig
+        });
+
+        var body = 'persist_matches=1&payload=' + encodeURIComponent(JSON.stringify(payload));
+        fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            ptDebugLine('net', 'persist_matches response', data);
+            if (data && data.success) {
+                PT_PERSISTED_RUN_TOKEN = data.run_token || PT_PERSISTED_RUN_TOKEN;
+                PT_LAST_PERSISTED_SIG  = sig;
+            }
+            ptLoadPersistedMatches();
+        })
+        .catch(function (err) {
+            ptDebugLine('error', 'persist_matches network error: ' + (err && err.message ? err.message : 'Unknown'));
+            ptLoadPersistedMatches();
+        });
+    }
+
+    function ptLoadPersistedMatches() {
+        if (!PT_PROGRAMME_ID || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
+            PT_PERSISTED_MATCHES = [];
+            PT_PERSISTED_LOADED  = true;
+            PT_PERSISTED_DIRTY   = false;
+            ptRefreshTradesButton();
+            return;
+        }
+
+        if (PT_PROJECTION_MODES.length) {
+            PT_PROJECTION_MODES.forEach(function (m) {
+                ptEnsureConfiguredRows(m.sourceTF, function () {
+                    ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
+                });
+            });
+            PT_PERSISTED_LOADED = true;
+            return;
+        }
+
+        var body = 'fetch_persisted_matches=1'
+                 + '&programmeid=' + encodeURIComponent(PT_PROGRAMME_ID)
+                 + '&symbol='      + encodeURIComponent(PT_CURRENT_SYMBOL)
+                 + '&timeframe='   + encodeURIComponent(PT_CURRENT_TIMEFRAME);
+
+        ptDebugLine('net', 'POST fetch_persisted_matches', {
+            programmeId: PT_PROGRAMME_ID, symbol: PT_CURRENT_SYMBOL, timeframe: PT_CURRENT_TIMEFRAME
+        });
+
+        fetch('programme_training.php', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            ptDebugLine('net', 'fetch_persisted_matches response', {
+                success: data && data.success, count: data && data.rows ? data.rows.length : 0
+            });
+            if (data && data.success) {
+                PT_PERSISTED_MATCHES = data.rows || [];
+                PT_CONFIGURED_ROWS_BY_TF[PT_CURRENT_TIMEFRAME] = PT_PERSISTED_MATCHES;
+            } else {
+                PT_PERSISTED_MATCHES = [];
+            }
+            PT_PERSISTED_LOADED = true;
+            PT_PERSISTED_DIRTY  = false;
+            ptRefreshTradesButton();
+
+            var modal = document.getElementById('ptTradesModal');
+            if (modal && modal.classList.contains('active')) {
+                ptRenderTradesResults();
+            }
+        })
+        .catch(function (err) {
+            ptDebugLine('error', 'fetch_persisted_matches network error: ' + (err && err.message ? err.message : 'Unknown'));
+            PT_PERSISTED_MATCHES = [];
+            PT_PERSISTED_LOADED  = true;
+            PT_PERSISTED_DIRTY   = false;
+            ptRefreshTradesButton();
+        });
     }
 
     function ptFirstRootName(tree) {
@@ -1298,45 +2559,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return 'Tree ' + tree.tree_id;
     }
 
-    /**
-     * Open the Trades modal. Renders the summary/results directly.
-     */
     function ptOpenTradesModal() {
         var modal = document.getElementById('ptTradesModal');
         var body  = document.getElementById('ptTradesBody');
         var sub   = document.getElementById('ptTradesSubtitle');
         if (!modal || !body) return;
 
-        if (sub) sub.textContent = PT_PROGRAMME_NAME + ' · trade matches';
+        if (sub) {
+            var lbl = PT_PROJECTION_MODES.length
+                ? ('projected ' + PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ')
+                    + ' → ' + PT_CURRENT_TIMEFRAME)
+                : (PT_CURRENT_SYMBOL + ' @ ' + PT_CURRENT_TIMEFRAME + ' · live scan');
+            sub.textContent = PT_PROGRAMME_NAME + ' · ' + lbl;
+        }
 
-        // Build the results container only.
         body.innerHTML = '<div id="ptTradesResults" class="pt-trades-results"></div>';
-
         modal.classList.add('active');
 
-        // Render results using the currently loaded chart.
-        ptRenderTradesResults();
+        if (!PT_CANDLES.length) {
+            var resultsEl = document.getElementById('ptTradesResults');
+            if (resultsEl) {
+                resultsEl.innerHTML = '<div class="pt-trades-empty">Waiting for candles to load…</div>';
+            }
+        } else {
+            ptRenderTradesResults();
+        }
 
-        ptDebugLine('info', 'Trades modal opened');
+        ptDebugLine('info', 'Trades modal opened (live scan, projCount=' + PT_PROJECTION_MODES.length + ')');
     }
 
-    /**
-     * Compute extended summary stats from a flat list of hits.
-     *
-     * Adds:
-     *   - winrate (% of resolved trades that hit target)
-     *   - daily trade counts derived from the RESOLUTION candle
-     *     (target hit or SL hit) — same day = same calendar date.
-     *   - weekly trade counts grouped by ISO week (YYYY-Www) of the ENTRY candle.
-     *   - trading days: distinct weekdays on which entries occurred (separate info).
-     *
-     * NOTE on Average:
-     *   The "average" here is NOT arithmetic mean (which can be 1.56).
-     *   It is the MEDIAN — the count that sits strictly between the
-     *   highest and lowest. If no value qualifies (e.g. only two
-     *   distinct counts exist, or all counts are equal), average is
-     *   set to null and the UI hides it.
-     */
+    // ==================== TRADE STATS ====================
     function ptComputeTradeStats(hitsChronological) {
         var stats = {
             highestConsecutiveLosses: 0,
@@ -1365,11 +2617,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var consecLosses = 0;
         var maxConsecLosses = 0;
 
-        // Daily bucket: key = YYYY-MM-DD of the RESOLUTION candle.
         var dailyMap = {};
-
-        // Weekly bucket: key = ISO week (YYYY-Www) of the ENTRY candle → counts trades per WEEK.
-        // Trading days bucket: weekday index (0=Sun..6=Sat) of the ENTRY candle → list of distinct weekdays.
         var weeklyMap = {};
         var tradingDayMap = {};
         var weekdayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -1396,17 +2644,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var dd = ((peak - liquidity) / peak) * 100;
             if (dd > maxDD) maxDD = dd;
 
-            // ── Daily bucket (based on the candle that RESOLVED the trade) ──
             var resCandle = (hit.outcome && hit.outcome.candle) ? hit.outcome.candle : null;
             if (resCandle && resCandle.time) {
-                var dayKey = String(resCandle.time).slice(0, 10); // YYYY-MM-DD
+                var dayKey = String(resCandle.time).slice(0, 10);
                 if (!dailyMap[dayKey]) dailyMap[dayKey] = 0;
                 dailyMap[dayKey]++;
             }
 
-            // ── Weekly bucket (based on the ENTRY candle timestamp) ──
-            //    Groups by ISO week (YYYY-Www) → number of distinct WEEKS.
-            //    Trading-day bucket collects distinct weekdays separately.
             var entryCandle = (hit.entry && hit.entry.candle) ? hit.entry.candle : null;
             if (entryCandle && entryCandle.time) {
                 var weekKey = ptWeekKeyFromTime(entryCandle.time);
@@ -1416,7 +2660,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 }
                 var dayIdx = ptWeekdayIndexFromTime(entryCandle.time);
                 if (dayIdx >= 0) {
-                    tradingDayMap[dayIdx] = true; // distinct flag only, no counting needed here
+                    tradingDayMap[dayIdx] = true;
                 }
             }
         });
@@ -1426,12 +2670,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         stats.peakLiquidity            = peak;
         stats.finalLiquidity           = liquidity;
 
-        // Winrate = wins / resolved * 100
         stats.winrate = stats.resolved > 0
             ? (stats.wins / stats.resolved) * 100
             : 0;
 
-        // ── Daily aggregation ──
         var dayKeys = Object.keys(dailyMap);
         stats.dailyCount = dayKeys.length;
         if (dayKeys.length) {
@@ -1441,8 +2683,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             stats.dailyAverage = ptMedianBetween(dailyCounts);
         }
 
-        // ── Weekly aggregation (distinct ISO weeks) ──
-        var weekKeys = Object.keys(weeklyMap).sort();   // already YYYY-Www, lexicographic == chronological
+        var weekKeys = Object.keys(weeklyMap).sort();
         stats.weeklyCount = weekKeys.length;
         if (weekKeys.length) {
             var weeklyCounts = weekKeys.map(function (k) { return weeklyMap[k]; });
@@ -1451,7 +2692,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             stats.weeklyAverage = ptMedianBetween(weeklyCounts);
         }
 
-        // ── Trading days (distinct weekdays that saw at least one entry) ──
         var tradingDayIdx = Object.keys(tradingDayMap).map(function (k) { return parseInt(k, 10); });
         tradingDayIdx.sort(function (a, b) { return a - b; });
         stats.weeklyDays = tradingDayIdx.map(function (k) { return weekdayNames[k]; });
@@ -1459,11 +2699,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return stats;
     }
 
-    /**
-     * Return the weekday index (0=Sunday..6=Saturday) for a candle
-     * timestamp string like "2025-01-15 09:30:00" or "2025-01-15T09:30:00".
-     * Returns -1 if the timestamp cannot be parsed.
-     */
     function ptWeekdayIndexFromTime(timeStr) {
         if (!timeStr) return -1;
         var s = String(timeStr).replace('T', ' ');
@@ -1478,11 +2713,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return dt.getUTCDay();
     }
 
-    /**
-     * Return an ISO-week key "YYYY-Www" for a candle timestamp string.
-     * Used to bucket trades into distinct weeks.
-     * Returns null if the timestamp cannot be parsed.
-     */
     function ptWeekKeyFromTime(timeStr) {
         if (!timeStr) return null;
         var s = String(timeStr).replace('T', ' ');
@@ -1495,43 +2725,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var dt = new Date(Date.UTC(y, m, d));
         if (isNaN(dt.getTime())) return null;
 
-        // ISO week: Thursday-based. Shift to nearest Thursday.
-        var day = dt.getUTCDay() || 7;                  // Mon=1..Sun=7
-        dt.setUTCDate(dt.getUTCDate() + 4 - day);       // nearest Thursday
+        var day = dt.getUTCDay() || 7;
+        dt.setUTCDate(dt.getUTCDate() + 4 - day);
         var yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
         var weekNo = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
         return dt.getUTCFullYear() + '-W' + (weekNo < 10 ? '0' + weekNo : weekNo);
     }
 
-    /**
-     * "Average" = the median value that sits STRICTLY between the
-     * highest and the lowest counts.
-     *
-     * Rules:
-     *   - Requires at least 3 distinct count values.
-     *   - The median is picked from the middle of the sorted unique
-     *     values (if even number of unique values, picks the lower
-     *     of the two middles, so it always lands between min & max).
-     *   - If no value exists strictly between min & max, returns null
-     *     so the UI can hide the line entirely.
-     *
-     * This is intentionally NOT the arithmetic mean — 1.56 is never
-     * shown, because the average is always an actual observed count.
-     */
     function ptMedianBetween(counts) {
         if (!counts || !counts.length) return null;
         var uniq = counts.slice().sort(function (a, b) { return a - b; });
-        // Deduplicate
         var unique = [];
         for (var i = 0; i < uniq.length; i++) {
             if (i === 0 || uniq[i] !== uniq[i - 1]) unique.push(uniq[i]);
         }
-        if (unique.length < 3) return null; // nothing strictly between min & max
+        if (unique.length < 3) return null;
 
         var min = unique[0];
         var max = unique[unique.length - 1];
 
-        // Take the middle of the unique values (exclude ends)
         var inner = unique.slice(1, unique.length - 1);
         if (!inner.length) return null;
 
@@ -1541,15 +2753,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return null;
     }
 
-    /**
-     * Render the extended summary card.
-     *
-     * Cards: Total Trades, Total R:R, Won R:R, Lost R:R, Pending (opt),
-     *        Winrate, Highest Consecutive Losses, Highest Drawdown,
-     *        Daily Trades (Highest / Lowest / Average),
-     *        Weekly Trades (distinct ISO weeks + Highest / Lowest / Average),
-     *        Trading Days (separate card, distinct weekdays).
-     */
     function ptRenderTradeSummaryCard(hits, label) {
         var totalHits   = 0;
         var sumRR       = 0;
@@ -1576,7 +2779,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         });
         var stats = ptComputeTradeStats(chrono);
 
-        // ★ Winrate value is white — no red/green tinting.
         var html = '';
         html += '<div class="pt-trades-summary-card">';
         if (label) {
@@ -1586,31 +2788,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
         html += '  <div class="pt-tsc-row">';
 
-        // Total Trades
         html += '    <div class="pt-tsc-cell">';
         html += '      <span class="pt-tsc-label">Total Trades</span>';
         html += '      <span class="pt-tsc-value">' + totalHits + '</span>';
         html += '    </div>';
 
-        // Total R:R
         html += '    <div class="pt-tsc-cell">';
         html += '      <span class="pt-tsc-label">Total R:R</span>';
         html += '      <span class="pt-tsc-value">' + sumRR.toFixed(2) + '</span>';
         html += '    </div>';
 
-        // Won R:R
         html += '    <div class="pt-tsc-cell pt-tsc-win">';
         html += '      <span class="pt-tsc-label">Won R:R (' + wonCount + ')</span>';
         html += '      <span class="pt-tsc-value">' + sumWinRR.toFixed(2) + '</span>';
         html += '    </div>';
 
-        // Lost R:R
         html += '    <div class="pt-tsc-cell pt-tsc-loss">';
         html += '      <span class="pt-tsc-label">Lost R:R (' + lostCount + ')</span>';
         html += '      <span class="pt-tsc-value">' + sumLossRR.toFixed(2) + '</span>';
         html += '    </div>';
 
-        // Pending (optional)
         if (pendCount > 0) {
             html += '    <div class="pt-tsc-cell pt-tsc-pending">';
             html += '      <span class="pt-tsc-label">Pending</span>';
@@ -1618,7 +2815,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             html += '    </div>';
         }
 
-        // ── Winrate card — value is WHITE, not red ──
         html += '    <div class="pt-tsc-cell">';
         html += '      <span class="pt-tsc-label">Winrate</span>';
         html += '      <span class="pt-tsc-value pt-tsc-winrate-value">'
@@ -1629,19 +2825,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
              +      '</span>';
         html += '    </div>';
 
-        // ── Highest Consecutive Losses ──
         html += '    <div class="pt-tsc-cell pt-tsc-danger">';
         html += '      <span class="pt-tsc-label">Highest Consecutive Losses</span>';
         html += '      <span class="pt-tsc-value">' + stats.highestConsecutiveLosses + '</span>';
         html += '    </div>';
 
-        // ── Highest Drawdown ──
         html += '    <div class="pt-tsc-cell pt-tsc-danger">';
         html += '      <span class="pt-tsc-label">Highest Drawdown</span>';
         html += '      <span class="pt-tsc-value">' + stats.highestDrawdownPct.toFixed(2) + '%</span>';
         html += '    </div>';
 
-        // ── Daily Trades Count ──
         html += '    <div class="pt-tsc-cell pt-tsc-info">';
         html += '      <span class="pt-tsc-label">Daily Trades Count</span>';
         html += '      <span class="pt-tsc-value">' + stats.dailyCount + ' day'
@@ -1649,13 +2842,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         html += '      <span class="pt-tsc-sub">'
              +          'Highest: ' + stats.dailyHighest
              +          ' · Lowest: ' + stats.dailyLowest
-             +          (stats.dailyAverage != null
-                            ? ' · Average: ' + stats.dailyAverage
-                            : '')
+             +          (stats.dailyAverage != null ? ' · Average: ' + stats.dailyAverage : '')
              +      '</span>';
         html += '    </div>';
 
-        // ── Weekly Trades Count (distinct ISO weeks) ──
         html += '    <div class="pt-tsc-cell pt-tsc-info">';
         html += '      <span class="pt-tsc-label">Weekly Trades Count</span>';
         html += '      <span class="pt-tsc-value">' + stats.weeklyCount + ' week'
@@ -1663,13 +2853,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         html += '      <span class="pt-tsc-sub">'
              +          'Highest: ' + stats.weeklyHighest
              +          ' · Lowest: ' + stats.weeklyLowest
-             +          (stats.weeklyAverage != null
-                            ? ' · Average: ' + stats.weeklyAverage
-                            : '')
+             +          (stats.weeklyAverage != null ? ' · Average: ' + stats.weeklyAverage : '')
              +      '</span>';
         html += '    </div>';
 
-        // ── Trading Days (separate card, distinct weekdays only) ──
         if (stats.weeklyDays && stats.weeklyDays.length) {
             html += '    <div class="pt-tsc-cell pt-tsc-info">';
             html += '      <span class="pt-tsc-label">Trading Days</span>';
@@ -1686,10 +2873,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return html;
     }
 
-    /**
-     * Scan every candle, evaluate every tree, resolve every trade
-     * rule against each matched tree instance.
-     */
     function ptScanTrades() {
         var out = [];
         if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
@@ -1699,11 +2882,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var roots = tree.roots || [];
             if (!roots.length) return;
             var trades = tree.trades || [];
-            if (!trades.length) return;
+            var drawings = tree.drawings || [];
+            if (!trades.length && !drawings.length) return;
 
             var rootName = ptFirstRootName(tree);
             var hits = [];
             var seenEntryByRule = {};
+            var matchedFlat = [];
 
             for (var i0 = 0; i0 < PT_CANDLES.length; i0++) {
                 var matched = ptEvaluateTreeAt(tree, i0, 0, PT_CANDLES.length - 1);
@@ -1716,6 +2901,167 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 if (!foundationRoot.timeframe || foundationRoot.timeframe !== PT_CURRENT_TIMEFRAME) continue;
                 if (foundationAbs < 0 || foundationAbs >= PT_CANDLES.length) continue;
 
+                matched.forEach(function (m, mi) {
+                    var root = m.root;
+                    var rc   = PT_CANDLES[m.absIdx];
+                    if (!rc) return;
+
+                    matchedFlat.push({
+                        row_role:          'matched_root',
+                        source_row_id:     root.id || null,
+                        candle_record_id:  rc.id || null,
+                        candle_time:       rc.time,
+                        open_time:         rc.open_time,
+                        close_time:        rc.close_time,
+                        open:              rc.open,
+                        high:              rc.high,
+                        low:               rc.low,
+                        close:             rc.close,
+                        candle_center:     rc.candle_center,
+                        body_center:       rc.body_center,
+                        high_wick_center:  rc.high_wick_center,
+                        low_wick_center:   rc.low_wick_center,
+                        candle_width_center: rc.candle_width_center,
+                        volume:            rc.volume,
+                        candle_name:       root.candle_name,
+                        price_level:       root.price_level,
+                        candle_type:       root.candle_type,
+                        candle_position:   root.candle_position,
+                        candle_search:     root.candle_search,
+                        operator:          root.operator,
+                        is_foundation:     mi === 0 ? 1 : 0,
+                        evaluation_priority: mi + 1,
+                        status:            'matched'
+                    });
+
+                    (root.root_refs || []).forEach(function (ref) {
+                        if (ref.row_role !== 'root_ref') return;
+                        var refOff = parseInt(ref.candle_position, 10) || 0;
+                        var refAbs = m.absIdx + refOff;
+                        if (refAbs < 0 || refAbs >= PT_CANDLES.length) return;
+                        var rfc = PT_CANDLES[refAbs];
+                        if (!rfc) return;
+
+                        matchedFlat.push({
+                            row_role:          'matched_ref',
+                            source_row_id:     ref.id || null,
+                            candle_record_id:  rfc.id || null,
+                            candle_time:       rfc.time,
+                            open_time:         rfc.open_time,
+                            close_time:        rfc.close_time,
+                            open:              rfc.open,
+                            high:              rfc.high,
+                            low:               rfc.low,
+                            close:             rfc.close,
+                            candle_center:     rfc.candle_center,
+                            body_center:       rfc.body_center,
+                            high_wick_center:  rfc.high_wick_center,
+                            low_wick_center:   rfc.low_wick_center,
+                            candle_width_center: rfc.candle_width_center,
+                            volume:            rfc.volume,
+                            candle_name:       ref.candle_name,
+                            price_level:       ref.price_level,
+                            candle_type:       ref.candle_type,
+                            candle_position:   ref.candle_position,
+                            candle_search:     ref.candle_search,
+                            operator:          root.operator,
+                            evaluation_priority: mi + 1,
+                            status:            'matched'
+                        });
+
+                        (ref.re_ref_pairs || []).forEach(function (pair) {
+                            var a = pair.author, b = pair.referenced;
+                            if (!a || !b) return;
+                            matchedFlat.push({
+                                row_role:          'matched_reref_author',
+                                source_row_id:     a.id || null,
+                                candle_record_id:  rfc.id || null,
+                                candle_time:       rfc.time,
+                                open_time:         rfc.open_time,
+                                close_time:        rfc.close_time,
+                                open:              rfc.open,
+                                high:              rfc.high,
+                                low:               rfc.low,
+                                close:             rfc.close,
+                                candle_center:     rfc.candle_center,
+                                body_center:       rfc.body_center,
+                                high_wick_center:  rfc.high_wick_center,
+                                low_wick_center:   rfc.low_wick_center,
+                                candle_width_center: rfc.candle_width_center,
+                                volume:            rfc.volume,
+                                candle_name:       a.candle_name,
+                                price_level:       a.price_level,
+                                candle_type:       a.candle_type,
+                                candle_position:   a.candle_position,
+                                candle_search:     a.candle_search,
+                                operator:          a.operator,
+                                evaluation_priority: mi + 1,
+                                status:            'matched'
+                            });
+                            matchedFlat.push({
+                                row_role:          'matched_reref_servant',
+                                source_row_id:     b.id || null,
+                                candle_record_id:  rfc.id || null,
+                                candle_time:       rfc.time,
+                                open_time:         rfc.open_time,
+                                close_time:        rfc.close_time,
+                                open:              rfc.open,
+                                high:              rfc.high,
+                                low:               rfc.low,
+                                close:             rfc.close,
+                                candle_center:     rfc.candle_center,
+                                body_center:       rfc.body_center,
+                                high_wick_center:  rfc.high_wick_center,
+                                low_wick_center:   rfc.low_wick_center,
+                                candle_width_center: rfc.candle_width_center,
+                                volume:            rfc.volume,
+                                candle_name:       b.candle_name,
+                                price_level:       b.price_level,
+                                candle_type:       b.candle_type,
+                                candle_position:   b.candle_position,
+                                candle_search:     b.candle_search,
+                                operator:          a.operator,
+                                evaluation_priority: mi + 1,
+                                status:            'matched'
+                            });
+                        });
+                    });
+                });
+
+                drawings.forEach(function (dr) {
+                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, i0);
+                    if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
+                    var fc = PT_CANDLES[fromIdx];
+                    if (!fc) return;
+                    matchedFlat.push({
+                        row_role:              'matched_drawing',
+                        source_row_id:         dr.id || null,
+                        candle_record_id:      fc.id || null,
+                        candle_time:           fc.time,
+                        open_time:             fc.open_time,
+                        close_time:            fc.close_time,
+                        open:                  fc.open,
+                        high:                  fc.high,
+                        low:                   fc.low,
+                        close:                 fc.close,
+                        candle_center:         fc.candle_center,
+                        body_center:           fc.body_center,
+                        high_wick_center:      fc.high_wick_center,
+                        low_wick_center:       fc.low_wick_center,
+                        candle_width_center:   fc.candle_width_center,
+                        volume:                fc.volume,
+                        drawing_id:            dr.drawing_id,
+                        drawing_tools:         dr.drawing_tools,
+                        draw_from:             dr.draw_from,
+                        draw_from_price_level: dr.draw_from_price_level,
+                        draw_to:               dr.draw_to,
+                        draw_to_price_level:   dr.draw_to_price_level,
+                        drawing_color:         dr.drawing_color,
+                        evaluation_priority:   1,
+                        status:                'matched'
+                    });
+                });
+
                 trades.forEach(function (trade, ti) {
                     var entry = ptResolveSourceObject(
                         tree, foundationRoot, foundationAbs,
@@ -1724,21 +3070,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     );
                     if (!entry) return;
 
-                    var exit = ptResolveSourceObject(
-                        tree, foundationRoot, foundationAbs,
-                        trade.exit_at, i0,
-                        trade.exit_at_price_level
-                    );
-                    if (!exit) return;
+                    var exit = null;
+                    if (trade.exit_at) {
+                        exit = ptResolveSourceObject(
+                            tree, foundationRoot, foundationAbs,
+                            trade.exit_at, i0,
+                            trade.exit_at_price_level
+                        );
+                    }
 
                     var target          = null;
                     var targetRR        = null;
                     var rrMode          = trade.target_rr_mode || trade.target || '';
 
                     if (rrMode === 'fixed_risk_reward' || rrMode === 'minimum_risk_reward') {
-                        var computed = ptComputeRiskRewardTarget(trade, entry, exit, rrMode);
-                        if (computed) {
-                            targetRR = computed;
+                        if (exit) {
+                            var computed = ptComputeRiskRewardTarget(trade, entry, exit, rrMode);
+                            if (computed) {
+                                targetRR = computed;
+                            }
                         }
                     } else if (trade.target &&
                                trade.target !== 'fixed_risk_reward' &&
@@ -1748,9 +3098,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             trade.target, i0,
                             trade.target_price_level
                         );
-                        if (target) {
+                        if (target && exit) {
                             var dyn = ptComputeDynamicRiskReward(trade, entry, exit, target);
                             if (dyn) targetRR = dyn;
+                        } else if (target) {
+                            targetRR = {
+                                ratio:     null,
+                                price:     target.price,
+                                direction: ptTradeDirection(trade),
+                                risk:      null,
+                                reward:    null,
+                                mode:      'dynamic'
+                            };
                         }
                     }
 
@@ -1762,9 +3121,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var targetPrice = (targetRR && targetRR.price != null)
                         ? targetRR.price
                         : (target && target.price != null ? target.price : null);
-                    var outcome = (direction !== 0)
-                        ? ptDetectTradeOutcome(entry, exit, targetPrice, direction, null)
-                        : { status: 'pending', candleIdx: null, candle: null, price: null };
+                    var outcome;
+                    if (direction !== 0 && exit && exit.price != null) {
+                        outcome = ptDetectTradeOutcome(entry, exit, targetPrice, direction, null);
+                    } else {
+                        outcome = { status: 'pending', candleIdx: null, candle: null, price: null };
+                    }
 
                     hits.push({
                         trade:     trade,
@@ -1777,10 +3139,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         i0:        i0,
                         matched:   matched
                     });
+
+                    var entryCandle = entry.candle;
+                    var entryPrice  = (entry.price != null) ? entry.price : null;
+                    var exitPrice   = (exit && exit.price != null) ? exit.price : null;
+                    var tgtPrice    = (targetRR && targetRR.price != null)
+                                        ? targetRR.price
+                                        : (target && target.price != null ? target.price : null);
+
+                    matchedFlat.push({
+                        row_role:          'matched_trade',
+                        source_row_id:     trade.id || null,
+                        candle_record_id:  entryCandle ? (entryCandle.id || null) : null,
+                        candle_time:       entryCandle ? entryCandle.time       : null,
+                        open_time:         entryCandle ? entryCandle.open_time  : null,
+                        close_time:        entryCandle ? entryCandle.close_time : null,
+                        open:              entryCandle ? entryCandle.open       : null,
+                        high:              entryCandle ? entryCandle.high       : null,
+                        low:               entryCandle ? entryCandle.low        : null,
+                        close:             entryCandle ? entryCandle.close      : null,
+                        candle_center:     entryCandle ? entryCandle.candle_center       : null,
+                        body_center:       entryCandle ? entryCandle.body_center         : null,
+                        high_wick_center:  entryCandle ? entryCandle.high_wick_center    : null,
+                        low_wick_center:   entryCandle ? entryCandle.low_wick_center     : null,
+                        candle_width_center: entryCandle ? entryCandle.candle_width_center : null,
+                        volume:            entryCandle ? entryCandle.volume              : null,
+                        candle_name:       foundationRoot.candle_name,
+                        price_level:       trade.entry_from_price_level,
+                        candle_type:       foundationRoot.candle_type,
+                        candle_position:   foundationRoot.candle_position,
+                        candle_search:     foundationRoot.candle_search,
+                        operator:          foundationRoot.operator,
+                        order_type:        trade.order_type,
+                        entry_from:        trade.entry_from,
+                        entry_from_price_level: trade.entry_from_price_level,
+                        exit_at:           trade.exit_at,
+                        exit_at_price_level: trade.exit_at_price_level,
+                        target:            (rrMode === 'minimum_risk_reward' || rrMode === 'fixed_risk_reward')
+                                            ? rrMode
+                                            : (trade.target || ''),
+                        target_price_level: trade.target_price_level || null,
+
+                        entry_price:       entryPrice,
+                        exit_price:        exitPrice,
+                        target_price:      tgtPrice,
+
+                        resolved_price:    tgtPrice,
+                        resolved_direction: direction,
+                        resolved_risk:     targetRR ? targetRR.risk   : null,
+                        resolved_reward:   targetRR ? targetRR.reward : null,
+                        resolved_ratio:    targetRR ? targetRR.ratio  : null,
+
+                        outcome_status:    outcome.status,
+                        outcome_candle_time: outcome.candle ? outcome.candle.time : null,
+                        outcome_price:     outcome.price,
+                        evaluation_priority: ti + 1,
+                        status:            outcome.status === 'profit' ? 'resolved_win'
+                                            : outcome.status === 'stop' ? 'resolved_loss'
+                                            : 'pending'
+                    });
                 });
             }
 
-            if (hits.length) {
+            if (hits.length || matchedFlat.length) {
                 hits.sort(function (a, b) {
                     var ta = a.entry && a.entry.candle ? a.entry.candle.time : '';
                     var tb = b.entry && b.entry.candle ? b.entry.candle.time : '';
@@ -1791,7 +3212,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     }
                     return String(tb).localeCompare(String(ta));
                 });
-                out.push({ rootName: rootName, tree: tree, hits: hits });
+                out.push({
+                    rootName: rootName,
+                    tree: tree,
+                    hits: hits,
+                    _matchedFlat: matchedFlat
+                });
             }
         });
 
@@ -1808,7 +3234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var targetLvl = trade.target_price_level || '';
 
         var entryPrice  = ptResolvedPrice(hit.entry);
-        var exitPrice   = ptResolvedPrice(hit.exit);
+        var exitPrice   = hit.exit ? ptResolvedPrice(hit.exit) : null;
         var targetPrice = hit.target ? ptResolvedPrice(hit.target) : null;
 
         var html = '';
@@ -1820,13 +3246,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
         html += '  <div class="pt-trade-kv">';
 
-        html += '    <div><span class="k">Entry</span> <span class="v">' + ptEscapeHtml(hit.entry.name) + '</span></div>';
+        html += '    <div><span class="k">Entry</span> <span class="v">' + ptEscapeHtml(hit.entry ? hit.entry.name : '—') + '</span></div>';
         html += '    <div><span class="k">Entry Lvl ' + ptEscapeHtml(entryLvl || '—') + ':</span> '
              +        '<span class="v">' + ptFormatPrice(entryPrice) + '</span></div>';
 
-        html += '    <div><span class="k">Exit</span> <span class="v">' + ptEscapeHtml(hit.exit.name) + '</span></div>';
+        html += '    <div><span class="k">Exit</span> <span class="v">' + ptEscapeHtml(hit.exit ? hit.exit.name : '—') + '</span></div>';
         html += '    <div><span class="k">Exit Lvl ' + ptEscapeHtml(exitLvl || '—') + ':</span> '
-             +        '<span class="v">' + ptFormatPrice(exitPrice) + '</span></div>';
+             +        '<span class="v">' + (exitPrice == null ? '—' : ptFormatPrice(exitPrice)) + '</span></div>';
 
         var targetLabel;
         var isRR = (trade.target_rr_mode === 'fixed_risk_reward' ||
@@ -1839,12 +3265,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             html += '    <div><span class="k">Target</span> <span class="v">' + ptEscapeHtml(targetLabel) + '</span></div>';
 
             if (hit.targetRR) {
-                html += '    <div><span class="k">Target Price (1:' + ptEscapeHtml(String(hit.targetRR.ratio)) + '):</span> '
+                html += '    <div><span class="k">Target Price' + (hit.targetRR.ratio != null ? ' (1:' + ptEscapeHtml(String(hit.targetRR.ratio)) + ')' : '') + ':</span> '
                      +        '<span class="v">' + ptFormatPrice(hit.targetRR.price) + '</span></div>';
-                html += '    <div><span class="k">Risk Distance:</span> '
-                     +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
-                html += '    <div><span class="k">Reward Distance:</span> '
-                     +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
+                if (hit.targetRR.risk != null) {
+                    html += '    <div><span class="k">Risk Distance:</span> '
+                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
+                }
+                if (hit.targetRR.reward != null) {
+                    html += '    <div><span class="k">Reward Distance:</span> '
+                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
+                }
             } else {
                 html += '    <div><span class="k">Target Price:</span> '
                      +        '<span class="v">—</span></div>';
@@ -1863,12 +3293,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             }
 
             if (hit.targetRR) {
-                html += '    <div><span class="k">Trade Risk Reward:</span> '
-                     +        '<span class="v">1:' + ptEscapeHtml(hit.targetRR.ratio.toFixed(2)) + '</span></div>';
-                html += '    <div><span class="k">Risk Distance:</span> '
-                     +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
-                html += '    <div><span class="k">Reward Distance:</span> '
-                     +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
+                if (hit.targetRR.ratio != null) {
+                    html += '    <div><span class="k">Trade Risk Reward:</span> '
+                         +        '<span class="v">1:' + ptEscapeHtml(hit.targetRR.ratio.toFixed(2)) + '</span></div>';
+                }
+                if (hit.targetRR.risk != null) {
+                    html += '    <div><span class="k">Risk Distance:</span> '
+                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
+                }
+                if (hit.targetRR.reward != null) {
+                    html += '    <div><span class="k">Reward Distance:</span> '
+                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
+                }
             }
         }
 
@@ -2073,7 +3509,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return tgt || '—';
     }
 
-
     // ==================== CONFIG PERSISTENCE ====================
     function ptSaveProgrammeConfiguration(snapshot) {
         var body = 'save_configuration=1'
@@ -2084,7 +3519,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
         fetch('programme_configuration.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
         .then(function (r) { return r.json(); })
@@ -2097,8 +3532,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 return;
             }
 
-            // ★ Keep our local Account Management copy in sync so subsequent
-            //   trade scans use the newly-saved R:R values.
             if (data.accountManagement) {
                 PT_ACCOUNT_MGMT = data.accountManagement;
                 ptDebugLine('cfg', 'Account Management updated', PT_ACCOUNT_MGMT);
@@ -2106,7 +3539,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
             PT_TREES = ptGroupRowsIntoTrees(data.rows || []);
             if (typeof window.pcSetTrees === 'function') window.pcSetTrees(PT_TREES);
-            ptRescanTradeMatches();
+
+            PT_CONFIGURED_ROWS_BY_TF = {};
+            PT_PERSISTED_MATCHES     = [];
+            PT_PERSISTED_LOADED      = false;
+            PT_PROJECTED_BY_TF       = {};
+            PT_PROJECTION_MODES      = [];
+            PT_LAST_PERSISTED_SIG    = '';
+            ptUpdateProjBanner();
+
+            ptRescanTradeMatches(true);
             ptScheduleDraw();
             if (typeof window.pcCloseConfiguration === 'function') window.pcCloseConfiguration();
             if (typeof window.pcOnSaveSuccess === 'function') window.pcOnSaveSuccess(data);
@@ -2119,7 +3561,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         });
     }
 
-    // Group flat rows into multi-root trees (matches server shape)
     function ptGroupRowsIntoTrees(rows) {
         var byTree = {};
         rows.forEach(function (r) {
@@ -2190,6 +3631,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var html = '';
         PT_ALL_TIMEFRAMES.forEach(function (tf) {
             var cls = 'pt-tf-btn' + (tf === PT_CURRENT_TIMEFRAME ? ' active' : '');
+            // Mark source TFs used for active projections
+            if (PT_PROJECTION_MODES.some(function (m) { return m.sourceTF === tf; })) {
+                cls += ' pt-tf-proj-src';
+            }
             html += '<button type="button" class="' + cls + '" data-tf="' + ptEscapeHtml(tf) + '" '
                   + 'onclick="ptSelectTimeframe(\'' + tf.replace(/'/g, "\\'") + '\')">'
                   + ptEscapeHtml(tf) + '</button>';
@@ -2197,11 +3642,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         strip.innerHTML = html;
     }
     function ptSelectTimeframe(tf) {
-        if (!tf || tf === PT_CURRENT_TIMEFRAME) return;
-        PT_CURRENT_TIMEFRAME = tf;
-        ptRenderTimeframeStrip();
-        PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
-        ptLoadChart();
+        if (!tf) return;
+        if (tf === PT_CURRENT_TIMEFRAME && !PT_PROJECTION_MODES.length) return;
+        ptSwitchToTimeframe(tf);
     }
 
     // ==================== SYMBOL MODAL ====================
@@ -2238,10 +3681,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     function ptSelectSymbol(sym) {
         if (!sym) return;
         PT_CURRENT_SYMBOL = sym;
+        PT_PERSISTED_MATCHES     = [];
+        PT_PERSISTED_LOADED      = false;
+        PT_PERSISTED_DIRTY       = true;
+        PT_PROJECTED_BY_TF       = {};
+        PT_CONFIGURED_ROWS_BY_TF = {};
+        PT_REQUESTED_AMOUNT      = PT_DEFAULT_AMOUNT;
+        PT_LAST_PERSISTED_SIG    = '';
+        PT_FULL_HISTORY_DONE     = false;
         ptUpdateSymbolLabel();
         ptCloseSymbolModal();
-        PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
+        ptRefreshTradesButton();
+        ptUpdateProjBanner();
         ptLoadChart();
+
+        // Re-project any active projection modes for the new symbol.
+        PT_PROJECTION_MODES.forEach(function (m) {
+            ptEnsureConfiguredRows(m.sourceTF, function () {
+                ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
+            });
+        });
     }
 
     // ==================== CANDLES-AMOUNT MODAL ====================
@@ -2292,6 +3751,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var n    = parseInt(raw, 10);
         if (!raw || isNaN(n) || n <= 0) { if (info) info.textContent = 'Please enter a positive number.'; return; }
         PT_REQUESTED_AMOUNT = n;
+        PT_FULL_HISTORY_DONE = false;
         ptCloseCandlesModal();
         ptLoadChart();
     }
@@ -2320,10 +3780,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (!bodyEl) return;
 
         if (titleEl) titleEl.textContent = 'Candle #' + idx + ' — ' + ptFormatTime(c.time);
-        if (subEl)   subEl.textContent   = PT_CURRENT_SYMBOL + ' · ' + PT_CURRENT_TIMEFRAME;
+        if (subEl)   subEl.textContent   = PT_CURRENT_SYMBOL + ' · ' + PT_CURRENT_TIMEFRAME
+            + (PT_PROJECTION_MODES.length ? '  (projected)' : '');
 
         var rows = [
             ['Timestamp',            c.time],
+            ['Open time',            c.open_time || '—'],
+            ['Close time',           c.close_time || '—'],
             ['Open',                 ptFormatPrice(c.open)],
             ['High',                 ptFormatPrice(c.high)],
             ['Low',                  ptFormatPrice(c.low)],
@@ -2333,6 +3796,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             ['High wick center',     c.high_wick_center    != null ? ptFormatPrice(c.high_wick_center)    : '—'],
             ['Low wick center',      c.low_wick_center     != null ? ptFormatPrice(c.low_wick_center)     : '—'],
             ['Candle width center',  c.candle_width_center != null ? ptFormatPrice(c.candle_width_center) : '—'],
+            ['Volume',               c.volume              != null ? String(c.volume)                     : '—'],
             ['Type',                 (c.close > c.open ? 'bullish' : (c.close < c.open ? 'bearish' : 'flat'))]
         ];
 
@@ -2356,7 +3820,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     // ==================== LOAD CHART ====================
     function ptLoadChart() {
         if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) { ptShowEmpty('Select a symbol and timeframe.'); return; }
-        ptDebugLine('data', 'Loading chart', { symbol: PT_CURRENT_SYMBOL, timeframe: PT_CURRENT_TIMEFRAME });
+        ptDebugLine('data', 'Loading chart', {
+            symbol: PT_CURRENT_SYMBOL, timeframe: PT_CURRENT_TIMEFRAME,
+            projections: PT_PROJECTION_MODES.map(function (m) { return m.sourceTF + '→' + m.targetTF; })
+        });
         PT_LOAD_TOKEN++;
         PT_CANDLES = [];
         PT_HOVER_INDEX = -1;
@@ -2365,8 +3832,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_IS_LOADING_OLDER = false;
         PT_INITIAL_LOADED = false;
         PT_CONSECUTIVE_ERRORS = 0;
-        PT_TRADE_SCAN_DIRTY  = true;
-        PT_TRADE_MATCH_COUNT = 0;
+        PT_FULL_HISTORY_DONE = false;
         PT_VIEW.offsetX = 0; PT_VIEW.offsetY = 0; PT_VIEW.priceScale = 1.0; PT_VIEW.candleWidth = 9;
         ptShowLoading(true); ptShowEmpty(null); ptClearCanvas();
         ptFetchChunk(null, PT_LOAD_TOKEN, true);
@@ -2422,14 +3888,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 ptClearCanvas();
                 ptShowEmpty('No candle records found for this symbol / timeframe.');
                 PT_HAS_MORE_OLDER = false;
+                ptRescanTradeMatches(true);
                 return;
             }
             PT_HAS_MORE_OLDER = !!data.has_more && chunk.length > 0;
             if (PT_REQUESTED_AMOUNT !== null && PT_CANDLES.length >= PT_REQUESTED_AMOUNT) PT_HAS_MORE_OLDER = false;
             PT_IS_LOADING_OLDER = false;
             ptUpdateJumpLatestVisibility();
+
             if (isInitial) {
-                ptRescanTradeMatches();
                 ptAutoLoadUpToTarget(token);
             }
         })
@@ -2455,13 +3922,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (PT_REQUESTED_AMOUNT !== null && PT_CANDLES.length >= PT_REQUESTED_AMOUNT) {
             ptShowBgLoading(false); ptFitViewportToCandles(); ptScheduleDraw();
             ptCenterOnLatest(); ptScheduleDraw(); ptUpdateJumpLatestVisibility();
-            ptRescanTradeMatches();
+            ptAfterChartLoaded();
             return;
         }
         if (!PT_HAS_MORE_OLDER) {
             ptShowBgLoading(false); ptFitViewportToCandles(); ptScheduleDraw();
             ptCenterOnLatest(); ptScheduleDraw(); ptUpdateJumpLatestVisibility();
-            ptRescanTradeMatches();
+            ptAfterChartLoaded();
             return;
         }
         if (!PT_CANDLES.length) { ptShowBgLoading(false); return; }
@@ -2502,7 +3969,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     PT_HAS_MORE_OLDER = false;
                     ptShowBgLoading(true, true);
                     ptSetBgLoadingText('Stopped loading (server limit).');
-                    ptRescanTradeMatches();
                 } else setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
                 return;
             }
@@ -2521,7 +3987,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 ptFitViewportToCandles(); ptScheduleDraw();
                 ptCenterOnLatest(); ptScheduleDraw();
                 ptShowBgLoading(false);
-                ptRescanTradeMatches();
+                ptAfterChartLoaded();
                 return;
             }
             setTimeout(function () { ptAutoLoadUpToTarget(token); }, 25);
@@ -2533,9 +3999,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 PT_HAS_MORE_OLDER = false;
                 ptShowBgLoading(true, true);
                 ptSetBgLoadingText('Stopped loading (network/DB limit).');
-                ptRescanTradeMatches();
             } else setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
         });
+    }
+
+    /**
+     * Called once the chart has finished loading its initial batch.
+     * Persists the native snapshot. Projections are refreshed here too.
+     */
+    function ptAfterChartLoaded() {
+        if (!PT_CANDLES.length) return;
+
+        if (PT_PROJECTION_MODES.length) {
+            // Re-evaluate outcomes against the freshly loaded candles.
+            ptReevaluateProjectedTradeOutcomes();
+
+            // Re-project any source TFs whose projected rows aren't fully
+            // represented in the loaded candle set.
+            var timeSet = {};
+            PT_CANDLES.forEach(function (c) { timeSet[c.time] = true; });
+
+            PT_PROJECTION_MODES.forEach(function (m) {
+                var list = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+                var missing = !list.length;
+                if (!missing) {
+                    for (var i = 0; i < list.length; i++) {
+                        if (!timeSet[list[i].candle_time]) { missing = true; break; }
+                    }
+                }
+                if (missing) {
+                    ptDebugLine('data', 'Re-projecting after chart load', {
+                        sourceTF: m.sourceTF, candleCount: PT_CANDLES.length
+                    });
+                    ptEnsureConfiguredRows(m.sourceTF, function () {
+                        ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
+                    });
+                }
+            });
+
+            ptUpdateProjBanner();
+            ptRefreshTradesButton();
+            ptScheduleDraw();
+            return;
+        }
+
+        // Native mode
+        if (PT_HAS_MORE_OLDER && !PT_FULL_HISTORY_DONE) {
+            ptDebugLine('data', 'Chart loaded — deferring persist until full history', {
+                candles: PT_CANDLES.length, hasMore: PT_HAS_MORE_OLDER
+            });
+            return;
+        }
+
+        if (!PT_FULL_HISTORY_DONE) {
+            PT_FULL_HISTORY_DONE = true;
+        }
+
+        ptDebugLine('data', 'Post-load scan (native)', {
+            symbol: PT_CURRENT_SYMBOL,
+            timeframe: PT_CURRENT_TIMEFRAME,
+            candles: PT_CANDLES.length
+        });
+        ptRescanTradeMatches(true);
+
+        var tradesModal = document.getElementById('ptTradesModal');
+        if (tradesModal && tradesModal.classList.contains('active')) {
+            ptRenderTradesResults();
+        }
     }
 
     function ptShowBgLoading(on, warn) {
@@ -2801,7 +4331,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_CTX.fillText(priceText, chipX2 + boxW2 / 2, chipY2 + boxH2 / 2 + 0.5);
         }
 
+        // ---- Draw native programme drawings ----
         ptDrawProgrammeDrawings(pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+
+        // ---- Draw ALL projected drawings (from every source TF) ----
+        // We iterate over PT_PROJECTION_MODES and call a variant of the
+        // projected-drawings renderer that uses that TF's row set.
+        if (PT_PROJECTION_MODES.length) {
+            PT_PROJECTION_MODES.forEach(function (m) {
+                var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+                if (!rows.length) return;
+                ptDrawProjectedDrawingRows(rows, pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+            });
+        }
+
+        // ---- Long/short overlays ----
+        if (PT_LONG_SHORT_ON) {
+            // Native overlays
+            ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+            // Projected overlays
+            if (PT_PROJECTION_MODES.length) {
+                PT_PROJECTION_MODES.forEach(function (m) {
+                    var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+                    if (!rows.length) return;
+                    ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+                });
+            }
+        }
 
         PT_CANVAS._ptStep     = step;
         PT_CANVAS._ptBaseX    = baseX;
@@ -2812,7 +4368,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     // ============================================================
-    // DRAWING ENGINE (multi-root team evaluation)
+    // DRAWING ENGINE (multi-root team evaluation) — native mode
     // ============================================================
     function ptCandleTypeMatches(type, candle) {
         if (!candle) return false;
@@ -3192,26 +4748,346 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_DRAW_CTX.lineTo(x2, y2);
             PT_DRAW_CTX.stroke();
         }
+    }
 
-        // ★ Long/Short risk/reward overlay — TradingView-style transparent boxes.
-        //   Only rendered when PT_LONG_SHORT_ON is true.
-        if (PT_LONG_SHORT_ON) {
-            ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+    // Generic projected-drawings renderer for a given projected row set.
+    // This is the old ptDrawProjectedDrawings logic, but takes the rows as
+    // an argument so we can call it once per active source TF.
+    function ptDrawProjectedDrawingRows(rows, pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
+        if (!PT_DRAW_CTX) return;
+        if (!rows.length) return;
+        if (!PT_CANDLES.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        var projByName = {};
+        var projByTreeRole = {};
+        rows.forEach(function (r) {
+            var nm = (r.candle_name || '').trim();
+            if (nm) {
+                if (!projByName[nm]) projByName[nm] = [];
+                projByName[nm].push(r);
+            }
+            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
+            if (!projByTreeRole[key]) projByTreeRole[key] = [];
+            projByTreeRole[key].push(r);
+        });
+
+        PT_DRAW_CTX.save();
+        PT_DRAW_CTX.lineWidth = 1.6;
+        PT_DRAW_CTX.setLineDash([]);
+
+        var drawnCount = 0;
+
+        rows.forEach(function (r) {
+            if (r.row_role !== 'matched_drawing') return;
+            if (r.drawing_tools !== 'trendline') return;
+            if (!r.draw_from || !r.draw_from_price_level) return;
+            if (!r.draw_to) return;
+
+            var fromIdx = idxByTime[r.candle_time];
+            if (fromIdx == null) {
+                if (r.open_time) fromIdx = idxByTime[r.open_time];
+            }
+            if (fromIdx == null) return;
+
+            var fromCandle = PT_CANDLES[fromIdx];
+            if (!fromCandle) return;
+            var fromVal = fromCandle[r.draw_from_price_level];
+            if (fromVal == null) return;
+
+            var x1 = baseX + fromIdx * step + step / 2;
+            var y1 = pToY(fromVal);
+            var stroke = ptResolveDrawingColor(r.drawing_color);
+            var toKey = r.draw_to || '';
+
+            function resolveTo(key) {
+                if (!key) return null;
+
+                var bare = key.replace(/_(axis|specific_price_level)$/, '');
+                var candidates = projByName[bare] || [];
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i].tree_id === r.tree_id) {
+                        var ci = idxByTime[candidates[i].candle_time];
+                        if (ci != null) return ci;
+                    }
+                }
+                for (var j = 0; j < candidates.length; j++) {
+                    var cj = idxByTime[candidates[j].candle_time];
+                    if (cj != null) return cj;
+                }
+
+                if (bare === 'ROOT') {
+                    var roots = projByTreeRole[(r.tree_id || 0) + '|matched_root'] || [];
+                    for (var k = 0; k < roots.length; k++) {
+                        if (roots[k].is_foundation) {
+                            var rk = idxByTime[roots[k].candle_time];
+                            if (rk != null) return rk;
+                        }
+                    }
+                    if (roots.length) {
+                        var r0 = idxByTime[roots[0].candle_time];
+                        if (r0 != null) return r0;
+                    }
+                }
+
+                var refMatch = /^REF:(\d+)$/.exec(bare);
+                if (refMatch) {
+                    var n = parseInt(refMatch[1], 10);
+                    var refs = projByTreeRole[(r.tree_id || 0) + '|matched_ref'] || [];
+                    if (refs[n]) {
+                        var rn = idxByTime[refs[n].candle_time];
+                        if (rn != null) return rn;
+                    }
+                }
+
+                var rrMatch = /^ROOT:(\d+):REF:(\d+)$/.exec(bare);
+                if (rrMatch) {
+                    var m = parseInt(rrMatch[2], 10);
+                    var refs2 = projByTreeRole[(r.tree_id || 0) + '|matched_ref'] || [];
+                    if (refs2[m]) {
+                        var rm = idxByTime[refs2[m].candle_time];
+                        if (rm != null) return rm;
+                    }
+                }
+
+                return null;
+            }
+
+            var specMatch2 = /^(.+)_specific_price_level$/.exec(toKey);
+            if (specMatch2) {
+                var toIdx = resolveTo(specMatch2[1]);
+                if (toIdx != null && r.draw_to_price_level) {
+                    var toCandle = PT_CANDLES[toIdx];
+                    if (toCandle && toCandle[r.draw_to_price_level] != null) {
+                        drawSegment(x1, y1, baseX + toIdx * step + step / 2,
+                            pToY(toCandle[r.draw_to_price_level]), stroke);
+                        drawnCount++;
+                        return;
+                    }
+                }
+                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
+                drawnCount++;
+                return;
+            }
+
+            var axisMatch2 = /^(.+)_axis$/.exec(toKey);
+            if (axisMatch2) {
+                var axisIdx = resolveTo(axisMatch2[1]);
+                if (axisIdx != null) {
+                    drawSegment(x1, y1, baseX + axisIdx * step + step / 2, y1, stroke);
+                    drawnCount++;
+                    return;
+                }
+                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
+                drawnCount++;
+                return;
+            }
+
+            if (toKey === 'any_candle_intercept') {
+                var found = null;
+                for (var q = fromIdx + 1; q < PT_CANDLES.length; q++) {
+                    var cn = PT_CANDLES[q];
+                    if (!cn) continue;
+                    if (fromVal <= cn.high && fromVal >= cn.low) { found = q; break; }
+                }
+                if (found == null) {
+                    for (var q2 = fromIdx - 1; q2 >= 0; q2--) {
+                        var cn2 = PT_CANDLES[q2];
+                        if (!cn2) continue;
+                        if (fromVal <= cn2.high && fromVal >= cn2.low) { found = q2; break; }
+                    }
+                }
+                if (found != null) {
+                    drawSegment(x1, y1, baseX + found * step + step / 2, y1, stroke);
+                    drawnCount++;
+                    return;
+                }
+                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
+                drawnCount++;
+                return;
+            }
+
+            var namedIdx = resolveTo(toKey);
+            if (namedIdx != null) {
+                drawSegment(x1, y1, baseX + namedIdx * step + step / 2, y1, stroke);
+                drawnCount++;
+                return;
+            }
+
+            drawSegment(x1, y1, x1 + step * 6, y1, stroke);
+            drawnCount++;
+        });
+
+        PT_DRAW_CTX.restore();
+
+        function drawSegment(x1, y1, x2, y2, stroke) {
+            if (y1 < chartTop - 2000 || y1 > chartBottom + 2000) return;
+            if (y2 < chartTop - 2000 || y2 > chartBottom + 2000) return;
+            PT_DRAW_CTX.strokeStyle = stroke || 'rgba(74,123,216,0.95)';
+            PT_DRAW_CTX.beginPath();
+            PT_DRAW_CTX.moveTo(x1, y1);
+            PT_DRAW_CTX.lineTo(x2, y2);
+            PT_DRAW_CTX.stroke();
         }
     }
 
-    /**
-     * Draw TradingView-style long/short risk/reward boxes for every matched
-     * trade across every tree.
-     *
-     * For each hit with a resolved entry, exit (stoploss) and target price:
-     *   - A red transparent box from entry price → stoploss price (risk zone)
-     *   - A green transparent box from entry price → target price (reward zone)
-     *   - Both boxes span from the entry candle's LEFT body edge to the
-     *     resolution candle's RIGHT body edge.
-     *
-     * No borders and no center line are drawn — fills only.
-     */
+    // Long/short overlay renderer for a specific projected row set.
+    function ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
+        if (!PT_DRAW_CTX) return;
+        if (!PT_CANDLES.length) return;
+        if (!rows.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        var projByName = {};
+        var projByTreeRole = {};
+        rows.forEach(function (r) {
+            var nm = (r.candle_name || '').trim();
+            if (nm) {
+                if (!projByName[nm]) projByName[nm] = [];
+                projByName[nm].push(r);
+            }
+            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
+            if (!projByTreeRole[key]) projByTreeRole[key] = [];
+            projByTreeRole[key].push(r);
+        });
+
+        var halfBody = PT_VIEW.candleWidth / 2;
+
+        PT_DRAW_CTX.save();
+
+        rows.forEach(function (entryRow) {
+            if (entryRow.row_role !== 'matched_trade') return;
+            if (!entryRow.resolved_direction) return;
+
+            var treeId = entryRow.tree_id || 0;
+
+            var entryIdx = idxByTime[entryRow.candle_time];
+            if (entryIdx == null) return;
+            if (entryIdx > lastVisible) return;
+
+            var entryPrice = (entryRow.entry_price != null)
+                ? entryRow.entry_price
+                : (entryRow.candle_center != null ? entryRow.candle_center : entryRow.close);
+            if (entryPrice == null) return;
+
+            function resolveTo(key) {
+                if (!key) return null;
+                var bare = key.replace(/_(axis|specific_price_level)$/, '');
+                var candidates = projByName[bare] || [];
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i].tree_id === treeId) {
+                        var ci = idxByTime[candidates[i].candle_time];
+                        if (ci != null) return ci;
+                    }
+                }
+                for (var j = 0; j < candidates.length; j++) {
+                    var cj = idxByTime[candidates[j].candle_time];
+                    if (cj != null) return cj;
+                }
+                if (bare === 'ROOT') {
+                    var roots = projByTreeRole[treeId + '|matched_root'] || [];
+                    for (var k = 0; k < roots.length; k++) {
+                        if (roots[k].is_foundation) {
+                            var rk = idxByTime[roots[k].candle_time];
+                            if (rk != null) return rk;
+                        }
+                    }
+                    if (roots.length) {
+                        var r0 = idxByTime[roots[0].candle_time];
+                        if (r0 != null) return r0;
+                    }
+                }
+                var refMatch = /^REF:(\d+)$/.exec(bare);
+                if (refMatch) {
+                    var n = parseInt(refMatch[1], 10);
+                    var refs = projByTreeRole[treeId + '|matched_ref'] || [];
+                    if (refs[n]) {
+                        var rn = idxByTime[refs[n].candle_time];
+                        if (rn != null) return rn;
+                    }
+                }
+                return null;
+            }
+
+            var exitIdx   = null;
+            var exitPrice = (entryRow.exit_price != null) ? entryRow.exit_price : null;
+            if (entryRow.exit_at) {
+                exitIdx = resolveTo(entryRow.exit_at);
+                if (exitPrice == null && exitIdx != null) {
+                    var ec = PT_CANDLES[exitIdx];
+                    if (ec) {
+                        var lvl = entryRow.exit_at_price_level;
+                        exitPrice = (lvl && ec[lvl] != null) ? ec[lvl] : ec.close;
+                    }
+                }
+            }
+
+            var targetIdx   = null;
+            var targetPrice = (entryRow.target_price != null)
+                ? entryRow.target_price
+                : (entryRow.resolved_price != null ? entryRow.resolved_price : null);
+
+            var isRR = (entryRow.target === 'minimum_risk_reward' ||
+                        entryRow.target === 'fixed_risk_reward');
+
+            if (!isRR && entryRow.target) {
+                targetIdx = resolveTo(entryRow.target);
+                if (targetPrice == null && targetIdx != null) {
+                    var tc = PT_CANDLES[targetIdx];
+                    if (tc) {
+                        var lvl2 = entryRow.target_price_level;
+                        targetPrice = (lvl2 && tc[lvl2] != null) ? tc[lvl2] : tc.close;
+                    }
+                }
+            }
+
+            if (exitPrice == null || targetPrice == null) return;
+
+            var resolutionIdx = lastVisible;
+            if (entryRow.outcome_candle_time && idxByTime[entryRow.outcome_candle_time] != null) {
+                resolutionIdx = idxByTime[entryRow.outcome_candle_time];
+            } else if (targetIdx != null) {
+                resolutionIdx = targetIdx;
+            } else if (exitIdx != null) {
+                resolutionIdx = exitIdx;
+            }
+            if (resolutionIdx < entryIdx) resolutionIdx = entryIdx;
+            if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
+
+            if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
+
+            var entryCenterX      = baseX + entryIdx * step + step / 2;
+            var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
+
+            var x1 = entryCenterX - halfBody;
+            var x2 = resolutionCenterX + halfBody;
+            if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
+
+            var yEntry  = pToY(entryPrice);
+            var yStop   = pToY(exitPrice);
+            var yTarget = pToY(targetPrice);
+
+            if (yEntry < chartTop - 4000 || yEntry > chartBottom + 4000) return;
+
+            var redTop    = Math.min(yEntry, yStop);
+            var redBottom = Math.max(yEntry, yStop);
+            PT_DRAW_CTX.fillStyle = 'rgba(231, 76, 60, 0.12)';
+            PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
+
+            var greenTop    = Math.min(yEntry, yTarget);
+            var greenBottom = Math.max(yEntry, yTarget);
+            PT_DRAW_CTX.fillStyle = 'rgba(39, 174, 96, 0.12)';
+            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
+        });
+
+        PT_DRAW_CTX.restore();
+    }
+
+    // Native long/short overlays (unchanged from original)
     function ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
         if (!PT_DRAW_CTX) return;
         if (!PT_CANDLES.length) return;
@@ -3263,20 +5139,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
                 if (yEntry < chartTop - 2000 || yEntry > chartBottom + 2000) return;
 
-                // ── Red risk box (entry → stoploss) — fill only ──
                 var redTop    = Math.min(yEntry, yStop);
                 var redBottom = Math.max(yEntry, yStop);
                 PT_DRAW_CTX.fillStyle = 'rgba(231, 76, 60, 0.12)';
                 PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
 
-                // ── Green reward box (entry → target) — fill only ──
                 var greenTop    = Math.min(yEntry, yTarget);
                 var greenBottom = Math.max(yEntry, yTarget);
                 PT_DRAW_CTX.fillStyle = 'rgba(39, 174, 96, 0.12)';
                 PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
-
-                // NOTE: No entry line, no border, no outline.
-                // The two transparent boxes are the entire visualization.
             });
         });
 
