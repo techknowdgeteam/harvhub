@@ -34,7 +34,7 @@
             display: flex;
             flex-direction: column;
             gap: 15px;
-            min-width: 0; /* critical: allows grid child to shrink below content size */
+            min-width: 0;
         }
         h1 {
             font-size: 24px;
@@ -74,13 +74,8 @@
             font-weight: bold;
             transition: background-color 0.2s;
         }
-        button:hover {
-            background-color: #0056b3;
-        }
-        button:disabled {
-            background-color: #6c757d;
-            cursor: not-allowed;
-        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
         .hint {
             font-size: 12px;
             color: #666;
@@ -88,7 +83,66 @@
         }
 
         /* ─────────────────────────────────────────────────────────
-           SQL QUERY DISPLAY BLOCK (shows what ran)
+           EXEC STATUS BANNER — the machine-readable state element
+           ───────────────────────────────────────────────────────── */
+        #exec-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid transparent;
+            transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+        }
+        #exec-status[data-state="idle"] {
+            background: #eef1f4; border-color: #d3d8dd; color: #4a5159;
+        }
+        #exec-status[data-state="loading"] {
+            background: #e7f1ff; border-color: #b6d4fe; color: #084298;
+        }
+        #exec-status[data-state="success"] {
+            background: #d4edda; border-color: #c3e6cb; color: #155724;
+        }
+        #exec-status[data-state="empty"] {
+            background: #fff3cd; border-color: #ffe69c; color: #664d03;
+        }
+        #exec-status[data-state="error"] {
+            background: #f8d7da; border-color: #f5c6cb; color: #721c24;
+        }
+        #exec-status .status-icon {
+            width: 18px; height: 18px;
+            display: inline-block;
+            text-align: center;
+            line-height: 18px;
+            flex-shrink: 0;
+        }
+        #exec-status[data-state="loading"] .status-icon::before {
+            content: "";
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid #084298;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: exec-spin 0.7s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes exec-spin { to { transform: rotate(360deg); } }
+        #exec-status[data-state="success"] .status-icon::before { content: "✔"; }
+        #exec-status[data-state="empty"]   .status-icon::before { content: "○"; }
+        #exec-status[data-state="error"]   .status-icon::before { content: "✖"; }
+        #exec-status[data-state="idle"]    .status-icon::before { content: "•"; }
+        #exec-status .status-meta {
+            margin-left: auto;
+            font-weight: 400;
+            font-size: 12px;
+            opacity: 0.8;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        /* ─────────────────────────────────────────────────────────
+           SQL QUERY DISPLAY BLOCK
            ───────────────────────────────────────────────────────── */
         .sql-query-display {
             margin-top: 15px;
@@ -133,24 +187,23 @@
         }
 
         /* ─────────────────────────────────────────────────────────
-           TABLE CONTAINER — horizontal scroll wrapper
+           TABLE CONTAINER
            ───────────────────────────────────────────────────────── */
         .table-scroll-container {
             width: 100%;
-            overflow-x: auto;              /* horizontal scroll if table too wide */
+            overflow-x: auto;
             overflow-y: auto;
-            max-height: 70vh;              /* vertical scroll if too tall */
+            max-height: 70vh;
             border: 1px solid #ddd;
             border-radius: 4px;
             background: #fff;
             margin-top: 15px;
             -webkit-overflow-scrolling: touch;
         }
-
         table {
             border-collapse: collapse;
             background-color: #fff;
-            width: max-content;            /* let table grow as wide as needed */
+            width: max-content;
             min-width: 100%;
             table-layout: auto;
         }
@@ -165,23 +218,18 @@
             background-color: #f8f9fa;
             color: #333;
             font-weight: bold;
-            position: sticky;              /* keep header visible while scrolling */
+            position: sticky;
             top: 0;
             z-index: 2;
         }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
+        tr:nth-child(even) { background-color: #f9f9f9; }
 
-        /* ─────────────────────────────────────────────────────────
-           PER-CELL SCROLL — long content scrolls inside the cell
-           ───────────────────────────────────────────────────────── */
         td .cell-content,
         th .cell-content {
-            max-width: 360px;              /* cap column width */
-            max-height: 120px;             /* cap row height */
-            overflow: auto;                /* scroll inside cell */
-            white-space: pre-wrap;         /* preserve newlines, wrap long text */
+            max-width: 360px;
+            max-height: 120px;
+            overflow: auto;
+            white-space: pre-wrap;
             word-break: break-word;
             display: block;
             font-family: 'Consolas', 'Monaco', monospace;
@@ -191,19 +239,12 @@
         }
         td .cell-content::-webkit-scrollbar,
         th .cell-content::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
+            width: 8px; height: 8px;
         }
         td .cell-content::-webkit-scrollbar-thumb,
         th .cell-content::-webkit-scrollbar-thumb {
-            background: #bbb;
-            border-radius: 4px;
+            background: #bbb; border-radius: 4px;
         }
-        td .cell-content::-webkit-scrollbar-thumb:hover,
-        th .cell-content::-webkit-scrollbar-thumb:hover {
-            background: #888;
-        }
-
         th .cell-content {
             background: transparent;
             max-height: none;
@@ -237,16 +278,32 @@
             color: #333;
         }
         @media (max-width: 768px) {
-            .container {
-                grid-template-columns: 1fr;
-            }
+            .container { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
     <h1>Database Query Interface</h1>
 
-    <div id="message" class="success"></div>
+    <!-- ─────────────────────────────────────────────────────────
+         MACHINE-READABLE EXEC STATUS
+         State machine: idle → loading → success | empty | error
+         The scraper polls #exec-status[data-state], NOT the table.
+         ───────────────────────────────────────────────────────── -->
+    <div id="exec-status"
+         data-state="idle"
+         data-rows="0"
+         data-affected="0"
+         data-query-id=""
+         role="status"
+         aria-live="polite">
+        <span class="status-icon" aria-hidden="true"></span>
+        <span class="status-label">Waiting…</span>
+        <span class="status-meta"></span>
+    </div>
+
+    <div id="message" class="success" style="display:none;"></div>
+
     <div class="container">
         <div class="sidebar">
             <div>
@@ -264,7 +321,6 @@
             <div class="hint">Press <b>Enter</b> to execute • <b>Shift+Enter</b> for new line</div>
             <button id="execute-btn" onclick="executeQuery()">Execute Query</button>
 
-            <!-- SQL Query display (what was run) -->
             <div id="sql-query-display" class="sql-query-display" style="display:none;">
                 <div class="sql-query-header">
                     <span>SQL Query</span>
@@ -284,12 +340,56 @@
         let cachedTables = [];
         let cachedColumns = [];
         let isExecuting = false;
-        let isInitialLoad = true;      // prevents auto-execute on the very first table load
-        let lastExecutedTable = null;  // prevents re-executing the same table repeatedly
+        let isInitialLoad = true;
+        let lastExecutedTable = null;
+        let _lastQueryId = 0;
 
         // ─────────────────────────────────────────────────────────
-        // Escape HTML safely
+        // EXEC STATUS STATE MACHINE
+        // Every transition here is observable by the scraper.
         // ─────────────────────────────────────────────────────────
+        function setExecStatus(state, opts = {}) {
+            const el = document.getElementById('exec-status');
+            if (!el) return;
+
+            const label = el.querySelector('.status-label');
+            const meta  = el.querySelector('.status-meta');
+
+            el.dataset.state = state;
+
+            if (opts.rows !== undefined)     el.dataset.rows     = String(opts.rows);
+            if (opts.affected !== undefined) el.dataset.affected = String(opts.affected);
+            if (opts.queryId !== undefined)  el.dataset.queryId  = String(opts.queryId);
+
+            switch (state) {
+                case 'idle':
+                    label.textContent = 'Waiting…';
+                    meta.textContent  = '';
+                    break;
+                case 'loading':
+                    label.textContent = 'Loading… running query';
+                    meta.textContent  = opts.queryId ? `#${opts.queryId}` : '';
+                    break;
+                case 'success':
+                    label.textContent = 'Results ready';
+                    meta.textContent  = `${opts.rows ?? 0} row(s)`;
+                    break;
+                case 'empty':
+                    label.textContent = 'Query completed — 0 rows';
+                    meta.textContent  = opts.queryId ? `#${opts.queryId}` : '';
+                    break;
+                case 'error':
+                    label.textContent = 'Error: ' + (opts.message || 'unknown');
+                    meta.textContent  = opts.queryId ? `#${opts.queryId}` : '';
+                    break;
+                default:
+                    label.textContent = state;
+            }
+        }
+
+        // Expose for manual override / debugging
+        window.setExecStatus = setExecStatus;
+
         function escapeHtml(str) {
             if (str === null || str === undefined) return 'NULL';
             return String(str)
@@ -300,21 +400,15 @@
                 .replace(/'/g, '&#39;');
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Display the SQL query that was run
-        // ─────────────────────────────────────────────────────────
         function showSqlQuery(sql, source) {
             const display = document.getElementById('sql-query-display');
-            const body = document.getElementById('sql-query-body');
-            const badge = document.getElementById('sql-query-source');
+            const body    = document.getElementById('sql-query-body');
+            const badge   = document.getElementById('sql-query-source');
             body.textContent = sql;
             badge.textContent = source || 'manual';
             display.style.display = 'block';
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Build a <table> inside a horizontal-scroll container
-        // ─────────────────────────────────────────────────────────
         function buildTable(columnNames, rows) {
             let html = '<div class="table-scroll-container"><table><thead><tr>';
             columnNames.forEach(name => {
@@ -334,9 +428,6 @@
             return html;
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Fetch and populate tables
-        // ─────────────────────────────────────────────────────────
         function loadTables() {
             fetch('phpmyadmin_tablesfetch.php')
                 .then(response => response.json())
@@ -348,6 +439,7 @@
                     if (data.status !== 'success') {
                         messageDiv.className = 'error';
                         messageDiv.textContent = data.message;
+                        messageDiv.style.display = 'block';
                         return;
                     }
 
@@ -356,7 +448,6 @@
                         cachedTables = newTables;
                         const selectedTable = currentTable && newTables.includes(currentTable) ? currentTable : (newTables[0] || '');
 
-                        // Rebuild options
                         tableSelect.innerHTML = '';
                         newTables.forEach(table => {
                             const option = document.createElement('option');
@@ -368,10 +459,6 @@
 
                         if (selectedTable) {
                             loadColumns(selectedTable);
-
-                            // ── AUTO-EXECUTE the table's DESCRIBE ──
-                            // Skip on the very first load (don't want an initial auto-run)
-                            // Skip if it's the same table we already executed
                             if (!isInitialLoad && selectedTable !== lastExecutedTable) {
                                 autoExecuteTableQuery(selectedTable);
                             }
@@ -391,19 +478,16 @@
                         }
                     }
 
-                    // After first successful load, allow auto-execute
                     isInitialLoad = false;
                 })
                 .catch(error => {
                     const messageDiv = document.getElementById('message');
                     messageDiv.className = 'error';
                     messageDiv.textContent = 'Error fetching tables: ' + error.message;
+                    messageDiv.style.display = 'block';
                 });
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Fetch and populate columns
-        // ─────────────────────────────────────────────────────────
         function loadColumns(table) {
             if (!table) return;
 
@@ -417,6 +501,7 @@
                     if (data.status !== 'success') {
                         messageDiv.className = 'error';
                         messageDiv.textContent = data.message;
+                        messageDiv.style.display = 'block';
                         columnSelect.innerHTML = '';
                         return;
                     }
@@ -447,32 +532,21 @@
                     const messageDiv = document.getElementById('message');
                     messageDiv.className = 'error';
                     messageDiv.textContent = 'Error fetching columns: ' + error.message;
+                    messageDiv.style.display = 'block';
                     document.getElementById('column-select').innerHTML = '';
                 });
         }
 
-        // ─────────────────────────────────────────────────────────
-        // AUTO-EXECUTE: DESCRIBE {table}
-        // ─────────────────────────────────────────────────────────
         function autoExecuteTableQuery(tableName) {
             if (!tableName) return;
-            // Sanitize table name for SQL (defensive — comes from server)
             const safeTable = String(tableName).replace(/[^a-zA-Z0-9_]/g, '');
             if (!safeTable) return;
 
-            // ⬇️ CHANGED: DESCRIBE instead of SELECT * LIMIT 500
             const sql = `DESCRIBE \`${safeTable}\``;
-            // Populate the textarea so it's visible & editable
             document.getElementById('sql-query').value = sql;
-            // Run it, marking source as "auto: table select"
             executeQuery({ sql: sql, source: 'auto: table select' });
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Execute SQL query (main entry point)
-        //   options.sql    → optional SQL to run (bypasses textarea)
-        //   options.source → badge label: 'manual' | 'auto: table select'
-        // ─────────────────────────────────────────────────────────
         function executeQuery(options = {}) {
             if (isExecuting) return;
 
@@ -491,19 +565,27 @@
             if (!sqlQuery) {
                 messageDiv.className = 'error';
                 messageDiv.textContent = 'Please enter an SQL query.';
+                messageDiv.style.display = 'block';
                 resultDiv.innerHTML = '';
                 columnDataDiv.innerHTML = '';
+                setExecStatus('error', { message: 'empty query' });
                 return;
             }
 
-            // Show the SQL command being executed
+            const queryId = ++_lastQueryId;
+
             showSqlQuery(sqlQuery, source);
+
+            // ── SIGNAL: LOADING ──────────────────────────────────
+            setExecStatus('loading', { queryId: queryId });
+            resultDiv.innerHTML = '';
+            columnDataDiv.innerHTML = '';
+            messageDiv.style.display = 'none';
 
             isExecuting = true;
             executeBtn.disabled = true;
             executeBtn.textContent = 'Executing...';
 
-            // Remember which table we auto-ran to avoid repeat loops
             if (source === 'auto: table select') {
                 const m = sqlQuery.match(/(?:FROM|DESCRIBE|INTO|UPDATE|TABLE)\s+`?([a-zA-Z0-9_]+)`?/i);
                 if (m) lastExecutedTable = m[1];
@@ -518,14 +600,12 @@
                 .then(data => {
                     messageDiv.className = data.status === 'success' ? 'success' : 'error';
                     messageDiv.textContent = data.message;
+                    messageDiv.style.display = 'block';
                     resultDiv.innerHTML = '';
                     columnDataDiv.innerHTML = '';
 
                     if (data.status === 'success') {
-                        // Only clear the textarea for manual runs
-                        if (source === 'manual') {
-                            queryInput.value = '';
-                        }
+                        if (source === 'manual') queryInput.value = '';
 
                         const columnMeta = (data.data && data.data.columnMeta) || [];
                         const rows = (data.data && data.data.rows) || [];
@@ -554,12 +634,34 @@
                             } else {
                                 resultDiv.innerHTML = '<h3>Query Results</h3>' + buildTable(columnNames, rows);
                             }
+
+                            // ── SIGNAL: SUCCESS ───────────────────
+                            setExecStatus('success', {
+                                rows: rows.length,
+                                queryId: queryId
+                            });
                         } else if (data.data && data.data.affectedRows !== undefined) {
                             const queryType = (sqlQuery.match(/^\s*(UPDATE|INSERT|ALTER|DELETE|CREATE|DROP|TRUNCATE)/i)?.[1] || 'Query').toUpperCase();
                             resultDiv.innerHTML = `<p>${queryType} executed successfully. Affected rows: ${data.data.affectedRows}</p>`;
+
+                            // ── SIGNAL: SUCCESS (non-read) ────────
+                            setExecStatus('success', {
+                                rows: 0,
+                                affected: data.data.affectedRows,
+                                queryId: queryId
+                            });
                         } else {
                             resultDiv.innerHTML = '<p>Query executed successfully, but no results returned.</p>';
+
+                            // ── SIGNAL: EMPTY ─────────────────────
+                            setExecStatus('empty', { rows: 0, queryId: queryId });
                         }
+                    } else {
+                        // ── SIGNAL: ERROR ─────────────────────────
+                        setExecStatus('error', {
+                            message: data.message || 'query failed',
+                            queryId: queryId
+                        });
                     }
                 })
                 .then(() => {
@@ -570,8 +672,13 @@
                 .catch(error => {
                     messageDiv.className = 'error';
                     messageDiv.textContent = 'Error executing query: ' + error.message;
+                    messageDiv.style.display = 'block';
                     resultDiv.innerHTML = '';
                     columnDataDiv.innerHTML = '';
+                    setExecStatus('error', {
+                        message: error.message || 'network error',
+                        queryId: queryId
+                    });
                 })
                 .finally(() => {
                     isExecuting = false;
@@ -580,16 +687,12 @@
                 });
         }
 
-        // ─────────────────────────────────────────────────────────
-        // Initialize
-        // ─────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
-            // Load tables WITHOUT auto-executing on first load
+            setExecStatus('idle');
             isInitialLoad = true;
             loadTables();
             tablePollInterval = setInterval(loadTables, 5000);
 
-            // ── Table select change → auto-execute DESCRIBE {table} ──
             document.getElementById('table-select').addEventListener('change', (e) => {
                 const selectedTable = e.target.value;
                 cachedColumns = [];
@@ -603,13 +706,11 @@
                     columnPollInterval = setInterval(() => loadColumns(selectedTable), 5000);
                 }
 
-                // Auto-execute the DESCRIBE for the newly picked table
                 if (selectedTable && selectedTable !== lastExecutedTable) {
                     autoExecuteTableQuery(selectedTable);
                 }
             });
 
-            // ── Enter key executes query; Shift+Enter inserts newline ──
             const textarea = document.getElementById('sql-query');
             textarea.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {

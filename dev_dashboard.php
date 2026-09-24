@@ -446,16 +446,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_requirements']))
     if ($maxInvestment < 0)     $maxInvestment = 0;
 
     try {
-        $checkRow = $pdo->prepare("SELECT id FROM programme_investors WHERE programme_id = ? AND developerid = ? LIMIT 1");
+        $pdo->beginTransaction();
+
+        // ---------------------------------------------------------------
+        // STEP 1: Upsert the DEVELOPER SETTINGS row (investorid = 0).
+        //         This is the "template" row for the programme.
+        // ---------------------------------------------------------------
+        $checkRow = $pdo->prepare("
+            SELECT id
+            FROM programme_investors
+            WHERE programme_id = ?
+              AND developerid  = ?
+              AND investorid   = 0
+            LIMIT 1
+        ");
         $checkRow->execute([$programmeId, $userId]);
         $existing = $checkRow->fetch(PDO::FETCH_ASSOC);
 
         if ($existing) {
             $upd = $pdo->prepare("
                 UPDATE programme_investors
-                SET contract_duration = ?,
-                    developer_percentage = ?,
-                    investor_percentage = ?,
+                SET contract_duration         = ?,
+                    developer_percentage      = ?,
+                    investor_percentage       = ?,
                     minimum_investment_amount = ?,
                     maximum_investment_amount = ?
                 WHERE id = ?
@@ -487,12 +500,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_requirements']))
             ]);
         }
 
+        // ---------------------------------------------------------------
+        // STEP 2: Sync the SAME values onto every REAL INVESTOR row
+        //         (investorid > 0) for this programme, so that
+        //         mydashboard.php reads up-to-date requirements.
+        // ---------------------------------------------------------------
+        $sync = $pdo->prepare("
+            UPDATE programme_investors
+            SET contract_duration         = ?,
+                developer_percentage      = ?,
+                investor_percentage       = ?,
+                minimum_investment_amount = ?,
+                maximum_investment_amount = ?
+            WHERE programme_id = ?
+              AND developerid  = ?
+              AND investorid  > 0
+        ");
+        $sync->execute([
+            $contractDuration,
+            $developerPercent,
+            $investorPercent,
+            $minInvestment,
+            $maxInvestment,
+            $programmeId,
+            $userId
+        ]);
+        $syncedRows = $sync->rowCount();
+
+        $pdo->commit();
+
         echo json_encode([
             'success' => true,
-            'message' => 'Requirements saved.'
+            'message' => 'Requirements saved.' . ($syncedRows > 0 ? " Synced to {$syncedRows} investor(s)." : ''),
+            'synced'  => $syncedRows
         ]);
     } catch (PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Failed to save requirements.']);
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Failed to save requirements: ' . $e->getMessage()]);
     }
     exit;
 }
@@ -685,7 +729,7 @@ function showSpinner() {
 <meta charset="UTF-8">
 <title>Developer Dashboard - HarvHub</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>

@@ -1,8 +1,6 @@
 <?php
     // dev_accountmanagement.php — Account Management (Standalone)
     session_start();
-    file_put_contents('debug_hit.log', date('Y-m-d H:i:s') . " - dev_accountmanagement.php was reached\n", FILE_APPEND);
-die("STOP - dev_accountmanagement.php reached successfully");
 
     // ==================== DATABASE CONNECTION ====================
     try {
@@ -53,6 +51,11 @@ die("STOP - dev_accountmanagement.php reached successfully");
     $currentBroker = $developer['broker'] ?? '';
 
     // ==================== ACCOUNT MANAGEMENT COLUMNS ====================
+    // Only columns that still exist after the ALTER TABLE changes.
+    // - grid_prices_setup  -> renamed to additional_configurations
+    // - Removed: martingale_per_stage_drawdown_amount, symbols_grid_strategy,
+    //            enable_single_position_and_pending, enable_martingale,
+    //            martingale_config
     $ACCOUNT_MGMT_COLUMNS = [
         'enable_risk_reward_correction'              => ['label' => 'Enable Risk Reward Correction',              'type' => 'bool',   'json' => false],
         'minimum_risk_reward'                        => ['label' => 'Minimum Risk Reward',                        'type' => 'decimal','json' => false],
@@ -60,19 +63,14 @@ die("STOP - dev_accountmanagement.php reached successfully");
         'enable_breakeven'                           => ['label' => 'Enable Breakeven',                           'type' => 'bool',   'json' => false],
         'breakeven_dictionary'                       => ['label' => 'Breakeven Dictionary',                       'type' => 'json',   'json' => true],
         'restrictions_duration'                      => ['label' => 'Restrictions Duration',                      'type' => 'json',   'json' => true],
-        'enable_martingale'                          => ['label' => 'Enable Martingale',                          'type' => 'bool',   'json' => false],
-        'martingale_config'                          => ['label' => 'Martingale Config',                          'type' => 'json',   'json' => true],
         'minimum_balance_risk_distance'              => ['label' => 'Minimum Balance Risk Distance',              'type' => 'json',   'json' => true],
         'maximum_balance_risk_distance'              => ['label' => 'Maximum Balance Risk Distance',              'type' => 'json',   'json' => true],
-        'martingale_per_stage_drawdown_amount'       => ['label' => 'Martingale Per Stage Drawdown Amount',       'type' => 'json',   'json' => true],
         'account_balance_default_risk_management'    => ['label' => 'Account Balance Default Risk Management',    'type' => 'json',   'json' => true],
         'account_balance_maximum_risk_management'    => ['label' => 'Account Balance Maximum Risk Management',    'type' => 'json',   'json' => true],
         'daily_target_config'                        => ['label' => 'Daily Target Config',                         'type' => 'json',   'json' => true],
         'restrict_order_from_timeframe'              => ['label' => 'Restrict Order From Timeframe',              'type' => 'varchar','json' => false],
         'use_recent_highest_balance_as_current_balance' => ['label' => 'Use Recent Highest Balance As Current Balance','type' => 'bool','json' => false],
-        'symbols_grid_strategy'                      => ['label' => 'Symbols Grid Strategy',                       'type' => 'bool',   'json' => false],
-        'enable_single_position_and_pending'         => ['label' => 'Enable Single Position And Pending',          'type' => 'bool',   'json' => false],
-        'manage_grid_levels_count'                   => ['label' => 'Manage Grid Levels Count',                    'type' => 'json',   'json' => true],
+        'additional_configurations'                  => ['label' => 'Additional Configurations',                  'type' => 'json',   'json' => true],
         'skip_orders_close_to_position'              => ['label' => 'Skip Orders Close To Position',               'type' => 'bool',   'json' => false],
         'cancel_orders_close_to_position'            => ['label' => 'Cancel Orders Close To Position',            'type' => 'bool',   'json' => false],
         'also_restrict_opposite_order_too_close_to_position' => ['label' => 'Also Restrict Opposite Order Too Close To Position','type' => 'bool','json' => false],
@@ -230,13 +228,48 @@ die("STOP - dev_accountmanagement.php reached successfully");
 <meta charset="UTF-8">
 <title>Account Management - HarvHub</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
 <?php include 'dev_style.php'; ?>
 <?php include 'dev_dashboard_style.php'; ?>
 <style>
+
+    /* Prevent double-tap zoom on tappable elements */
+    button, a, input, select, textarea, label {
+        touch-action: manipulation;
+    }
+
+    /* iOS long-press callout prevention on inputs (optional polish) */
+    input, textarea, select {
+        -webkit-touch-callout: none;
+    }
+
+    /* Prevent Safari text auto-resize on orientation change */
+    html {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
+    /* ============================================================
+    GLOBAL iOS ZOOM FIX
+    iOS Safari auto-zooms any input with font-size < 16px.
+    Force 16px on all form controls at mobile widths.
+    ============================================================ */
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea,
+        .dd-input,
+        .dd-select,
+        .dd-am-input,
+        .dd-inline-input,
+        .dd-req-input,
+        .dd-json-edit-textarea,
+        .pt-modal-input {
+            font-size: 16px !important;
+        }
+    }
     /* JSON view / edit modal */
     .dd-json-view-modal .dd-modal-content {
         max-width: 600px;
@@ -296,6 +329,74 @@ die("STOP - dev_accountmanagement.php reached successfully");
         background: var(--bg-card, #1e1e2a);
         border-color: var(--border-color, #333);
         color: var(--text, #eee);
+    }
+
+    /* ==================== FOLDABLE CONTENT ==================== */
+    .dd-foldable {
+        position: relative;
+    }
+
+    .dd-foldable.is-collapsed {
+        max-height: 160px;
+        overflow: hidden;
+    }
+
+    .dd-foldable.is-collapsed::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 48px;
+        background: linear-gradient(to bottom, transparent, var(--bg, #f5f5f5));
+        pointer-events: none;
+        border-radius: 0 0 var(--radius-sm, 8px) var(--radius-sm, 8px);
+    }
+
+    body.dark-mode .dd-foldable.is-collapsed::after {
+        background: linear-gradient(to bottom, transparent, var(--bg-card, #1e1e2a));
+    }
+
+    .dd-fold-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        color: var(--accent, #2e8b57);
+        background: transparent;
+        border: 1px solid var(--accent, #2e8b57);
+        border-radius: var(--radius-sm, 8px);
+        padding: 5px 12px;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+
+    .dd-fold-toggle:hover {
+        background: rgba(46, 139, 87, 0.08);
+    }
+
+    .dd-fold-toggle .dd-fold-icon {
+        transition: transform 0.2s ease;
+        display: inline-block;
+    }
+
+    .dd-fold-toggle.is-expanded .dd-fold-icon {
+        transform: rotate(180deg);
+    }
+
+    .dd-json-view-body.dd-foldable.is-collapsed {
+        max-height: 220px;
+    }
+
+    @media (max-width: 480px) {
+        .dd-foldable.is-collapsed {
+            max-height: 120px;
+        }
     }
 </style>
 </head>
@@ -404,11 +505,12 @@ die("STOP - dev_accountmanagement.php reached successfully");
                                        placeholder="Enter value">
                             <?php else: ?>
                                 <?php if ($isExistingJson): ?>
-                                    <div class="dd-json-preview"
-                                         data-col="<?= htmlspecialchars($col) ?>"
-                                         id="jsonPreview-<?= htmlspecialchars($col) ?>">
-                                        <?= renderJsonPreview($jsonData) ?>
-                                    </div>
+                                    <details class="dd-json-fold" open>
+                                        <summary>Show JSON</summary>
+                                        <div class="dd-json-preview" data-col="<?= htmlspecialchars($col) ?>" id="jsonPreview-<?= htmlspecialchars($col) ?>">
+                                            <?= renderJsonPreview($jsonData) ?>
+                                        </div>
+                                    </details>
                                     <input type="hidden" class="dd-am-json-hidden"
                                            data-col="<?= htmlspecialchars($col) ?>"
                                            value="<?= htmlspecialchars($val) ?>">
@@ -453,9 +555,13 @@ die("STOP - dev_accountmanagement.php reached successfully");
             <h2 class="dd-modal-title" id="ddJsonViewTitle">JSON Data</h2>
 
             <!-- Read-only view -->
-            <div class="dd-json-view-body" id="ddJsonViewBody">
+            <div class="dd-json-view-body dd-foldable is-collapsed" id="ddJsonViewBody">
                 <pre id="ddJsonViewPre"></pre>
             </div>
+
+            <button type="button" class="dd-fold-toggle" id="ddJsonViewFoldBtn" data-target="ddJsonViewBody" onclick="toggleFold(this)">
+                <span class="dd-fold-label">Expand</span> <i class="dd-fold-icon">▾</i>
+            </button>
 
             <!-- Direct edit -->
             <textarea id="ddJsonEditTextarea" class="dd-json-edit-textarea" spellcheck="false"></textarea>
@@ -486,6 +592,9 @@ die("STOP - dev_accountmanagement.php reached successfully");
     var jsonViewCol = null;
     var jsonViewEditing = false;
 
+    // Threshold (px) above which we auto-collapse a JSON preview.
+    var FOLD_THRESHOLD = 200;
+
     // ==================== HELPERS ====================
     function escapeHtml(t) {
         var d = document.createElement('div');
@@ -514,6 +623,65 @@ die("STOP - dev_accountmanagement.php reached successfully");
         document.body.style.width = '';
         document.body.style.top = '';
         window.scrollTo(0, y);
+    }
+
+    // ==================== FOLD / EXPAND ====================
+    function toggleFold(btn) {
+        var targetId = btn.getAttribute('data-target');
+        var target = targetId ? document.getElementById(targetId) : btn.previousElementSibling;
+        if (!target) return;
+
+        var collapsed = target.classList.toggle('is-collapsed');
+        btn.classList.toggle('is-expanded', !collapsed);
+
+        var label = btn.querySelector('.dd-fold-label');
+        if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
+    }
+
+    // Wrap a JSON preview container in a foldable shell if it's tall enough.
+    function ensureFoldable(previewEl, col) {
+        if (!previewEl) return;
+
+        // The preview itself is the foldable element.
+        previewEl.classList.add('dd-foldable');
+
+        // Find or create the toggle button in the same input wrap.
+        var wrap = previewEl.closest('.dd-am-input-wrap');
+        if (!wrap) return;
+
+        var btn = wrap.querySelector('.dd-fold-toggle[data-target="' + previewEl.id + '"]');
+
+        // Measure whether the content exceeds the threshold.
+        // Temporarily remove collapse to measure full height.
+        var wasCollapsed = previewEl.classList.contains('is-collapsed');
+        previewEl.classList.remove('is-collapsed');
+        var fullHeight = previewEl.scrollHeight;
+        var shouldFold = fullHeight > FOLD_THRESHOLD;
+
+        if (!shouldFold) {
+            // Content is short: remove toggle button, leave expanded.
+            if (btn) btn.remove();
+            previewEl.classList.remove('is-collapsed');
+            return;
+        }
+
+        // Content is tall: ensure toggle exists and apply initial state.
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dd-fold-toggle';
+            btn.setAttribute('data-target', previewEl.id);
+            btn.innerHTML = '<span class="dd-fold-label">Expand</span> <i class="dd-fold-icon">▾</i>';
+            btn.addEventListener('click', function () { toggleFold(btn); });
+            wrap.appendChild(btn);
+        }
+
+        // Preserve prior collapsed state if it was collapsed, else start collapsed.
+        var startCollapsed = wasCollapsed || true;
+        previewEl.classList.toggle('is-collapsed', startCollapsed);
+        btn.classList.toggle('is-expanded', !startCollapsed);
+        var label = btn.querySelector('.dd-fold-label');
+        if (label) label.textContent = startCollapsed ? 'Expand' : 'Collapse';
     }
 
     // ==================== ALERT ====================
@@ -564,6 +732,16 @@ die("STOP - dev_accountmanagement.php reached successfully");
         document.getElementById('ddJsonCancelEditBtn').style.display = 'none';
         document.getElementById('ddJsonApplyBtn').style.display = 'none';
 
+        // Reset fold state for the modal body.
+        var viewBody = document.getElementById('ddJsonViewBody');
+        viewBody.classList.add('dd-foldable');
+        viewBody.classList.add('is-collapsed');
+        var foldBtn = document.getElementById('ddJsonViewFoldBtn');
+        foldBtn.classList.remove('is-expanded');
+        var foldLabel = foldBtn.querySelector('.dd-fold-label');
+        if (foldLabel) foldLabel.textContent = 'Expand';
+        foldBtn.style.display = 'inline-flex';
+
         document.getElementById('ddJsonViewModal').classList.add('active');
         lockBodyScroll();
     }
@@ -572,6 +750,7 @@ die("STOP - dev_accountmanagement.php reached successfully");
         if (!jsonViewCol) return;
         var data = jsonDataByCol[jsonViewCol];
         document.getElementById('ddJsonViewBody').style.display = 'none';
+        document.getElementById('ddJsonViewFoldBtn').style.display = 'none';
         var ta = document.getElementById('ddJsonEditTextarea');
         ta.value = JSON.stringify(data, null, 2);
         ta.style.display = 'block';
@@ -586,6 +765,7 @@ die("STOP - dev_accountmanagement.php reached successfully");
         if (!jsonViewCol) return;
         document.getElementById('ddJsonEditTextarea').style.display = 'none';
         document.getElementById('ddJsonViewBody').style.display = 'block';
+        document.getElementById('ddJsonViewFoldBtn').style.display = 'inline-flex';
         document.getElementById('ddJsonEditBtn').style.display = 'inline-block';
         document.getElementById('ddJsonCancelEditBtn').style.display = 'none';
         document.getElementById('ddJsonApplyBtn').style.display = 'none';
@@ -753,7 +933,13 @@ die("STOP - dev_accountmanagement.php reached successfully");
             return;
         }
         preview.style.display = 'block';
+        preview.classList.add('dd-foldable');
+
+        // Render the interactive tree.
         preview.innerHTML = renderJsonColumnTree(col, data, 'root', 'root');
+
+        // Wrap in <details> if not already wrapped and apply fold logic.
+        ensureFoldable(preview, col);
     }
 
     function renderJsonColumnTree(col, node, path, keyLabel) {
@@ -1066,6 +1252,12 @@ die("STOP - dev_accountmanagement.php reached successfully");
                 renderJsonColumn(col);
             }
         });
+
+        // Apply fold logic to server-rendered JSON previews (those inside <details>).
+        document.querySelectorAll('.dd-json-fold .dd-json-preview').forEach(function (preview) {
+            var col = preview.getAttribute('data-col');
+            if (col) ensureFoldable(preview, col);
+        });
     }
 
     // ==================== KEYBOARD ====================
@@ -1167,6 +1359,7 @@ die("STOP - dev_accountmanagement.php reached successfully");
     window.applyJsonEdit             = applyJsonEdit;
     window.closeJsonView             = closeJsonView;
     window.closeDdAlert              = closeDdAlert;
+    window.toggleFold                = toggleFold;
 </script>
 
 </body>

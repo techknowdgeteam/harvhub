@@ -158,7 +158,7 @@ foreach ($userTierKeys as $userKey) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
@@ -279,18 +279,6 @@ foreach ($userTierKeys as $userKey) {
                         <span class="item-arrow" style="color: var(--success);">›</span>
                 </a>
 
-                <!-- Logout -->
-                <div class="menu-item" onclick="openLogoutModal()">
-                    <div class="item-left">
-                        <span class="item-icon"><i class="fa-solid fa-right-from-bracket"></i></span>
-                        <div class="item-text">
-                            <span class="item-title">Logout</span>
-                            <span class="item-desc">Sign out of your account</span>
-                        </div>
-                    </div>
-                    <span class="item-arrow">›</span>
-                </div>
-
                 <!-- Disconnect Account -->
                 <?php if ($broker_connected): ?>
                 <div class="menu-item danger" onclick="window.location.href='disconnect_broker.php'">
@@ -304,6 +292,18 @@ foreach ($userTierKeys as $userKey) {
                     <span class="item-arrow">›</span>
                 </div>
                 <?php endif; ?>
+
+                <!-- Logout -->
+                <div class="menu-item" onclick="openLogoutModal()">
+                    <div class="item-left">
+                        <span class="item-icon"><i class="fa-solid fa-right-from-bracket"></i></span>
+                        <div class="item-text">
+                            <span class="item-title">Logout</span>
+                            <span class="item-desc">Sign out of your account</span>
+                        </div>
+                    </div>
+                    <span class="item-arrow">›</span>
+                </div>
             </div>
 
             <div class="version-info">

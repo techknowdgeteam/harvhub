@@ -131,23 +131,28 @@ try {
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at
+                   root_ref_count, resolved_root_id, triggered_at,
+                   anchor_candle_id, anchor_candle_index
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
         ");
         $cStmt->execute([$userId, $programmeId]);
 
-        $byTree = [];
+        $byTree     = [];
+        $rowById    = [];   // id => row (for anchor lookup)
         while ($r = $cStmt->fetch(PDO::FETCH_ASSOC)) {
             $tid = (int)$r['tree_id'];
             if (!isset($byTree[$tid])) {
                 $byTree[$tid] = [
-                    'tree_id'  => $tid,
-                    'roots'    => [],
-                    'drawings' => [],
-                    'trades'   => [],
-                    '_orphans' => []
+                    'tree_id'             => $tid,
+                    'roots'               => [],
+                    'drawings'            => [],
+                    'trades'              => [],
+                    '_orphans'            => [],
+                    'anchor_candle_id'    => null,
+                    'anchor_candle_index' => null,
+                    'anchor_row'          => null,
                 ];
             }
             $row = [
@@ -185,9 +190,17 @@ try {
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
+                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
+                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
+            $rowById[$row['id']] = $row;
+
             if ($row['row_role'] === 'root') {
                 $byTree[$tid]['roots'][] = $row;
+                if ($byTree[$tid]['anchor_candle_id'] === null && $row['anchor_candle_id'] !== null) {
+                    $byTree[$tid]['anchor_candle_id']    = (int)$row['anchor_candle_id'];
+                    $byTree[$tid]['anchor_candle_index'] = $row['anchor_candle_index'];
+                }
             } elseif ($row['row_role'] === 'drawing') {
                 $byTree[$tid]['drawings'][] = $row;
             } elseif ($row['row_role'] === 'trade') {
@@ -196,6 +209,17 @@ try {
                 $byTree[$tid]['_orphans'][] = $row;
             }
         }
+
+        // Resolve each tree's anchor_candle_id to its full config row
+        // (the anchor may be a root OR a root_ref). This is what the client
+        // anchor-finder uses to locate the anchored candle independently of
+        // operators/refs/candle_type checks.
+        foreach ($byTree as $tid => &$tree) {
+            if ($tree['anchor_candle_id'] !== null && isset($rowById[$tree['anchor_candle_id']])) {
+                $tree['anchor_row'] = $rowById[$tree['anchor_candle_id']];
+            }
+        }
+        unset($tree);
 
         foreach ($byTree as $tid => &$tree) {
             $roots   = &$tree['roots'];
@@ -448,7 +472,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                      entry_price, exit_price, target_price,
                      resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
                      outcome_status, outcome_candle_time, outcome_price,
-                     is_foundation, evaluation_priority, status, triggered_at)
+                     is_foundation, evaluation_priority, status,
+                     anchor_match, anchor_match_index, triggered_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?,
@@ -462,7 +487,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                         ?, ?, ?,
                         ?, ?, ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?, ?, ?)
+                        ?, ?, ?,
+                        ?, ?, ?)
             ");
 
             $now = date('Y-m-d H:i:s');
@@ -543,6 +569,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                         !empty($m['is_foundation']) ? 1 : 0,
                         isset($m['evaluation_priority']) ? (int)$m['evaluation_priority'] : 1,
                         $m['status'] ?? 'matched',
+
+                        !empty($m['anchor_match']) ? 1 : 0,
+                        (isset($m['anchor_match_index']) && $m['anchor_match_index'] !== '')
+                            ? (string)$m['anchor_match_index'] : null,
+
                         $m['triggered_at'] ?? $now,
                     ]);
                     $insertedRows++;
@@ -597,7 +628,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                    entry_price, exit_price, target_price,
                    resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
                    outcome_status, outcome_candle_time, outcome_price,
-                   is_foundation, evaluation_priority, status, triggered_at, created_at
+                   is_foundation, evaluation_priority, status,
+                   anchor_match, anchor_match_index, triggered_at, created_at
             FROM programme_candles_configuration
             WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -668,6 +700,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                 'is_foundation'         => (int)$r['is_foundation'],
                 'evaluation_priority'   => (int)$r['evaluation_priority'],
                 'status'                => $r['status'],
+                'anchor_match'          => (int)$r['anchor_match'],
+                'anchor_match_index'    => $r['anchor_match_index'],
                 'triggered_at'          => $r['triggered_at'],
                 'created_at'            => $r['created_at'],
             ];
@@ -887,7 +921,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 <meta charset="UTF-8">
 <title><?= htmlspecialchars($programmeName) ?> - Training</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
@@ -1184,6 +1218,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
     .pt-proj-banner.active { display: inline-flex; }
     .pt-proj-banner i { font-size: 0.8rem; }
+    .pt-proj-spinner {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-left: 6px;
+        border: 2px solid rgba(255,255,255,0.4);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: pt-proj-spin 0.7s linear infinite;
+        vertical-align: middle;
+    }
+    @keyframes pt-proj-spin {
+        to { transform: rotate(360deg); }
+    }
+    /* ============================================================
+    GLOBAL iOS ZOOM FIX
+    iOS Safari auto-zooms any input with font-size < 16px.
+    Force 16px on all form controls at mobile widths.
+    ============================================================ */
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea,
+        .dd-input,
+        .dd-select,
+        .dd-am-input,
+        .dd-inline-input,
+        .dd-req-input,
+        .dd-json-edit-textarea,
+        .pt-modal-input {
+            font-size: 16px !important;
+        }
+    }
 </style>
 </head>
 <body class="pt-fullbody <?= htmlspecialchars($darkModeClass) ?>">
@@ -1457,12 +1524,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     var PT_PERSISTED_LOADED       = false;
     var PT_LAST_PERSISTED_SIG     = '';
 
-    // Projection mode: now supports MULTIPLE higher-TF projections at once.
-    // Array of { sourceTF, targetTF } entries.
     var PT_PROJECTION_MODES   = [];
-    // Projected matches per sourceTF: { sourceTF: [rows...] }
     var PT_PROJECTED_BY_TF    = {};
-
+    var PT_PROJECTION_LOADED_TFS = {};
     var PT_CONFIGURED_ROWS_BY_TF = {};
 
     var PT_LOAD_TOKEN         = 0;
@@ -1520,7 +1584,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return { bg: isDark ? '#2a2a2a' : '#1e1e1e', bgText: '#f2f2f2', border: isDark ? '#444' : '#000' };
     }
     function ptRoundRect(ctx, x, y, w, h, r) {
-        if (w < 2 * r) r = w / 2; if (h < 2 * r) r = h / 2;
+        if (w < 2 * r) r = w / 2; if (h < 2 * r) h = h / 2;
         ctx.beginPath(); ctx.moveTo(x + r, y);
         ctx.arcTo(x + w, y,     x + w, y + h, r);
         ctx.arcTo(x + w, y + h, x,     y + h, r);
@@ -1571,8 +1635,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     function ptSnapshotSignature(treeResults) {
-        // Simple, cheap signature of the current snapshot. Used to avoid
-        // redundant persist round-trips when nothing changed.
         var s = PT_CURRENT_SYMBOL + '|' + PT_CURRENT_TIMEFRAME + '|' + PT_CANDLES.length;
         var total = 0;
         var tids = [];
@@ -1582,6 +1644,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         });
         tids.sort();
         return s + '|' + total + '|' + tids.join(',');
+    }
+
+    // ==================== ANCHOR LOOKUP ====================
+    function ptBuildAnchorLookup() {
+        var byRowId = {};
+        (PT_TREES || []).forEach(function (t) {
+            if (t.anchor_candle_id == null || !t.anchor_candle_index) return;
+            var key = parseInt(t.anchor_candle_id, 10);
+            if (isNaN(key)) return;
+            if (byRowId[key] == null) {
+                byRowId[key] = {
+                    index:  String(t.anchor_candle_index),
+                    treeId: t.tree_id
+                };
+            }
+        });
+        return { byRowId: byRowId };
+    }
+
+    function ptNativeAnchorFlag(rowId, lookup) {
+        if (rowId == null || !lookup) return { anchor_match: 0, anchor_match_index: null };
+        var rec = lookup.byRowId[rowId];
+        if (!rec) return { anchor_match: 0, anchor_match_index: null };
+        return { anchor_match: 1, anchor_match_index: rec.index };
+    }
+
+    function ptPickAnchorSubBar(list, index, sourceRow) {
+        if (!list || !list.length) return null;
+        var idx = String(index || '').toLowerCase().trim();
+
+        switch (idx) {
+            case 'open_time':
+            case 'open':
+                return list[0];
+
+            case 'close_time':
+            case 'close':
+                return list[list.length - 1];
+
+            case 'high': {
+                var bestHigh = list[0];
+                for (var i = 1; i < list.length; i++) {
+                    if (list[i].high > bestHigh.high) bestHigh = list[i];
+                }
+                return bestHigh;
+            }
+
+            case 'low': {
+                var bestLow = list[0];
+                for (var j = 1; j < list.length; j++) {
+                    if (list[j].low < bestLow.low) bestLow = list[j];
+                }
+                return bestLow;
+            }
+
+            default: {
+                var srcVal = sourceRow ? sourceRow[idx] : null;
+                if (srcVal == null) return list[list.length - 1];
+
+                var bestIdx = 0;
+                var bestDiff = Infinity;
+                for (var k = 0; k < list.length; k++) {
+                    var v = list[k][idx];
+                    if (v == null) continue;
+                    var d = Math.abs(v - srcVal);
+                    if (d < bestDiff) { bestDiff = d; bestIdx = k; }
+                }
+                return list[bestIdx];
+            }
+        }
     }
 
     // ==================== INIT ====================
@@ -1717,14 +1849,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     // ==================== TIMEFRAME SWITCHING (NO MODAL) ====================
-    // Clicking a timeframe now simply:
-    //   1. Sets PT_CURRENT_TIMEFRAME.
-    //   2. Clears any projection state.
-    //   3. For every OTHER configured timeframe in PT_ALL_TIMEFRAMES that is
-    //      HIGHER than the target, schedules a projection of that timeframe's
-    //      saved matches onto the target.
-    //   4. Loads the target chart. Everything is drawn on the same canvas.
-
     function ptSwitchToTimeframe(targetTF) {
         if (!targetTF) return;
         if (targetTF === PT_CURRENT_TIMEFRAME && !PT_PROJECTION_MODES.length) return;
@@ -1735,17 +1859,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_REQUESTED_AMOUNT  = PT_DEFAULT_AMOUNT;
         PT_FULL_HISTORY_DONE = false;
 
-        // Reset native persisted state
         PT_PERSISTED_MATCHES   = [];
         PT_PERSISTED_LOADED    = false;
         PT_PERSISTED_DIRTY     = true;
         PT_LAST_PERSISTED_SIG  = '';
 
-        // Reset projection state
-        PT_PROJECTION_MODES = [];
-        PT_PROJECTED_BY_TF  = {};
+        PT_PROJECTION_MODES      = [];
+        PT_PROJECTED_BY_TF       = {};
+        PT_PROJECTION_LOADED_TFS = {};
 
-        // Find all higher configured timeframes and request projections
         var higherTFs = [];
         PT_ALL_TIMEFRAMES.forEach(function (tf) {
             if (tf === targetTF) return;
@@ -1753,7 +1875,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             higherTFs.push(tf);
         });
 
-        // Sort descending by duration (highest first)
         higherTFs.sort(function (a, b) {
             return (ptTfMs(b) || 0) - (ptTfMs(a) || 0);
         });
@@ -1765,11 +1886,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ptRefreshTradesButton();
         ptLoadChart();
 
-        // Kick off projection for each higher TF as soon as we have that TF's
-        // saved rows. Each projection appends to PT_PROJECTED_BY_TF and
-        // triggers a redraw once it completes.
         higherTFs.forEach(function (srcTF) {
             PT_PROJECTION_MODES.push({ sourceTF: srcTF, targetTF: targetTF });
+            PT_PROJECTION_LOADED_TFS[srcTF] = false;
             ptEnsureConfiguredRows(srcTF, function () {
                 ptProjectConfiguredRowsOnto(srcTF, targetTF);
             });
@@ -1778,22 +1897,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ptUpdateProjBanner();
     }
 
+    function ptCountActiveProjections() {
+        var active = 0;
+        var loaded = 0;
+        PT_PROJECTION_MODES.forEach(function (m) {
+            var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+            if (PT_PROJECTION_LOADED_TFS[m.sourceTF]) loaded++;
+            if (rows.length > 0) active++;
+        });
+        return { active: active, loaded: loaded, total: PT_PROJECTION_MODES.length };
+    }
+
     function ptUpdateProjBanner() {
         var b = document.getElementById('ptProjBanner');
         var t = document.getElementById('ptProjBannerText');
         if (!b || !t) return;
-        if (PT_PROJECTION_MODES.length) {
-            var total = 0;
-            PT_PROJECTION_MODES.forEach(function (m) {
-                total += (PT_PROJECTED_BY_TF[m.sourceTF] || []).length;
-            });
-            var labels = PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ');
-            t.textContent = 'Projections: ' + labels + ' → ' + PT_CURRENT_TIMEFRAME
-                          + '  (' + total + ' projected rows)';
-            b.classList.add('active');
-        } else {
+
+        if (!PT_PROJECTION_MODES.length) {
             b.classList.remove('active');
+            t.innerHTML = '';
+            return;
         }
+
+        var sourcesWithData = [];
+        var totalRows = 0;
+        var allLoaded = true;
+
+        PT_PROJECTION_MODES.forEach(function (m) {
+            var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
+            if (rows.length > 0) {
+                sourcesWithData.push(m.sourceTF);
+                totalRows += rows.length;
+            }
+            if (!PT_PROJECTION_LOADED_TFS[m.sourceTF]) allLoaded = false;
+        });
+
+        if (!allLoaded) {
+            var pendingLabels = PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ');
+            t.innerHTML = 'Projections: ' + ptEscapeHtml(pendingLabels)
+                        + ' in ' + ptEscapeHtml(PT_CURRENT_TIMEFRAME)
+                        + ' <span class="pt-proj-spinner"></span>';
+            b.classList.add('active');
+            return;
+        }
+
+        if (!sourcesWithData.length) {
+            t.textContent = 'Projections: none in ' + PT_CURRENT_TIMEFRAME;
+            b.classList.add('active');
+            return;
+        }
+
+        var labels = sourcesWithData.join(' + ');
+        t.textContent = 'Projections: ' + labels
+                      + ' in ' + PT_CURRENT_TIMEFRAME
+                      + '  (' + totalRows + ' row' + (totalRows === 1 ? '' : 's') + ')';
+        b.classList.add('active');
     }
 
     function ptEnsureConfiguredRows(sourceTF, onReady) {
@@ -1919,6 +2077,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var rows = PT_CONFIGURED_ROWS_BY_TF[sourceTF] || [];
         if (!rows.length) {
             PT_PROJECTED_BY_TF[sourceTF] = [];
+            PT_PROJECTION_LOADED_TFS[sourceTF] = true;
             ptUpdateProjBanner();
             ptRefreshTradesButton();
             ptScheduleDraw();
@@ -1936,6 +2095,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var winKeys = Object.keys(windows);
         if (!winKeys.length) {
             PT_PROJECTED_BY_TF[sourceTF] = [];
+            PT_PROJECTION_LOADED_TFS[sourceTF] = true;
             ptUpdateProjBanner();
             ptRefreshTradesButton();
             ptScheduleDraw();
@@ -2040,6 +2200,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (!recent.length) {
                 ptDebugLine('error', 'Projection fallback: no recent candles available', {});
                 PT_PROJECTED_BY_TF[sourceTF] = [];
+                PT_PROJECTION_LOADED_TFS[sourceTF] = true;
                 ptUpdateProjBanner();
                 ptRefreshTradesButton();
                 ptScheduleDraw();
@@ -2062,6 +2223,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (!overlapping.length) {
                 ptDebugLine('warn', 'Projection fallback: no source rows overlap the recent window', {});
                 PT_PROJECTED_BY_TF[sourceTF] = [];
+                PT_PROJECTION_LOADED_TFS[sourceTF] = true;
                 ptUpdateProjBanner();
                 ptRefreshTradesButton();
                 ptScheduleDraw();
@@ -2087,6 +2249,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             });
         });
 
+        var anchorLookup = ptBuildAnchorLookup();
+
         var projected = [];
         rows.forEach(function (r) {
             var o = ptNormTs(r.open_time || '');
@@ -2100,11 +2264,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var sub = ptPickSubBar(list, level, r);
             if (!sub) return;
 
+            var anchorRec = (r.source_row_id != null)
+                ? anchorLookup.byRowId[parseInt(r.source_row_id, 10)]
+                : null;
+
+            if (anchorRec) {
+                var anchorSub = ptPickAnchorSubBar(list, anchorRec.index, r);
+                if (anchorSub) {
+                    var anchorClone = ptCloneRowWithSubBar(r, anchorSub, level);
+                    anchorClone._anchor_target    = true;
+                    anchorClone._anchor_src_row_id = r.source_row_id;
+                    anchorClone._anchor_index      = anchorRec.index;
+                    anchorClone._anchor_tree_id    = anchorRec.treeId;
+                    projected.push(anchorClone);
+
+                    ptDebugLine('data', 'Anchor resolved in projection', {
+                        sourceTF: sourceTF,
+                        targetTF: targetTF,
+                        sourceRowId: r.source_row_id,
+                        index: anchorRec.index,
+                        anchorTime: anchorSub.time
+                    });
+                } else {
+                    ptDebugLine('warn', 'Anchor index could not be resolved to a sub-bar', {
+                        sourceRowId: r.source_row_id,
+                        index: anchorRec.index
+                    });
+                }
+            }
+
             var projectedRow = ptCloneRowWithSubBar(r, sub, level);
             projected.push(projectedRow);
         });
 
         PT_PROJECTED_BY_TF[sourceTF] = projected;
+        PT_PROJECTION_LOADED_TFS[sourceTF] = true;
         ptUpdateProjBanner();
         ptRefreshTradesButton();
 
@@ -2114,7 +2308,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             sourceTF: sourceTF,
             sourceRows: rows.length,
             subsFetched: subs.length,
-            projectedRows: projected.length
+            projectedRows: projected.length,
+            anchorMarked: projected.filter(function (x) { return x._anchor_target; }).length
         });
 
         var modal = document.getElementById('ptTradesModal');
@@ -2187,11 +2382,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         out._projected_sub_time  = sub.time;
         out._projected_is_sub    = true;
 
+        out._anchor_target       = false;
+        out._anchor_src_row_id   = null;
+        out._anchor_index        = null;
+        out._anchor_tree_id      = null;
+
         return out;
     }
 
-    // Re-evaluate every projected trade (across ALL source TFs) against the
-    // currently loaded candle set.
     function ptReevaluateProjectedTradeOutcomes() {
         if (!PT_CANDLES.length) return;
 
@@ -2269,9 +2467,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     // ==================== COMBINED MATCH ROWS ====================
-    // Returns the "active" match rows for the current chart. If any
-    // projections exist, returns the concatenation of all projected sets.
-    // Otherwise returns the native persisted matches.
     function ptActiveMatchRows() {
         if (PT_PROJECTION_MODES.length) {
             var combined = [];
@@ -2285,8 +2480,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     function ptActiveNativeMatches() {
-        // Native matches are always drawn (even when projections exist),
-        // so the chart shows "everything at once".
         if (PT_PERSISTED_MATCHES.length) return PT_PERSISTED_MATCHES;
         return [];
     }
@@ -2414,12 +2607,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
     }
 
-    /**
-     * Rescan the current chart with the current tree configuration.
-     * When `persist` is truthy, the resulting snapshot is written to the DB
-     * (deleting the previous snapshot for this symbol/TF first, via the
-     * server-side full-snapshot semantics).
-     */
     function ptRescanTradeMatches(persist) {
         PT_TRADE_SCAN_DIRTY = true;
         ptRefreshTradesButton();
@@ -2873,10 +3060,183 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return html;
     }
 
+    // ============================================================
+    // ANCHOR HELPERS
+    // ============================================================
+    function ptTreeIsAnchored(tree) {
+        return !!(tree
+            && tree.anchor_candle_id != null
+            && tree.anchor_candle_index);
+    }
+
+    function ptFindAnchorRow(tree) {
+        if (!tree || tree.anchor_candle_id == null) return null;
+        var id = parseInt(tree.anchor_candle_id, 10);
+        if (isNaN(id)) return null;
+
+        if (tree.anchor_row && parseInt(tree.anchor_row.id, 10) === id) {
+            return tree.anchor_row;
+        }
+
+        var pools = [tree.roots || [], tree.drawings || [], tree.trades || []];
+        for (var p = 0; p < pools.length; p++) {
+            for (var i = 0; i < pools[p].length; i++) {
+                if (parseInt(pools[p][i].id, 10) === id) return pools[p][i];
+            }
+        }
+
+        var roots = tree.roots || [];
+        for (var r = 0; r < roots.length; r++) {
+            var refs = roots[r].root_refs || [];
+            for (var j = 0; j < refs.length; j++) {
+                if (parseInt(refs[j].id, 10) === id) return refs[j];
+            }
+        }
+
+        return null;
+    }
+
+    // ============================================================
+    // ANCHOR RESOLUTION (single-candle semantics)
+    // ============================================================
+    function ptFindAnchorMatches(tree, firstVisible, lastVisible) {
+        var anchorRow = ptFindAnchorRow(tree);
+        if (!anchorRow) return [];
+        if (!anchorRow.price_level) return [];
+
+        // ── Path 1: exact candle_time on the anchor row ─────────────
+        if (anchorRow.candle_time) {
+            var wantTime = ptNormTs(anchorRow.candle_time);
+            for (var i = 0; i < PT_CANDLES.length; i++) {
+                if (ptNormTs(PT_CANDLES[i].time) === wantTime) {
+                    return [i];
+                }
+            }
+            return [];
+        }
+
+        // ── Path 2: resolve via persisted matches by source_row_id ──
+        if (anchorRow.source_row_id != null && PT_PERSISTED_MATCHES.length) {
+            var srcId = parseInt(anchorRow.source_row_id, 10);
+            for (var p = 0; p < PT_PERSISTED_MATCHES.length; p++) {
+                var pm = PT_PERSISTED_MATCHES[p];
+                if (pm.source_row_id === srcId && pm.candle_time) {
+                    var wantTime2 = ptNormTs(pm.candle_time);
+                    for (var k = 0; k < PT_CANDLES.length; k++) {
+                        if (ptNormTs(PT_CANDLES[k].time) === wantTime2) {
+                            return [k];
+                        }
+                    }
+                }
+            }
+            return [];
+        }
+
+        // ── Path 3: first pattern match only ────────────────────────
+        var anchorPos = parseInt(anchorRow.candle_position, 10);
+        if (isNaN(anchorPos)) anchorPos = 0;
+
+        var refs = anchorRow.root_refs || [];
+        var firstRef = null;
+        for (var q = 0; q < refs.length; q++) {
+            if (refs[q].row_role === 'root_ref') { firstRef = refs[q]; break; }
+        }
+
+        var refRow = null;
+        var refPos = 0;
+        if (firstRef) {
+            refRow = firstRef;
+            refPos = parseInt(firstRef.candle_position, 10);
+            if (isNaN(refPos)) refPos = 0;
+        }
+
+        var probe = {
+            id:              anchorRow.id,
+            candle_name:     anchorRow.candle_name,
+            price_level:     anchorRow.price_level,
+            timeframe:       PT_CURRENT_TIMEFRAME,
+            candle_type:     anchorRow.candle_type,
+            candle_position: anchorPos,
+            candle_search:   '',
+            operator:        anchorRow.operator,
+            root_refs:       refRow ? [{
+                id:              refRow.id,
+                row_role:        'root_ref',
+                candle_name:     refRow.candle_name,
+                price_level:     refRow.price_level,
+                candle_type:     refRow.candle_type,
+                candle_position: refPos,
+                candle_search:   '',
+                operator:        refRow.operator,
+                re_ref_pairs:    []
+            }] : []
+        };
+
+        var lo = firstVisible;
+        var hi = lastVisible;
+        if (anchorPos > 0) lo = Math.max(lo, firstVisible - anchorPos);
+        if (anchorPos < 0) hi = Math.min(hi, lastVisible - anchorPos);
+        if (refRow && refPos > 0) hi = Math.min(hi, lastVisible - refPos);
+        if (refRow && refPos < 0) lo = Math.max(lo, firstVisible - refPos);
+
+        for (var m = lo; m <= hi; m++) {
+            if (ptRootMatchesAt(probe, m, firstVisible, lastVisible)) {
+                return [m + anchorPos];
+            }
+        }
+
+        return [];
+    }
+
+    function ptEvaluateTreeAtAnchor(tree, originIdx, firstVisible, lastVisible) {
+        var roots = tree.roots || [];
+        if (!roots.length) return [];
+
+        var treeTf = roots[0].timeframe;
+        if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return [];
+
+        var sorted = roots.slice().sort(function (a, b) {
+            var pa = parseInt(a.evaluation_priority, 10) || 1;
+            var pb = parseInt(b.evaluation_priority, 10) || 1;
+            return pa - pb;
+        });
+
+        var foundation = sorted[0];
+        var fOff = parseInt(foundation.candle_position, 10);
+        if (isNaN(fOff)) fOff = 0;
+        var fAbs = originIdx + fOff;
+
+        if (!ptRootMatchesAt(foundation, fAbs, firstVisible, lastVisible)) {
+            return [];
+        }
+
+        var matched = [{ root: foundation, absIdx: fAbs }];
+
+        for (var r = 1; r < sorted.length; r++) {
+            var hr  = sorted[r];
+            var off = parseInt(hr.candle_position, 10);
+            if (isNaN(off)) off = 0;
+            var hAbs = originIdx + off;
+            if (ptRootMatchesAt(hr, hAbs, firstVisible, lastVisible)) {
+                matched.push({ root: hr, absIdx: hAbs });
+            }
+        }
+        return matched;
+    }
+
+    // ============================================================
+    // SCAN
+    // ============================================================
     function ptScanTrades() {
         var out = [];
         if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
         if (!PT_CANDLES.length) return out;
+
+        var anchorLookup = ptBuildAnchorLookup();
+
+        function anchorFlagFor(rowId) {
+            return ptNativeAnchorFlag(rowId, anchorLookup);
+        }
 
         PT_TREES.forEach(function (tree) {
             var roots = tree.roots || [];
@@ -2890,8 +3250,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var seenEntryByRule = {};
             var matchedFlat = [];
 
-            for (var i0 = 0; i0 < PT_CANDLES.length; i0++) {
-                var matched = ptEvaluateTreeAt(tree, i0, 0, PT_CANDLES.length - 1);
+            var anchored = ptTreeIsAnchored(tree);
+
+            if (anchored) {
+                var treeTf = roots[0].timeframe;
+                if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return;
+            }
+
+            var origins = [];
+            if (anchored) {
+                origins = ptFindAnchorMatches(tree, 0, PT_CANDLES.length - 1);
+                if (!origins.length) return;
+            } else {
+                for (var z = 0; z < PT_CANDLES.length; z++) origins.push(z);
+            }
+
+            for (var oi = 0; oi < origins.length; oi++) {
+                var origin = origins[oi];
+
+                var matched = anchored
+                    ? ptEvaluateTreeAtAnchor(tree, origin, 0, PT_CANDLES.length - 1)
+                    : ptEvaluateTreeAt(tree, origin, 0, PT_CANDLES.length - 1);
                 if (!matched.length) continue;
 
                 var foundationMatch = matched[0];
@@ -2905,6 +3284,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var root = m.root;
                     var rc   = PT_CANDLES[m.absIdx];
                     if (!rc) return;
+
+                    var rootAnchor = anchorFlagFor(root.id);
 
                     matchedFlat.push({
                         row_role:          'matched_root',
@@ -2931,7 +3312,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         operator:          root.operator,
                         is_foundation:     mi === 0 ? 1 : 0,
                         evaluation_priority: mi + 1,
-                        status:            'matched'
+                        status:            'matched',
+                        anchor_match:      rootAnchor.anchor_match,
+                        anchor_match_index: rootAnchor.anchor_match_index
                     });
 
                     (root.root_refs || []).forEach(function (ref) {
@@ -2941,6 +3324,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         if (refAbs < 0 || refAbs >= PT_CANDLES.length) return;
                         var rfc = PT_CANDLES[refAbs];
                         if (!rfc) return;
+
+                        var refAnchor = anchorFlagFor(ref.id);
 
                         matchedFlat.push({
                             row_role:          'matched_ref',
@@ -2966,12 +3351,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             candle_search:     ref.candle_search,
                             operator:          root.operator,
                             evaluation_priority: mi + 1,
-                            status:            'matched'
+                            status:            'matched',
+                            anchor_match:      refAnchor.anchor_match,
+                            anchor_match_index: refAnchor.anchor_match_index
                         });
 
                         (ref.re_ref_pairs || []).forEach(function (pair) {
                             var a = pair.author, b = pair.referenced;
                             if (!a || !b) return;
+
+                            var aAnchor = anchorFlagFor(a.id);
+                            var bAnchor = anchorFlagFor(b.id);
+
                             matchedFlat.push({
                                 row_role:          'matched_reref_author',
                                 source_row_id:     a.id || null,
@@ -2996,7 +3387,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     a.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
-                                status:            'matched'
+                                status:            'matched',
+                                anchor_match:      aAnchor.anchor_match,
+                                anchor_match_index: aAnchor.anchor_match_index
                             });
                             matchedFlat.push({
                                 row_role:          'matched_reref_servant',
@@ -3022,17 +3415,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     b.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
-                                status:            'matched'
+                                status:            'matched',
+                                anchor_match:      bAnchor.anchor_match,
+                                anchor_match_index: bAnchor.anchor_match_index
                             });
                         });
                     });
                 });
 
                 drawings.forEach(function (dr) {
-                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, i0);
+                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, origin);
                     if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
                     var fc = PT_CANDLES[fromIdx];
                     if (!fc) return;
+
+                    var drAnchor = anchorFlagFor(dr.id);
+
                     matchedFlat.push({
                         row_role:              'matched_drawing',
                         source_row_id:         dr.id || null,
@@ -3058,14 +3456,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         draw_to_price_level:   dr.draw_to_price_level,
                         drawing_color:         dr.drawing_color,
                         evaluation_priority:   1,
-                        status:                'matched'
+                        status:                'matched',
+                        anchor_match:          drAnchor.anchor_match,
+                        anchor_match_index:    drAnchor.anchor_match_index
                     });
                 });
 
                 trades.forEach(function (trade, ti) {
                     var entry = ptResolveSourceObject(
                         tree, foundationRoot, foundationAbs,
-                        trade.entry_from, i0,
+                        trade.entry_from, origin,
                         trade.entry_from_price_level
                     );
                     if (!entry) return;
@@ -3074,7 +3474,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     if (trade.exit_at) {
                         exit = ptResolveSourceObject(
                             tree, foundationRoot, foundationAbs,
-                            trade.exit_at, i0,
+                            trade.exit_at, origin,
                             trade.exit_at_price_level
                         );
                     }
@@ -3091,11 +3491,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             }
                         }
                     } else if (trade.target &&
-                               trade.target !== 'fixed_risk_reward' &&
-                               trade.target !== 'minimum_risk_reward') {
+                            trade.target !== 'fixed_risk_reward' &&
+                            trade.target !== 'minimum_risk_reward') {
                         target = ptResolveSourceObject(
                             tree, foundationRoot, foundationAbs,
-                            trade.target, i0,
+                            trade.target, origin,
                             trade.target_price_level
                         );
                         if (target && exit) {
@@ -3136,7 +3536,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         targetRR:  targetRR,
                         direction: direction,
                         outcome:   outcome,
-                        i0:        i0,
+                        i0:        origin,
                         matched:   matched
                     });
 
@@ -3146,6 +3546,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var tgtPrice    = (targetRR && targetRR.price != null)
                                         ? targetRR.price
                                         : (target && target.price != null ? target.price : null);
+
+                    var trAnchor = anchorFlagFor(trade.id);
 
                     matchedFlat.push({
                         row_role:          'matched_trade',
@@ -3196,7 +3598,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         evaluation_priority: ti + 1,
                         status:            outcome.status === 'profit' ? 'resolved_win'
                                             : outcome.status === 'stop' ? 'resolved_loss'
-                                            : 'pending'
+                                            : 'pending',
+                        anchor_match:      trAnchor.anchor_match,
+                        anchor_match_index: trAnchor.anchor_match_index
                     });
                 });
             }
@@ -3545,6 +3949,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_PERSISTED_LOADED      = false;
             PT_PROJECTED_BY_TF       = {};
             PT_PROJECTION_MODES      = [];
+            PT_PROJECTION_LOADED_TFS = {};
             PT_LAST_PERSISTED_SIG    = '';
             ptUpdateProjBanner();
 
@@ -3565,12 +3970,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var byTree = {};
         rows.forEach(function (r) {
             if (!byTree[r.tree_id]) {
-                byTree[r.tree_id] = { tree_id: r.tree_id, roots: [], drawings: [], trades: [], _orphans: [] };
+                byTree[r.tree_id] = {
+                    tree_id:              r.tree_id,
+                    roots:                [],
+                    drawings:             [],
+                    trades:               [],
+                    _orphans:             [],
+                    anchor_candle_id:     null,
+                    anchor_candle_index:  null,
+                    anchor_row:           null
+                };
             }
-            if (r.row_role === 'root')             byTree[r.tree_id].roots.push(r);
-            else if (r.row_role === 'drawing')     byTree[r.tree_id].drawings.push(r);
-            else if (r.row_role === 'trade')       byTree[r.tree_id].trades.push(r);
-            else                                   byTree[r.tree_id]._orphans.push(r);
+
+            var t = byTree[r.tree_id];
+
+            if (t.anchor_candle_id === null
+                && r.anchor_candle_id != null
+                && r.anchor_candle_index) {
+                t.anchor_candle_id    = parseInt(r.anchor_candle_id, 10);
+                t.anchor_candle_index = String(r.anchor_candle_index);
+                t.anchor_row          = r;
+            }
+
+            if (r.row_role === 'root')             t.roots.push(r);
+            else if (r.row_role === 'drawing')     t.drawings.push(r);
+            else if (r.row_role === 'trade')       t.trades.push(r);
+            else                                   t._orphans.push(r);
         });
 
         Object.keys(byTree).forEach(function (tid) {
@@ -3631,7 +4056,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var html = '';
         PT_ALL_TIMEFRAMES.forEach(function (tf) {
             var cls = 'pt-tf-btn' + (tf === PT_CURRENT_TIMEFRAME ? ' active' : '');
-            // Mark source TFs used for active projections
             if (PT_PROJECTION_MODES.some(function (m) { return m.sourceTF === tf; })) {
                 cls += ' pt-tf-proj-src';
             }
@@ -3689,14 +4113,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_REQUESTED_AMOUNT      = PT_DEFAULT_AMOUNT;
         PT_LAST_PERSISTED_SIG    = '';
         PT_FULL_HISTORY_DONE     = false;
+        PT_PROJECTION_LOADED_TFS = {};
         ptUpdateSymbolLabel();
         ptCloseSymbolModal();
         ptRefreshTradesButton();
         ptUpdateProjBanner();
         ptLoadChart();
 
-        // Re-project any active projection modes for the new symbol.
         PT_PROJECTION_MODES.forEach(function (m) {
+            PT_PROJECTION_LOADED_TFS[m.sourceTF] = false;
             ptEnsureConfiguredRows(m.sourceTF, function () {
                 ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
             });
@@ -4003,19 +4428,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         });
     }
 
-    /**
-     * Called once the chart has finished loading its initial batch.
-     * Persists the native snapshot. Projections are refreshed here too.
-     */
     function ptAfterChartLoaded() {
         if (!PT_CANDLES.length) return;
 
         if (PT_PROJECTION_MODES.length) {
-            // Re-evaluate outcomes against the freshly loaded candles.
             ptReevaluateProjectedTradeOutcomes();
 
-            // Re-project any source TFs whose projected rows aren't fully
-            // represented in the loaded candle set.
             var timeSet = {};
             PT_CANDLES.forEach(function (c) { timeSet[c.time] = true; });
 
@@ -4028,9 +4446,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     }
                 }
                 if (missing) {
-                    ptDebugLine('data', 'Re-projecting after chart load', {
-                        sourceTF: m.sourceTF, candleCount: PT_CANDLES.length
-                    });
+                    PT_PROJECTION_LOADED_TFS[m.sourceTF] = false;
                     ptEnsureConfiguredRows(m.sourceTF, function () {
                         ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
                     });
@@ -4040,10 +4456,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             ptUpdateProjBanner();
             ptRefreshTradesButton();
             ptScheduleDraw();
+
+            if (!PT_HAS_MORE_OLDER || PT_CANDLES.length >= PT_REQUESTED_AMOUNT) {
+                ptDebugLine('data', 'Post-load scan (projection mode, native persist)', {
+                    symbol: PT_CURRENT_SYMBOL,
+                    timeframe: PT_CURRENT_TIMEFRAME,
+                    candles: PT_CANDLES.length
+                });
+                ptRescanTradeMatches(true);
+            }
             return;
         }
 
-        // Native mode
         if (PT_HAS_MORE_OLDER && !PT_FULL_HISTORY_DONE) {
             ptDebugLine('data', 'Chart loaded — deferring persist until full history', {
                 candles: PT_CANDLES.length, hasMore: PT_HAS_MORE_OLDER
@@ -4051,9 +4475,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             return;
         }
 
-        if (!PT_FULL_HISTORY_DONE) {
-            PT_FULL_HISTORY_DONE = true;
-        }
+        if (!PT_FULL_HISTORY_DONE) PT_FULL_HISTORY_DONE = true;
 
         ptDebugLine('data', 'Post-load scan (native)', {
             symbol: PT_CURRENT_SYMBOL,
@@ -4061,11 +4483,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             candles: PT_CANDLES.length
         });
         ptRescanTradeMatches(true);
-
-        var tradesModal = document.getElementById('ptTradesModal');
-        if (tradesModal && tradesModal.classList.contains('active')) {
-            ptRenderTradesResults();
-        }
     }
 
     function ptShowBgLoading(on, warn) {
@@ -4335,8 +4752,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ptDrawProgrammeDrawings(pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
 
         // ---- Draw ALL projected drawings (from every source TF) ----
-        // We iterate over PT_PROJECTION_MODES and call a variant of the
-        // projected-drawings renderer that uses that TF's row set.
         if (PT_PROJECTION_MODES.length) {
             PT_PROJECTION_MODES.forEach(function (m) {
                 var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
@@ -4345,11 +4760,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             });
         }
 
+        // ---- Projected anchor markers (the 'A' glyph) ----
+        if (PT_PROJECTION_MODES.length) {
+            ptDrawProjectedAnchorMarkers(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+        }
+
         // ---- Long/short overlays ----
         if (PT_LONG_SHORT_ON) {
-            // Native overlays
             ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-            // Projected overlays
             if (PT_PROJECTION_MODES.length) {
                 PT_PROJECTION_MODES.forEach(function (m) {
                     var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
@@ -4368,13 +4786,210 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     // ============================================================
-    // DRAWING ENGINE (multi-root team evaluation) — native mode
+    // CURRENT TF / TREE / TREE-TF CONTEXT RESOLVER
+    // ============================================================
+    // For the currently displayed timeframe (PT_CURRENT_TIMEFRAME) this walks
+    // every configured tree and reports:
+    //   - the current timeframe we are on
+    //   - the tree's configured timeframe (treeTf, from roots[0].timeframe)
+    //   - the tree id
+    //   - whether the tree is anchored (has anchor_candle_id + anchor_candle_index)
+    //   - the anchor's config row id + anchor_candle_index (the relative offset)
+    //   - the resolved anchor candle index/time on the CURRENT chart
+    //
+    // This is the single source of truth for "which tree / which TF / which
+    // anchor" the 'A' glyph belongs to.
+    function ptGetCurrentTreeTfContext() {
+        var out = {
+            currentTimeframe: PT_CURRENT_TIMEFRAME,
+            currentSymbol:    PT_CURRENT_SYMBOL,
+            projectionMode:   PT_PROJECTION_MODES.length > 0,
+            trees:            []
+        };
+
+        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
+
+        PT_TREES.forEach(function (tree) {
+            var roots = tree.roots || [];
+            if (!roots.length) return;
+
+            var treeTf = roots[0].timeframe || null;
+            var anchored = ptTreeIsAnchored(tree);
+
+            // Only report trees whose native TF matches the chart we are on,
+            // OR (in projection mode) any tree we can project. When not in
+            // projection mode, native-only.
+            var isNative = (treeTf === PT_CURRENT_TIMEFRAME);
+            var isProjectable = out.projectionMode && treeTf && treeTf !== PT_CURRENT_TIMEFRAME;
+
+            if (!isNative && !isProjectable) return;
+
+            var anchorRow   = ptFindAnchorRow(tree);
+            var anchorRowId = anchorRow ? anchorRow.id : null;
+
+            // Resolve the anchor to an actual candle on THIS chart (native only;
+            // projections resolve their own anchor inside ptBuildProjectionFromSubs).
+            var resolvedAnchorIdx  = null;
+            var resolvedAnchorTime = null;
+
+            if (isNative && anchored) {
+                var origins = ptFindAnchorMatches(tree, 0, PT_CANDLES.length - 1);
+                if (origins.length) {
+                    resolvedAnchorIdx  = origins[0];
+                    var ac = PT_CANDLES[resolvedAnchorIdx];
+                    resolvedAnchorTime = ac ? ac.time : null;
+                }
+            }
+
+            out.trees.push({
+                treeId:             tree.tree_id,
+                treeTf:             treeTf,
+                matchesCurrentTf:   isNative,
+                isProjectable:      isProjectable,
+                anchored:           anchored,
+                anchorCandleId:     tree.anchor_candle_id != null ? tree.anchor_candle_id : null,
+                anchorCandleIndex:  tree.anchor_candle_index != null ? String(tree.anchor_candle_index) : null,
+                anchorRowRole:      anchorRow ? anchorRow.row_role : null,
+                anchorRowName:      anchorRow ? anchorRow.candle_name : null,
+                resolvedAnchorIdx:  resolvedAnchorIdx,
+                resolvedAnchorTime: resolvedAnchorTime
+            });
+        });
+
+        return out;
+    }
+
+    // ============================================================
+    // PROJECTED ANCHOR MARKERS
+    // ============================================================
+    function ptDrawProjectedAnchorMarkers(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
+        if (!PT_DRAW_CTX) return;
+        if (!PT_CANDLES.length) return;
+        if (!PT_PROJECTION_MODES.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        // ---- Resolve the current TF / tree / tree-TF context once ----
+        var ctx = ptGetCurrentTreeTfContext();
+
+        console.groupCollapsed(
+            '[PT Anchor] current TF=' + ctx.currentTimeframe +
+            '  symbol=' + ctx.currentSymbol +
+            '  projectionMode=' + ctx.projectionMode +
+            '  trees=' + ctx.trees.length
+        );
+        console.log('Current timeframe :', ctx.currentTimeframe);
+        console.log('Current symbol    :', ctx.currentSymbol);
+        console.log('Projection mode   :', ctx.projectionMode);
+        console.table(ctx.trees.map(function (t) {
+            return {
+                treeId:             t.treeId,
+                treeTf:             t.treeTf,
+                matchesCurrentTf:   t.matchesCurrentTf,
+                isProjectable:      t.isProjectable,
+                anchored:           t.anchored,
+                anchorCandleId:     t.anchorCandleId,
+                anchorCandleIndex:  t.anchorCandleIndex,
+                anchorRowRole:      t.anchorRowRole,
+                resolvedAnchorIdx:  t.resolvedAnchorIdx,
+                resolvedAnchorTime: t.resolvedAnchorTime
+            };
+        }));
+        console.groupEnd();
+
+        // Mirror into the debug console so it shows up alongside other events.
+        ptDebugLine('cfg', 'Anchor context resolved', {
+            currentTimeframe: ctx.currentTimeframe,
+            currentSymbol:    ctx.currentSymbol,
+            projectionMode:   ctx.projectionMode,
+            trees:            ctx.trees
+        });
+
+        var drawnKeys = {};
+        var glyphSize = Math.max(12, Math.min(20, PT_VIEW.candleWidth * 1.2));
+
+        PT_DRAW_CTX.save();
+        PT_DRAW_CTX.textAlign    = 'center';
+        PT_DRAW_CTX.textBaseline = 'alphabetic';
+        PT_DRAW_CTX.font         = 'bold ' + glyphSize + 'px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+        PT_DRAW_CTX.lineWidth    = 3;
+        PT_DRAW_CTX.strokeStyle  = 'rgba(0,0,0,0.85)';
+        PT_DRAW_CTX.fillStyle    = '#ffd54a';
+
+        PT_PROJECTION_MODES.forEach(function (mode) {
+            var rows = PT_PROJECTED_BY_TF[mode.sourceTF] || [];
+            if (!rows.length) return;
+
+            rows.forEach(function (r) {
+                if (!r._anchor_target) return;
+
+                var idx = idxByTime[r.candle_time];
+                if (idx == null) return;
+
+                if (idx < firstVisible || idx > lastVisible) return;
+
+                var dedupKey = (r._anchor_tree_id != null ? r._anchor_tree_id : 'x')
+                             + '|' + (r._anchor_src_row_id != null ? r._anchor_src_row_id : 'x')
+                             + '|' + r.candle_time;
+                if (drawnKeys[dedupKey]) return;
+                drawnKeys[dedupKey] = true;
+
+                var candle = PT_CANDLES[idx];
+                if (!candle) return;
+
+                var cx = baseX + idx * step + step / 2;
+                var yTop = pToY(candle.high);
+
+                if (yTop < chartTop - 200 || yTop > chartBottom + 200) return;
+
+                var glyphY = yTop - Math.max(4, glyphSize * 0.25);
+                if (glyphY < chartTop) glyphY = chartTop + glyphSize;
+
+                PT_DRAW_CTX.strokeText('A', cx, glyphY);
+                PT_DRAW_CTX.fillText('A', cx, glyphY);
+
+                // ---- Log which anchor this 'A' represents ----
+                var treeId    = r._anchor_tree_id != null ? r._anchor_tree_id : null;
+                var treeEntry = null;
+                for (var i = 0; i < ctx.trees.length; i++) {
+                    if (ctx.trees[i].treeId === treeId) { treeEntry = ctx.trees[i]; break; }
+                }
+
+                console.log(
+                    '[PT Anchor A] current TF=' + PT_CURRENT_TIMEFRAME +
+                    '  tree=' + (treeId != null ? treeId : '?') +
+                    '  treeTf=' + (treeEntry ? treeEntry.treeTf : '?') +
+                    '  anchorRowId=' + r._anchor_src_row_id +
+                    '  anchorIndex=' + r._anchor_index +
+                    '  candleTime=' + r.candle_time
+                );
+
+                ptDebugLine('cfg', 'A drawn', {
+                    currentTimeframe: PT_CURRENT_TIMEFRAME,
+                    sourceTimeframe:  mode.sourceTF,
+                    treeId:           treeId,
+                    treeTf:           treeEntry ? treeEntry.treeTf : null,
+                    anchorRowId:      r._anchor_src_row_id,
+                    anchorIndex:      r._anchor_index,
+                    candleTime:       r.candle_time,
+                    candleIdx:        idx
+                });
+            });
+        });
+
+        PT_DRAW_CTX.restore();
+    }
+
+    // ============================================================
+    // CANDLE TYPE MATCHING
     // ============================================================
     function ptCandleTypeMatches(type, candle) {
         if (!candle) return false;
         var ct = (type || '').toLowerCase();
         if (ct === 'bullish') return candle.close > candle.open;
         if (ct === 'bearish') return candle.close < candle.open;
+        if (ct === 'any')     return candle.close !== candle.open;
         return true;
     }
     function ptCompare(a, op, b) {
@@ -4665,13 +5280,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var drawings = tree.drawings || [];
             if (!drawings.length) return;
 
-            var candidates = ptRootCandidateIndices(firstVisible, lastVisible);
+            var anchored = ptTreeIsAnchored(tree);
 
-            candidates.forEach(function (i0) {
-                if (i0 < firstVisible || i0 > lastVisible) return;
-                if (i0 < 0 || i0 >= PT_CANDLES.length) return;
+            if (anchored) {
+                var treeTf = roots[0].timeframe;
+                if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return;
+            }
 
-                var matched = ptEvaluateTreeAt(tree, i0, firstVisible, lastVisible);
+            var origins = [];
+            if (anchored) {
+                origins = ptFindAnchorMatches(tree, firstVisible, lastVisible);
+                if (!origins.length) return;
+            } else {
+                origins = ptRootCandidateIndices(firstVisible, lastVisible);
+            }
+
+            origins.forEach(function (origin) {
+                if (origin < 0 || origin >= PT_CANDLES.length) return;
+
+                var matched = anchored
+                    ? ptEvaluateTreeAtAnchor(tree, origin, firstVisible, lastVisible)
+                    : ptEvaluateTreeAt(tree, origin, firstVisible, lastVisible);
                 if (!matched.length) return;
 
                 var foundationMatch = matched[0];
@@ -4686,7 +5315,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     if (!dr.draw_from || !dr.draw_from_price_level) return;
                     if (!dr.draw_to) return;
 
-                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, i0);
+                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, origin);
                     if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
                     var fromCandle = PT_CANDLES[fromIdx];
                     if (!fromCandle) return;
@@ -4701,7 +5330,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var specMatch2 = /^(.+)_specific_price_level$/.exec(toKey);
                     if (specMatch2) {
                         var targetKey = specMatch2[1];
-                        var toIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, targetKey, i0);
+                        var toIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, targetKey, origin);
                         if (toIdx == null || toIdx < 0 || toIdx >= PT_CANDLES.length) return;
                         var toCandle = PT_CANDLES[toIdx];
                         if (!toCandle) return;
@@ -4715,20 +5344,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var axisMatch2 = /^(.+)_axis$/.exec(toKey);
                     if (axisMatch2) {
                         var axisKey = axisMatch2[1];
-                        var axisIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, axisKey, i0);
+                        var axisIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, axisKey, origin);
                         if (axisIdx == null || axisIdx < 0 || axisIdx >= PT_CANDLES.length) return;
                         drawSegment(x1, y1, baseX + axisIdx * step + step / 2, y1, stroke);
                         return;
                     }
 
                     if (toKey === 'any_candle_intercept') {
-                        var dir = (fromIdx >= foundationAbs) ? 1 : -1;
-                        var hit2 = ptFindAnyIntercept(fromIdx, dir, y1, fromVal, baseX, step, firstVisible, lastVisible);
-                        if (hit2) drawSegment(x1, y1, hit2.x, hit2.y, stroke);
+                        var hitRight = ptFindAnyIntercept(fromIdx, +1, y1, fromVal, baseX, step, firstVisible, lastVisible);
+                        if (hitRight) {
+                            drawSegment(x1, y1, hitRight.x, hitRight.y, stroke);
+                            return;
+                        }
+                        var hitLeft = ptFindAnyIntercept(fromIdx, -1, y1, fromVal, baseX, step, firstVisible, lastVisible);
+                        if (hitLeft) drawSegment(x1, y1, hitLeft.x, hitLeft.y, stroke);
                         return;
                     }
 
-                    var namedIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, toKey, i0);
+                    var namedIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, toKey, origin);
                     if (namedIdx != null && namedIdx >= 0 && namedIdx < PT_CANDLES.length) {
                         drawSegment(x1, y1, baseX + namedIdx * step + step / 2, y1, stroke);
                         return;
@@ -4750,9 +5383,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
     }
 
-    // Generic projected-drawings renderer for a given projected row set.
-    // This is the old ptDrawProjectedDrawings logic, but takes the rows as
-    // an argument so we can call it once per active source TF.
     function ptDrawProjectedDrawingRows(rows, pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
         if (!PT_DRAW_CTX) return;
         if (!rows.length) return;
@@ -4933,7 +5563,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         }
     }
 
-    // Long/short overlay renderer for a specific projected row set.
     function ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
         if (!PT_DRAW_CTX) return;
         if (!PT_CANDLES.length) return;
@@ -5087,7 +5716,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_DRAW_CTX.restore();
     }
 
-    // Native long/short overlays (unchanged from original)
     function ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
         if (!PT_DRAW_CTX) return;
         if (!PT_CANDLES.length) return;

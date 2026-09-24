@@ -264,6 +264,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     $trees       = is_array($payload['trees'] ?? null) ? $payload['trees'] : [];
     $singleTreeId = isset($payload['tree_id']) ? (int)$payload['tree_id'] : 0;
 
+    $oldRootIdToName  = [];
+    $oldRootIdToOrder = [];
+    $pendingAnchors   = [];
+    if ($singleTreeId > 0) {
+        $capture = $pdo->prepare("
+            SELECT id, candle_name, root_order
+            FROM programme_configuration
+            WHERE userid = ? AND programmeid = ? AND tree_id = ? AND row_role = 'root'
+        ");
+        $capture->execute([$uId, $programmeId, $singleTreeId]);
+        while ($cr = $capture->fetch(PDO::FETCH_ASSOC)) {
+            $oldRootIdToName[(int)$cr['id']]  = (string)$cr['candle_name'];
+            $oldRootIdToOrder[(int)$cr['id']] = (int)$cr['root_order'];
+        }
+    }
+
     $rrOverrides = is_array($payload['accountManagement'] ?? null) ? $payload['accountManagement'] : [];
 
     try {
@@ -469,22 +485,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             }
 
             // ---- 4.5) APPLY TREE-LEVEL ANCHOR TO ALL ROOTS ----
-            if ($treeAnchorLocalKey !== '') {
-                $anchorDbId = isset($rootLocalToDb[$treeAnchorLocalKey])
-                    ? (int)$rootLocalToDb[$treeAnchorLocalKey] : 0;
+            //
+            // The anchor is GLOBAL across all trees. It may point at:
+            //   1) a root in THIS tree (fast path — resolved via $rootLocalToDb)
+            //   2) a root in ANOTHER tree (resolved by candle name across the
+            //      whole programme)
+            //
+            // We also record the anchor intent so a post-pass (section 7) can
+            // re-resolve it after every tree has been inserted — this is what
+            // makes "Save All" survive a page reload.
+            $anchorGlobalKey  = isset($tree['anchor_global_key'])  ? (string)$tree['anchor_global_key']  : '';
+            $anchorCandleName = isset($tree['anchor_candle_name']) ? trim((string)$tree['anchor_candle_name']) : '';
+            $anchorIndexRaw   = isset($tree['anchor_candle_index']) ? trim((string)$tree['anchor_candle_index']) : '';
+            $anchorIndex      = in_array($anchorIndexRaw, ['open_time', 'close_time'], true)
+                                    ? $anchorIndexRaw : null;
 
-                if ($anchorDbId > 0) {
-                    $anchorIndex = in_array($treeAnchorIndex, ['open_time','close_time'], true)
-                        ? $treeAnchorIndex : null;
+            $anchorDbId = 0;
 
-                    foreach ($rootDbIds as $rdb) {
-                        $upd2 = $pdo->prepare("
-                            UPDATE programme_configuration
-                            SET anchor_candle_id = ?, anchor_candle_index = ?
-                            WHERE id = ?
-                        ");
-                        $upd2->execute([$anchorDbId, $anchorIndex, (int)$rdb]);
-                    }
+            // Fast path: anchor points at a root in the current tree.
+            if ($anchorGlobalKey !== '' && isset($rootLocalToDb[$anchorGlobalKey])) {
+                $anchorDbId = (int)$rootLocalToDb[$anchorGlobalKey];
+            }
+
+            // Cross-tree path: resolve by candle name across the whole programme.
+            // This also covers the case where the anchor root was inserted
+            // earlier in this same request (previous tree in the loop).
+            if ($anchorDbId <= 0 && $anchorCandleName !== '') {
+                $anchorLookup = $pdo->prepare("
+                    SELECT id
+                    FROM programme_configuration
+                    WHERE userid = ? AND programmeid = ? AND row_role = 'root'
+                      AND candle_name = ?
+                    ORDER BY tree_id ASC, root_order ASC
+                    LIMIT 1
+                ");
+                $anchorLookup->execute([$uId, $programmeId, $anchorCandleName]);
+                $anchorRow = $anchorLookup->fetch(PDO::FETCH_ASSOC);
+                if ($anchorRow) {
+                    $anchorDbId = (int)$anchorRow['id'];
+                }
+            }
+
+            if ($anchorDbId > 0) {
+                foreach ($rootDbIds as $rdb) {
+                    $upd2 = $pdo->prepare("
+                        UPDATE programme_configuration
+                        SET anchor_candle_id = ?, anchor_candle_index = ?
+                        WHERE id = ?
+                    ");
+                    $upd2->execute([$anchorDbId, $anchorIndex, (int)$rdb]);
+                }
+            } else if ($anchorCandleName !== '') {
+                // Anchor target not inserted yet (it lives in a LATER tree in
+                // this request). Queue it for the post-pass below.
+                if (!isset($pendingAnchors)) { $pendingAnchors = []; }
+                $pendingAnchors[] = [
+                    'root_db_ids'  => array_values($rootDbIds),
+                    'candle_name'  => $anchorCandleName,
+                    'anchor_index' => $anchorIndex
+                ];
+            }
+            // ---- 4.6) REPAIR CROSS-TREE ANCHOR REFERENCES ----
+            if ($singleTreeId > 0 && !empty($oldRootIdToName)) {
+                $newRootIdByNameOrder = [];
+                foreach ($rootDbIds as $rIdx2 => $newRootId) {
+                    $rootRowNow = isset($roots[$rIdx2]) ? $roots[$rIdx2] : null;
+                    if (!$rootRowNow) continue;
+                    $nm    = (string)($rootRowNow['candle_name'] ?? '');
+                    $order = $rIdx2 + 1;
+                    if ($nm === '') continue;
+                    $newRootIdByNameOrder[$nm . '::' . $order] = (int)$newRootId;
+                }
+
+                foreach ($oldRootIdToName as $oldId => $oldName) {
+                    $oldOrder = isset($oldRootIdToOrder[$oldId]) ? $oldRootIdToOrder[$oldId] : 0;
+                    $key = $oldName . '::' . $oldOrder;
+                    if (!isset($newRootIdByNameOrder[$key])) continue;
+                    $newAnchorId = $newRootIdByNameOrder[$key];
+
+                    $repair = $pdo->prepare("
+                        UPDATE programme_configuration
+                        SET anchor_candle_id = ?
+                        WHERE userid = ? AND programmeid = ?
+                        AND tree_id <> ?
+                        AND anchor_candle_id = ?
+                    ");
+                    $repair->execute([$newAnchorId, $uId, $programmeId, $singleTreeId, $oldId]);
                 }
             }
 
@@ -619,6 +705,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     VALUES (?, 0, ?, ?)
                 ");
                 $insAm->execute([$uId, $newMin, $newFixed]);
+            }
+        }
+
+        // ---- 7) POST-PASS: RESOLVE DEFERRED GLOBAL ANCHORS ----
+        //
+        // Any tree whose anchor pointed at a root belonging to a LATER tree in
+        // this same request could not be resolved during that tree's insert.
+        // Now that every root across every tree exists in the DB, resolve them
+        // by candle name.
+        if (!empty($pendingAnchors) && is_array($pendingAnchors)) {
+            foreach ($pendingAnchors as $pa) {
+                $paName = isset($pa['candle_name']) ? trim((string)$pa['candle_name']) : '';
+                if ($paName === '') continue;
+
+                $lookup = $pdo->prepare("
+                    SELECT id
+                    FROM programme_configuration
+                    WHERE userid = ? AND programmeid = ? AND row_role = 'root'
+                      AND candle_name = ?
+                    ORDER BY tree_id ASC, root_order ASC
+                    LIMIT 1
+                ");
+                $lookup->execute([$uId, $programmeId, $paName]);
+                $resolvedRow = $lookup->fetch(PDO::FETCH_ASSOC);
+                if (!$resolvedRow) continue;
+
+                $resolvedId    = (int)$resolvedRow['id'];
+                $resolvedIndex = isset($pa['anchor_index']) ? $pa['anchor_index'] : null;
+                if (!in_array($resolvedIndex, ['open_time', 'close_time'], true)) {
+                    $resolvedIndex = null;
+                }
+
+                $upd = $pdo->prepare("
+                    UPDATE programme_configuration
+                    SET anchor_candle_id = ?, anchor_candle_index = ?
+                    WHERE id = ?
+                ");
+                foreach ((array)$pa['root_db_ids'] as $rootId) {
+                    $upd->execute([$resolvedId, $resolvedIndex, (int)$rootId]);
+                }
             }
         }
 
@@ -1708,53 +1834,9 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 });
             });
 
-            // Resolve tree-level anchor db id to a GLOBAL anchor value.
-            // The anchor is stored as anchor_candle_id pointing at a root row.
-            if (tree.anchorDbId) {
-                // Search all trees' roots for the matching db id; anchor is global.
-                var foundGlobal = null;
-                PC.trees.forEach(function (otherTree) {
-                    (otherTree.roots || []).forEach(function (otherRoot) {
-                        if (otherRoot.dbId === tree.anchorDbId) {
-                            var nm = (otherRoot.fields.candle_name || '').trim();
-                            if (nm) {
-                                foundGlobal = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
-                            }
-                        }
-                        (otherRoot.refs || []).forEach(function (otherRef) {
-                            if (otherRef.dbId === tree.anchorDbId) {
-                                var refNm = (otherRef.fields.candle_name || '').trim();
-                                if (refNm) {
-                                    foundGlobal = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
-                                }
-                            }
-                        });
-                    });
-                });
-
-                // Fallback: anchor may be in the tree currently being hydrated
-                if (!foundGlobal) {
-                    tree.roots.forEach(function (r) {
-                        if (r.dbId === tree.anchorDbId) {
-                            var nm2 = (r.fields.candle_name || '').trim();
-                            if (nm2) foundGlobal = nm2 + '::root::' + tree.localId + '::' + r.localId;
-                        }
-                        (r.refs || []).forEach(function (rf) {
-                            if (rf.dbId === tree.anchorDbId) {
-                                var refNm2 = (rf.fields.candle_name || '').trim();
-                                if (refNm2) foundGlobal = refNm2 + '::ref::' + tree.localId + '::' + rf.localId;
-                            }
-                        });
-                    });
-                }
-
-                // Legacy fallback: local key from dbIdToLocal
-                if (!foundGlobal && dbIdToLocal[tree.anchorDbId]) {
-                    foundGlobal = dbIdToLocal[tree.anchorDbId];
-                }
-
-                tree.anchorLocalKey = foundGlobal || null;
-            }
+            // Stash the raw DB anchor id; resolution happens in a second sweep
+            // once every tree's roots are known.
+            tree._rawAnchorDbId = tree.anchorDbId || null;
 
             (t.drawings || []).forEach(function (dr) {
                 tree.drawings.push({
@@ -1802,6 +1884,39 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             });
 
             PC.trees.push(tree);
+        });
+
+        // ---- Second sweep: resolve every tree's raw anchor DB id to a
+        // global anchor key now that all trees' roots are available. ----
+        PC.trees.forEach(function (tree) {
+            var rawId = tree._rawAnchorDbId;
+            if (!rawId) {
+                tree.anchorLocalKey = tree.anchorLocalKey || null;
+                return;
+            }
+
+            var foundGlobal = null;
+            PC.trees.forEach(function (otherTree) {
+                (otherTree.roots || []).forEach(function (otherRoot) {
+                    if (otherRoot.dbId === rawId) {
+                        var nm = (otherRoot.fields.candle_name || '').trim();
+                        if (nm) {
+                            foundGlobal = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
+                        }
+                    }
+                    (otherRoot.refs || []).forEach(function (otherRef) {
+                        if (otherRef.dbId === rawId) {
+                            var refNm = (otherRef.fields.candle_name || '').trim();
+                            if (refNm) {
+                                foundGlobal = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
+                            }
+                        }
+                    });
+                });
+            });
+
+            tree.anchorLocalKey = foundGlobal || null;
+            delete tree._rawAnchorDbId;
         });
     }
 
@@ -2281,7 +2396,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     renderTrees();
                 });
             }
-
             // ── GLOBAL ANCHOR CANDLE (across all trees) ──
             var treeAnchorRootSel    = group.querySelector('[data-field="tree_anchor_root"]');
             var treeAnchorIndexField = group.querySelector('[data-role="treeAnchorIndexField"]');
@@ -2289,6 +2403,33 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             var treeAnchorNameLabel  = group.querySelector('[data-role="treeAnchorNameLabel"]');
 
             if (treeAnchorRootSel) {
+                // ---- Derive anchorLocalKey from the persisted DB id, every render.
+                //      This makes the anchor immune to uid() churn and render order.
+                if (tree.anchorDbId) {
+                    var resolvedKey = null;
+                    PC.trees.forEach(function (otherTree) {
+                        (otherTree.roots || []).forEach(function (otherRoot) {
+                            if (otherRoot.dbId === tree.anchorDbId) {
+                                var nm = (otherRoot.fields.candle_name || '').trim();
+                                if (nm) {
+                                    resolvedKey = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
+                                }
+                            }
+                            (otherRoot.refs || []).forEach(function (otherRef) {
+                                if (otherRef.dbId === tree.anchorDbId) {
+                                    var refNm = (otherRef.fields.candle_name || '').trim();
+                                    if (refNm) {
+                                        resolvedKey = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    if (resolvedKey) {
+                        tree.anchorLocalKey = resolvedKey;
+                    }
+                }
+
                 var anchorOpts = buildGlobalAnchorOptions();
 
                 if (anchorOpts.length === 0) {
@@ -2301,35 +2442,75 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     treeAnchorRootSel.disabled = false;
                     fillSelect(treeAnchorRootSel, anchorOpts, { placeholder: '— none —' });
 
-                    // Restore selection if it still exists; otherwise clear model state
-                    var validValues = anchorOpts.map(function (o) { return o.value; });
-                    if (tree.anchorLocalKey && validValues.indexOf(tree.anchorLocalKey) !== -1) {
+                    // ---- Restore the model value WITHOUT ever nulling it.
+                    //      If the saved key is not among the current options
+                    //      (target renamed / tree deleted), inject a stale
+                    //      option so the user sees it and the value survives.
+                    if (tree.anchorLocalKey) {
+                        var exists = anchorOpts.some(function (o) { return o.value === tree.anchorLocalKey; });
+                        if (!exists) {
+                            var staleName = String(tree.anchorLocalKey).split('::')[0] || 'saved anchor';
+                            var staleOpt  = document.createElement('option');
+                            staleOpt.value = tree.anchorLocalKey;
+                            staleOpt.textContent = staleName + ' (saved — target not found)';
+                            treeAnchorRootSel.appendChild(staleOpt);
+                        }
                         treeAnchorRootSel.value = tree.anchorLocalKey;
                     } else {
-                        tree.anchorLocalKey = null;
-                        tree.anchorIndex    = '';
                         treeAnchorRootSel.value = '';
                     }
 
                     function syncTreeAnchorIndexField() {
                         var chosen = treeAnchorRootSel.value;
+
+                        // Resolve the chosen key back to a numeric db id so
+                        // the model always carries a durable anchorDbId.
+                        var newAnchorDbId = null;
+                        if (chosen) {
+                            var parts = String(chosen).split('::');
+                            if (parts.length >= 4) {
+                                var chosenKind = parts[1];
+                                var chosenTlid = parts[2];
+                                var chosenEid  = parts[3];
+                                PC.trees.forEach(function (otherTree) {
+                                    if (otherTree.localId !== chosenTlid) return;
+                                    if (chosenKind === 'root') {
+                                        (otherTree.roots || []).forEach(function (r) {
+                                            if (r.localId === chosenEid) newAnchorDbId = r.dbId;
+                                        });
+                                    } else if (chosenKind === 'ref') {
+                                        (otherTree.roots || []).forEach(function (r) {
+                                            (r.refs || []).forEach(function (rf) {
+                                                if (rf.localId === chosenEid) newAnchorDbId = rf.dbId;
+                                            });
+                                        });
+                                    }
+                                });
+                            }
+                        }
+
                         if (!chosen) {
                             if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
                             tree.anchorLocalKey = null;
-                            tree.anchorIndex = '';
+                            tree.anchorDbId     = null;
+                            tree.anchorIndex    = '';
                             if (treeAnchorIndexSel) treeAnchorIndexSel.value = '';
                             return;
                         }
-                        tree.anchorLocalKey = chosen;
 
-                        // Derive a display name from the global option label
+                        tree.anchorLocalKey = chosen;
+                        tree.anchorDbId     = newAnchorDbId;
+
+                        // Derive a display name from the option label
                         var chosenOpt = anchorOpts.filter(function (o) { return o.value === chosen; })[0];
                         var chosenName = chosenOpt ? chosenOpt.label : 'candle';
                         if (treeAnchorNameLabel) treeAnchorNameLabel.textContent = chosenName;
 
-                        fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
-                        if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
-                            treeAnchorIndexSel.value = tree.anchorIndex;
+                        if (treeAnchorIndexSel) {
+                            fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
+                            if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
+                                treeAnchorIndexSel.value = tree.anchorIndex;
+                            }
                         }
                         if (treeAnchorIndexField) treeAnchorIndexField.style.display = '';
                     }
@@ -2560,16 +2741,18 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 treeAnchorRootSel.appendChild(opt);
             });
 
-            // Restore prior value if it still exists; otherwise clear model state
-            if (curVal && validValues.indexOf(curVal) !== -1) {
-                treeAnchorRootSel.value = curVal;
-            } else if (tree.anchorLocalKey && validValues.indexOf(tree.anchorLocalKey) !== -1) {
-                treeAnchorRootSel.value = tree.anchorLocalKey;
-            } else {
-                treeAnchorRootSel.value = '';
-                tree.anchorLocalKey = null;
-                tree.anchorIndex    = '';
+            // Restore prior value if it still exists; NEVER null the model
+            // from a refresh — the model is the source of truth.
+            var desiredKey = curVal || tree.anchorLocalKey || '';
+            if (desiredKey && validValues.indexOf(desiredKey) === -1) {
+                // Inject a stale option so the user still sees what's stored.
+                var staleName2 = String(desiredKey).split('::')[0] || 'saved anchor';
+                var staleOpt2  = document.createElement('option');
+                staleOpt2.value = desiredKey;
+                staleOpt2.textContent = staleName2 + ' (saved — target not found)';
+                treeAnchorRootSel.appendChild(staleOpt2);
             }
+            treeAnchorRootSel.value = desiredKey || '';
 
             // Refresh the index-time label/field for whatever is selected now
             var chosen = treeAnchorRootSel.value;
@@ -2852,33 +3035,65 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // SNAPSHOT
     // ============================================================
     function pcBuildTreeSnapshot(tree) {
-        // Resolve the global anchor value to a local key that exists in THIS tree.
-        var resolvedAnchorLocalKey = null;
-        if (tree.anchorLocalKey) {
-            var resolved = resolveAnchorForTree(tree, tree.anchorLocalKey);
-            if (resolved) resolvedAnchorLocalKey = resolved.localId;
+        // Send BOTH the global anchor key AND the anchor candle name so the
+        // server can resolve the anchor even when it lives in a different tree.
+        // Do NOT null out cross-tree anchors here — that was the original bug.
+        var anchorGlobalKey  = tree.anchorLocalKey || null;
+        var anchorCandleName = null;
+
+        if (anchorGlobalKey) {
+            // Global anchor value format:
+            //   "candleName::root::treeLocalId::rootLocalId"
+            //   "candleName::ref::treeLocalId::refLocalId"
+            var parts = String(anchorGlobalKey).split('::');
+            if (parts.length >= 4 && parts[0]) {
+                anchorCandleName = parts[0];
+            } else {
+                // Legacy fallback: anchor stored as a plain local key that
+                // belongs to THIS tree. Resolve it locally so the server still
+                // receives something usable.
+                var resolved = resolveAnchorForTree(tree, anchorGlobalKey);
+                if (resolved) {
+                    if (resolved.type === 'root') {
+                        var r = (tree.roots || []).filter(function (x) {
+                            return x.localId === resolved.localId;
+                        })[0];
+                        if (r) anchorCandleName = (r.fields.candle_name || '').trim() || null;
+                    } else if (resolved.type === 'ref') {
+                        (tree.roots || []).forEach(function (r) {
+                            (r.refs || []).forEach(function (ref) {
+                                if (ref.localId === resolved.localId) {
+                                    anchorCandleName = (ref.fields.candle_name || '').trim() || null;
+                                }
+                            });
+                        });
+                    }
+                }
+            }
         }
 
         var t = {
             timeframe:           tree.timeframe || '',
-            anchor_local_key:    resolvedAnchorLocalKey,
+            anchor_global_key:   anchorGlobalKey,
+            anchor_candle_name:  anchorCandleName,
             anchor_candle_index: tree.anchorIndex || '',
             roots:               [],
             drawings:            [],
             trades:              []
         };
+
         (tree.roots || []).forEach(function (root, rIdx) {
             var rootSnap = {
-                local_key:         root.localId,
-                candle_name:       root.fields.candle_name || '',
-                price_level:       root.fields.price_level || '',
-                timeframe:         tree.timeframe || root.fields.timeframe || '',
-                candle_type:       root.fields.candle_type || '',
-                candle_position:   root.fields.candle_position === '' ? '0' : root.fields.candle_position,
-                candle_search:     root.fields.candle_search || '',
-                operator:          root.fields.operator || '',
+                local_key:           root.localId,
+                candle_name:         root.fields.candle_name || '',
+                price_level:         root.fields.price_level || '',
+                timeframe:           tree.timeframe || root.fields.timeframe || '',
+                candle_type:         root.fields.candle_type || '',
+                candle_position:     root.fields.candle_position === '' ? '0' : root.fields.candle_position,
+                candle_search:       root.fields.candle_search || '',
+                operator:            root.fields.operator || '',
                 authority_local_key: root.authorityLocalKey || null,
-                root_refs:         []
+                root_refs:           []
             };
             (root.refs || []).forEach(function (ref) {
                 var refSnap = {
@@ -2892,25 +3107,32 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 };
                 (ref.reRefPairs || []).forEach(function (p) {
                     refSnap.re_ref_pairs.push({
-                        author:     { price_level: p.author.fields.price_level || '', operator: p.author.fields.operator || '' },
-                        referenced: { price_level: p.servant.fields.price_level || '' }
+                        author:     {
+                            price_level: p.author.fields.price_level || '',
+                            operator:    p.author.fields.operator || ''
+                        },
+                        referenced: {
+                            price_level: p.servant.fields.price_level || ''
+                        }
                     });
                 });
                 rootSnap.root_refs.push(refSnap);
             });
             t.roots.push(rootSnap);
         });
+
         (tree.drawings || []).forEach(function (d) {
             t.drawings.push({
-                drawing_id:             d.fields.drawing_id,
-                drawing_tools:          d.fields.drawing_tools || '',
-                draw_from:              d.fields.draw_from || '',
-                draw_from_price_level:  d.fields.draw_from_price_level || '',
-                draw_to:                d.fields.draw_to || '',
-                draw_to_price_level:    d.fields.draw_to_price_level || '',
-                drawing_color:          d.fields.drawing_color || ''
+                drawing_id:            d.fields.drawing_id,
+                drawing_tools:         d.fields.drawing_tools || '',
+                draw_from:             d.fields.draw_from || '',
+                draw_from_price_level: d.fields.draw_from_price_level || '',
+                draw_to:               d.fields.draw_to || '',
+                draw_to_price_level:   d.fields.draw_to_price_level || '',
+                drawing_color:         d.fields.drawing_color || ''
             });
         });
+
         (tree.trades || []).forEach(function (tr) {
             var f = tr.fields;
             var snap = {
@@ -2925,7 +3147,8 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             };
             if (snap.target_type === 'risk_reward') {
                 snap.target = (f.target_rr_mode === 'minimum_risk_reward')
-                    ? 'minimum_risk_reward' : 'fixed_risk_reward';
+                    ? 'minimum_risk_reward'
+                    : 'fixed_risk_reward';
                 snap.target_price_level = '';
             } else {
                 snap.target = f.target || '';
@@ -2933,6 +3156,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             }
             t.trades.push(snap);
         });
+
         return t;
     }
 
@@ -3121,6 +3345,22 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         if (current) PC_CURRENT_TF = String(current);
     };
     window.pcSetTrees = function (trees) { PC_TREES_SERVER = Array.isArray(trees) ? trees.slice() : []; };
+    window.pcDebugState = function () {
+        return {
+            trees: PC.trees.map(function (t) {
+                return {
+                    localId: t.localId,
+                    dbTreeId: t.dbTreeId,
+                    anchorLocalKey: t.anchorLocalKey,
+                    anchorDbId: t.anchorDbId,
+                    anchorIndex: t.anchorIndex,
+                    roots: t.roots.map(function (r) {
+                        return { localId: r.localId, dbId: r.dbId, name: r.fields.candle_name };
+                    })
+                };
+            })
+        };
+    };
 
 })();
 </script>

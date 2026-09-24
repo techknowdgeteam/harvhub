@@ -639,7 +639,7 @@ showSpinner();
 <meta charset="UTF-8">
 <title>VPS Hub - HarvHub</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
@@ -658,6 +658,25 @@ showSpinner();
         body {
             padding-top: var(--header-height-mobile, 52px);
             padding-bottom: var(--nav-height-mobile, 80px);
+        }
+    }
+    /* ============================================================
+    GLOBAL iOS ZOOM FIX
+    iOS Safari auto-zooms any input with font-size < 16px.
+    Force 16px on all form controls at mobile widths.
+    ============================================================ */
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea,
+        .dd-input,
+        .dd-select,
+        .dd-am-input,
+        .dd-inline-input,
+        .dd-req-input,
+        .dd-json-edit-textarea,
+        .pt-modal-input {
+            font-size: 16px !important;
         }
     }
 </style>
@@ -741,7 +760,7 @@ showSpinner();
                             </div>
                             <div class="vps-host-meta">
                                 <span class="vps-host-stat">
-                                    <span class="vps-host-stat-label">Server Location</span>
+                                    <span class="vps-host-stat-label">Proxy</span>
                                     <span class="vps-host-stat-value"><?= htmlspecialchars($serverLocation) ?></span>
                                 </span>
                                 <span class="vps-host-stat">
@@ -1049,7 +1068,7 @@ showSpinner();
     }
 
     // ==================== FOLLOWER MODE: OWNER + FOLLOWERS LIST ====================
-    // Only shows: owner name, server location, subscription duration,
+    // Only shows: owner name, Proxy, subscription duration,
     // and the followers list. No IP, no passwords, no IDs.
     function renderFollowerOwnerView(container, owner, self, followers) {
         var html = '';
@@ -1058,7 +1077,7 @@ showSpinner();
         html += '  <div class="vps-owner-badge">VPS Owner</div>';
         html += '  <div class="vps-owner-name">' + escapeHtml(owner.fullname || 'Anonymous') + '</div>';
         html += '  <div class="vps-owner-meta">';
-        html += '    <div class="vps-owner-stat"><span class="vps-owner-stat-label">Server Location</span><span class="vps-owner-stat-value">' + escapeHtml(owner.server_location || 'N/A') + '</span></div>';
+        html += '    <div class="vps-owner-stat"><span class="vps-owner-stat-label">Proxy</span><span class="vps-owner-stat-value">' + escapeHtml(owner.server_location || 'N/A') + '</span></div>';
         if (owner.subscription_duration) {
             html += '    <div class="vps-owner-stat"><span class="vps-owner-stat-label">Subscription Duration</span><span class="vps-owner-stat-value">' + escapeHtml(String(owner.subscription_duration)) + ' days</span></div>';
         }
@@ -1201,7 +1220,7 @@ showSpinner();
 
             if (location) {
                 html += '  <div class="vps-request-row">';
-                html += '    <div class="vps-request-label">Server Location</div>';
+                html += '    <div class="vps-request-label">Proxy</div>';
                 html += '    <div class="vps-request-value">' + escapeHtml(location) + '</div>';
                 html += '  </div>';
             }
@@ -1375,7 +1394,7 @@ showSpinner();
                         '<span class="vps-modal-value">' + escapeHtml(h.fullname) + '</span>' +
                     '</div>' +
                     '<div class="vps-modal-row">' +
-                        '<span class="vps-modal-label">Server Location</span>' +
+                        '<span class="vps-modal-label">Proxy</span>' +
                         '<span class="vps-modal-value">' + escapeHtml(h.server_location || 'N/A') + '</span>' +
                     '</div>' +
                     '<div class="vps-modal-row">' +

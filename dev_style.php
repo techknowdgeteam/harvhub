@@ -3,7 +3,25 @@
     /* ============================================================
     STYLE SHEET 1: ROOT VARIABLES, GLOBAL RESET, MODALS, SCROLLBARS
     ============================================================ */
-
+    /* ============================================================
+    GLOBAL iOS ZOOM FIX
+    iOS Safari auto-zooms any input with font-size < 16px.
+    Force 16px on all form controls at mobile widths.
+    ============================================================ */
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea,
+        .dd-input,
+        .dd-select,
+        .dd-am-input,
+        .dd-inline-input,
+        .dd-req-input,
+        .dd-json-edit-textarea,
+        .pt-modal-input {
+            font-size: 16px !important;
+        }
+    }
     /* ===== ROOT VARIABLES - LIGHT MODE ===== */
     :root {
         --bg: #f0f4f8;
@@ -4593,5 +4611,661 @@
         }
     }
 </style>
+<style>
+    /* ============================================================
+       DEVELOPER ACCOUNT MANAGEMENT — dd-am-* / dd-json-*
+       Uses root CSS vars from style.php / dev_style.php
+       ============================================================ */
 
+    /* ===== NOTE (below the card head) ===== */
+    .dd-am-note {
+        font-size: 0.82rem;
+        color: var(--text, #222);
+        background: rgba(46, 139, 87, 0.08);
+        border-left: 4px solid var(--accent, #2e8b57);
+        border-radius: var(--radius-sm, 8px);
+        padding: 10px 14px;
+        margin-bottom: var(--spacing-md, 20px);
+        line-height: 1.55;
+    }
+
+    .dd-am-note strong {
+        color: var(--accent, #2e8b57);
+    }
+
+    /* ===== LIST OF COLUMNS ===== */
+    .dd-am-list {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        margin-bottom: var(--spacing-md, 20px);
+    }
+
+    /* ===== SINGLE COLUMN CARD ===== */
+    .dd-am-item {
+        background: var(--bg-card, #fff);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .dd-am-item:hover {
+        border-color: var(--accent, #2e8b57);
+        box-shadow: 0 2px 10px rgba(46, 139, 87, 0.06);
+    }
+
+    /* ===== HEAD (label + toggle / view button) ===== */
+    .dd-am-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .dd-am-label {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text, #222);
+        letter-spacing: 0.2px;
+        word-break: break-word;
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* ===== JSON TOGGLE (Store JSON switch) ===== */
+    .dd-am-toggle-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .dd-am-toggle-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted, #888);
+        white-space: nowrap;
+    }
+
+    .dd-am-switch {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 22px;
+        flex-shrink: 0;
+        cursor: pointer;
+    }
+
+    .dd-am-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .dd-am-slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background-color: var(--border-color, #ccc);
+        transition: background-color 0.25s ease;
+        border-radius: 22px;
+    }
+
+    .dd-am-slider::before {
+        content: "";
+        position: absolute;
+        height: 16px;
+        width: 16px;
+        left: 3px;
+        bottom: 3px;
+        background-color: #fff;
+        transition: transform 0.25s ease;
+        border-radius: 50%;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    }
+
+    .dd-am-switch input:checked + .dd-am-slider {
+        background-color: var(--accent, #2e8b57);
+    }
+
+    .dd-am-switch input:checked + .dd-am-slider::before {
+        transform: translateX(18px);
+    }
+
+    /* ===== MINI BUTTONS (Construct / View JSON) ===== */
+    .dd-btn-mini {
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 6px 12px;
+        border-radius: var(--radius-sm, 8px);
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        letter-spacing: 0.2px;
+    }
+
+    .dd-btn-construct {
+        background: transparent;
+        color: var(--accent, #2e8b57);
+        border-color: var(--accent, #2e8b57);
+    }
+
+    .dd-btn-construct:hover {
+        background: rgba(46, 139, 87, 0.08);
+    }
+
+    .dd-btn-add {
+        background: var(--accent, #2e8b57);
+        color: #fff;
+        border-color: var(--accent, #2e8b57);
+    }
+
+    .dd-btn-add:hover {
+        background: var(--accent-hover, #3cb371);
+    }
+
+    .dd-btn-edit {
+        background: transparent;
+        color: #3498db;
+        border-color: #3498db;
+    }
+
+    .dd-btn-edit:hover {
+        background: rgba(52, 152, 219, 0.08);
+    }
+
+    .dd-btn-danger {
+        background: transparent;
+        color: #e74c3c;
+        border-color: #e74c3c;
+        padding: 6px 10px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .dd-btn-danger:hover {
+        background: #e74c3c;
+        color: #fff;
+    }
+
+    .dd-btn-cancel {
+        background: var(--bg, #f5f5f5);
+        color: var(--text, #222);
+        border-color: var(--border-color, #e0e0e0);
+    }
+
+    .dd-btn-cancel:hover {
+        background: var(--border-color, #e0e0e0);
+    }
+
+    /* ===== INPUT WRAP ===== */
+    .dd-am-input-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .dd-am-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        background: var(--bg, #f5f5f5);
+        color: var(--text, #222);
+        font-size: 0.88rem;
+        font-family: inherit;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .dd-am-input:focus {
+        outline: none;
+        border-color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.1);
+    }
+
+    /* ============================================================
+       JSON PREVIEW (read-only tree rendered inline)
+       ============================================================ */
+    .dd-json-preview {
+        font-family: 'Courier New', monospace;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        background: var(--bg, #f5f5f5);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        padding: 12px 14px;
+        color: var(--text, #222);
+        overflow-x: auto;
+    }
+
+    .dd-json-preview-empty {
+        display: none;
+    }
+
+    .dd-json-preview-inner {
+        padding-left: 12px;
+        border-left: 1px dashed var(--border-color, #ccc);
+        margin: 4px 0 4px 4px;
+    }
+
+    /* JSON syntax colors */
+    .dd-json-key   { color: #9b59b6; font-weight: 700; }
+    .dd-json-str   { color: #27ae60; }
+    .dd-json-num   { color: #e67e22; }
+    .dd-json-bool  { color: #3498db; font-weight: 700; }
+    .dd-json-null  { color: var(--text-muted, #888); font-style: italic; }
+
+    /* ============================================================
+       INLINE JSON EDITOR (used inside the live tree)
+       ============================================================ */
+    .dd-json-node {
+        margin: 6px 0;
+    }
+
+    .dd-json-node-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 8px;
+        background: rgba(46, 139, 87, 0.06);
+        border-radius: 6px;
+        margin-bottom: 6px;
+        flex-wrap: wrap;
+    }
+
+    .dd-json-node-label {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--text, #222);
+        word-break: break-word;
+    }
+
+    .dd-json-badge {
+        display: inline-block;
+        font-size: 0.62rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        background: var(--accent, #2e8b57);
+        color: #fff;
+        padding: 2px 7px;
+        border-radius: 20px;
+        margin-left: 6px;
+    }
+
+    .dd-json-children {
+        padding-left: 14px;
+        border-left: 1px dashed var(--border-color, #ccc);
+        margin-left: 6px;
+    }
+
+    .dd-json-child {
+        margin: 4px 0;
+    }
+
+    .dd-json-leaf {
+        font-size: 0.82rem;
+        padding: 5px 0;
+        color: var(--text, #222);
+        word-break: break-word;
+    }
+
+    .dd-json-string {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.82rem;
+    }
+
+    .dd-json-str-label {
+        color: var(--text-muted, #888);
+        font-weight: 700;
+    }
+
+    .dd-json-str-value {
+        color: #27ae60;
+        font-weight: 600;
+        word-break: break-word;
+    }
+
+    /* Key row (with Edit / Delete buttons) */
+    .dd-json-key-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 0;
+        flex-wrap: wrap;
+    }
+
+    .dd-json-key-name {
+        font-family: 'Courier New', monospace;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #9b59b6;
+        word-break: break-word;
+    }
+
+    /* ===== INLINE EDITORS ===== */
+    .dd-inline-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 14px;
+        background: rgba(46, 139, 87, 0.06);
+        border: 1px dashed var(--accent, #2e8b57);
+        border-radius: var(--radius-sm, 8px);
+        margin: 8px 0;
+    }
+
+    .dd-inline-editor-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .dd-inline-label {
+        font-size: 0.74rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--text-muted, #888);
+        min-width: 60px;
+        flex-shrink: 0;
+    }
+
+    .dd-inline-input {
+        flex: 1;
+        min-width: 140px;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        background: var(--bg-card, #fff);
+        color: var(--text, #222);
+        font-size: 0.85rem;
+        font-family: inherit;
+    }
+
+    .dd-inline-input:focus {
+        outline: none;
+        border-color: var(--accent, #2e8b57);
+    }
+
+    .dd-inline-editor-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    /* ============================================================
+       JSON VIEW / EDIT MODAL
+       ============================================================ */
+    .dd-json-view-modal .dd-modal-content {
+        max-width: 600px;
+    }
+
+    .dd-json-view-body {
+        background: var(--bg, #f5f5f5);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        padding: 14px 16px;
+        max-height: 55vh;
+        overflow: auto;
+    }
+
+    .dd-json-view-body pre {
+        margin: 0;
+        font-family: 'Courier New', monospace;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--text, #222);
+    }
+
+    .dd-json-edit-textarea {
+        display: none;
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 320px;
+        max-height: 55vh;
+        resize: vertical;
+        background: var(--bg-card, #fff);
+        border: 1px solid var(--border-color, #e0e0e0);
+        border-radius: var(--radius-sm, 8px);
+        padding: 12px 14px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        color: var(--text, #222);
+    }
+
+    .dd-json-edit-textarea:focus {
+        outline: none;
+        border-color: var(--accent, #2e8b57);
+    }
+
+    .dd-json-view-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: var(--spacing-sm, 12px);
+        flex-wrap: wrap;
+    }
+
+    .dd-json-view-actions .dd-btn-primary,
+    .dd-json-view-actions .dd-btn-ghost {
+        width: auto;
+        flex: 1;
+        min-width: 110px;
+    }
+
+    /* ============================================================
+       DARK MODE OVERRIDES
+       ============================================================ */
+    body.dark-mode .dd-am-note {
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-am-item {
+        background: var(--bg, #2a2a3a);
+        border-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-am-label {
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-am-input,
+    body.dark-mode .dd-inline-input,
+    body.dark-mode .dd-json-preview,
+    body.dark-mode .dd-json-view-body,
+    body.dark-mode .dd-json-edit-textarea {
+        background: var(--bg-card, #1e1e2a);
+        border-color: var(--border-color, #333);
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-json-view-body pre,
+    body.dark-mode .dd-json-leaf,
+    body.dark-mode .dd-json-node-label {
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-json-node-head {
+        background: rgba(46, 139, 87, 0.12);
+    }
+
+    body.dark-mode .dd-json-preview-inner,
+    body.dark-mode .dd-json-children {
+        border-left-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-inline-editor {
+        background: rgba(46, 139, 87, 0.1);
+    }
+
+    body.dark-mode .dd-am-slider {
+        background-color: var(--border-color, #333);
+    }
+
+    body.dark-mode .dd-btn-cancel {
+        background: var(--bg, #2a2a3a);
+        border-color: var(--border-color, #333);
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .dd-btn-cancel:hover {
+        background: var(--border-color, #333);
+    }
+
+    /* ============================================================
+       RESPONSIVE
+       ============================================================ */
+    @media (max-width: 480px) {
+        .dd-am-item {
+            padding: 14px 14px;
+        }
+
+        .dd-am-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .dd-am-toggle-wrap {
+            width: 100%;
+            justify-content: flex-start;
+        }
+
+        .dd-json-node-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .dd-json-key-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .dd-inline-editor-row {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .dd-inline-label {
+            min-width: 0;
+        }
+
+        .dd-inline-input {
+            min-width: 0;
+        }
+
+        .dd-inline-editor-actions {
+            justify-content: stretch;
+        }
+
+        .dd-inline-editor-actions .dd-btn-mini {
+            flex: 1;
+            text-align: center;
+        }
+
+        .dd-json-view-actions {
+            flex-direction: column;
+        }
+
+        .dd-json-view-actions .dd-btn-primary,
+        .dd-json-view-actions .dd-btn-ghost {
+            width: 100%;
+            flex: none;
+        }
+
+        .dd-json-edit-textarea {
+            min-height: 240px;
+        }
+    }
+    /* ===== FOLDABLE CONTENT (JSON preview, modal body, long values) ===== */
+    .dd-foldable {
+        position: relative;
+    }
+
+    .dd-foldable.is-collapsed {
+        max-height: 160px;
+        overflow: hidden;
+    }
+
+    /* Fade-out gradient at the bottom when collapsed */
+    .dd-foldable.is-collapsed::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 48px;
+        background: linear-gradient(to bottom, transparent, var(--bg, #f5f5f5));
+        pointer-events: none;
+        border-radius: 0 0 var(--radius-sm, 8px) var(--radius-sm, 8px);
+    }
+
+    body.dark-mode .dd-foldable.is-collapsed::after {
+        background: linear-gradient(to bottom, transparent, var(--bg-card, #1e1e2a));
+    }
+
+    /* Toggle button */
+    .dd-fold-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 6px;
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        color: var(--accent, #2e8b57);
+        background: transparent;
+        border: 1px solid var(--accent, #2e8b57);
+        border-radius: var(--radius-sm, 8px);
+        padding: 5px 12px;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+
+    .dd-fold-toggle:hover {
+        background: rgba(46, 139, 87, 0.08);
+    }
+
+    .dd-fold-toggle .dd-fold-icon {
+        transition: transform 0.2s ease;
+    }
+
+    .dd-fold-toggle.is-expanded .dd-fold-icon {
+        transform: rotate(180deg);
+    }
+
+    /* Also allow the modal body pre to fold */
+    .dd-json-view-body.dd-foldable.is-collapsed {
+        max-height: 220px;
+    }
+
+    @media (max-width: 480px) {
+        .dd-foldable.is-collapsed {
+            max-height: 120px;
+        }
+    }
+</style>
 

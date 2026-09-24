@@ -603,35 +603,103 @@ $serverShare   = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
 $userShare     = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
 
 // --- Determine Deposit Link ---
+// --- Determine Deposit Link (uses same logic as connect_investor_broker.php) ---
 $brokerLink   = '';
-$brokerLinks  = [];
+$brokerLinks  = [];   // keyed by formatted broker name, e.g. "Bybit" => "bybit.com"
 
-if (!empty($serverAccount['brokers_link'])) {
-    $linkParts = explode(',', $serverAccount['brokers_link']);
+if (!empty($serverAccount['brokers_link']) && !empty($serverAccount['brokers'])) {
+    // Parse brokers_link: "Bybit:https://bybit.com, Exness:https://exness.com"
+    $raw_links   = explode(',', $serverAccount['brokers_link']);
+    $raw_brokers = explode(',', $serverAccount['brokers']);
 
-    foreach ($linkParts as $part) {
-        $part = trim($part);
-        if (strpos($part, ':') !== false) {
-            list($keyRaw, $link) = explode(':', $part, 2);
-            $key = trim(strtolower($keyRaw));
+    // Extract clean domain names from each link entry
+    $cleaned_links = [];
+    foreach ($raw_links as $link) {
+        $link = trim($link);
+        if ($link === '') continue;
 
-            $linkName = strtolower(basename(parse_url('http://' . trim($link), PHP_URL_HOST) ?? ''));
-            $linkName = str_replace(array('.com', '.co', '.net'), '', $linkName);
+        // Drop the "broker:" prefix if present
+        if (strpos($link, ':') !== false) {
+            $link = trim(substr($link, strrpos($link, ':') + 1));
+        }
 
-            if (!empty($linkName)) $brokerLinks[$linkName] = trim($link);
-            $brokerLinks[$key] = trim($link);
+        // Grab the bare domain (e.g. bybit.com)
+        if (preg_match('/([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})/', $link, $matches)) {
+            $link = $matches[1];
+        }
+
+        $link = strtolower(trim($link));
+        if (!empty($link)) $cleaned_links[] = $link;
+    }
+
+    // Pair each broker name with its cleaned link
+    foreach ($raw_brokers as $index => $entry) {
+        $entry = trim($entry);
+        if ($entry === '') continue;
+
+        $broker_name = (strpos($entry, ':') !== false)
+            ? trim(substr($entry, strrpos($entry, ':') + 1))
+            : $entry;
+        $broker_name = preg_replace('/[^a-zA-Z0-9\s]/', '', $broker_name);
+        $broker_name = trim($broker_name);
+        $broker_name_clean = strtolower($broker_name);
+
+        if ($broker_name === '') continue;
+
+        $formatted_name = ucfirst($broker_name);
+        $link = isset($cleaned_links[$index]) ? $cleaned_links[$index] : '';
+
+        // Fallback: try to match by broker name inside any cleaned link
+        if (empty($link)) {
+            foreach ($cleaned_links as $cleaned_link) {
+                if (strpos($cleaned_link, $broker_name_clean) !== false) {
+                    $link = $cleaned_link;
+                    break;
+                }
+            }
+        }
+
+        if (!isset($brokerLinks[$formatted_name])) {
+            $brokerLinks[$formatted_name] = $link;
         }
     }
 }
 
-$userBrokerNormalized = strtolower($broker);
-if (!empty($userBrokerNormalized) && isset($brokerLinks[$userBrokerNormalized])) {
-    $brokerLink = $brokerLinks[$userBrokerNormalized];
-} elseif (isset($brokerLinks['harvhub'])) {
-    $brokerLink = $brokerLinks['harvhub'];
+// Match the user's current broker (case-insensitive) to a link
+$userBrokerNormalized = strtolower(trim($broker));   // e.g. "bybit"
+$matchedLink = '';
+
+foreach ($brokerLinks as $name => $link) {
+    if (strtolower($name) === $userBrokerNormalized) {
+        $matchedLink = $link;
+        break;
+    }
 }
 
-$brokerLink   = (strpos($brokerLink, '://') === false && !empty($brokerLink)) ? 'https://' . $brokerLink : $brokerLink;
+// Fallback: try to find any broker key that contains the user's broker name
+if (empty($matchedLink)) {
+    foreach ($brokerLinks as $name => $link) {
+        if (strpos(strtolower($name), $userBrokerNormalized) !== false) {
+            $matchedLink = $link;
+            break;
+        }
+    }
+}
+
+// Last-resort fallbacks: harvhub, then any link at all
+if (empty($matchedLink) && isset($brokerLinks['harvhub'])) {
+    $matchedLink = $brokerLinks['harvhub'];
+}
+if (empty($matchedLink) && !empty($brokerLinks)) {
+    $first = reset($brokerLinks);
+    if (!empty($first)) $matchedLink = $first;
+}
+
+// Build the final URL (https:// prefix if missing)
+if (!empty($matchedLink)) {
+    $brokerLink = (strpos($matchedLink, '://') === false) ? 'https://' . $matchedLink : $matchedLink;
+}
+
 $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
 
 // ==================== POST HANDLING ====================
@@ -1086,7 +1154,7 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
 <meta charset="UTF-8">
 <title>Harvhub</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <?php include 'style.php'; ?>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">

@@ -97,7 +97,7 @@
 
     $fullName = $user['fullname'] ?? 'User';
 ?>
-<div class="activity-container">
+<div class="activities-container">
     <div class="activity-header">
         <h1>Activities</h1>
         <p>Your Daily Balance Log</p>

@@ -154,6 +154,25 @@ foreach ($allowed_brokers as $broker) {
     .debug-console .info {
         color: #44aaff;
     }
+    /* ============================================================
+    GLOBAL iOS ZOOM FIX
+    iOS Safari auto-zooms any input with font-size < 16px.
+    Force 16px on all form controls at mobile widths.
+    ============================================================ */
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea,
+        .dd-input,
+        .dd-select,
+        .dd-am-input,
+        .dd-inline-input,
+        .dd-req-input,
+        .dd-json-edit-textarea,
+        .pt-modal-input {
+            font-size: 16px !important;
+        }
+    }
 </style>
 </head>
 <body>

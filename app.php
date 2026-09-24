@@ -122,9 +122,6 @@
         }
     }
 
-    // ==================== DISCONNECT BROKER LOGIC REMOVED ====================
-    // Disconnect is now handled entirely by disconnect_broker.php
-
     $darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
     $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
@@ -135,7 +132,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
@@ -448,10 +445,19 @@
     <?php
     // =====================================================================
     // SESSION-TRACKED ONE-TIME INFORMATIONAL MODALS
+    //
+    // IMPORTANT: The order matters. Success modals (from POST redirects)
+    // take priority. Then we evaluate the user's CURRENT state on every
+    // page load — not just when a status first changes — so the modal
+    // always reflects the true live state (balance verification, enroll,
+    // active contract, etc.) even after a payment was confirmed.
     // =====================================================================
 
     $sessionModalState = '';
 
+    // -----------------------------------------------------------------
+    // 1) SUCCESS MODALS (from PRG redirects) — highest priority
+    // -----------------------------------------------------------------
     if (isset($_GET['show_enroll_success']) && $_GET['show_enroll_success'] == '1' && isset($_SESSION['enroll_success_message'])) {
         $sessionModalState = 'enroll_success';
         $enrollSuccessMessage = $_SESSION['enroll_success_message'];
@@ -473,6 +479,12 @@
         unset($_SESSION['toggle_success_message']);
     }
     else {
+        // -----------------------------------------------------------------
+        // 2) LIVE STATE RESOLUTION
+        //
+        // Build the list of loyalty statuses from both the user row and
+        // the latest revenue_history row.
+        // -----------------------------------------------------------------
         $allLoyaltyStatuses = [];
         if (isset($loyaltiesStatus) && $loyaltiesStatus !== null) {
             $allLoyaltyStatuses[] = $loyaltiesStatus;
@@ -483,58 +495,104 @@
         $allLoyaltyStatuses = array_unique($allLoyaltyStatuses);
 
         $paymentMadeStatuses = ['payment-made', 'contract-cancelled-payment-made'];
-        $unpaidStatuses = ['unpaid-payment', 'unpaid', 'contract-cancelled-unpaid', 'contract-cancelled-unpaid-payment', 'contract-cancelled-payment-required'];
-        $failedStatuses = ['payment-failed', 'failed-payment', 'contract-cancelled-failed-payment', 'contract-cancelled-payment-failed'];
-        $confirmedStatuses = ['payment-confirmed'];
+        $unpaidStatuses      = ['unpaid-payment', 'unpaid', 'contract-cancelled-unpaid', 'contract-cancelled-unpaid-payment', 'contract-cancelled-payment-required'];
+        $failedStatuses      = ['payment-failed', 'failed-payment', 'contract-cancelled-failed-payment', 'contract-cancelled-payment-failed'];
+        $confirmedStatuses   = ['payment-confirmed'];
 
-        $paymentStateResolved = false;
+        // Determine whether a payment is currently pending / failed / unpaid.
+        // These take priority over the downstream states because the user
+        // must complete the payment before anything else can progress.
+        $hasPendingPayment = false;
+        $hasFailedPayment  = false;
+        $hasUnpaidPayment  = false;
+        $hasConfirmedPayment = false;
 
         foreach ($allLoyaltyStatuses as $status) {
-            if (in_array($status, $confirmedStatuses)) {
-                $sessionModalState = 'payment_confirmed';
-                $paymentStateResolved = true;
-                break;
+            if (in_array($status, $confirmedStatuses, true)) {
+                $hasConfirmedPayment = true;
             }
         }
 
-        if (!$paymentStateResolved) {
+        // Only treat pending/failed/unpaid as active blockers if we do NOT
+        // already have a confirmed payment. A confirmed payment means the
+        // cycle has moved on to the next phase.
+        if (!$hasConfirmedPayment) {
             foreach ($allLoyaltyStatuses as $status) {
-                if (in_array($status, $paymentMadeStatuses)) {
-                    $sessionModalState = 'payment_pending';
-                    $paymentStateResolved = true;
+                if (in_array($status, $paymentMadeStatuses, true)) {
+                    $hasPendingPayment = true;
                     break;
+                }
+            }
+            if (!$hasPendingPayment) {
+                foreach ($allLoyaltyStatuses as $status) {
+                    if (in_array($status, $failedStatuses, true)) {
+                        $hasFailedPayment = true;
+                        break;
+                    }
+                }
+            }
+            if (!$hasPendingPayment && !$hasFailedPayment) {
+                foreach ($allLoyaltyStatuses as $status) {
+                    if (in_array($status, $unpaidStatuses, true)) {
+                        $hasUnpaidPayment = true;
+                        break;
+                    }
                 }
             }
         }
 
-        if (!$paymentStateResolved) {
-            foreach ($allLoyaltyStatuses as $status) {
-                if (in_array($status, $failedStatuses)) {
-                    $sessionModalState = 'payment_failed';
-                    $paymentStateResolved = true;
-                    break;
-                }
-            }
-        }
-
-        if (!$paymentStateResolved) {
-            foreach ($allLoyaltyStatuses as $status) {
-                if (in_array($status, $unpaidStatuses)) {
-                    $sessionModalState = 'profit_split';
-                    $paymentStateResolved = true;
-                    break;
-                }
-            }
-        }
-
-        if (!$paymentStateResolved) {
+        // -----------------------------------------------------------------
+        // 3) STATE PRIORITY CHAIN
+        //
+        // Payment states first (if payment not yet confirmed).
+        // If payment IS confirmed (or no payment cycle at all), fall
+        // through to the live dashboard state checks.
+        // -----------------------------------------------------------------
+        if ($hasPendingPayment) {
+            $sessionModalState = 'payment_pending';
+        } elseif ($hasFailedPayment) {
+            $sessionModalState = 'payment_failed';
+        } elseif ($hasUnpaidPayment) {
+            $sessionModalState = 'profit_split';
+        } elseif ($hasConfirmedPayment) {
+            // Payment is confirmed — now check the NEXT required step.
+            // The user may still need to:
+            //   a) connect a broker
+            //   b) reset their contract (reset_contract flag)
+            //   c) apply for balance verification
+            //   d) wait for verification review
+            //   e) deposit more funds
+            //   f) enroll in a new contract
+            //   g) or simply have an active contract
             if (!$brokerConnected) {
                 $sessionModalState = 'no_broker';
             } elseif (isset($resetContract) && $resetContract === 1) {
                 $sessionModalState = 'reset';
             } elseif (isset($balanceVerificationStatus) && $balanceVerificationStatus === 'applied-for-verification') {
                 $sessionModalState = 'under_review';
-            } elseif (isset($balanceVerificationStatus) && $balanceVerificationStatus === 'not-verified') {
+            } elseif (isset($balanceVerificationStatus) && ($balanceVerificationStatus === 'not-verified' || $balanceVerificationStatus === '' || $balanceVerificationStatus === null)) {
+                $sessionModalState = 'apply';
+            } elseif (isset($balanceVerificationStatus) && $balanceVerificationStatus === 'verified'
+                      && isset($brokerBalance) && isset($MIN_INITIAL_DEPOSIT)
+                      && $brokerBalance < $MIN_INITIAL_DEPOSIT) {
+                $sessionModalState = 'deposit';
+            } elseif (isset($is_contract_active) && $is_contract_active === true) {
+                $sessionModalState = 'active';
+            } elseif (isset($show_reenroll_button) && $show_reenroll_button === true) {
+                $sessionModalState = 'enroll';
+            } else {
+                // Fallback: payment confirmed, everything else looks settled.
+                $sessionModalState = 'payment_confirmed';
+            }
+        } else {
+            // No payment cycle at all — check basic gating states.
+            if (!$brokerConnected) {
+                $sessionModalState = 'no_broker';
+            } elseif (isset($resetContract) && $resetContract === 1) {
+                $sessionModalState = 'reset';
+            } elseif (isset($balanceVerificationStatus) && $balanceVerificationStatus === 'applied-for-verification') {
+                $sessionModalState = 'under_review';
+            } elseif (isset($balanceVerificationStatus) && ($balanceVerificationStatus === 'not-verified' || $balanceVerificationStatus === '' || $balanceVerificationStatus === null)) {
                 $sessionModalState = 'apply';
             } elseif (isset($balanceVerificationStatus) && $balanceVerificationStatus === 'verified'
                       && isset($brokerBalance) && isset($MIN_INITIAL_DEPOSIT)
@@ -553,8 +611,12 @@
 
     if (!empty($sessionModalState)) {
         if ($isSuccessModal) {
+            // Success modals always show (one-time via PRG redirect).
             $showSessionModal = true;
         } else {
+            // Informational modals: show once per state per session.
+            // If the state changes (e.g. apply → under_review), the new
+            // state will not be in the shown list and will display.
             if (!isset($_SESSION['shown_session_modals']) || !is_array($_SESSION['shown_session_modals'])) {
                 $_SESSION['shown_session_modals'] = [];
             }
@@ -618,7 +680,7 @@
             break;
         case 'payment_confirmed':
             $sessionModalTitle   = 'Payment Confirmed';
-            $sessionModalMessage = 'Your payment has been confirmed. You can now start a new contract by clicking "Let\'s get started".';
+            $sessionModalMessage = 'Your payment has been confirmed. You can now proceed with the next steps to start a new contract.';
             $sessionModalIcon    = '';
             $sessionModalClass   = 'success';
             break;
