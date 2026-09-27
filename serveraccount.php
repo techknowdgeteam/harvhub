@@ -6,10 +6,69 @@
     require_once 'db.php';
 
     // ============================================
+    // SESSION TIMEOUT - DYNAMIC (from server_account.inactivity_timer)
     // ============================================
-    // SESSION TIMEOUT - 1 MINUTE
-    // ============================================
-    $session_timeout = 60; // 1 minute in seconds
+
+    /**
+     * Convert an "inactivity_timer" value (e.g. "60:seconds", "5:minutes", "1:hours")
+     * into a number of seconds.
+     *
+     * @param string|null $raw  Raw value from the DB column.
+     * @param int         $fallback  Seconds to use if the value is invalid/missing.
+     * @return int  Number of seconds.
+     */
+    function resolveInactivityTimeoutSeconds($raw, $fallback = 60) {
+        if (empty($raw) || !is_string($raw)) {
+            return $fallback;
+        }
+
+        // Expect "value:unit" — split on the last colon
+        $pos = strrpos($raw, ':');
+        if ($pos === false) {
+            return $fallback;
+        }
+
+        $value = (int)trim(substr($raw, 0, $pos));
+        $unit  = strtolower(trim(substr($raw, $pos + 1)));
+
+        if ($value <= 0) {
+            return $fallback;
+        }
+
+        switch ($unit) {
+            case 'second':
+            case 'seconds':
+            case 'sec':
+            case 's':
+                return $value;
+
+            case 'minute':
+            case 'minutes':
+            case 'min':
+            case 'm':
+                return $value * 60;
+
+            case 'hour':
+            case 'hours':
+            case 'hr':
+            case 'hrs':
+            case 'h':
+                return $value * 3600;
+
+            default:
+                return $fallback;
+        }
+    }
+
+    // We need $serverAccount early so we can read the timeout before the sync blocks.
+    // Do a lightweight fetch first (the main fetch happens in SECTION 2 below).
+    $earlyAccountStmt = $pdo->prepare("SELECT inactivity_timer FROM {$serverAccountTable} WHERE id = 1");
+    $earlyAccountStmt->execute();
+    $earlyAccountRow = $earlyAccountStmt->fetch(PDO::FETCH_ASSOC);
+
+    $rawInactivityTimer = $earlyAccountRow['inactivity_timer'] ?? '60:seconds';
+    $session_timeout    = resolveInactivityTimeoutSeconds($rawInactivityTimer, 60);
+    $sessionTimeoutRaw  = $rawInactivityTimer; // used to hand off to JS
 
     // Check if user is logged in
     if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true) {
@@ -17,20 +76,25 @@
         if (isset($_SESSION['last_activity'])) {
             // Calculate session age
             $session_age = time() - $_SESSION['last_activity'];
-            
+
             // If session is older than timeout, destroy it
             if ($session_age > $session_timeout) {
                 session_unset();
                 session_destroy();
-                
+
                 // Redirect to login page
                 header("Location: serveraccount.php");
                 exit;
             }
         }
-        
+
         // Update last activity time
         $_SESSION['last_activity'] = time();
+    }
+
+    // If not logged in, make sure last_activity is not set
+    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+        unset($_SESSION['last_activity']);
     }
 
     // If not logged in, make sure last_activity is not set
@@ -538,6 +602,56 @@
         ];
     }
 
+    /**
+     * Programme-first gate — mirrors mydashboard.php's LEVEL 0a check.
+     *
+     * A user is considered to have an "active programme investment" only if
+     * there is at least one row in programme_investors where they are the
+     * investor (investorid) — OR they are the developer of a programme
+     * (developerid) with a template row.
+     *
+     * This is the authoritative precondition for a user to appear in ANY
+     * of the Active / Inactive / Completed revenue tabs.
+     *
+     * @param PDO $pdo
+     * @param int $userId
+     * @return bool
+     */
+    function userHasProgrammeInvestment($pdo, $userId) {
+        $userId = (int)$userId;
+        if ($userId <= 0) return false;
+
+        try {
+            // Primary: investor in someone else's programme
+            $stmt = $pdo->prepare("
+                SELECT pi.id
+                FROM programme_investors pi
+                WHERE pi.investorid = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$userId]);
+            if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+                return true;
+            }
+        } catch (Exception $e) { /* fall through */ }
+
+        try {
+            // Secondary: developer with a programme template row
+            $stmt = $pdo->prepare("
+                SELECT pi.id
+                FROM programme_investors pi
+                WHERE pi.developerid = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$userId]);
+            if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+                return true;
+            }
+        } catch (Exception $e) { /* fall through */ }
+
+        return false;
+    }
+
 
     function format_currency($amount) {
         return '$' . number_format($amount, 2);
@@ -741,6 +855,9 @@
     }
 
     $authenticated = ($_SESSION['admin_logged_in'] ?? false) && !$initialSetupRequired;
+    // Expose the raw inactivity timer value to JS for the client-side timer.
+    // Format: "value:unit" (e.g. "60:seconds", "5:minutes", "1:hours")
+    $inactivityTimerRaw = $serverAccount['inactivity_timer'] ?? '60:seconds';
     
     // ============================================
     // SECTION 4.5: AUTO-MARK EXPIRED CONTRACTS AS UNPAID
@@ -752,9 +869,9 @@
             $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
             $today = new DateTime();
             $today->setTime(0, 0, 0);
-            
+
             $validStatuses = ['payment-confirmed', 'payment-made', 'unpaid-payment', 'failed-payment'];
-            
+
             try {
                 $stmt = $pdo->prepare("
                     SELECT id, execution_start_date, profitandloss, loyalties, email, invested_with 
@@ -765,34 +882,40 @@
                 ");
                 $stmt->execute();
                 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                
+
                 foreach ($users as $user) {
+                    $userId = (int)$user['id'];
+
+                    // ---- LEVEL 0a: programme_investors gate ----
+                    if (!userHasProgrammeInvestment($pdo, $userId)) {
+                        continue;
+                    }
+
                     $executionStartDate = $user['execution_start_date'];
                     $profitAndLoss = (float)($user['profitandloss'] ?? 0);
                     $currentLoyalties = strtolower(trim($user['loyalties'] ?? ''));
-                    $userId = $user['id'];
-                    
+
                     // Get programme-specific contract duration
                     $progData = getProgrammeInvestorData($pdo, $userId);
                     $contractDuration = $progData['contract_duration'];
-                    
+
                     try {
                         $start = new DateTime($executionStartDate);
                         $end = clone $start;
                         $end->modify("+{$contractDuration} days");
                         $end->setTime(0, 0, 0);
-                        
+
                         if ($today <= $end) {
                             continue;
                         }
                     } catch (Exception $e) {
                         continue;
                     }
-                    
+
                     if ($profitAndLoss <= $minProfitForSplit) {
                         continue;
                     }
-                    
+
                     $statusAlreadySet = false;
                     foreach ($validStatuses as $validStatus) {
                         if (strpos($currentLoyalties, $validStatus) !== false) {
@@ -800,11 +923,11 @@
                             break;
                         }
                     }
-                    
+
                     if (!$statusAlreadySet) {
                         $updateStmt = $pdo->prepare("UPDATE {$harvhubTable} SET loyalties = 'unpaid-payment' WHERE id = ?");
                         $updateStmt->execute([$userId]);
-                        
+
                         if (function_exists('syncUserRevenueHistory')) {
                             syncUserRevenueHistory($userId, $harvhubTable, $pdo, $serverAccount);
                         }
@@ -996,88 +1119,102 @@
                 $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $today = date('Y-m-d');
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
-                
-                function shouldBeActive($user, $contractDuration, $minProfitForSplit) {
-                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
-                    if (strpos($appStatus, 'approved') === false) {
+
+                /**
+                 * Active contract determination — mirrors mydashboard.php.
+                 *
+                 * Preconditions (must ALL pass):
+                 *   0. User has a row in programme_investors (investorid or developerid).
+                 *   1. balance_verification = 'verified'.
+                 *   2. execution_start_date is set (not null / not '0000-00-00').
+                 *   3. loyalties is NOT a cancelled status.
+                 *
+                 * Then the user is "active" if EITHER:
+                 *   a. The contract window has not yet elapsed, OR
+                 *   b. The loyalties status is one of the post-contract
+                 *      "still owing" statuses (unpaid / payment-made /
+                 *      failed-payment) — these stay in the Active tab
+                 *      until payment is confirmed or the contract is cancelled.
+                 *
+                 * NOTE: application_status and login are NO LONGER required —
+                 *       mydashboard.php does not gate on them, so neither do we.
+                 */
+                function shouldBeActive($user, $contractDuration, $minProfitForSplit, $pdo) {
+                    // ---- LEVEL 0a: programme_investors gate ----
+                    if (!userHasProgrammeInvestment($pdo, (int)$user['id'])) {
                         return false;
                     }
-                    
-                    $login = trim($user['login'] ?? '');
-                    if (empty($login)) {
+
+                    // ---- balance_verification must be 'verified' ----
+                    $balanceVerif = $user['balance_verification'] ?? 'not-verified';
+                    if ($balanceVerif !== 'verified') {
                         return false;
                     }
-                    
+
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
                         return false;
                     }
-                    
+
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
-                    
+
                     if (strpos($loyalties, 'cancelled') !== false) {
                         return false;
                     }
-                    
+
                     $isContractActive = false;
-                    
-                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
-                        try {
-                            $start = new DateTime($execDate);
-                            $end = clone $start;
-                            $end->modify("+{$contractDuration} days");
-                            $end->setTime(0, 0, 0);
-                            
-                            $todayObj = new DateTime();
-                            $todayObj->setTime(0, 0, 0);
-                            
-                            if ($end >= $todayObj) {
-                                $isContractActive = true;
-                            }
-                        } catch (Exception $e) {
-                            $isContractActive = false;
+
+                    try {
+                        $start = new DateTime($execDate);
+                        $end = clone $start;
+                        $end->modify("+{$contractDuration} days");
+                        $end->setTime(0, 0, 0);
+
+                        $todayObj = new DateTime();
+                        $todayObj->setTime(0, 0, 0);
+
+                        if ($end >= $todayObj) {
+                            $isContractActive = true;
                         }
+                    } catch (Exception $e) {
+                        $isContractActive = false;
                     }
-                    
+
                     if ($isContractActive) {
                         return true;
                     }
-                    
+
                     $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
-                    
+
                     foreach ($activeStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
                             return true;
                         }
                     }
-                    
-                    if (strpos($loyalties, 'payment-confirmed') !== false || strpos($loyalties, 'payment_confirmed') !== false) {
-                        return false;
-                    }
-                    
+
                     return false;
                 }
-                
+
                 try {
                     $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
                     if ($checkTable->rowCount() > 0) {
                         $stmt = $pdo->prepare("
-                            SELECT id, fullname, email, broker, login, execution_start_date, profitandloss, broker_balance, loyalties, application_status, '{$harvhubTable}' as source
+                            SELECT id, fullname, email, broker, login, execution_start_date,
+                                   profitandloss, broker_balance, loyalties,
+                                   application_status, balance_verification,
+                                   '{$harvhubTable}' as source
                             FROM {$harvhubTable} 
-                            WHERE application_status LIKE '%approved%'
-                            AND login IS NOT NULL 
-                            AND login != ''
                             ORDER BY id DESC
                         ");
                         $stmt->execute();
                         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                        
+
                         foreach ($results as $user) {
                             // Get programme-specific data for this user
                             $progData = getProgrammeInvestorData($pdo, $user['id']);
                             $contractDuration = $progData['contract_duration'];
-                            
-                            if (shouldBeActive($user, $contractDuration, $minProfitForSplit)) {
+
+                            if (shouldBeActive($user, $contractDuration, $minProfitForSplit, $pdo)) {
                                 $user['contract_duration'] = $contractDuration;
                                 $user['developer_name'] = $progData['developer_name'];
                                 $user['programme_name'] = $progData['programme_name'];
@@ -1088,7 +1225,7 @@
                         }
                     }
                 } catch (Exception $e) { }
-                
+
                 echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1103,7 +1240,7 @@
                 $today = date('Y-m-d');
                 $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
-                
+
                 function checkUnusualActivity($dailyLog) {
                     if (empty($dailyLog)) return false;
                     $log = json_decode($dailyLog, true);
@@ -1115,7 +1252,7 @@
                     }
                     return false;
                 }
-                
+
                 function getUnusualSummary($dailyLog) {
                     if (empty($dailyLog)) return ['withdrawal_count' => 0, 'unauthorized_trade_count' => 0, 'unauthorized_balance' => 0];
                     $log = json_decode($dailyLog, true);
@@ -1141,63 +1278,55 @@
                     ];
                 }
 
-                function isUserActive($user, $contractDuration) {
-                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
-                    if (strpos($appStatus, 'approved') === false) {
+                /**
+                 * Same programme-first logic as shouldBeActive(), reused here
+                 * so the Unusual tab only shows users who would also qualify
+                 * as Active under the new gate.
+                 */
+                function isUserActive($user, $contractDuration, $pdo) {
+                    // ---- LEVEL 0a: programme_investors gate ----
+                    if (!userHasProgrammeInvestment($pdo, (int)$user['id'])) {
                         return false;
                     }
-                    
-                    $login = trim($user['login'] ?? '');
-                    if (empty($login)) {
+
+                    // ---- balance_verification must be 'verified' ----
+                    $balanceVerif = $user['balance_verification'] ?? 'not-verified';
+                    if ($balanceVerif !== 'verified') {
                         return false;
                     }
-                    
+
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
                         return false;
                     }
-                    
+
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
-                    
+
                     $isContractActive = false;
-                    
-                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
-                        try {
-                            $start = new DateTime($execDate);
-                            $end = clone $start;
-                            $end->modify("+{$contractDuration} days");
-                            $end->setTime(0, 0, 0);
-                            
-                            $todayObj = new DateTime();
-                            $todayObj->setTime(0, 0, 0);
-                            
-                            if ($end >= $todayObj) {
-                                $isContractActive = true;
-                            }
-                        } catch (Exception $e) {
-                            $isContractActive = false;
-                        }
-                    }
-                    
-                    if ($isContractActive) {
-                        return true;
-                    }
-                    
+                    try {
+                        $start = new DateTime($execDate);
+                        $end = clone $start;
+                        $end->modify("+{$contractDuration} days");
+                        $end->setTime(0, 0, 0);
+                        $todayObj = new DateTime();
+                        $todayObj->setTime(0, 0, 0);
+                        if ($end >= $todayObj) $isContractActive = true;
+                    } catch (Exception $e) {}
+
+                    if ($isContractActive) return true;
+
                     $activeStatuses = ['payment-made', 'payment_made', 'unpaid-payment', 'unpaid_payment', 'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'];
-                    
                     foreach ($activeStatuses as $status) {
-                        if (strpos($loyalties, $status) !== false) {
-                            return true;
-                        }
+                        if (strpos($loyalties, $status) !== false) return true;
                     }
-                    
+
                     return false;
                 }
-                
+
                 try {
                     $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
                     if ($checkTable->rowCount() > 0) {
-                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, '{$harvhubTable}' as source FROM {$harvhubTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
+                        $sql = "SELECT id, fullname, email, broker, login, broker_balance, profitandloss, daily_balance_log, loyalties, execution_start_date, application_status, balance_verification, '{$harvhubTable}' as source FROM {$harvhubTable} WHERE execution_start_date IS NOT NULL AND execution_start_date != '0000-00-00' AND execution_start_date <= ?";
                         if (!empty($search)) {
                             $sql .= " AND (fullname LIKE ? OR email LIKE ? OR id LIKE ?)";
                         }
@@ -1214,8 +1343,8 @@
                             // Get programme-specific duration
                             $progData = getProgrammeInvestorData($pdo, $user['id']);
                             $contractDuration = $progData['contract_duration'];
-                            
-                            if (isUserActive($user, $contractDuration) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
+
+                            if (isUserActive($user, $contractDuration, $pdo) && checkUnusualActivity($user['daily_balance_log'] ?? '')) {
                                 $summary = getUnusualSummary($user['daily_balance_log'] ?? '');
                                 $user['withdrawal_count'] = $summary['withdrawal_count'];
                                 $user['unauthorized_trade_count'] = $summary['unauthorized_trade_count'];
@@ -1232,7 +1361,7 @@
                 } catch (Exception $e) {
                     error_log("Error in get_unusual_users: " . $e->getMessage());
                 }
-                
+
                 echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1448,7 +1577,7 @@
             try {
                 $users = array();
                 $defaultContractDuration = (int)($serverAccount['contract_duration'] ?? 30);
-                
+
                 try {
                     $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
                     if ($checkTable->rowCount() > 0) {
@@ -1462,14 +1591,21 @@
                         ");
                         $stmt->execute();
                         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                        
+
                         foreach ($results as $user) {
+                            // ---- LEVEL 0a: programme_investors gate ----
+                            // Users with no programme investment are excluded from
+                            // the Completed / Revenue History view entirely.
+                            if (!userHasProgrammeInvestment($pdo, (int)$user['id'])) {
+                                continue;
+                            }
+
                             // Get programme-specific data
                             $progData = getProgrammeInvestorData($pdo, $user['id']);
-                            
+
                             $history = [];
                             $hasHistory = false;
-                            
+
                             $historyStmt = $pdo->prepare("
                                 SELECT * FROM revenue_history 
                                 WHERE user_email = ? 
@@ -1477,12 +1613,12 @@
                             ");
                             $historyStmt->execute([$user['email']]);
                             $historyRecords = $historyStmt->fetchAll(PDO::FETCH_ASSOC);
-                            
+
                             if (!empty($historyRecords)) {
                                 $history = $historyRecords;
                                 $hasHistory = true;
                             }
-                            
+
                             $userData = [
                                 'id' => $user['id'],
                                 'source' => $user['source'],
@@ -1518,14 +1654,14 @@
                                 'developerid' => $progData['developerid'],
                                 'programme_id' => $progData['programme_id']
                             ];
-                            
+
                             $users[] = $userData;
                         }
                     }
                 } catch (Exception $e) {
                     error_log("Error in get_completed_investors: " . $e->getMessage());
                 }
-                
+
                 echo json_encode(['success' => true, 'users' => $users]);
             } catch (Exception $e) {
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -3623,6 +3759,89 @@
             echo json_encode(['success' => true]);
             exit;
         }
+        // ============================================
+        // SESSION TIMEOUT (inactivity_timer) — GET
+        // ============================================
+        if ($action === 'settings_get_inactivity_timer') {
+            try {
+                $stmt = $pdo->prepare("SELECT inactivity_timer FROM {$serverAccountTable} WHERE id = 1");
+                $stmt->execute();
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                $raw = $row['inactivity_timer'] ?? '60:seconds';
+
+                // Parse into value + unit for the UI
+                $pos = strrpos($raw, ':');
+                $value = 60;
+                $unit  = 'seconds';
+
+                if ($pos !== false) {
+                    $parsedValue = (int)substr($raw, 0, $pos);
+                    $parsedUnit  = strtolower(trim(substr($raw, $pos + 1)));
+                    if ($parsedValue > 0) $value = $parsedValue;
+                    if (in_array($parsedUnit, ['seconds', 'minutes', 'hours'], true)) {
+                        $unit = $parsedUnit;
+                    }
+                }
+
+                echo json_encode([
+                    'success' => true,
+                    'raw'     => $raw,
+                    'value'   => $value,
+                    'unit'    => $unit
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // ============================================
+        // SESSION TIMEOUT (inactivity_timer) — SAVE
+        // ============================================
+        if ($action === 'settings_update_inactivity_timer') {
+            $admin_password = $_POST['admin_password'] ?? '';
+            $login_id       = $_POST['login_id'] ?? '';
+            $value          = (int)($_POST['timeout_value'] ?? 60);
+            $unit           = strtolower(trim($_POST['timeout_unit'] ?? 'seconds'));
+
+            // Verify admin credentials
+            $stmt = $pdo->prepare("SELECT admin_login_id, admin_password_hash FROM {$serverAccountTable} WHERE id = 1");
+            $stmt->execute();
+            $adminData = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adminData
+                || $login_id !== ($adminData['admin_login_id'] ?? '')
+                || !password_verify($admin_password, $adminData['admin_password_hash'] ?? '')) {
+                echo json_encode(['error' => 'Invalid password']);
+                exit;
+            }
+
+            if (!in_array($unit, ['seconds', 'minutes', 'hours'], true)) {
+                echo json_encode(['error' => 'Invalid time unit']);
+                exit;
+            }
+            if ($value <= 0) {
+                echo json_encode(['error' => 'Timeout value must be greater than 0']);
+                exit;
+            }
+
+            try {
+                $raw = $value . ':' . $unit;
+                $stmt = $pdo->prepare("UPDATE {$serverAccountTable} SET inactivity_timer = ? WHERE id = 1");
+                $stmt->execute([$raw]);
+
+                echo json_encode([
+                    'success' => true,
+                    'raw'     => $raw,
+                    'value'   => $value,
+                    'unit'    => $unit
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+            }
+            exit;
+        }
         // ============================================================
         // 5z5: VPS MANAGEMENT — NEW SYSTEM (per-user VPS rows)
         // These handlers back the new vps_config.php admin page.
@@ -3958,68 +4177,75 @@
                 $today = date('Y-m-d');
                 $minProfitForSplit = (float)($serverAccount['min_profit_for_split'] ?? 30);
 
-                function isUserInactive($user, $contractDuration, $today, $minProfitForSplit) {
-                    $appStatus = strtolower(trim($user['application_status'] ?? ''));
-                    if (strpos($appStatus, 'approved') === false) {
+                /**
+                 * Inactive determination — PROGRAMME-FIRST.
+                 *
+                 * A user is Inactive if they have a programme_investors row
+                 * but are NOT currently in an active contract window and are
+                 * NOT sitting on a post-contract payment status (those live
+                 * in the Active tab until confirmed/cancelled).
+                 */
+                function isUserInactive($user, $contractDuration, $today, $minProfitForSplit, $pdo) {
+                    // ---- LEVEL 0a: programme_investors gate ----
+                    if (!userHasProgrammeInvestment($pdo, (int)$user['id'])) {
                         return false;
                     }
-                    
-                    $login = trim($user['login'] ?? '');
-                    if (empty($login)) {
+
+                    // ---- balance_verification must be 'verified' ----
+                    $balanceVerif = $user['balance_verification'] ?? 'not-verified';
+                    if ($balanceVerif !== 'verified') {
                         return false;
                     }
-                    
+
                     $loyalties = strtolower(trim($user['loyalties'] ?? ''));
                     $profitAndLoss = (float)($user['profitandloss'] ?? 0);
-                    
+
                     if (strpos($loyalties, 'cancelled') !== false) {
                         if ($profitAndLoss > $minProfitForSplit) {
                             return false;
                         }
                         return true;
                     }
-                    
+
                     $paymentStatuses = [
                         'payment-made', 'payment_made',
                         'unpaid-payment', 'unpaid_payment', 'unpaid',
                         'failed-payment', 'failed_payment', 'payment-failed', 'payment_failed'
                     ];
-                    
+
                     foreach ($paymentStatuses as $status) {
                         if (strpos($loyalties, $status) !== false) {
                             return false;
                         }
                     }
-                    
+
                     $execDate = $user['execution_start_date'] ?? null;
                     if (empty($execDate) || $execDate === '0000-00-00' || $execDate === null) {
                         return true;
                     }
-                    
+
                     $isContractActive = false;
-                    
-                    if (!empty($execDate) && $execDate !== '0000-00-00' && $execDate !== null) {
-                        try {
-                            $start = new DateTime($execDate);
-                            $end = clone $start;
-                            $end->modify("+{$contractDuration} days");
-                            $end->setTime(0, 0, 0);
-                            
-                            $todayObj = new DateTime($today);
-                            $todayObj->setTime(0, 0, 0);
-                            
-                            if ($end >= $todayObj) {
-                                $isContractActive = true;
-                            }
-                        } catch (Exception $e) {
-                            $isContractActive = false;
+
+                    try {
+                        $start = new DateTime($execDate);
+                        $end = clone $start;
+                        $end->modify("+{$contractDuration} days");
+                        $end->setTime(0, 0, 0);
+
+                        $todayObj = new DateTime($today);
+                        $todayObj->setTime(0, 0, 0);
+
+                        if ($end >= $todayObj) {
+                            $isContractActive = true;
                         }
+                    } catch (Exception $e) {
+                        $isContractActive = false;
                     }
-                    
+
                     if ($isContractActive) {
                         return false;
                     }
-                    
+
                     return true;
                 }
 
@@ -4027,24 +4253,22 @@
                     $checkTable = $pdo->query("SHOW TABLES LIKE '{$harvhubTable}'");
                     if ($checkTable->rowCount() > 0) {
                         $stmt = $pdo->prepare("
-                            SELECT id, fullname, email, broker, login, broker_balance, profitandloss, 
-                                loyalties, execution_start_date, invested_with, application_status,
-                                '{$harvhubTable}' as source 
+                            SELECT id, fullname, email, broker, login, broker_balance,
+                                   profitandloss, loyalties, execution_start_date,
+                                   invested_with, application_status, balance_verification,
+                                   '{$harvhubTable}' as source 
                             FROM {$harvhubTable} 
-                            WHERE application_status LIKE '%approved%'
-                            AND login IS NOT NULL 
-                            AND login != ''
                             ORDER BY id DESC
                         ");
                         $stmt->execute();
                         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                        
+
                         foreach ($results as $user) {
                             // Get programme-specific duration
                             $progData = getProgrammeInvestorData($pdo, $user['id']);
                             $contractDuration = $progData['contract_duration'];
-                            
-                            if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit)) {
+
+                            if (isUserInactive($user, $contractDuration, $today, $minProfitForSplit, $pdo)) {
                                 $user['contract_duration'] = $contractDuration;
                                 $user['developer_name'] = $progData['developer_name'];
                                 $user['programme_name'] = $progData['programme_name'];
@@ -4471,6 +4695,12 @@
         
         // Process each user for the table and summaries
         foreach ($allUsers as &$user) {
+            // ---- LEVEL 0a: programme_investors gate ----
+            if (!userHasProgrammeInvestment($pdo, (int)$user['id'])) {
+                $user['current_status'] = 'inactive';
+                $user['should_show_in_revenue'] = false;
+                continue;
+            }
             $brokerBalance = (float)($user['broker_balance'] ?? 0);
             $profitAndLoss = (float)($user['profitandloss'] ?? 0);
             $currentBalance = $brokerBalance + $profitAndLoss;
@@ -4635,6 +4865,9 @@
     <?php include 'server_script.php' ?>
 </head>
 <body>
+    <!-- Dynamic session timeout value handed off to JS (format: "value:unit") -->
+    <input type="hidden" id="session-inactivity-raw"
+           value="<?= htmlspecialchars($inactivityTimerRaw ?? '60:seconds') ?>">
     <div id="custom-body">
         <?php if ($initialSetupRequired || !$authenticated): ?>
             <!-- ============================================ -->

@@ -677,17 +677,59 @@
 </script>
 <script>
     // ============================================
-    // SESSION TIMEOUT - 1 MINUTE (No Warning)
+    // SESSION TIMEOUT - DYNAMIC (reads from #session-inactivity-raw)
+    // Format: "value:unit" e.g. "60:seconds", "5:minutes", "1:hours"
     // ============================================
     (function() {
-        // Timeout in milliseconds (1 minute = 60,000 ms)
-        const SESSION_TIMEOUT = 60 * 1000;
-        let inactivityTimer;
-        let isLoggedOut = false;
-        
+        // --- Read the raw config from the hidden input (falls back to 60 seconds) ---
+        var rawInput = document.getElementById('session-inactivity-raw');
+        var rawValue = rawInput ? rawInput.value : '60:seconds';
+
+        /**
+         * Parse "value:unit" into milliseconds.
+         * Returns 60000 (1 minute) as a safe fallback.
+         */
+        function parseInactivityToMs(raw) {
+            if (!raw || typeof raw !== 'string') return 60000;
+
+            var pos = raw.lastIndexOf(':');
+            if (pos === -1) return 60000;
+
+            var value = parseInt(raw.substring(0, pos), 10);
+            var unit  = raw.substring(pos + 1).toLowerCase().trim();
+
+            if (!value || value <= 0) return 60000;
+
+            switch (unit) {
+                case 'second':
+                case 'seconds':
+                case 'sec':
+                case 's':
+                    return value * 1000;
+                case 'minute':
+                case 'minutes':
+                case 'min':
+                case 'm':
+                    return value * 60 * 1000;
+                case 'hour':
+                case 'hours':
+                case 'hr':
+                case 'hrs':
+                case 'h':
+                    return value * 60 * 60 * 1000;
+                default:
+                    return 60000;
+            }
+        }
+
+        // Timeout in milliseconds (dynamic)
+        var SESSION_TIMEOUT = parseInactivityToMs(rawValue);
+
+        var inactivityTimer;
+        var isLoggedOut = false;
+
         // Check if user is already logged out by checking for the login form
         function checkIfLoggedOut() {
-            // If we see a login form, user is logged out - stop all timers
             if (document.querySelector('.login-container')) {
                 isLoggedOut = true;
                 if (inactivityTimer) {
@@ -698,18 +740,14 @@
             }
             return false;
         }
-        
+
         // Function to reset the inactivity timer
         function resetInactivityTimer() {
-            // Don't reset if already logged out
             if (isLoggedOut) return;
-            
-            // Check if logged out again
             if (checkIfLoggedOut()) return;
-            
-            // Clear existing timer
+
             if (inactivityTimer) clearTimeout(inactivityTimer);
-            
+
             // Send keep-alive ping to server
             fetch('serveraccount.php', {
                 method: 'HEAD',
@@ -717,40 +755,34 @@
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest'
                 }
-            }).catch(function(error) {
-                // If fetch fails, check if we're logged out
+            }).catch(function() {
                 checkIfLoggedOut();
             });
-            
-            // Set new timer for logout
+
+            // Set new timer for logout (dynamic)
             inactivityTimer = setTimeout(forceLogout, SESSION_TIMEOUT);
         }
-        
+
         // Function to force logout
         function forceLogout() {
-            // Check if already logged out first
             if (checkIfLoggedOut()) return;
-            
-            // Clear timer
+
             if (inactivityTimer) {
                 clearTimeout(inactivityTimer);
                 inactivityTimer = null;
             }
-            
-            // Show message (optional - will disappear on redirect)
-            const messageDiv = document.createElement('div');
+
+            var messageDiv = document.createElement('div');
             messageDiv.className = 'message';
             messageDiv.innerHTML = '<span style="color:orange;">⏰ Session expired. Redirecting to login...</span>';
-            const container = document.querySelector('.container');
+            var container = document.querySelector('.container');
             if (container) {
-                const existingMessage = container.querySelector('.message');
+                var existingMessage = container.querySelector('.message');
                 if (existingMessage) existingMessage.remove();
                 container.insertBefore(messageDiv, container.firstChild);
             }
-            
-            // Redirect to logout after 1.5 seconds
+
             setTimeout(function() {
-                // Check again if we're already on login page
                 if (document.querySelector('.login-container')) {
                     isLoggedOut = true;
                     return;
@@ -758,51 +790,40 @@
                 window.location.href = 'serveraccount.php?logout=1';
             }, 1500);
         }
-        
-        // Check initial state
+
         checkIfLoggedOut();
-        
-        // Track user activity events
-        const activityEvents = ['mousemove', 'mousedown', 'click', 'keypress', 'scroll', 'touchstart', 'keydown'];
-        
+
+        var activityEvents = ['mousemove', 'mousedown', 'click', 'keypress', 'scroll', 'touchstart', 'keydown'];
+
         function handleUserActivity() {
-            // Don't handle activity if already logged out
             if (isLoggedOut) return;
-            
-            // Check if we're now logged out
             if (checkIfLoggedOut()) return;
-            
             resetInactivityTimer();
         }
-        
-        // Add event listeners for user activity
+
         activityEvents.forEach(function(event) {
             document.addEventListener(event, handleUserActivity);
         });
-        
-        // Also track when page becomes visible again
+
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden) {
-                // Check if logged out when page becomes visible
                 if (checkIfLoggedOut()) return;
                 handleUserActivity();
             }
         });
-        
-        // Initialize the timer (only if not logged out)
+
         if (!isLoggedOut) {
             resetInactivityTimer();
         }
-        
-        // Periodic ping to keep session alive (every 30 seconds)
-        const pingInterval = setInterval(function() {
-            // Stop pinging if logged out
+
+        // Periodic ping to keep session alive (every 30 seconds while visible)
+        var pingInterval = setInterval(function() {
             if (isLoggedOut || document.querySelector('.login-container')) {
                 isLoggedOut = true;
                 clearInterval(pingInterval);
                 return;
             }
-            
+
             if (document.visibilityState === 'visible') {
                 fetch('serveraccount.php', {
                     method: 'HEAD',
@@ -810,14 +831,12 @@
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest'
                     }
-                }).catch(function(error) {
-                    // If fetch fails, check if we're logged out
+                }).catch(function() {
                     checkIfLoggedOut();
                 });
             }
         }, 30000);
-        
-        // Clean up on page unload
+
         window.addEventListener('beforeunload', function() {
             if (inactivityTimer) {
                 clearTimeout(inactivityTimer);
@@ -825,9 +844,8 @@
             }
             clearInterval(pingInterval);
         });
-        
-        // Also check for login form on any DOM changes (in case of dynamic content)
-        const observer = new MutationObserver(function() {
+
+        var observer = new MutationObserver(function() {
             if (document.querySelector('.login-container')) {
                 isLoggedOut = true;
                 if (inactivityTimer) {
@@ -837,7 +855,6 @@
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
-        
+
     })();
-    
 </script>

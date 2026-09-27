@@ -207,7 +207,6 @@
     #paymentModal.modal .modal-content,
     #paymentFailedModal.modal .modal-content,
     #finalConfirmationModal.modal .modal-content,
-    #reenrollModal.modal .modal-content,
     #tradeHistoryModal.modal .modal-content,
     #disconnectModal.modal .modal-content,
     #finalDisconnectModal.modal .modal-content,
@@ -227,7 +226,6 @@
         #paymentModal.modal .modal-content,
         #paymentFailedModal.modal .modal-content,
         #finalConfirmationModal.modal .modal-content,
-        #reenrollModal.modal .modal-content,
         #tradeHistoryModal.modal .modal-content,
         #disconnectModal.modal .modal-content,
         #finalDisconnectModal.modal .modal-content,
@@ -237,6 +235,368 @@
             padding: 20px;
             margin: 12px;
             max-height: 90vh;
+        }
+    }
+    /* ============================================================
+    CONTRACT ENROLLMENT PROTOCOL MODAL - FIXED STYLES
+    ============================================================ */
+
+    /* Modal content container */
+    #reenrollModal.modal .modal-content {
+        max-width: 520px;
+        padding: 32px 28px;
+        border-radius: var(--radius, 16px);
+        background: var(--modal-bg, #ffffff);
+        border: 1px solid var(--border-color, #e2e8f0);
+        box-shadow: var(--shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.08));
+    }
+
+    /* Modal heading */
+    #reenrollModal.modal .modal-content h2 {
+        font-size: 1.45rem;
+        font-weight: 700;
+        color: var(--info, #3498db);
+        margin: 0 0 10px 0;
+        text-align: center;
+        letter-spacing: -0.3px;
+    }
+
+    /* Intro paragraph */
+    #reenrollModal.modal .modal-content > p {
+        margin: 0 0 20px 0;
+        opacity: 0.85;
+        font-size: 0.92rem;
+        line-height: 1.6;
+        text-align: center;
+        color: var(--text-secondary, #5a6c7d);
+    }
+
+    /* Instructions block */
+    #reenrollModal .reenroll-instructions {
+        background: var(--bg, #f0f4f8);
+        border: 1px solid var(--border-color, #e2e8f0);
+        border-radius: var(--radius-sm, 10px);
+        padding: 18px 20px;
+        margin-bottom: 20px;
+    }
+
+    #reenrollModal .reenroll-instructions h4 {
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--text-muted, #8a9aa8);
+        margin: 0 0 14px 0;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--border-color, #e2e8f0);
+    }
+
+    #reenrollModal .reenroll-instructions ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    #reenrollModal .reenroll-instructions li {
+        position: relative;
+        padding-left: 26px;
+        font-size: 0.88rem;
+        line-height: 1.55;
+        color: var(--text, #1a2332);
+    }
+
+    #reenrollModal .reenroll-instructions li::before {
+        content: "●";
+        position: absolute;
+        left: 0;
+        top: 0;
+        font-size: 0.6rem;
+        color: var(--info, #3498db);
+        line-height: 1.8;
+    }
+
+    #reenrollModal .reenroll-instructions li strong {
+        color: var(--text, #1a2332);
+        font-weight: 700;
+    }
+
+    /* Consequence note */
+    #reenrollModal .consequence-note {
+        margin-top: 16px;
+        padding: 12px 14px;
+        background: var(--danger-bg, #fdedec);
+        border-left: 4px solid var(--danger, #e74c3c);
+        border-radius: 6px;
+        font-size: 0.82rem;
+        line-height: 1.5;
+        color: var(--danger, #e74c3c);
+        font-weight: 600;
+    }
+
+    /* Checkbox container */
+    #reenrollModal .checkbox-container-legal {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+        margin-bottom: 20px;
+        background: var(--bg, #f0f4f8);
+        border: 1px solid var(--border-color, #e2e8f0);
+        border-radius: var(--radius-sm, 10px);
+        cursor: pointer;
+        transition: border-color 0.2s ease, background 0.2s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    #reenrollModal .checkbox-container-legal:hover {
+        border-color: var(--info, #3498db);
+    }
+
+    #reenrollModal .checkbox-container-legal input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        margin: 0;
+        flex-shrink: 0;
+        cursor: pointer;
+        accent-color: var(--info, #3498db);
+        -webkit-appearance: none;
+        appearance: none;
+        border: 2px solid var(--border-color, #e2e8f0);
+        border-radius: 5px;
+        background: var(--bg-card, #ffffff);
+        position: relative;
+        transition: all 0.15s ease;
+    }
+
+    #reenrollModal .checkbox-container-legal input[type="checkbox"]:checked {
+        background: var(--info, #3498db);
+        border-color: var(--info, #3498db);
+    }
+
+    #reenrollModal .checkbox-container-legal input[type="checkbox"]:checked::after {
+        content: "✓";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    #reenrollModal .checkbox-container-legal label {
+        font-size: 0.88rem;
+        line-height: 1.5;
+        color: var(--text, #1a2332);
+        cursor: pointer;
+        margin: 0;
+        padding-top: 1px;
+    }
+
+    /* Modal actions */
+    #reenrollModal .modal-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 0;
+    }
+
+    /* Proceed button */
+    #reenrollModal .reenroll-confirm-btn {
+        width: 100%;
+        padding: 14px 20px;
+        background: #555;
+        color: #999;
+        border: none;
+        border-radius: var(--radius-sm, 10px);
+        font-size: 0.95rem;
+        font-weight: 700;
+        cursor: not-allowed;
+        transition: all 0.25s ease;
+        font-family: inherit;
+        opacity: 0.6;
+        letter-spacing: 0.2px;
+    }
+
+    #reenrollModal .reenroll-confirm-btn:not(:disabled) {
+        background: #0080bc;
+        color: #000;
+        cursor: pointer;
+        opacity: 1;
+        box-shadow: 0 4px 14px rgba(0, 128, 188, 0.3);
+    }
+
+    #reenrollModal .reenroll-confirm-btn:not(:disabled):hover {
+        background: #0099e0;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(0, 128, 188, 0.4);
+    }
+
+    #reenrollModal .reenroll-confirm-btn:not(:disabled):active {
+        transform: translateY(0) scale(0.98);
+    }
+
+    /* Cancel button */
+    #reenrollModal .modal-actions > button:last-child {
+        width: 100%;
+        padding: 12px 20px;
+        background: #555;
+        color: #ffffff;
+        border: none;
+        border-radius: var(--radius-sm, 10px);
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-family: inherit;
+    }
+
+    #reenrollModal .modal-actions > button:last-child:hover {
+        background: #666;
+    }
+
+    #reenrollModal .modal-actions > button:last-child:active {
+        transform: scale(0.98);
+    }
+
+    /* ============================================================
+    DARK MODE OVERRIDES
+    ============================================================ */
+    body.dark-mode #reenrollModal.modal .modal-content {
+        background: var(--modal-bg, #161b22);
+        border-color: var(--border-color, #30363d);
+    }
+
+    body.dark-mode #reenrollModal .reenroll-instructions {
+        background: var(--bg, #0d1117);
+        border-color: var(--border-color, #30363d);
+    }
+
+    body.dark-mode #reenrollModal .reenroll-instructions h4 {
+        color: var(--text-muted, #6e7681);
+        border-color: var(--border-color, #30363d);
+    }
+
+    body.dark-mode #reenrollModal .reenroll-instructions li {
+        color: var(--text, #e6edf3);
+    }
+
+    body.dark-mode #reenrollModal .reenroll-instructions li strong {
+        color: var(--text, #e6edf3);
+    }
+
+    body.dark-mode #reenrollModal .consequence-note {
+        background: rgba(248, 81, 73, 0.1);
+        border-color: var(--danger, #f85149);
+        color: var(--danger, #f85149);
+    }
+
+    body.dark-mode #reenrollModal .checkbox-container-legal {
+        background: var(--bg, #0d1117);
+        border-color: var(--border-color, #30363d);
+    }
+
+    body.dark-mode #reenrollModal .checkbox-container-legal:hover {
+        border-color: var(--info, #58a6ff);
+    }
+
+    body.dark-mode #reenrollModal .checkbox-container-legal input[type="checkbox"] {
+        background: var(--bg-card, #21262d);
+        border-color: var(--border-color, #30363d);
+    }
+
+    body.dark-mode #reenrollModal .checkbox-container-legal input[type="checkbox"]:checked {
+        background: var(--info, #58a6ff);
+        border-color: var(--info, #58a6ff);
+    }
+
+    body.dark-mode #reenrollModal .checkbox-container-legal label {
+        color: var(--text, #e6edf3);
+    }
+
+    body.dark-mode #reenrollModal .reenroll-confirm-btn:not(:disabled) {
+        background: #0080bc;
+        color: #ffffff;
+    }
+
+    body.dark-mode #reenrollModal .reenroll-confirm-btn:not(:disabled):hover {
+        background: #0099e0;
+    }
+
+    body.dark-mode #reenrollModal .modal-actions > button:last-child {
+        background: #30363d;
+        color: var(--text, #e6edf3);
+    }
+
+    body.dark-mode #reenrollModal .modal-actions > button:last-child:hover {
+        background: #3d444d;
+    }
+
+    /* ============================================================
+    RESPONSIVE
+    ============================================================ */
+    @media (max-width: 768px) {
+        #reenrollModal.modal .modal-content {
+            padding: 24px 20px;
+            margin: 12px;
+            max-height: 90vh;
+        }
+
+        #reenrollModal.modal .modal-content h2 {
+            font-size: 1.25rem;
+        }
+
+        #reenrollModal .reenroll-instructions {
+            padding: 14px 16px;
+        }
+
+        #reenrollModal .reenroll-instructions li {
+            font-size: 0.84rem;
+            padding-left: 22px;
+        }
+
+        #reenrollModal .checkbox-container-legal {
+            padding: 12px 14px;
+        }
+
+        #reenrollModal .checkbox-container-legal label {
+            font-size: 0.84rem;
+        }
+
+        #reenrollModal .reenroll-confirm-btn {
+            padding: 13px 18px;
+            font-size: 0.9rem;
+        }
+    }
+
+    @media (max-width: 400px) {
+        #reenrollModal.modal .modal-content {
+            padding: 20px 16px;
+        }
+
+        #reenrollModal.modal .modal-content h2 {
+            font-size: 1.1rem;
+        }
+
+        #reenrollModal.modal .modal-content > p {
+            font-size: 0.85rem;
+        }
+
+        #reenrollModal .reenroll-instructions h4 {
+            font-size: 0.72rem;
+        }
+
+        #reenrollModal .reenroll-instructions li {
+            font-size: 0.8rem;
+        }
+
+        #reenrollModal .consequence-note {
+            font-size: 0.78rem;
+            padding: 10px 12px;
         }
     }
 </style>
@@ -3543,7 +3903,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 0 20px;
-        z-index: 10000;
+        z-index: 800;
         box-shadow: 0 1px 10px rgba(0, 0, 0, 0.05);
         transition: background 0.3s ease;
     }

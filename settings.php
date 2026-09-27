@@ -470,10 +470,53 @@
                     <input type="password" id="settings-admin-password-confirm" class="settings-input"
                            placeholder="Re-enter new password">
                 </div>
-                <div class="settings-field-error" id="settings-credentials-error" style="display:none;"></div>
+        <div class="settings-field-error" id="settings-credentials-error" style="display:none;"></div>
             </div>
             <div class="settings-card-footer">
                 <button class="settings-btn settings-btn-primary" onclick="Settings.saveCredentials()">Save Credentials</button>
+            </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!-- AUTO LOGOUT (INACTIVITY TIMER)               -->
+        <!-- ============================================ -->
+        <div class="settings-card" style="margin-top:20px;">
+            <div class="settings-card-header">
+                <h3>Auto Logout (Inactivity Timer)</h3>
+                <p class="settings-card-sub">
+                    Automatically log out the admin when there is no activity for the configured duration.
+                    Stored in <code>inactivity_timer</code> as <code>value:unit</code>.
+                </p>
+            </div>
+            <div class="settings-card-body">
+                <div class="settings-field">
+                    <label for="settings-inactivity-value">Timeout Value</label>
+                    <input type="number" min="1" step="1"
+                           id="settings-inactivity-value"
+                           class="settings-input"
+                           value="60"
+                           placeholder="e.g. 60">
+                    <div class="settings-field-hint">Enter a positive whole number.</div>
+                </div>
+
+                <div class="settings-field">
+                    <label for="settings-inactivity-unit">Time Unit</label>
+                    <select id="settings-inactivity-unit" class="settings-input">
+                        <option value="seconds">Second(s)</option>
+                        <option value="minutes">Minute(s)</option>
+                        <option value="hours">Hour(s)</option>
+                    </select>
+                    <div class="settings-field-hint">
+                        Options: Hour(s), Minute(s), Second(s). Default: 60 Seconds.
+                    </div>
+                </div>
+
+                <div class="settings-field-error" id="settings-inactivity-error" style="display:none;"></div>
+            </div>
+            <div class="settings-card-footer">
+                <button class="settings-btn settings-btn-primary" onclick="Settings.saveInactivityTimer()">
+                    Save Auto Logout
+                </button>
             </div>
         </div>
     </div>
@@ -663,6 +706,7 @@ const Settings = {
         }
         this.loadBrokers();
         this.loadTiers();
+        this.loadInactivityTimer();
         this.bindEvents();
     },
 
@@ -1793,6 +1837,76 @@ const Settings = {
                         self.showNotification('Credentials updated successfully!', 'Success', false);
                     } else if (data.error === 'Invalid password') {
                         self.showNotification('Current password verification failed.', 'Error', true);
+                    } else {
+                        self.showNotification('Error: ' + (data.error || 'Unknown error'), 'Error', true);
+                    }
+                }).catch(err => self.showNotification('Error: ' + err.message, 'Error', true));
+            }
+        );
+    },
+
+    // ============================================
+    // AUTO LOGOUT (INACTIVITY TIMER)
+    // ============================================
+    loadInactivityTimer: function() {
+        const self = this;
+        this.postAction('settings_get_inactivity_timer', {}).then(data => {
+            if (data.success) {
+                const valueEl = document.getElementById('settings-inactivity-value');
+                const unitEl  = document.getElementById('settings-inactivity-unit');
+                if (valueEl) valueEl.value = data.value;
+                if (unitEl)  unitEl.value  = data.unit;
+            }
+        }).catch(function() { /* keep defaults on error */ });
+    },
+
+    saveInactivityTimer: function() {
+        const self = this;
+        const errorEl = document.getElementById('settings-inactivity-error');
+        errorEl.style.display = 'none';
+
+        const valueEl = document.getElementById('settings-inactivity-value');
+        const unitEl  = document.getElementById('settings-inactivity-unit');
+
+        const value = parseInt(valueEl.value, 10);
+        const unit  = unitEl.value;
+
+        if (!value || value <= 0) {
+            errorEl.textContent = 'Timeout value must be a positive number.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        if (['seconds', 'minutes', 'hours'].indexOf(unit) === -1) {
+            errorEl.textContent = 'Please choose a valid time unit.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        this.showPasswordModal(
+            'Save Auto Logout',
+            'Enter admin password to save the inactivity timeout.',
+            function(password) {
+                const loginId = document.getElementById('settings-login-id-hidden')?.value || '';
+                self.postAction('settings_update_inactivity_timer', {
+                    timeout_value: value,
+                    timeout_unit:  unit,
+                    admin_password: password,
+                    login_id: loginId
+                }).then(data => {
+                    if (data.success) {
+                        // Update the hidden input so the running client timer
+                        // picks up the new value on the next activity reset.
+                        const rawInput = document.getElementById('session-inactivity-raw');
+                        if (rawInput) rawInput.value = data.raw;
+
+                        self.showNotification(
+                            'Auto logout updated to ' + value + ' ' + unit + '. ' +
+                            'The new timeout takes effect on the next page load.',
+                            'Success',
+                            false
+                        );
+                    } else if (data.error === 'Invalid password') {
+                        self.showNotification('Password verification failed.', 'Error', true);
                     } else {
                         self.showNotification('Error: ' + (data.error || 'Unknown error'), 'Error', true);
                     }

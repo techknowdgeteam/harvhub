@@ -424,13 +424,10 @@
     }
 </style>
 </head>
-<body>
+<body class="<?= htmlspecialchars($darkModeClass) ?>">
     
     <?php include 'harvhub_header.php'; ?>
     
-    <script>
-        document.body.className = '<?= htmlspecialchars($darkModeClass) ?>';
-    </script>
     
     <div class="spinner-overlay" id="spinnerOverlay">
         <div class="spinner"></div>

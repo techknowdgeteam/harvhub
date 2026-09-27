@@ -51,11 +51,6 @@
     $currentBroker = $developer['broker'] ?? '';
 
     // ==================== ACCOUNT MANAGEMENT COLUMNS ====================
-    // Only columns that still exist after the ALTER TABLE changes.
-    // - grid_prices_setup  -> renamed to additional_configurations
-    // - Removed: martingale_per_stage_drawdown_amount, symbols_grid_strategy,
-    //            enable_single_position_and_pending, enable_martingale,
-    //            martingale_config
     $ACCOUNT_MGMT_COLUMNS = [
         'enable_risk_reward_correction'              => ['label' => 'Enable Risk Reward Correction',              'type' => 'bool',   'json' => false],
         'minimum_risk_reward'                        => ['label' => 'Minimum Risk Reward',                        'type' => 'decimal','json' => false],
@@ -165,6 +160,44 @@
     // ==================== HANDLE AJAX: SAVE ACCOUNT MANAGEMENT ====================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_account_management'])) {
         header('Content-Type: application/json');
+
+        $singleCol = isset($_POST['single_col']) ? trim($_POST['single_col']) : '';
+
+        if ($singleCol !== '') {
+            $val = $_POST['single_value'] ?? '';
+            if (!array_key_exists($singleCol, $ACCOUNT_MGMT_COLUMNS)) {
+                echo json_encode(['success' => false, 'message' => 'Unknown column.']);
+                exit;
+            }
+
+            $meta = $ACCOUNT_MGMT_COLUMNS[$singleCol];
+            if ($meta['type'] === 'bool') {
+                $cleanVal = ((int)$val) ? 1 : 0;
+            } elseif ($meta['type'] === 'decimal') {
+                $cleanVal = (float)$val;
+            } else {
+                $cleanVal = is_string($val) ? $val : json_encode($val);
+            }
+
+            try {
+                $pdo->beginTransaction();
+                ensureAccountManagementRow($pdo, $userId, 0);
+
+                $upd = $pdo->prepare("UPDATE accountmanagement SET `$singleCol` = ? WHERE developerid = ? AND investorid = 0");
+                $upd->execute([$cleanVal, $userId]);
+
+                syncInvestorRows($pdo, $userId, $ACCOUNT_MGMT_COLUMNS);
+
+                $pdo->commit();
+                echo json_encode(['success' => true, 'message' => 'Column saved and synced to all investors.']);
+            } catch (PDOException $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                echo json_encode(['success' => false, 'message' => 'Failed to save: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+
+        // ---- Full save ----
         $raw = $_POST['fields'] ?? '{}';
         $fields = json_decode($raw, true);
         if (!is_array($fields)) { echo json_encode(['success' => false, 'message' => 'Invalid data.']); exit; }
@@ -209,7 +242,7 @@
 
     // ==================== ENSURE ROWS FOR ALL INVESTORS ====================
     try {
-        ensureAccountManagementRow($pdo, $userId, 0); // master row
+        ensureAccountManagementRow($pdo, $userId, 0);
         $investors = getDeveloperInvestors($pdo, $userId);
         foreach ($investors as $inv) ensureAccountManagementRow($pdo, $userId, (int)$inv['investorid']);
     } catch (PDOException $e) {}
@@ -241,36 +274,94 @@
         touch-action: manipulation;
     }
 
-    /* iOS long-press callout prevention on inputs (optional polish) */
     input, textarea, select {
         -webkit-touch-callout: none;
     }
 
-    /* Prevent Safari text auto-resize on orientation change */
     html {
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
     }
-    /* ============================================================
-    GLOBAL iOS ZOOM FIX
-    iOS Safari auto-zooms any input with font-size < 16px.
-    Force 16px on all form controls at mobile widths.
-    ============================================================ */
+
+    /* iOS zoom fix */
     @media (max-width: 768px) {
-        input,
-        select,
-        textarea,
-        .dd-input,
-        .dd-select,
-        .dd-am-input,
-        .dd-inline-input,
-        .dd-req-input,
-        .dd-json-edit-textarea,
-        .pt-modal-input {
+        input, select, textarea,
+        .dd-input, .dd-select, .dd-am-input, .dd-inline-input,
+        .dd-req-input, .dd-json-edit-textarea, .pt-modal-input {
             font-size: 16px !important;
         }
     }
-    /* JSON view / edit modal */
+
+    /* ============================================================
+       MAIN PAGE — FOLDABLE JSON PREVIEW
+       (Only on the dashboard, NOT the modal)
+       ============================================================ */
+    .dd-foldable {
+        position: relative;
+    }
+
+    .dd-foldable.is-collapsed {
+        max-height: 180px;
+        overflow: hidden;
+    }
+
+    .dd-foldable.is-collapsed::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 56px;
+        background: linear-gradient(to bottom, transparent, var(--bg, #f5f5f5));
+        pointer-events: none;
+        border-radius: 0 0 var(--radius-sm, 8px) var(--radius-sm, 8px);
+    }
+
+    body.dark-mode .dd-foldable.is-collapsed::after {
+        background: linear-gradient(to bottom, transparent, var(--bg-card, #1e1e2a));
+    }
+
+    .dd-fold-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 10px;
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--accent, #2e8b57);
+        background: transparent;
+        border: 1px solid var(--accent, #2e8b57);
+        border-radius: var(--radius-sm, 8px);
+        padding: 6px 14px;
+        cursor: pointer;
+        transition: background 0.15s ease, transform 0.1s ease;
+    }
+
+    .dd-fold-toggle:hover {
+        background: rgba(46, 139, 87, 0.08);
+    }
+
+    .dd-fold-toggle:active {
+        transform: scale(0.97);
+    }
+
+    .dd-fold-toggle .dd-fold-icon {
+        transition: transform 0.2s ease;
+        display: inline-block;
+        font-size: 0.85rem;
+        line-height: 1;
+    }
+
+    .dd-fold-toggle.is-expanded .dd-fold-icon {
+        transform: rotate(180deg);
+    }
+
+    /* ============================================================
+       JSON VIEW / EDIT MODAL — ALWAYS EXPANDED
+       ============================================================ */
     .dd-json-view-modal .dd-modal-content {
         max-width: 600px;
     }
@@ -279,7 +370,7 @@
         border: 1px solid var(--border-color, #e0e0e0);
         border-radius: var(--radius-sm, 8px);
         padding: 14px 16px;
-        max-height: 55vh;
+        max-height: 60vh;
         overflow: auto;
     }
     .dd-json-view-body pre {
@@ -296,7 +387,7 @@
         width: 100%;
         box-sizing: border-box;
         min-height: 320px;
-        max-height: 55vh;
+        max-height: 60vh;
         resize: vertical;
         background: var(--bg-card, #fff);
         border: 1px solid var(--border-color, #e0e0e0);
@@ -315,11 +406,13 @@
         display: flex;
         gap: 10px;
         margin-top: var(--spacing-sm, 12px);
+        flex-wrap: wrap;
     }
     .dd-json-view-actions .dd-btn-primary,
     .dd-json-view-actions .dd-btn-ghost {
         width: auto;
         flex: 1;
+        min-width: 100px;
     }
     body.dark-mode .dd-json-view-body {
         background: var(--bg, #2a2a3a);
@@ -331,71 +424,140 @@
         color: var(--text, #eee);
     }
 
-    /* ==================== FOLDABLE CONTENT ==================== */
-    .dd-foldable {
-        position: relative;
+    /* ============================================================
+       COLUMN HEAD ACTION ROW — polished buttons
+       ============================================================ */
+    .dd-am-col-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
 
-    .dd-foldable.is-collapsed {
-        max-height: 160px;
-        overflow: hidden;
-    }
-
-    .dd-foldable.is-collapsed::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 48px;
-        background: linear-gradient(to bottom, transparent, var(--bg, #f5f5f5));
-        pointer-events: none;
-        border-radius: 0 0 var(--radius-sm, 8px) var(--radius-sm, 8px);
-    }
-
-    body.dark-mode .dd-foldable.is-collapsed::after {
-        background: linear-gradient(to bottom, transparent, var(--bg-card, #1e1e2a));
-    }
-
-    .dd-fold-toggle {
+    .dd-btn-col {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        margin-top: 6px;
+        gap: 8px;
+        padding: 9px 18px;
+        border-radius: 999px;
         font-family: inherit;
-        font-size: 0.72rem;
+        font-size: 0.78rem;
         font-weight: 700;
         letter-spacing: 0.3px;
-        text-transform: uppercase;
-        color: var(--accent, #2e8b57);
-        background: transparent;
-        border: 1px solid var(--accent, #2e8b57);
-        border-radius: var(--radius-sm, 8px);
-        padding: 5px 12px;
         cursor: pointer;
-        transition: background 0.15s ease;
+        transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+        border: 1.5px solid transparent;
+        white-space: nowrap;
+        line-height: 1;
+        -webkit-tap-highlight-color: transparent;
     }
 
-    .dd-fold-toggle:hover {
-        background: rgba(46, 139, 87, 0.08);
+    .dd-btn-col:active {
+        transform: scale(0.96);
     }
 
-    .dd-fold-toggle .dd-fold-icon {
-        transition: transform 0.2s ease;
-        display: inline-block;
+    .dd-btn-col i {
+        font-size: 0.9rem;
+        line-height: 1;
     }
 
-    .dd-fold-toggle.is-expanded .dd-fold-icon {
-        transform: rotate(180deg);
+    /* "View JSON Data" — subtle outline style */
+    .dd-btn-col-view {
+        background: transparent;
+        color: var(--accent, #2e8b57);
+        border-color: var(--accent, #2e8b57);
+    }
+    .dd-btn-col-view:hover {
+        background: rgba(46, 139, 87, 0.1);
     }
 
-    .dd-json-view-body.dd-foldable.is-collapsed {
-        max-height: 220px;
+    /* "Save Column" — solid accent style, cooler */
+    .dd-btn-col-save {
+        background: linear-gradient(135deg, #2e8b57 0%, #1f6b41 100%);
+        color: #fff;
+        border-color: #2e8b57;
+        box-shadow: 0 3px 10px rgba(46, 139, 87, 0.3);
+    }
+    .dd-btn-col-save:hover {
+        background: linear-gradient(135deg, #34a368 0%, #237a4a 100%);
+        box-shadow: 0 5px 14px rgba(46, 139, 87, 0.4);
+    }
+    .dd-btn-col-save:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    /* "Construct JSON Data" — softer pill */
+    .dd-btn-col-construct {
+        background: rgba(46, 139, 87, 0.1);
+        color: var(--accent, #2e8b57);
+        border-color: rgba(46, 139, 87, 0.35);
+    }
+    .dd-btn-col-construct:hover {
+        background: rgba(46, 139, 87, 0.18);
+        border-color: var(--accent, #2e8b57);
+    }
+
+    body.dark-mode .dd-btn-col-view {
+        color: var(--accent, #3fb5c9);
+        border-color: var(--accent, #3fb5c9);
+    }
+    body.dark-mode .dd-btn-col-view:hover {
+        background: rgba(63, 181, 201, 0.12);
+    }
+    body.dark-mode .dd-btn-col-save {
+        background: linear-gradient(135deg, #3fb5c9 0%, #2a8fa0 100%);
+        border-color: #3fb5c9;
+        box-shadow: 0 3px 10px rgba(63, 181, 201, 0.25);
+    }
+    body.dark-mode .dd-btn-col-construct {
+        background: rgba(63, 181, 201, 0.12);
+        color: var(--accent, #3fb5c9);
+        border-color: rgba(63, 181, 201, 0.35);
+    }
+
+    /* ============================================================
+       TOAST
+       ============================================================ */
+    .dd-save-toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(80px);
+        background: #27ae60;
+        color: #fff;
+        font-family: inherit;
+        font-size: 0.85rem;
+        font-weight: 600;
+        padding: 12px 26px;
+        border-radius: 24px;
+        box-shadow: 0 6px 24px rgba(39, 174, 96, 0.4);
+        opacity: 0;
+        transition: opacity 0.3s ease, transform 0.3s ease;
+        z-index: 999999;
+        pointer-events: none;
+        max-width: 88vw;
+        text-align: center;
+    }
+    .dd-save-toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+    .dd-save-toast.error {
+        background: #e74c3c;
+        box-shadow: 0 6px 24px rgba(231, 76, 60, 0.4);
     }
 
     @media (max-width: 480px) {
-        .dd-foldable.is-collapsed {
-            max-height: 120px;
+        .dd-am-col-actions {
+            width: 100%;
+            justify-content: flex-start;
+        }
+        .dd-btn-col {
+            padding: 8px 14px;
+            font-size: 0.74rem;
         }
     }
 </style>
@@ -435,7 +597,7 @@
 
             <div class="dd-am-note">
                 <strong>Note:</strong> Any change here will be applied to all investors under you.
-                JSON columns render an interactive tree directly on this page — no modal.
+                JSON columns render an interactive tree directly on this page — each column has its own save button.
             </div>
 
             <div class="dd-am-list">
@@ -458,16 +620,20 @@
 
                             <?php if ($isJson): ?>
                                 <?php if ($isExistingJson): ?>
-                                    <!-- JSON already stored: show "View JSON Data" button instead of the Store JSON toggle -->
-                                    <div class="dd-am-toggle-wrap">
+                                    <div class="dd-am-toggle-wrap dd-am-col-actions">
                                         <button type="button"
-                                                class="dd-btn-mini dd-btn-construct"
+                                                class="dd-btn-col dd-btn-col-view"
                                                 onclick="viewJsonDataCol('<?= htmlspecialchars($col) ?>')">
-                                            View JSON Data
+                                            <i class="fa-regular fa-eye"></i> View JSON Data
+                                        </button>
+                                        <button type="button"
+                                                class="dd-btn-col dd-btn-col-save"
+                                                onclick="saveSingleColumn('<?= htmlspecialchars($col) ?>')">
+                                            <i class="fa-solid fa-floppy-disk"></i> Save Column
                                         </button>
                                     </div>
                                 <?php else: ?>
-                                    <div class="dd-am-toggle-wrap">
+                                    <div class="dd-am-toggle-wrap dd-am-col-actions">
                                         <label class="dd-am-switch">
                                             <input type="checkbox"
                                                    class="dd-am-json-toggle"
@@ -477,11 +643,18 @@
                                         </label>
                                         <span class="dd-am-toggle-label">Store JSON</span>
                                         <button type="button"
-                                                class="dd-btn-mini dd-btn-construct"
+                                                class="dd-btn-col dd-btn-col-construct"
                                                 id="constructBtn-<?= htmlspecialchars($col) ?>"
                                                 style="display:none;"
                                                 onclick="startNewJsonForColumn('<?= htmlspecialchars($col) ?>')">
-                                            Construct JSON Data
+                                            <i class="fa-solid fa-wand-magic-sparkles"></i> Construct JSON
+                                        </button>
+                                        <button type="button"
+                                                class="dd-btn-col dd-btn-col-save"
+                                                id="saveColBtn-<?= htmlspecialchars($col) ?>"
+                                                style="display:none;"
+                                                onclick="saveSingleColumn('<?= htmlspecialchars($col) ?>')">
+                                            <i class="fa-solid fa-floppy-disk"></i> Save Column
                                         </button>
                                     </div>
                                 <?php endif; ?>
@@ -554,14 +727,10 @@
         <div class="dd-modal-content">
             <h2 class="dd-modal-title" id="ddJsonViewTitle">JSON Data</h2>
 
-            <!-- Read-only view -->
-            <div class="dd-json-view-body dd-foldable is-collapsed" id="ddJsonViewBody">
+            <!-- Read-only view — ALWAYS EXPANDED, no fold toggle -->
+            <div class="dd-json-view-body" id="ddJsonViewBody">
                 <pre id="ddJsonViewPre"></pre>
             </div>
-
-            <button type="button" class="dd-fold-toggle" id="ddJsonViewFoldBtn" data-target="ddJsonViewBody" onclick="toggleFold(this)">
-                <span class="dd-fold-label">Expand</span> <i class="dd-fold-icon">▾</i>
-            </button>
 
             <!-- Direct edit -->
             <textarea id="ddJsonEditTextarea" class="dd-json-edit-textarea" spellcheck="false"></textarea>
@@ -569,31 +738,28 @@
             <div class="dd-json-view-actions">
                 <button type="button" class="dd-btn-ghost" id="ddJsonEditBtn" onclick="enableJsonEdit()">Edit JSON</button>
                 <button type="button" class="dd-btn-ghost" id="ddJsonCancelEditBtn" style="display:none;" onclick="cancelJsonEdit()">Cancel</button>
-                <button type="button" class="dd-btn-primary" id="ddJsonApplyBtn" style="display:none;" onclick="applyJsonEdit()">Apply JSON</button>
+                <button type="button" class="dd-btn-primary" id="ddJsonApplyBtn" onclick="applyJsonEditAndSave()">Apply JSON &amp; Save</button>
                 <button type="button" class="dd-btn-ghost" onclick="closeJsonView()">Close</button>
             </div>
         </div>
     </div>
 
+    <!-- ==================== TOAST ==================== -->
+    <div id="ddSaveToast" class="dd-save-toast"></div>
+
 <script>
     // ==================== STATE ====================
     var ACCOUNT_MGMT_COLUMNS = <?= json_encode($ACCOUNT_MGMT_COLUMNS) ?>;
 
-    // Per-column working data for JSON columns.
     var jsonDataByCol = {};
-
-    // Per-column inline editor state.
     var jsonEditorByCol = {};
-
-    // Per-column root type picker state (true = picker visible, no data yet).
     var jsonRootPickerByCol = {};
 
-    // JSON view/edit modal state.
     var jsonViewCol = null;
     var jsonViewEditing = false;
 
-    // Threshold (px) above which we auto-collapse a JSON preview.
-    var FOLD_THRESHOLD = 200;
+    // Threshold (px) above which a page preview auto-collapses.
+    var FOLD_THRESHOLD = 220;
 
     // ==================== HELPERS ====================
     function escapeHtml(t) {
@@ -625,63 +791,18 @@
         window.scrollTo(0, y);
     }
 
-    // ==================== FOLD / EXPAND ====================
-    function toggleFold(btn) {
-        var targetId = btn.getAttribute('data-target');
-        var target = targetId ? document.getElementById(targetId) : btn.previousElementSibling;
-        if (!target) return;
-
-        var collapsed = target.classList.toggle('is-collapsed');
-        btn.classList.toggle('is-expanded', !collapsed);
-
-        var label = btn.querySelector('.dd-fold-label');
-        if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
-    }
-
-    // Wrap a JSON preview container in a foldable shell if it's tall enough.
-    function ensureFoldable(previewEl, col) {
-        if (!previewEl) return;
-
-        // The preview itself is the foldable element.
-        previewEl.classList.add('dd-foldable');
-
-        // Find or create the toggle button in the same input wrap.
-        var wrap = previewEl.closest('.dd-am-input-wrap');
-        if (!wrap) return;
-
-        var btn = wrap.querySelector('.dd-fold-toggle[data-target="' + previewEl.id + '"]');
-
-        // Measure whether the content exceeds the threshold.
-        // Temporarily remove collapse to measure full height.
-        var wasCollapsed = previewEl.classList.contains('is-collapsed');
-        previewEl.classList.remove('is-collapsed');
-        var fullHeight = previewEl.scrollHeight;
-        var shouldFold = fullHeight > FOLD_THRESHOLD;
-
-        if (!shouldFold) {
-            // Content is short: remove toggle button, leave expanded.
-            if (btn) btn.remove();
-            previewEl.classList.remove('is-collapsed');
-            return;
-        }
-
-        // Content is tall: ensure toggle exists and apply initial state.
-        if (!btn) {
-            btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'dd-fold-toggle';
-            btn.setAttribute('data-target', previewEl.id);
-            btn.innerHTML = '<span class="dd-fold-label">Expand</span> <i class="dd-fold-icon">▾</i>';
-            btn.addEventListener('click', function () { toggleFold(btn); });
-            wrap.appendChild(btn);
-        }
-
-        // Preserve prior collapsed state if it was collapsed, else start collapsed.
-        var startCollapsed = wasCollapsed || true;
-        previewEl.classList.toggle('is-collapsed', startCollapsed);
-        btn.classList.toggle('is-expanded', !startCollapsed);
-        var label = btn.querySelector('.dd-fold-label');
-        if (label) label.textContent = startCollapsed ? 'Expand' : 'Collapse';
+    // ==================== TOAST ====================
+    var _toastTimer = null;
+    function showToast(msg, isError) {
+        var t = document.getElementById('ddSaveToast');
+        if (!t) return;
+        t.textContent = msg;
+        t.classList.toggle('error', !!isError);
+        t.classList.add('show');
+        if (_toastTimer) clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(function () {
+            t.classList.remove('show');
+        }, 2200);
     }
 
     // ==================== ALERT ====================
@@ -696,7 +817,165 @@
         unlockBodyScroll();
     }
 
-    // ==================== JSON DATA VIEW / EDIT ====================
+    // ==================== FOLD (PAGE PREVIEWS ONLY) ====================
+    function toggleFold(btn) {
+        var targetId = btn.getAttribute('data-target');
+        var target = targetId ? document.getElementById(targetId) : btn.previousElementSibling;
+        if (!target) return;
+
+        var collapsed = target.classList.toggle('is-collapsed');
+        btn.classList.toggle('is-expanded', !collapsed);
+
+        var label = btn.querySelector('.dd-fold-label');
+        if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
+    }
+
+    /**
+     * Wrap a page-side JSON preview in a foldable shell if it's tall enough.
+     * Never used for the modal — the modal is always expanded.
+     */
+    function ensureFoldable(previewEl, col) {
+        if (!previewEl) return;
+
+        previewEl.classList.add('dd-foldable');
+
+        var wrap = previewEl.closest('.dd-am-input-wrap');
+        if (!wrap) return;
+
+        var btn = wrap.querySelector('.dd-fold-toggle[data-target="' + previewEl.id + '"]');
+
+        // Temporarily measure full height.
+        var wasCollapsed = previewEl.classList.contains('is-collapsed');
+        previewEl.classList.remove('is-collapsed');
+        var fullHeight = previewEl.scrollHeight;
+        var shouldFold = fullHeight > FOLD_THRESHOLD;
+
+        if (!shouldFold) {
+            if (btn) btn.remove();
+            previewEl.classList.remove('is-collapsed');
+            return;
+        }
+
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dd-fold-toggle';
+            btn.setAttribute('data-target', previewEl.id);
+            btn.innerHTML = '<span class="dd-fold-label">Expand</span> <i class="dd-fold-icon">▾</i>';
+            btn.addEventListener('click', function () { toggleFold(btn); });
+            wrap.appendChild(btn);
+        }
+
+        // Start collapsed on the page (keeps the card tidy).
+        var startCollapsed = true;
+        previewEl.classList.toggle('is-collapsed', startCollapsed);
+        btn.classList.toggle('is-expanded', !startCollapsed);
+        var label = btn.querySelector('.dd-fold-label');
+        if (label) label.textContent = startCollapsed ? 'Expand' : 'Collapse';
+    }
+
+    // ==================== SINGLE-COLUMN SAVE ====================
+    function saveSingleColumn(col) {
+        var meta = ACCOUNT_MGMT_COLUMNS[col];
+        if (!meta) return;
+
+        var valueToSend;
+        if (meta.json) {
+            if (jsonDataByCol.hasOwnProperty(col) && jsonDataByCol[col] !== null && jsonDataByCol[col] !== undefined) {
+                valueToSend = JSON.stringify(jsonDataByCol[col]);
+            } else {
+                var hidden = document.querySelector('.dd-am-json-hidden[data-col="' + col + '"]');
+                valueToSend = hidden ? (hidden.value || '') : '';
+            }
+        } else {
+            var inp = document.querySelector('.dd-am-input[data-col="' + col + '"]');
+            if (!inp) return;
+            var type = inp.getAttribute('data-type');
+            if (type === 'bool') valueToSend = inp.value === '1' ? 1 : 0;
+            else if (type === 'decimal') valueToSend = parseFloat(inp.value) || 0;
+            else valueToSend = inp.value;
+        }
+
+        fetch('dev_accountmanagement.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: 'save_account_management=1'
+                + '&single_col=' + encodeURIComponent(col)
+                + '&single_value=' + encodeURIComponent(valueToSend)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                var hidden = document.querySelector('.dd-am-json-hidden[data-col="' + col + '"]');
+                if (hidden && meta.json) hidden.value = valueToSend;
+                showToast('Saved: ' + (meta.label || col));
+            } else {
+                showToast(data.message || 'Failed to save.', true);
+            }
+        })
+        .catch(function () {
+            showToast('Network error. Please try again.', true);
+        });
+    }
+
+    // ==================== FULL SAVE (SAVE ALL) ====================
+    function saveAccountManagement() {
+        var btn = document.getElementById('saveAccountMgmtBtn');
+        var btn2 = document.getElementById('saveAccountMgmtBtnBottom');
+        var originalText = btn ? btn.textContent : 'Save All';
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+        if (btn2) { btn2.disabled = true; btn2.textContent = 'Saving...'; }
+
+        var fields = {};
+        document.querySelectorAll('.dd-am-input').forEach(function (inp) {
+            var col = inp.getAttribute('data-col');
+            var type = inp.getAttribute('data-type');
+            if (!col) return;
+            if (type === 'bool') fields[col] = inp.value === '1' ? 1 : 0;
+            else if (type === 'decimal') fields[col] = parseFloat(inp.value) || 0;
+            else fields[col] = inp.value;
+        });
+
+        Object.keys(ACCOUNT_MGMT_COLUMNS).forEach(function (col) {
+            var meta = ACCOUNT_MGMT_COLUMNS[col];
+            if (!meta.json) return;
+            if (jsonDataByCol.hasOwnProperty(col) && jsonDataByCol[col] !== null) {
+                fields[col] = JSON.stringify(jsonDataByCol[col]);
+            } else {
+                var hidden = document.querySelector('.dd-am-json-hidden[data-col="' + col + '"]');
+                fields[col] = hidden ? (hidden.value || '') : '';
+            }
+        });
+
+        fetch('dev_accountmanagement.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: 'save_account_management=1&fields=' + encodeURIComponent(JSON.stringify(fields))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (btn) { btn.disabled = false; btn.textContent = originalText; }
+            if (btn2) { btn2.disabled = false; btn2.textContent = 'Save All Account Management'; }
+            if (data.success) {
+                showToast('All columns saved and synced.');
+            } else {
+                showToast(data.message || 'Failed to save.', true);
+            }
+        })
+        .catch(function () {
+            if (btn) { btn.disabled = false; btn.textContent = originalText; }
+            if (btn2) { btn2.disabled = false; btn2.textContent = 'Save All Account Management'; }
+            showToast('Network error. Please try again.', true);
+        });
+    }
+
+    // ==================== JSON VIEW / EDIT MODAL ====================
     function viewJsonDataCol(col) {
         var data = (jsonDataByCol.hasOwnProperty(col) && jsonDataByCol[col] !== null && jsonDataByCol[col] !== undefined)
             ? jsonDataByCol[col]
@@ -725,22 +1004,13 @@
         document.getElementById('ddJsonViewTitle').textContent = meta.label || col;
         document.getElementById('ddJsonViewPre').textContent = JSON.stringify(data, null, 2);
 
-        // Reset to view mode
+        // Reset to view mode — MODAL IS ALWAYS FULLY EXPANDED (no fold class).
         document.getElementById('ddJsonViewBody').style.display = 'block';
+        document.getElementById('ddJsonViewBody').classList.remove('is-collapsed', 'dd-foldable');
         document.getElementById('ddJsonEditTextarea').style.display = 'none';
         document.getElementById('ddJsonEditBtn').style.display = 'inline-block';
         document.getElementById('ddJsonCancelEditBtn').style.display = 'none';
         document.getElementById('ddJsonApplyBtn').style.display = 'none';
-
-        // Reset fold state for the modal body.
-        var viewBody = document.getElementById('ddJsonViewBody');
-        viewBody.classList.add('dd-foldable');
-        viewBody.classList.add('is-collapsed');
-        var foldBtn = document.getElementById('ddJsonViewFoldBtn');
-        foldBtn.classList.remove('is-expanded');
-        var foldLabel = foldBtn.querySelector('.dd-fold-label');
-        if (foldLabel) foldLabel.textContent = 'Expand';
-        foldBtn.style.display = 'inline-flex';
 
         document.getElementById('ddJsonViewModal').classList.add('active');
         lockBodyScroll();
@@ -750,7 +1020,6 @@
         if (!jsonViewCol) return;
         var data = jsonDataByCol[jsonViewCol];
         document.getElementById('ddJsonViewBody').style.display = 'none';
-        document.getElementById('ddJsonViewFoldBtn').style.display = 'none';
         var ta = document.getElementById('ddJsonEditTextarea');
         ta.value = JSON.stringify(data, null, 2);
         ta.style.display = 'block';
@@ -765,32 +1034,67 @@
         if (!jsonViewCol) return;
         document.getElementById('ddJsonEditTextarea').style.display = 'none';
         document.getElementById('ddJsonViewBody').style.display = 'block';
-        document.getElementById('ddJsonViewFoldBtn').style.display = 'inline-flex';
         document.getElementById('ddJsonEditBtn').style.display = 'inline-block';
         document.getElementById('ddJsonCancelEditBtn').style.display = 'none';
         document.getElementById('ddJsonApplyBtn').style.display = 'none';
         jsonViewEditing = false;
     }
 
-    function applyJsonEdit() {
+    function applyJsonEditAndSave() {
         if (!jsonViewCol) return;
-        var ta = document.getElementById('ddJsonEditTextarea');
+
+        var col = jsonViewCol;
         var parsed;
-        try {
-            parsed = JSON.parse(ta.value);
-        } catch (e) {
-            showDdAlert('Invalid JSON: ' + e.message, 'Error');
-            return;
+
+        if (jsonViewEditing) {
+            var ta = document.getElementById('ddJsonEditTextarea');
+            try {
+                parsed = JSON.parse(ta.value);
+            } catch (e) {
+                showDdAlert('Invalid JSON: ' + e.message, 'Error');
+                return;
+            }
+            jsonDataByCol[col] = parsed;
+            jsonEditorByCol[col] = null;
+            renderJsonColumn(col);
+            document.getElementById('ddJsonViewPre').textContent = JSON.stringify(parsed, null, 2);
+        } else {
+            parsed = jsonDataByCol[col];
         }
 
-        // Commit the edited data into the column's working state
-        jsonDataByCol[jsonViewCol] = parsed;
-        jsonEditorByCol[jsonViewCol] = null;
-        renderJsonColumn(jsonViewCol);
+        var btn = document.getElementById('ddJsonApplyBtn');
+        var originalText = btn ? btn.textContent : 'Apply JSON & Save';
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
 
-        // Update the view and return to view mode
-        document.getElementById('ddJsonViewPre').textContent = JSON.stringify(parsed, null, 2);
-        cancelJsonEdit();
+        var valueToSend = JSON.stringify(parsed);
+        var hidden = document.querySelector('.dd-am-json-hidden[data-col="' + col + '"]');
+        if (hidden) hidden.value = valueToSend;
+
+        fetch('dev_accountmanagement.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: 'save_account_management=1'
+                + '&single_col=' + encodeURIComponent(col)
+                + '&single_value=' + encodeURIComponent(valueToSend)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (btn) { btn.disabled = false; btn.textContent = originalText; }
+            if (data.success) {
+                showToast('JSON saved for: ' + ((ACCOUNT_MGMT_COLUMNS[col] || {}).label || col));
+                cancelJsonEdit();
+                setTimeout(closeJsonView, 400);
+            } else {
+                showDdAlert(data.message || 'Failed to save.', 'Error');
+            }
+        })
+        .catch(function () {
+            if (btn) { btn.disabled = false; btn.textContent = originalText; }
+            showDdAlert('Network error. Please try again.', 'Error');
+        });
     }
 
     function closeJsonView() {
@@ -800,63 +1104,13 @@
         unlockBodyScroll();
     }
 
-    // ==================== SAVE ACCOUNT MANAGEMENT ====================
-    function saveAccountManagement() {
-        var btn = document.getElementById('saveAccountMgmtBtn');
-        var btn2 = document.getElementById('saveAccountMgmtBtnBottom');
-        var originalText = btn ? btn.textContent : 'Save All';
-        if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
-        if (btn2) { btn2.disabled = true; btn2.textContent = 'Saving...'; }
-
-        var fields = {};
-        document.querySelectorAll('.dd-am-input').forEach(function (inp) {
-            var col = inp.getAttribute('data-col');
-            var type = inp.getAttribute('data-type');
-            if (!col) return;
-            if (type === 'bool') fields[col] = inp.value === '1' ? 1 : 0;
-            else if (type === 'decimal') fields[col] = parseFloat(inp.value) || 0;
-            else fields[col] = inp.value;
-        });
-
-        // For JSON columns, use the working data (or existing hidden value)
-        Object.keys(ACCOUNT_MGMT_COLUMNS).forEach(function (col) {
-            var meta = ACCOUNT_MGMT_COLUMNS[col];
-            if (!meta.json) return;
-            if (jsonDataByCol.hasOwnProperty(col) && jsonDataByCol[col] !== null) {
-                fields[col] = JSON.stringify(jsonDataByCol[col]);
-            } else {
-                var hidden = document.querySelector('.dd-am-json-hidden[data-col="' + col + '"]');
-                fields[col] = hidden ? (hidden.value || '') : '';
-            }
-        });
-
-        fetch('dev_accountmanagement.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'XMLHttpRequest'
-            },
-            body: 'save_account_management=1&fields=' + encodeURIComponent(JSON.stringify(fields))
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (btn) { btn.disabled = false; btn.textContent = originalText; }
-            if (btn2) { btn2.disabled = false; btn2.textContent = 'Save All Account Management'; }
-            showDdAlert(data.message || (data.success ? 'Saved.' : 'Failed.'), data.success ? 'Success' : 'Error');
-        })
-        .catch(function () {
-            if (btn) { btn.disabled = false; btn.textContent = originalText; }
-            if (btn2) { btn2.disabled = false; btn2.textContent = 'Save All Account Management'; }
-            showDdAlert('Network error. Please try again.', 'Error');
-        });
-    }
-
     // ==================== JSON TOGGLE ====================
     function onJsonToggle(cb) {
         var col = cb.getAttribute('data-col');
         var btn = document.getElementById('constructBtn-' + col);
-        if (!btn) return;
-        btn.style.display = cb.checked ? 'inline-block' : 'none';
+        var saveBtn = document.getElementById('saveColBtn-' + col);
+        if (btn) btn.style.display = cb.checked ? 'inline-flex' : 'none';
+        if (saveBtn) saveBtn.style.display = cb.checked ? 'inline-flex' : 'none';
     }
 
     // ==================== ROOT TYPE PICKER (new JSON) ====================
@@ -918,7 +1172,7 @@
         if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
     }
 
-    // ==================== RENDER JSON COLUMN (inline, in the dashboard) ====================
+    // ==================== RENDER JSON COLUMN (PAGE) ====================
     function renderJsonColumn(col) {
         var preview = document.getElementById('jsonPreview-' + col);
         if (!preview) return;
@@ -934,11 +1188,9 @@
         }
         preview.style.display = 'block';
         preview.classList.add('dd-foldable');
-
-        // Render the interactive tree.
         preview.innerHTML = renderJsonColumnTree(col, data, 'root', 'root');
 
-        // Wrap in <details> if not already wrapped and apply fold logic.
+        // Only the page preview gets fold logic. The modal never does.
         ensureFoldable(preview, col);
     }
 
@@ -994,7 +1246,6 @@
             var v = obj[k];
             html += '<div class="dd-json-child">';
 
-            // Key row
             if (editor && editor.kind === 'editKey' && editor.path === path && editor.key === k) {
                 html += renderInlineEditKeyEditor(col, path, k);
             } else {
@@ -1005,7 +1256,6 @@
                 html += '</div>';
             }
 
-            // Value
             if (typeof v === 'string') {
                 if (editor && editor.kind === 'editString' && editor.path === childPath) {
                     html += renderInlineEditStringEditor(col, childPath);
@@ -1253,7 +1503,7 @@
             }
         });
 
-        // Apply fold logic to server-rendered JSON previews (those inside <details>).
+        // Apply fold logic to server-rendered previews (inside <details>).
         document.querySelectorAll('.dd-json-fold .dd-json-preview').forEach(function (preview) {
             var col = preview.getAttribute('data-col');
             if (col) ensureFoldable(preview, col);
@@ -1271,7 +1521,6 @@
         }
     });
 
-    // Close the JSON view when clicking the dark backdrop (outside the white box).
     document.addEventListener('click', function (e) {
         var jm = document.getElementById('ddJsonViewModal');
         if (jm && jm.classList.contains('active') && e.target === jm) {
@@ -1340,6 +1589,7 @@
 
     // ==================== EXPORTS ====================
     window.saveAccountManagement     = saveAccountManagement;
+    window.saveSingleColumn          = saveSingleColumn;
     window.onJsonToggle              = onJsonToggle;
     window.startNewJsonForColumn     = startNewJsonForColumn;
     window.confirmRootTypeCol        = confirmRootTypeCol;
@@ -1356,9 +1606,10 @@
     window.viewJsonDataCol           = viewJsonDataCol;
     window.enableJsonEdit            = enableJsonEdit;
     window.cancelJsonEdit            = cancelJsonEdit;
-    window.applyJsonEdit             = applyJsonEdit;
+    window.applyJsonEditAndSave      = applyJsonEditAndSave;
     window.closeJsonView             = closeJsonView;
     window.closeDdAlert              = closeDdAlert;
+    window.showToast                 = showToast;
     window.toggleFold                = toggleFold;
 </script>
 

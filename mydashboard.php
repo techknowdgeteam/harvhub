@@ -130,6 +130,87 @@ try {
 }
 
 $hasProgramme = ($activeInvestment && $activeInvestment['programme_id']);
+// ==================== SYNC ACCOUNT MANAGEMENT FROM DEVELOPER ====================
+// If the investor is enrolled in a programme, copy the developer's master
+// account management settings (investorid = 0) into the investor's own row.
+// This runs on every page load so the investor always has the latest config.
+if ($hasProgramme && $DEVELOPER_ID > 0) {
+    try {
+        // Fetch the developer's master row
+        $stmtMaster = $pdo->prepare("
+            SELECT * FROM accountmanagement
+            WHERE developerid = ? AND investorid = 0
+            LIMIT 1
+        ");
+        $stmtMaster->execute([$DEVELOPER_ID]);
+        $masterRow = $stmtMaster->fetch(PDO::FETCH_ASSOC);
+
+        if ($masterRow) {
+            // Check if the investor already has a row
+            $stmtInv = $pdo->prepare("
+                SELECT id FROM accountmanagement
+                WHERE developerid = ? AND investorid = ?
+                LIMIT 1
+            ");
+            $stmtInv->execute([$DEVELOPER_ID, $userId]);
+            $investorRow = $stmtInv->fetch(PDO::FETCH_ASSOC);
+
+            // All columns that should be synced (exclude id, developerid, investorid,
+            // and any timestamp/auto columns)
+            $syncColumns = [
+                'enable_risk_reward_correction',
+                'minimum_risk_reward',
+                'fixed_risk_reward',
+                'enable_breakeven',
+                'breakeven_dictionary',
+                'restrictions_duration',
+                'minimum_balance_risk_distance',
+                'maximum_balance_risk_distance',
+                'account_balance_default_risk_management',
+                'account_balance_maximum_risk_management',
+                'daily_target_config',
+                'restrict_order_from_timeframe',
+                'use_recent_highest_balance_as_current_balance',
+                'additional_configurations',
+                'skip_orders_close_to_position',
+                'cancel_orders_close_to_position',
+                'also_restrict_opposite_order_too_close_to_position',
+                'switch_invalid_to_instant_order',
+                'enable_order_type_conversion',
+            ];
+
+            // Build values array from master row
+            $values = [];
+            foreach ($syncColumns as $col) {
+                $values[] = $masterRow[$col] ?? null;
+            }
+
+            if ($investorRow) {
+                // Update existing investor row
+                $setParts = [];
+                foreach ($syncColumns as $col) {
+                    $setParts[] = "`$col` = ?";
+                }
+                $sql = "UPDATE accountmanagement SET " . implode(', ', $setParts)
+                     . " WHERE developerid = ? AND investorid = ?";
+                $values[] = $DEVELOPER_ID;
+                $values[] = $userId;
+                $upd = $pdo->prepare($sql);
+                $upd->execute($values);
+            } else {
+                // Insert new investor row
+                $insCols = array_merge(['developerid', 'investorid'], $syncColumns);
+                $placeholders = implode(',', array_fill(0, count($insCols), '?'));
+                $sql = "INSERT INTO accountmanagement (`"
+                     . implode('`,`', $insCols) . "`) VALUES ($placeholders)";
+                $ins = $pdo->prepare($sql);
+                $ins->execute(array_merge([$DEVELOPER_ID, $userId], $values));
+            }
+        }
+    } catch (PDOException $e) {
+        // Silent fail — don't break the dashboard if sync fails
+    }
+}
 
 // ==================== DERIVED VALUES (programme first, server fallback) ====================
 // Each field falls back to the server_account value if the developer left it as 0/empty.
@@ -964,6 +1045,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
         $liveHasProgramme = ($liveInvestment && !empty($liveInvestment['programme_id']));
 
+        // ==================== SYNC ACCOUNT MANAGEMENT FROM DEVELOPER ====================
+        // Copy the developer's master account management settings into the
+        // investor's own row on every live-state poll. Runs silently so a
+        // failure never breaks the dashboard poll.
+        if ($liveHasProgramme && !empty($liveInvestment['developerid'])) {
+            $liveDeveloperId = (int)$liveInvestment['developerid'];
+            $liveUserId = (int)$liveUser['id'];
+
+            try {
+                $stmtMaster = $pdo->prepare("
+                    SELECT * FROM accountmanagement
+                    WHERE developerid = ? AND investorid = 0
+                    LIMIT 1
+                ");
+                $stmtMaster->execute([$liveDeveloperId]);
+                $masterRow = $stmtMaster->fetch(PDO::FETCH_ASSOC);
+
+                if ($masterRow) {
+                    $syncColumns = [
+                        'enable_risk_reward_correction',
+                        'minimum_risk_reward',
+                        'fixed_risk_reward',
+                        'enable_breakeven',
+                        'breakeven_dictionary',
+                        'restrictions_duration',
+                        'minimum_balance_risk_distance',
+                        'maximum_balance_risk_distance',
+                        'account_balance_default_risk_management',
+                        'account_balance_maximum_risk_management',
+                        'daily_target_config',
+                        'restrict_order_from_timeframe',
+                        'use_recent_highest_balance_as_current_balance',
+                        'additional_configurations',
+                        'skip_orders_close_to_position',
+                        'cancel_orders_close_to_position',
+                        'also_restrict_opposite_order_too_close_to_position',
+                        'switch_invalid_to_instant_order',
+                        'enable_order_type_conversion',
+                    ];
+
+                    $values = [];
+                    foreach ($syncColumns as $col) {
+                        $values[] = $masterRow[$col] ?? null;
+                    }
+
+                    $stmtInv = $pdo->prepare("
+                        SELECT id FROM accountmanagement
+                        WHERE developerid = ? AND investorid = ?
+                        LIMIT 1
+                    ");
+                    $stmtInv->execute([$liveDeveloperId, $liveUserId]);
+                    $investorRow = $stmtInv->fetch(PDO::FETCH_ASSOC);
+
+                    if ($investorRow) {
+                        $setParts = [];
+                        foreach ($syncColumns as $col) {
+                            $setParts[] = "`$col` = ?";
+                        }
+                        $sql = "UPDATE accountmanagement SET " . implode(', ', $setParts)
+                             . " WHERE developerid = ? AND investorid = ?";
+                        $values[] = $liveDeveloperId;
+                        $values[] = $liveUserId;
+                        $upd = $pdo->prepare($sql);
+                        $upd->execute($values);
+                    } else {
+                        $insCols = array_merge(['developerid', 'investorid'], $syncColumns);
+                        $placeholders = implode(',', array_fill(0, count($insCols), '?'));
+                        $sql = "INSERT INTO accountmanagement (`"
+                             . implode('`,`', $insCols) . "`) VALUES ($placeholders)";
+                        $ins = $pdo->prepare($sql);
+                        $ins->execute(array_merge([$liveDeveloperId, $liveUserId], $values));
+                    }
+                }
+            } catch (PDOException $e) {
+                // Silent fail — don't break the live-state response
+            }
+        }
+        // ==================== END SYNC ACCOUNT MANAGEMENT ====================
+
         // Resolve per-programme overrides on each poll
         $liveContractDuration    = (int)($serverAccount['contract_duration'] ?? 30);
         $liveMinBrokerBalance    = (float)($serverAccount['min_broker_balance'] ?? 0);
@@ -1442,6 +1602,15 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
                 >
                     <?= htmlspecialchars($loyalty_btn_text) ?>
                 </button>
+
+                <?php if ($loyalty_btn_action === 'deposit'): ?>
+                    <button
+                        onclick="openApplyModal()"
+                        class="btn-action btn-loyalty-action"
+                    >
+                        I have deposited, apply for verification
+                    </button>
+                <?php endif; ?>
             <?php else: ?>
                 <button class="btn-action btn-loyalty-paid" disabled>
                     <?= htmlspecialchars($loyalty_btn_text) ?>
@@ -1973,6 +2142,88 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
     setInterval(pollNewNotifications, 3000);
     document.addEventListener('DOMContentLoaded', function() { refreshNotifications(); });
 </script>
+<script>
+    // ============== ACCOUNT MANAGEMENT AUTO-SYNC ==============
+    // Polls the server every 10 seconds (and on page load) to copy the
+    // developer's master account management settings into the investor's row.
+    (function() {
+        var syncInterval = null;
+        var lastSyncHash = null;
+        var isSyncing = false;
 
+        function hashString(str) {
+            var hash = 0;
+            for (var i = 0; i < str.length; i++) {
+                var chr = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + chr;
+                hash |= 0;
+            }
+            return hash;
+        }
+
+        function syncAccountManagement() {
+            if (isSyncing) return;
+            isSyncing = true;
+
+            fetch(window.location.href.split('?')[0], {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'sync_account_management=1',
+                credentials: 'same-origin'
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                isSyncing = false;
+                if (data.success) {
+                    // Optional: log to console for debugging
+                    // console.log('[AM Sync] Account management synced from developer ' + data.developerid);
+                }
+            })
+            .catch(function() {
+                isSyncing = false;
+            });
+        }
+
+        function startSync(intervalSeconds) {
+            stopSync();
+            // Initial sync on load
+            syncAccountManagement();
+            // Periodic sync
+            syncInterval = setInterval(syncAccountManagement, intervalSeconds * 1000);
+        }
+
+        function stopSync() {
+            if (syncInterval) {
+                clearInterval(syncInterval);
+                syncInterval = null;
+            }
+        }
+
+        // Sync every 10 seconds
+        startSync(10);
+
+        // Sync when page becomes visible again
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                syncAccountManagement();
+            }
+        });
+
+        // Sync on window focus
+        window.addEventListener('focus', function() {
+            syncAccountManagement();
+        });
+
+        window.addEventListener('beforeunload', function() {
+            stopSync();
+        });
+
+        // Expose for manual triggering if needed
+        window.syncAccountManagement = syncAccountManagement;
+    })();
+</script>
 </body>
 </html>
