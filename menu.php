@@ -307,7 +307,7 @@ foreach ($userTierKeys as $userKey) {
             </div>
 
             <div class="version-info">
-                HarvHub v1.0.0
+                HarvestHub
             </div>
         </div>
     </div>

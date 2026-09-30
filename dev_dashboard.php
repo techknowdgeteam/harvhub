@@ -734,7 +734,10 @@ function showSpinner() {
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
 <?php include 'dev_style.php'; ?>
-<?php include 'dev_dashboard_style.php'; ?>
+
+<?php include 'style.php'; ?>
+<?php include 'dev_style.php'; ?>
+
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
 

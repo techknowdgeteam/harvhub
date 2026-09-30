@@ -30,9 +30,9 @@
         --text-secondary: #5a6c7d;
         --text-muted: #8a9aa8;
         --text-light: #e8edf2;
-        --accent: #2d7b8c;
-        --accent-light: #e8f4f7;
-        --accent-hover: #236673;
+        --accent: #2ecc8f;
+        --accent-light: #ebfaff;
+        --accent-hover: #2ecc8fb9;
         --success: #2ecc71;
         --success-bg: #eafaf1;
         --danger: #e74c3c;
@@ -59,15 +59,15 @@
 
     /* ===== DARK MODE ===== */
     body.dark-mode {
-        --bg: #0d1117;
-        --bg-card: #161b22;
+        --bg: black;
+        --bg-card: #0c1311;
         --text: #e6edf3;
         --text-secondary: #8b949e;
         --text-muted: #6e7681;
         --text-light: #30363d;
-        --accent: #3fb5c9;
+        --accent: #2ecc8f;
         --accent-light: #1a2a30;
-        --accent-hover: #4ec5d9;
+        --accent-hover: #2ecc8fb9;
         --success: #3fb950;
         --success-bg: #1a2a1a;
         --danger: #f85149;
@@ -3136,7 +3136,56 @@
         .dd-confirm-actions button { padding: 11px 14px; font-size: 0.85rem; }
     }
 </style>
+<style>
+    /* Hard override for developer dashboard sub-tabs — no background, no shadow, ever */
+    .dd-subtabs,
+    .dd-subtabs.dd-subtabs,
+    body .dd-subtabs,
+    body.dark-mode .dd-subtabs {
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+    }
 
+    .dd-subtab,
+    .dd-subtab:link,
+    .dd-subtab:visited,
+    .dd-subtab:hover,
+    .dd-subtab:focus,
+    .dd-subtab:active,
+    button.dd-subtab {
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+        border-radius: 0 !important;
+        -webkit-appearance: none !important;
+        appearance: none !important;
+    }
+
+    .dd-subtab {
+        color: var(--text-muted, #888);
+        transition: color 0.2s ease;
+    }
+
+    .dd-subtab:hover {
+        color: var(--text, #222);
+    }
+
+    .dd-subtab.active,
+    .dd-subtab.active:hover,
+    .dd-subtab.active:focus,
+    body.dark-mode .dd-subtab.active {
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        border: none !important;
+        color: var(--accent, #2e8b57) !important;
+    }
+</style>
 <style>
     /* ============================================================
        DEVELOPER DASHBOARD — dd-*
@@ -3670,10 +3719,11 @@
     .dd-subtabs {
         display: flex;
         gap: 6px;
-        background: var(--bg, #f5f5f5);
-        border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: var(--radius-sm, 8px);
-        padding: 6px;
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        border-radius: 0;
+        padding: 0;
         margin-bottom: var(--spacing-md, 20px);
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
@@ -3684,26 +3734,26 @@
         min-width: 90px;
         background: transparent;
         border: none;
+        box-shadow: none;
         padding: 10px 14px;
-        border-radius: var(--radius-sm, 8px);
+        border-radius: 0;
         font-family: inherit;
         font-size: 0.85rem;
         font-weight: 600;
         color: var(--text-muted, #888);
         cursor: pointer;
         white-space: nowrap;
-        transition: all 0.2s ease;
+        transition: color 0.2s ease;
     }
 
     .dd-subtab:hover {
         color: var(--text, #222);
-        background: rgba(46, 139, 87, 0.06);
     }
 
     .dd-subtab.active {
-        background: var(--accent, #2e8b57);
-        color: #fff;
-        box-shadow: 0 2px 8px rgba(46, 139, 87, 0.25);
+        color: var(--accent, #2e8b57);
+        background: transparent;
+        box-shadow: none;
     }
 
     .dd-subtab-content {
@@ -3978,17 +4028,8 @@
         color: var(--text, #eee);
     }
 
-    body.dark-mode .dd-subtabs {
-        background: var(--bg, #2a2a3a);
-        border-color: var(--border-color, #333);
-    }
-
-    body.dark-mode .dd-subtab:hover {
-        background: rgba(46, 139, 87, 0.15);
-    }
-
     body.dark-mode .dd-subtab.active {
-        background: var(--accent, #2e8b57);
+        color: var(--accent, #2e8b57);
     }
 
     body.dark-mode .dd-visibility-item,

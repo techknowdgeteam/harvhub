@@ -1,6 +1,6 @@
 <?php
 // verify_dev_code.php
-// Generic email verification gate.
+// Generic email verification gate for dev panel.
 // Accepts: ?source=<page_to_return_to>&action=<optional_action_label>
 // On success, sets $_SESSION['verified_<source>'] = true,
 // then redirects back to:  <source>.php?verified=1
@@ -28,45 +28,39 @@ if (!isset($_SESSION['user_email'])) {
 $email = strtolower($_SESSION['user_email']);
 
 // ==================== SOURCE / ACTION PARAMS ====================
-// source = the php file to return to after successful verification
-//          e.g. "disconnect_dev_broker"  ->  disconnect_dev_broker.php
-// action = a human label shown in the UI + email (e.g. "Disconnect Broker")
 $source = isset($_GET['source']) ? preg_replace('/[^a-z0-9_]/i', '', $_GET['source']) : '';
 $action = isset($_GET['action']) ? trim($_GET['action']) : 'Verify Identity';
 
 if (empty($source)) {
-    // No source given → just go back to app
     header("Location: dev_app.php");
     exit;
 }
 
 $source_file = $source . '.php';
 
-// Whitelist of allowed sources (only real files we control)
 $allowed_sources = ['disconnect_dev_broker', 'connect_dev_broker', 'mydashboard'];
 if (!in_array($source, $allowed_sources, true)) {
     header("Location: dev_app.php");
     exit;
 }
 
-// Session key used to mark this source as verified
 $session_key = 'verified_' . $source;
 
 // ==================== FETCH MAILER CREDENTIALS ====================
-$mailer_email = '';
-$mailer_password = '';
+$mailer_email  = '';
+$brevo_api_key = '';
+
 try {
     $stmt = $pdo->prepare("SELECT mailer_email, mailer_password FROM server_account WHERE id = 1 LIMIT 1");
     $stmt->execute();
     $mailerData = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($mailerData) {
-        $mailer_email    = trim($mailerData['mailer_email'] ?? '');
-        $mailer_password = trim($mailerData['mailer_password'] ?? '');
+        $mailer_email  = trim($mailerData['mailer_email'] ?? '');
+        $brevo_api_key = trim($mailerData['mailer_password'] ?? '');
     }
-} catch (Exception $e) {}
-
-if (empty($mailer_email))    $mailer_email    = 'techknowdgeteam@gmail.com';
-if (empty($mailer_password)) $mailer_password = 'rqcrossbioujepda';
+} catch (Exception $e) {
+    // silent
+}
 
 // ==================== FETCH USER ====================
 $stmt = $pdo->prepare("SELECT fullname, email FROM harvhub WHERE email = ? LIMIT 1");
@@ -99,72 +93,155 @@ function maskEmail($email) {
     return $masked . '@' . $domain;
 }
 
-function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $mailer_password) {
-    require_once 'PHPMailer/src/PHPMailer.php';
-    require_once 'PHPMailer/src/SMTP.php';
-    require_once 'PHPMailer/src/Exception.php';
+function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brevo_api_key) {
 
-    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
-
-    try {
-        $mail->isSMTP();
-        $mail->Host       = 'smtp.gmail.com';
-        $mail->SMTPAuth   = true;
-        $mail->Username   = $mailer_email;
-        $mail->Password   = $mailer_password;
-        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port       = 587;
-
-        $mail->setFrom($mailer_email, 'HarvHub Security');
-        $mail->addAddress($toEmail, $toName);
-
-        $mail->isHTML(true);
-        $mail->Subject = 'Verification Code - ' . $action;
-        $safeAction = htmlspecialchars($action, ENT_QUOTES, 'UTF-8');
-        $mail->Body    = "
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; color:#333; }
-                    .container { max-width:500px; margin:0 auto; padding:20px; background:#f9f9f9; border-radius:10px; }
-                    .code { font-size:32px; font-weight:bold; color:#2e8b57; text-align:center; padding:20px; background:#fff; border-radius:8px; margin:20px 0; letter-spacing:6px; }
-                    .footer { font-size:12px; color:#999; text-align:center; margin-top:20px; }
-                </style>
-            </head>
-            <body>
-                <div class='container'>
-                    <h2 style='text-align:center; color:#2e8b57;'>HarvHub</h2>
-                    <h3 style='text-align:center;'>{$safeAction}</h3>
-                    <p>You requested to perform: <strong>{$safeAction}</strong>.</p>
-                    <p>Enter this verification code to confirm:</p>
-                    <div class='code'>{$code}</div>
-                    <p>If you didn't request this, please ignore this email and consider changing your password.</p>
-                    <div class='footer'>HarvHub Security</div>
-                </div>
-            </body>
-            </html>
-        ";
-        $mail->AltBody = "Your verification code for {$action} is: {$code}";
-
-        $mail->send();
-        return true;
-    } catch (Exception $e) {
-        error_log('Verify mail error: ' . $mail->ErrorInfo);
+    if (empty($mailer_email) || empty($brevo_api_key)) {
         return false;
     }
+
+    $safeAction = htmlspecialchars($action, ENT_QUOTES, 'UTF-8');
+    $safeCode   = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
+    $safeName   = htmlspecialchars($toName, ENT_QUOTES, 'UTF-8');
+
+    $payload = [
+        'sender' => [
+            'name'  => 'HarvHub Security',
+            'email' => $mailer_email,
+        ],
+        'to' => [
+            ['email' => $toEmail, 'name' => $safeName],
+        ],
+        'subject'     => 'Verification code for ' . $action,
+        'htmlContent' =>
+            '<!DOCTYPE html>'
+            . '<html>'
+            . '<head>'
+            . '<meta charset="UTF-8">'
+            . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            . '</head>'
+            . '<body style="margin:0;padding:0;background-color:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+
+            // Preheader — inbox preview line
+            . '<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f5f7;opacity:0;">'
+            . 'Complete your verification — use this code to confirm ' . $safeAction . '.'
+            . '</div>'
+
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f4f5f7;padding:40px 16px;">'
+            . '<tr><td align="center">'
+
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);overflow:hidden;">'
+
+            // Header
+            . '<tr><td style="padding:32px 40px 8px 40px;text-align:center;">'
+            . '<div style="display:inline-block;width:56px;height:56px;line-height:56px;border-radius:14px;background-color:#2e8b57;color:#ffffff;font-weight:700;font-size:26px;text-align:center;">H</div>'
+            . '<h1 style="margin:16px 0 0 0;font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.2px;">HarvHub</h1>'
+            . '</td></tr>'
+
+            // Body
+            . '<tr><td style="padding:24px 40px 8px 40px;">'
+            . '<h2 style="margin:0 0 12px 0;font-size:18px;font-weight:600;color:#111827;">Complete your verification</h2>'
+            . '<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#4b5563;">'
+            . 'You requested to perform: <strong style="color:#111827;">' . $safeAction . '</strong>.'
+            . '</p>'
+            . '<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#4b5563;">'
+            . 'Enter the verification code below to confirm this action.'
+            . '</p>'
+            . '</td></tr>'
+
+            // Code block
+            . '<tr><td style="padding:8px 40px 8px 40px;">'
+            . '<div style="background-color:#f0f9f4;border:1px solid #d6ede0;border-radius:10px;padding:24px;text-align:center;">'
+            . '<p style="margin:0 0 8px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#4b5563;font-weight:600;">Verification code</p>'
+            . '<div style="font-family:\'SF Mono\',Menlo,Consolas,\'Courier New\',monospace;font-size:34px;font-weight:700;letter-spacing:10px;color:#2e8b57;padding-left:10px;">'
+            . $safeCode
+            . '</div>'
+            . '<p style="margin:12px 0 0 0;font-size:13px;color:#6b7280;">Use this code to continue</p>'
+            . '</div>'
+            . '</td></tr>'
+
+            // Safety
+            . '<tr><td style="padding:16px 40px 8px 40px;">'
+            . '<p style="margin:0;font-size:14px;line-height:1.6;color:#4b5563;">'
+            . 'If you did not request this action, please disregard this email and consider changing your password.'
+            . '</p>'
+            . '</td></tr>'
+
+            // Divider
+            . '<tr><td style="padding:24px 40px 0 40px;">'
+            . '<div style="border-top:1px solid #e5e7eb;"></div>'
+            . '</td></tr>'
+
+            // Footer
+            . '<tr><td style="padding:20px 40px 32px 40px;">'
+            . '<p style="margin:0 0 6px 0;font-size:13px;color:#6b7280;">'
+            . 'This is an automated security message from HarvHub. Please do not reply to this email.'
+            . '</p>'
+            . '<p style="margin:0;font-size:12px;color:#9ca3af;">'
+            . '&copy; ' . date('Y') . ' HarvHub. All rights reserved.'
+            . '</p>'
+            . '</td></tr>'
+
+            . '</table>'
+
+            // Sub-footer
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;margin-top:20px;">'
+            . '<tr><td style="padding:0 8px;text-align:center;font-size:12px;color:#9ca3af;line-height:1.6;">'
+            . 'For your security, HarvHub will never ask for your password or verification code via email, phone, or chat.'
+            . '</td></tr>'
+            . '</table>'
+
+            . '</td></tr>'
+            . '</table>'
+            . '</body>'
+            . '</html>',
+
+        'textContent' =>
+            "Complete your verification — use this code to confirm {$action}.\n\n"
+            . "HARVHUB SECURITY\n"
+            . "=====================================\n\n"
+            . "Complete your verification\n\n"
+            . "You requested to perform: {$action}\n\n"
+            . "Enter the verification code below to confirm this\n"
+            . "action.\n\n"
+            . "VERIFICATION CODE: {$code}\n\n"
+            . "If you did not request this action, please disregard\n"
+            . "this email and consider changing your password.\n\n"
+            . "-------------------------------------\n"
+            . "This is an automated security message from HarvHub.\n"
+            . "Please do not reply to this email.\n\n"
+            . "© " . date('Y') . " HarvHub. All rights reserved.\n\n"
+            . "For your security, HarvHub will never ask for your\n"
+            . "password or verification code via email, phone, or chat.\n",
+    ];
+
+    $ch = curl_init('https://api.brevo.com/v3/smtp/email');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_HTTPHEADER     => [
+            'accept: application/json',
+            'api-key: ' . $brevo_api_key,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_TIMEOUT        => 15,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return ($httpCode >= 200 && $httpCode < 300);
 }
 
 // ==================== HANDLE: SEND CODE ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vc_action']) && $_POST['vc_action'] === 'send_code') {
     $code = generateCode();
 
-    // Remove any old codes for this email
     try {
         $del = $pdo->prepare("DELETE FROM password_resets WHERE email = ?");
         $del->execute([$email]);
     } catch (Exception $e) {}
 
-    // Store code (no expiry)
     try {
         $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 YEAR))");
         $stmt->execute([$email, $code]);
@@ -174,7 +251,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vc_action']) && $_POS
         exit;
     }
 
-    if (sendVerifyEmail($email, $fullname, $code, $action, $mailer_email, $mailer_password)) {
+    if (sendVerifyEmail($email, $fullname, $code, $action, $mailer_email, $brevo_api_key)) {
         $_SESSION['vc_step']    = 'verify';
         $_SESSION['vc_success'] = 'A verification code has been sent to ' . maskEmail($email);
         unset($_SESSION['vc_error']);
@@ -214,19 +291,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vc_action']) && $_POS
         } elseif ($rec['reset_code'] !== $entered) {
             $_SESSION['vc_error'] = 'Invalid verification code. Please try again.';
         } else {
-            // Mark used
             $upd = $pdo->prepare("UPDATE password_resets SET used = 1 WHERE id = ?");
             $upd->execute([$rec['id']]);
 
-            // Mark source as verified in session
             $_SESSION[$session_key] = true;
 
-            // Clear verify state
             unset($_SESSION['vc_step']);
             unset($_SESSION['vc_error']);
             unset($_SESSION['vc_success']);
 
-            // Redirect back to the source with verified=1
             header('Location: ' . $source_file . '?verified=1');
             exit;
         }
@@ -248,7 +321,7 @@ if (isset($_GET['resend']) && $_GET['resend'] === '1') {
         $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 YEAR))");
         $stmt->execute([$email, $code]);
 
-        if (sendVerifyEmail($email, $fullname, $code, $action, $mailer_email, $mailer_password)) {
+        if (sendVerifyEmail($email, $fullname, $code, $action, $mailer_email, $brevo_api_key)) {
             $_SESSION['vc_step']    = 'verify';
             $_SESSION['vc_success'] = 'A new code has been sent to ' . maskEmail($email);
             unset($_SESSION['vc_error']);
@@ -276,13 +349,11 @@ $step    = $_SESSION['vc_step']    ?? 'request';
 $error   = $_SESSION['vc_error']   ?? '';
 $success = $_SESSION['vc_success'] ?? '';
 
-// Consume messages so they don't persist
 unset($_SESSION['vc_error']);
 unset($_SESSION['vc_success']);
 
 $maskedEmail = maskEmail($email);
 
-// Auto-send first code if user lands on this page fresh
 $autoSend = ($step === 'request' && $_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['nosend']));
 
 $darkMode = 0;
@@ -450,6 +521,13 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         .vc-code-row { gap:4px; }
     }
     input { font-size:16px !important; }
+    @media (max-width: 768px) {
+        input,
+        select,
+        textarea {
+            font-size: 16px !important;
+        }
+    }
 </style>
 </head>
 <body>
@@ -519,7 +597,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
                 <input type="text" maxlength="1" class="vc-code-input" data-index="5" inputmode="numeric" pattern="[0-9]">
             </div>
 
-            <button type="submit" class="vc-btn" id="vcVerifyBtn">Verify & Continue</button>
+            <button type="submit" class="vc-btn" id="vcVerifyBtn">Verify &amp; Continue</button>
         </form>
 
         <div class="vc-links">
@@ -534,12 +612,13 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 </div>
 
 <script>
-    // ==================== AUTO-ADVANCE OTP INPUTS ====================
+    // ==================== AUTO-ADVANCE OTP INPUTS + AUTO-SUBMIT ====================
     (function() {
         var inputs = document.querySelectorAll('.vc-code-input');
         var hidden = document.getElementById('vcCodeHidden');
         var form   = document.getElementById('vcVerifyForm');
         var btn    = document.getElementById('vcVerifyBtn');
+        var isSubmitting = false;
 
         if (!inputs.length) return;
 
@@ -547,6 +626,22 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
             var code = '';
             inputs.forEach(function(i){ code += i.value; });
             if (hidden) hidden.value = code;
+        }
+
+        function isComplete() {
+            for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i].value === '' || !/^\d$/.test(inputs[i].value)) return false;
+            }
+            return true;
+        }
+
+        function autoSubmit() {
+            if (isSubmitting || !isComplete()) return;
+            isSubmitting = true;
+            setTimeout(function() {
+                if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
+                form.submit();
+            }, 120);
         }
 
         setTimeout(function(){ if (inputs[0]) inputs[0].focus(); }, 100);
@@ -558,6 +653,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
                     inputs[idx + 1].focus();
                 }
                 updateHidden();
+                autoSubmit();
             });
 
             input.addEventListener('keydown', function(e) {
@@ -576,9 +672,10 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
                 }
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    var complete = true;
-                    inputs.forEach(function(i){ if (i.value === '') complete = false; });
-                    if (complete && form) form.submit();
+                    if (isComplete() && !isSubmitting) {
+                        isSubmitting = true;
+                        form.submit();
+                    }
                 }
             });
 
@@ -592,6 +689,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
                 var next = Math.min(digits.length, inputs.length - 1);
                 if (inputs[next]) inputs[next].focus();
                 updateHidden();
+                autoSubmit();
             });
 
             input.addEventListener('focus', function(){ this.select(); });
@@ -601,7 +699,6 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
     // ==================== AUTO-SEND FIRST CODE ====================
     <?php if ($autoSend): ?>
     (function() {
-        var sendBtn = document.getElementById('vcSendBtn');
         var sendForm = document.getElementById('vcSendForm');
         if (sendForm) {
             setTimeout(function() {

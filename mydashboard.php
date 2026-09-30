@@ -1,573 +1,475 @@
 <?php
-session_start();
-// mydashboard.php
+    session_start();
+    // mydashboard.php
 
-// --- CHECK FOR REDIRECT TO APP ---
-if (isset($_GET['redirect_to_app']) && $_GET['redirect_to_app'] == '1') {
-    $queryParams = [];
+    // --- CHECK FOR REDIRECT TO APP ---
+    if (isset($_GET['redirect_to_app']) && $_GET['redirect_to_app'] == '1') {
+        $queryParams = [];
 
-    if (isset($_SESSION['apply_success_message']))   $queryParams['show_apply_success']  = '1';
-    if (isset($_SESSION['reset_success_message']))   $queryParams['show_reset_success']  = '1';
-    if (isset($_SESSION['enroll_success_message']))  $queryParams['show_enroll_success'] = '1';
-    if (isset($_SESSION['toggle_success_message']))  $queryParams['show_toggle_success'] = '1';
+        if (isset($_SESSION['apply_success_message']))   $queryParams['show_apply_success']  = '1';
+        if (isset($_SESSION['reset_success_message']))   $queryParams['show_reset_success']  = '1';
+        if (isset($_SESSION['enroll_success_message']))  $queryParams['show_enroll_success'] = '1';
+        if (isset($_SESSION['toggle_success_message']))  $queryParams['show_toggle_success'] = '1';
 
-    $queryString = !empty($queryParams) ? '?' . http_build_query($queryParams) : '';
+        $queryString = !empty($queryParams) ? '?' . http_build_query($queryParams) : '';
 
-    header("Location: app.php#mydashboard" . $queryString, true, 303);
-    exit;
-}
-
-// --- Configuration and Connection ---
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    if (isset($_SESSION['prg_redirect_safe'])) {
-        unset($_SESSION['prg_redirect_safe']);
-    } else {
-        unset($_SESSION['password_verified']);
-        unset($_SESSION['password_error']);
-        unset($_SESSION['reenroll_password_verified']);
-        unset($_SESSION['reenroll_password_error']);
+        header("Location: app.php#mydashboard" . $queryString, true, 303);
+        exit;
     }
-}
 
-if (!isset($_SESSION['user_email'])) {
-    header("Location: index.php");
-    exit;
-}
+    // --- Detect whether this script is being included or called directly ---
+    $scriptName = basename($_SERVER['SCRIPT_NAME'] ?? '');
+    $isDirectCall = ($scriptName === 'mydashboard.php');
 
-$email  = strtolower($_SESSION['user_email']);
-$host   = "sql312.infinityfree.com";
-$dbname = "if0_40473107_harvhub";
-$user   = "if0_40473107";
-$pass   = "InDQmdl53FZ85";
-
-$tableName              = "harvhub";
-$serverAccountTable     = "server_account";
-$revenueHistoryTable    = "revenue_history";
-$vpsTable               = "vps";
-$vpsFollowersTable      = "vps_hosts_followers";
-$vpsRequestorsTable     = "vps_hosts_requestors";
-$programmeInvestorsTable= "programme_investors";
-$programmeTable         = "programme";
-
-try {
-    $pdo = new PDO(
-        "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-        $user,
-        $pass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
-} catch (Exception $e) {
-    die("Database connection failed.");
-}
-
-// ==================== FETCH USER ====================
-$stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ?");
-$stmt->execute([$email]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$user) {
-    header("Location: index.php");
-    exit;
-}
-
-$userId = (int)$user['id'];
-
-// ==================== FETCH SERVER ACCOUNT (FALLBACKS) ====================
-$stmt = $pdo->prepare("SELECT * FROM $serverAccountTable WHERE id = 1 LIMIT 1");
-$stmt->execute();
-$serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$serverAccount) {
-    die("Server configuration not found. Please contact administrator.");
-}
-
-$darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
-$darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
-
-// --- Server-side fallbacks ---
-$SERVER_MIN_BROKER_BALANCE   = (float)($serverAccount['min_broker_balance'] ?? 0);
-$SERVER_CONTRACT_DURATION    = (int)($serverAccount['contract_duration'] ?? 30);
-$SERVER_SHARE_PERCENT        = (int)($serverAccount['server_share_percent'] ?? 30);
-$SERVER_USER_SHARE_PERCENT   = (int)($serverAccount['user_share_percent'] ?? 70);
-$SERVER_MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
-$MIN_INITIAL_DEPOSIT         = (float)($serverAccount['min_broker_balance'] ?? 0);
-
-// ==================== FIND THE USER'S ACTIVE INVESTMENT (programme_investors) ====================
-// A user can have many investments over time. We pick the most recent one.
-// "Active" = status is 'active' (set at enrollment), OR no status filter — we
-// treat the latest row as the current programme.
-$activeInvestment = null;
-$investmentDeveloper = null;
-$investmentProgramme  = null;
-
-try {
-    $stmt = $pdo->prepare("
-        SELECT * FROM $programmeInvestorsTable
-        WHERE investorid = ?
-        ORDER BY invested_at DESC, id DESC
-        LIMIT 1
-    ");
-    $stmt->execute([$userId]);
-    $activeInvestment = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($activeInvestment) {
-        // Programme info
-        if (!empty($activeInvestment['programme_id'])) {
-            $stmtP = $pdo->prepare("SELECT * FROM $programmeTable WHERE id = ? LIMIT 1");
-            $stmtP->execute([(int)$activeInvestment['programme_id']]);
-            $investmentProgramme = $stmtP->fetch(PDO::FETCH_ASSOC);
-        }
-
-        // Developer info (harvhub row of the developer)
-        if (!empty($activeInvestment['developerid'])) {
-            $stmtD = $pdo->prepare("SELECT id, fullname, email FROM $tableName WHERE id = ? LIMIT 1");
-            $stmtD->execute([(int)$activeInvestment['developerid']]);
-            $investmentDeveloper = $stmtD->fetch(PDO::FETCH_ASSOC);
+    // --- Configuration and Connection ---
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        if (isset($_SESSION['prg_redirect_safe'])) {
+            unset($_SESSION['prg_redirect_safe']);
+        } else {
+            unset($_SESSION['password_verified']);
+            unset($_SESSION['password_error']);
+            unset($_SESSION['reenroll_password_verified']);
+            unset($_SESSION['reenroll_password_error']);
         }
     }
-} catch (PDOException $e) {
-    $activeInvestment = null;
-}
 
-$hasProgramme = ($activeInvestment && $activeInvestment['programme_id']);
-// ==================== SYNC ACCOUNT MANAGEMENT FROM DEVELOPER ====================
-// If the investor is enrolled in a programme, copy the developer's master
-// account management settings (investorid = 0) into the investor's own row.
-// This runs on every page load so the investor always has the latest config.
-if ($hasProgramme && $DEVELOPER_ID > 0) {
+    if (!isset($_SESSION['user_email'])) {
+        header("Location: index.php");
+        exit;
+    }
+
+    $email  = strtolower($_SESSION['user_email']);
+    $host   = "sql312.infinityfree.com";
+    $dbname = "if0_40473107_harvhub";
+    $user   = "if0_40473107";
+    $pass   = "InDQmdl53FZ85";
+
+    $tableName              = "harvhub";
+    $serverAccountTable     = "server_account";
+    $revenueHistoryTable    = "revenue_history";
+    $vpsTable               = "vps";
+    $vpsFollowersTable      = "vps_hosts_followers";
+    $vpsRequestorsTable     = "vps_hosts_requestors";
+    $programmeInvestorsTable= "programme_investors";
+    $programmeTable         = "programme";
+
     try {
-        // Fetch the developer's master row
-        $stmtMaster = $pdo->prepare("
-            SELECT * FROM accountmanagement
-            WHERE developerid = ? AND investorid = 0
+        $pdo = new PDO(
+            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
+            $user,
+            $pass,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
+    } catch (Exception $e) {
+        die("Database connection failed.");
+    }
+
+    // ==================== FETCH USER ====================
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ?");
+    $stmt->execute([$email]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        header("Location: index.php");
+        exit;
+    }
+
+    $userId = (int)$user['id'];
+
+    // ==================== FETCH SERVER ACCOUNT (FALLBACKS) ====================
+    $stmt = $pdo->prepare("SELECT * FROM $serverAccountTable WHERE id = 1 LIMIT 1");
+    $stmt->execute();
+    $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$serverAccount) {
+        die("Server configuration not found. Please contact administrator.");
+    }
+
+    $darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
+    $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
+
+    // --- Server-side fallbacks ---
+    $SERVER_MIN_BROKER_BALANCE   = (float)($serverAccount['min_broker_balance'] ?? 0);
+    $SERVER_CONTRACT_DURATION    = (int)($serverAccount['contract_duration'] ?? 30);
+    $SERVER_SHARE_PERCENT        = (int)($serverAccount['server_share_percent'] ?? 30);
+    $SERVER_USER_SHARE_PERCENT   = (int)($serverAccount['user_share_percent'] ?? 70);
+    $SERVER_MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
+    $MIN_INITIAL_DEPOSIT         = (float)($serverAccount['min_broker_balance'] ?? 0);
+
+    // ==================== FIND THE USER'S ACTIVE INVESTMENT ====================
+    $activeInvestment = null;
+    $investmentDeveloper = null;
+    $investmentProgramme  = null;
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT * FROM $programmeInvestorsTable
+            WHERE investorid = ?
+            ORDER BY invested_at DESC, id DESC
             LIMIT 1
         ");
-        $stmtMaster->execute([$DEVELOPER_ID]);
-        $masterRow = $stmtMaster->fetch(PDO::FETCH_ASSOC);
+        $stmt->execute([$userId]);
+        $activeInvestment = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($masterRow) {
-            // Check if the investor already has a row
-            $stmtInv = $pdo->prepare("
-                SELECT id FROM accountmanagement
-                WHERE developerid = ? AND investorid = ?
-                LIMIT 1
-            ");
-            $stmtInv->execute([$DEVELOPER_ID, $userId]);
-            $investorRow = $stmtInv->fetch(PDO::FETCH_ASSOC);
-
-            // All columns that should be synced (exclude id, developerid, investorid,
-            // and any timestamp/auto columns)
-            $syncColumns = [
-                'enable_risk_reward_correction',
-                'minimum_risk_reward',
-                'fixed_risk_reward',
-                'enable_breakeven',
-                'breakeven_dictionary',
-                'restrictions_duration',
-                'minimum_balance_risk_distance',
-                'maximum_balance_risk_distance',
-                'account_balance_default_risk_management',
-                'account_balance_maximum_risk_management',
-                'daily_target_config',
-                'restrict_order_from_timeframe',
-                'use_recent_highest_balance_as_current_balance',
-                'additional_configurations',
-                'skip_orders_close_to_position',
-                'cancel_orders_close_to_position',
-                'also_restrict_opposite_order_too_close_to_position',
-                'switch_invalid_to_instant_order',
-                'enable_order_type_conversion',
-            ];
-
-            // Build values array from master row
-            $values = [];
-            foreach ($syncColumns as $col) {
-                $values[] = $masterRow[$col] ?? null;
+        if ($activeInvestment) {
+            if (!empty($activeInvestment['programme_id'])) {
+                $stmtP = $pdo->prepare("SELECT * FROM $programmeTable WHERE id = ? LIMIT 1");
+                $stmtP->execute([(int)$activeInvestment['programme_id']]);
+                $investmentProgramme = $stmtP->fetch(PDO::FETCH_ASSOC);
             }
 
-            if ($investorRow) {
-                // Update existing investor row
-                $setParts = [];
-                foreach ($syncColumns as $col) {
-                    $setParts[] = "`$col` = ?";
-                }
-                $sql = "UPDATE accountmanagement SET " . implode(', ', $setParts)
-                     . " WHERE developerid = ? AND investorid = ?";
-                $values[] = $DEVELOPER_ID;
-                $values[] = $userId;
-                $upd = $pdo->prepare($sql);
-                $upd->execute($values);
-            } else {
-                // Insert new investor row
-                $insCols = array_merge(['developerid', 'investorid'], $syncColumns);
-                $placeholders = implode(',', array_fill(0, count($insCols), '?'));
-                $sql = "INSERT INTO accountmanagement (`"
-                     . implode('`,`', $insCols) . "`) VALUES ($placeholders)";
-                $ins = $pdo->prepare($sql);
-                $ins->execute(array_merge([$DEVELOPER_ID, $userId], $values));
+            if (!empty($activeInvestment['developerid'])) {
+                $stmtD = $pdo->prepare("SELECT id, fullname, email FROM $tableName WHERE id = ? LIMIT 1");
+                $stmtD->execute([(int)$activeInvestment['developerid']]);
+                $investmentDeveloper = $stmtD->fetch(PDO::FETCH_ASSOC);
             }
         }
     } catch (PDOException $e) {
-        // Silent fail — don't break the dashboard if sync fails
-    }
-}
-
-// ==================== DERIVED VALUES (programme first, server fallback) ====================
-// Each field falls back to the server_account value if the developer left it as 0/empty.
-$CONTRACT_DURATION    = $SERVER_CONTRACT_DURATION;
-$MIN_BROKER_BALANCE   = $SERVER_MIN_BROKER_BALANCE;
-$MIN_INITIAL_DEPOSIT  = $SERVER_MIN_BROKER_BALANCE;
-$SERVER_SHARE_PERCENT = $SERVER_SHARE_PERCENT; // default
-$USER_SHARE_PERCENT   = $SERVER_USER_SHARE_PERCENT;
-$MIN_PROFIT_FOR_SPLIT = $SERVER_MIN_PROFIT_FOR_SPLIT;
-$PROGRAMME_NAME       = '';
-$DEVELOPER_NAME       = '';
-$DEVELOPER_ID         = 0;
-
-if ($hasProgramme) {
-    // Contract duration
-    $pi_cd = (int)($activeInvestment['contract_duration'] ?? 0);
-    if ($pi_cd > 0) $CONTRACT_DURATION = $pi_cd;
-
-    // Minimum investment amount (= min broker balance floor for the investor)
-    $pi_min = (float)($activeInvestment['minimum_investment_amount'] ?? 0);
-    if ($pi_min > 0) {
-        $MIN_BROKER_BALANCE  = $pi_min;
-        $MIN_INITIAL_DEPOSIT = $pi_min;
+        $activeInvestment = null;
     }
 
-    // Developer / investor split
-    $pi_dev = (int)($activeInvestment['developer_percentage'] ?? 0);
-    $pi_inv = (int)($activeInvestment['investor_percentage'] ?? 0);
-    if ($pi_dev > 0) $SERVER_SHARE_PERCENT = $pi_dev;
-    if ($pi_inv > 0) $USER_SHARE_PERCENT   = $pi_inv;
+    $hasProgramme = ($activeInvestment && $activeInvestment['programme_id']);
 
-    // Programme name + developer name
-    if ($investmentProgramme && !empty($investmentProgramme['program_name'])) {
-        $PROGRAMME_NAME = $investmentProgramme['program_name'];
+    // ==================== DERIVED VALUES ====================
+    $CONTRACT_DURATION    = $SERVER_CONTRACT_DURATION;
+    $MIN_BROKER_BALANCE   = $SERVER_MIN_BROKER_BALANCE;
+    $MIN_INITIAL_DEPOSIT  = $SERVER_MIN_BROKER_BALANCE;
+    $SERVER_SHARE_PERCENT = $SERVER_SHARE_PERCENT;
+    $USER_SHARE_PERCENT   = $SERVER_USER_SHARE_PERCENT;
+    $MIN_PROFIT_FOR_SPLIT = $SERVER_MIN_PROFIT_FOR_SPLIT;
+    $PROGRAMME_NAME       = '';
+    $DEVELOPER_NAME       = '';
+    $DEVELOPER_ID         = 0;
+
+    if ($hasProgramme) {
+        $pi_cd = (int)($activeInvestment['contract_duration'] ?? 0);
+        if ($pi_cd > 0) $CONTRACT_DURATION = $pi_cd;
+
+        $pi_min = (float)($activeInvestment['minimum_investment_amount'] ?? 0);
+        if ($pi_min > 0) {
+            $MIN_BROKER_BALANCE  = $pi_min;
+            $MIN_INITIAL_DEPOSIT = $pi_min;
+        }
+
+        $pi_dev = (int)($activeInvestment['developer_percentage'] ?? 0);
+        $pi_inv = (int)($activeInvestment['investor_percentage'] ?? 0);
+        if ($pi_dev > 0) $SERVER_SHARE_PERCENT = $pi_dev;
+        if ($pi_inv > 0) $USER_SHARE_PERCENT   = $pi_inv;
+
+        if ($investmentProgramme && !empty($investmentProgramme['program_name'])) {
+            $PROGRAMME_NAME = $investmentProgramme['program_name'];
+        }
+        if ($investmentDeveloper && !empty($investmentDeveloper['fullname'])) {
+            $DEVELOPER_NAME = $investmentDeveloper['fullname'];
+            $DEVELOPER_ID   = (int)$investmentDeveloper['id'];
+        }
     }
-    if ($investmentDeveloper && !empty($investmentDeveloper['fullname'])) {
-        $DEVELOPER_NAME = $investmentDeveloper['fullname'];
-        $DEVELOPER_ID   = (int)$investmentDeveloper['id'];
-    }
-}
 
-// Extract user data
-$brokerBalance      = (float)($user['broker_balance'] ?? 0);
-$profitAndLoss      = (float)($user['profitandloss'] ?? 0);
-$executionStartDate = $user['execution_start_date'] ?? null;
-$loyaltiesStatus    = $user['loyalties'] ?? null;
-$resetContract      = (int)($user['reset_contract'] ?? 0);
-$balanceVerificationStatus = $user['balance_verification'] ?? 'not-verified';
+    // Extract user data
+    $brokerBalance          = (float)($user['broker_balance'] ?? 0);
+    $profitAndLoss          = (float)($user['profitandloss'] ?? 0);
+    $executionStartDate     = $user['execution_start_date'] ?? null;
+    $loyaltiesStatus        = $user['loyalties'] ?? null;
+    $resetContract          = (int)($user['reset_contract'] ?? 0);
+    $balanceVerificationStatus = $user['balance_verification'] ?? 'not-verified';
+    $recentHighestBalance   = (float)($user['recent_highest_balance'] ?? 0);
 
-// ==================== VPS CHECK ====================
-$userHasVps = false;
+    // ==================== VPS CHECK ====================
+    $userHasVps = false;
 
-try {
-    $stmt = $pdo->prepare("SELECT id FROM $vpsTable WHERE user_id = ? LIMIT 1");
-    $stmt->execute([$userId]);
-    if ($stmt->fetch(PDO::FETCH_ASSOC)) $userHasVps = true;
-} catch (PDOException $e) {}
-
-if (!$userHasVps) {
     try {
-        $stmt = $pdo->prepare("SELECT id FROM $vpsFollowersTable WHERE follower_id = ? AND host_status = 'active' LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id FROM $vpsTable WHERE user_id = ? LIMIT 1");
         $stmt->execute([$userId]);
         if ($stmt->fetch(PDO::FETCH_ASSOC)) $userHasVps = true;
     } catch (PDOException $e) {}
-}
 
-// ==================== LATEST REVENUE HISTORY ====================
-function getLatestRevenueHistory($pdo, $revenueHistoryTable, $email) {
-    $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt->execute([$email]);
-    return $stmt->fetch(PDO::FETCH_ASSOC);
-}
-$latestRevenueRecord = getLatestRevenueHistory($pdo, $revenueHistoryTable, $email);
-
-function updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, $loyaltiesStatus, $paymentDetails = null) {
-    $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt->execute([$email]);
-    $latestRecord = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($latestRecord) {
-        $updateData = ['loyalties' => $loyaltiesStatus];
-        if ($paymentDetails !== null) {
-            $updateData['payment_details'] = $paymentDetails;
-            $updateData['payment_date']    = date('Y-m-d H:i:s');
-        }
-        $setClauses = [];
-        $params = [];
-        foreach ($updateData as $key => $value) {
-            $setClauses[] = "$key = ?";
-            $params[] = $value;
-        }
-        $params[] = $latestRecord['id'];
-        $updateStmt = $pdo->prepare("UPDATE $revenueHistoryTable SET " . implode(', ', $setClauses) . " WHERE id = ?");
-        $updateStmt->execute($params);
-    }
-}
-
-if ($loyaltiesStatus !== null && $latestRevenueRecord) {
-    $latestRevenueLoyalty = $latestRevenueRecord['loyalties'] ?? null;
-    if ($latestRevenueLoyalty !== $loyaltiesStatus) {
-        updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, $loyaltiesStatus);
-        $latestRevenueRecord = getLatestRevenueHistory($pdo, $revenueHistoryTable, $email);
-    }
-}
-
-// ==================== DASHBOARD STATE RESOLVER ====================
-// Same hierarchy as before, but now with an extra top-level gate:
-//   LEVEL 0a: Must have an active programme investment (programme_investors).
-//             If no investment => show "Explore Programme" button.
-//   LEVEL 0b: Must have VPS.
-//   LEVEL 1 : Payment conditions.
-//   LEVEL 2 : Broker connection.
-//   LEVEL 3 : Core states.
-function determineDashboardState(array $u, array $cfg, $latestRevenueRecord, bool $userHasVps = true, bool $hasProgramme = true): array
-{
-    $brokerBalance      = (float)($u['broker_balance'] ?? 0);
-    $profitAndLoss      = (float)($u['profitandloss'] ?? 0);
-    $loyaltiesStatus    = $u['loyalties'] ?? null;
-    $executionStartDate = $u['execution_start_date'] ?? null;
-    $balanceVerif       = $u['balance_verification'] ?? 'not-verified';
-    $resetContract      = (int)($u['reset_contract'] ?? 0);
-    $brokerConnected    = (!empty($u['broker']) && !empty($u['server']) && !empty($u['login']));
-    $applicationStatus  = $u['application_status'] ?? '';
-
-    $minDeposit     = (float)($cfg['min_broker_balance'] ?? 0);
-    $contractDur    = (int)($cfg['contract_duration'] ?? 30);
-    $minProfitSplit = (float)($cfg['min_profit_for_split'] ?? 0);
-
-    $state = [
-        'show_get_vps'          => false,
-        'show_explore_programme'=> false,
-        'show_reset_button'     => false,
-        'show_apply_button'     => false,
-        'show_reenroll_button'  => false,
-        'show_payment_note'     => false,
-        'show_payment_failed'   => false,
-        'show_profit_split'     => false,
-        'show_withdraw_buttons' => false,
-        'show_connect_broker'   => false,
-        'show_find_manager'     => false,
-        'show_payment_confirmed_notice' => false,
-        'loyalties_message'     => '',
-        'loyalty_text'          => '',
-        'dashboard_disclaimer'  => '',
-        'loyalty_btn_text'      => '',
-        'loyalty_btn_class'     => '',
-        'loyalty_btn_action'    => '',
-    ];
-
-    // =====================================================================
-    // LEVEL 0a: NO PROGRAMME INVESTMENT => EXPLORE PROGRAMME
-    // =====================================================================
-    if (!$hasProgramme) {
-        $state['show_explore_programme'] = true;
-        $state['loyalties_message']   = "No Programme Joined";
-        $state['loyalty_text']        = "You haven't invested in any developer programme yet. Explore programmes to start your investment journey.";
-        $state['dashboard_disclaimer']= "Join a programme to get started.";
-        $state['loyalty_btn_text']    = "Explore Programme";
-        $state['loyalty_btn_class']   = "btn-loyalty-action btn-explore-programme";
-        $state['loyalty_btn_action']  = "explore_programme";
-        return $state;
-    }
-
-    // =====================================================================
-    // LEVEL 0b: VPS REQUIRED
-    // =====================================================================
     if (!$userHasVps) {
-        $state['show_get_vps'] = true;
-        $state['loyalties_message']   = "VPS Required";
-        $state['loyalty_text']        = "You need a Virtual Private Server to run automated trading. Get one to unlock your dashboard.";
-        $state['dashboard_disclaimer']= "VPS required before proceeding.";
-        $state['loyalty_btn_text']    = "Get VPS";
-        $state['loyalty_btn_class']   = "btn-loyalty-action btn-get-vps";
-        $state['loyalty_btn_action']  = "get_vps";
-        return $state;
+        try {
+            $stmt = $pdo->prepare("SELECT id FROM $vpsFollowersTable WHERE follower_id = ? AND host_status = 'active' LIMIT 1");
+            $stmt->execute([$userId]);
+            if ($stmt->fetch(PDO::FETCH_ASSOC)) $userHasVps = true;
+        } catch (PDOException $e) {}
     }
 
-    // =====================================================================
-    // LEVEL 1: PAYMENT CONDITIONS
-    // =====================================================================
-    $allLoyaltyStatuses = [];
-    if ($loyaltiesStatus !== null) $allLoyaltyStatuses[] = $loyaltiesStatus;
-    if ($latestRevenueRecord && isset($latestRevenueRecord['loyalties']) && $latestRevenueRecord['loyalties'] !== null) {
-        $allLoyaltyStatuses[] = $latestRevenueRecord['loyalties'];
+    // ==================== LATEST REVENUE HISTORY ====================
+    function getLatestRevenueHistory($pdo, $revenueHistoryTable, $email) {
+        $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$email]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
-    $allLoyaltyStatuses = array_unique($allLoyaltyStatuses);
+    $latestRevenueRecord = getLatestRevenueHistory($pdo, $revenueHistoryTable, $email);
 
-    $paymentMadeStatuses = ['payment-made', 'contract-cancelled-payment-made'];
-    $failedStatuses      = ['payment-failed', 'failed-payment', 'contract-cancelled-failed-payment', 'contract-cancelled-payment-failed'];
-    $unpaidStatuses      = ['unpaid-payment', 'unpaid', 'contract-cancelled-unpaid', 'contract-cancelled-unpaid-payment', 'contract-cancelled-payment-required'];
-    $confirmedStatuses   = ['payment-confirmed'];
+    function updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, $loyaltiesStatus, $paymentDetails = null) {
+        $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$email]);
+        $latestRecord = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    foreach ($allLoyaltyStatuses as $status) {
-        if (in_array($status, $paymentMadeStatuses)) {
-            $state['show_payment_note'] = true;
-            $state['loyalties_message'] = "Payment Pending Confirmation";
-            $state['loyalty_text']      = "Your payment has been recorded. Waiting for server confirmation.";
-            $state['dashboard_disclaimer'] = "Payment submitted for verification.";
-            $state['loyalty_btn_text']  = "Awaiting Confirmation";
-            $state['loyalty_btn_class'] = "btn-loyalty-paid";
-            $state['loyalty_btn_action']= "";
+        if ($latestRecord) {
+            $updateData = ['loyalties' => $loyaltiesStatus];
+            if ($paymentDetails !== null) {
+                $updateData['payment_details'] = $paymentDetails;
+                $updateData['payment_date']    = date('Y-m-d H:i:s');
+            }
+            $setClauses = [];
+            $params = [];
+            foreach ($updateData as $key => $value) {
+                $setClauses[] = "$key = ?";
+                $params[] = $value;
+            }
+            $params[] = $latestRecord['id'];
+            $updateStmt = $pdo->prepare("UPDATE $revenueHistoryTable SET " . implode(', ', $setClauses) . " WHERE id = ?");
+            $updateStmt->execute($params);
+        }
+    }
+
+    if ($loyaltiesStatus !== null && $latestRevenueRecord) {
+        $latestRevenueLoyalty = $latestRevenueRecord['loyalties'] ?? null;
+        if ($latestRevenueLoyalty !== $loyaltiesStatus) {
+            updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, $loyaltiesStatus);
+            $latestRevenueRecord = getLatestRevenueHistory($pdo, $revenueHistoryTable, $email);
+        }
+    }
+
+    // ==================== DASHBOARD STATE RESOLVER ====================
+    function determineDashboardState(array $u, array $cfg, $latestRevenueRecord, bool $userHasVps = true, bool $hasProgramme = true): array
+    {
+        $brokerBalance      = (float)($u['broker_balance'] ?? 0);
+        $profitAndLoss      = (float)($u['profitandloss'] ?? 0);
+        $loyaltiesStatus    = $u['loyalties'] ?? null;
+        $executionStartDate = $u['execution_start_date'] ?? null;
+        $balanceVerif       = $u['balance_verification'] ?? 'not-verified';
+        $resetContract      = (int)($u['reset_contract'] ?? 0);
+        $brokerConnected    = (!empty($u['broker']) && !empty($u['server']) && !empty($u['login']));
+        $applicationStatus  = $u['application_status'] ?? '';
+
+        $minDeposit     = (float)($cfg['min_broker_balance'] ?? 0);
+        $contractDur    = (int)($cfg['contract_duration'] ?? 30);
+        $minProfitSplit = (float)($cfg['min_profit_for_split'] ?? 0);
+
+        $state = [
+            'show_get_vps'          => false,
+            'show_explore_programme'=> false,
+            'show_reset_button'     => false,
+            'show_apply_button'     => false,
+            'show_reenroll_button'  => false,
+            'show_payment_note'     => false,
+            'show_payment_failed'   => false,
+            'show_profit_split'     => false,
+            'show_withdraw_buttons' => false,
+            'show_connect_broker'   => false,
+            'show_find_manager'     => false,
+            'show_payment_confirmed_notice' => false,
+            'loyalties_message'     => '',
+            'loyalty_text'          => '',
+            'dashboard_disclaimer'  => '',
+            'loyalty_btn_text'      => '',
+            'loyalty_btn_class'     => '',
+            'loyalty_btn_action'    => '',
+        ];
+
+        if (!$hasProgramme) {
+            $state['show_explore_programme'] = true;
+            $state['loyalties_message']   = "No Programme Joined";
+            $state['loyalty_text']        = "You haven't invested in any developer programme yet. Explore programmes to start your investment journey.";
+            $state['dashboard_disclaimer']= "Join a programme to get started.";
+            $state['loyalty_btn_text']    = "Explore Programme";
+            $state['loyalty_btn_class']   = "btn-loyalty-action btn-explore-programme";
+            $state['loyalty_btn_action']  = "explore_programme";
             return $state;
         }
-    }
 
-    foreach ($allLoyaltyStatuses as $status) {
-        if (in_array($status, $failedStatuses)) {
-            $state['show_payment_failed'] = true;
-            $state['loyalties_message'] = "Payment Failed";
-            $state['loyalty_text']      = "Your previous payment attempt failed. Please retry.";
-            $state['dashboard_disclaimer'] = "Payment verification failed!";
-            $state['loyalty_btn_text']  = "Retry Payment";
-            $state['loyalty_btn_class'] = "btn-loyalty-action";
-            $state['loyalty_btn_action']= "payment_failed_redirect";
+        if (!$userHasVps) {
+            $state['show_get_vps'] = true;
+            $state['loyalties_message']   = "VPS Required";
+            $state['loyalty_text']        = "You need a Virtual Private Server to run automated trading. Get one to unlock your dashboard.";
+            $state['dashboard_disclaimer']= "VPS required before proceeding.";
+            $state['loyalty_btn_text']    = "Get VPS";
+            $state['loyalty_btn_class']   = "btn-loyalty-action btn-get-vps";
+            $state['loyalty_btn_action']  = "get_vps";
             return $state;
         }
-    }
 
-    foreach ($allLoyaltyStatuses as $status) {
-        if (in_array($status, $unpaidStatuses)) {
-            $state['show_profit_split'] = true;
-            $state['loyalties_message'] = "Payment Required";
-            $state['loyalty_text']      = "Profit split payment is required. Click below to complete payment.";
-            $state['dashboard_disclaimer'] = "Payment required!";
-            $state['loyalty_btn_text']  = "Make Profit Split";
-            $state['loyalty_btn_class'] = "btn-loyalty-action";
-            $state['loyalty_btn_action']= "profit_split_redirect";
+        $allLoyaltyStatuses = [];
+        if ($loyaltiesStatus !== null) $allLoyaltyStatuses[] = $loyaltiesStatus;
+        if ($latestRevenueRecord && isset($latestRevenueRecord['loyalties']) && $latestRevenueRecord['loyalties'] !== null) {
+            $allLoyaltyStatuses[] = $latestRevenueRecord['loyalties'];
+        }
+        $allLoyaltyStatuses = array_unique($allLoyaltyStatuses);
+
+        $paymentMadeStatuses = ['payment-made', 'contract-cancelled-payment-made'];
+        $failedStatuses      = ['payment-failed', 'failed-payment', 'contract-cancelled-failed-payment', 'contract-cancelled-payment-failed'];
+        $unpaidStatuses      = ['unpaid-payment', 'unpaid', 'contract-cancelled-unpaid', 'contract-cancelled-unpaid-payment', 'contract-cancelled-payment-required'];
+        $confirmedStatuses   = ['payment-confirmed'];
+
+        foreach ($allLoyaltyStatuses as $status) {
+            if (in_array($status, $paymentMadeStatuses)) {
+                $state['show_payment_note'] = true;
+                $state['loyalties_message'] = "Payment Pending Confirmation";
+                $state['loyalty_text']      = "Your payment has been recorded. Waiting for server confirmation.";
+                $state['dashboard_disclaimer'] = "Payment submitted for verification.";
+                $state['loyalty_btn_text']  = "Awaiting Confirmation";
+                $state['loyalty_btn_class'] = "btn-loyalty-paid";
+                $state['loyalty_btn_action']= "";
+                return $state;
+            }
+        }
+
+        foreach ($allLoyaltyStatuses as $status) {
+            if (in_array($status, $failedStatuses)) {
+                $state['show_payment_failed'] = true;
+                $state['loyalties_message'] = "Payment Failed";
+                $state['loyalty_text']      = "Your previous payment attempt failed. Please retry.";
+                $state['dashboard_disclaimer'] = "Payment verification failed!";
+                $state['loyalty_btn_text']  = "Retry Payment";
+                $state['loyalty_btn_class'] = "btn-loyalty-action";
+                $state['loyalty_btn_action']= "payment_failed_redirect";
+                return $state;
+            }
+        }
+
+        foreach ($allLoyaltyStatuses as $status) {
+            if (in_array($status, $unpaidStatuses)) {
+                $state['show_profit_split'] = true;
+                $state['loyalties_message'] = "Payment Required";
+                $state['loyalty_text']      = "Profit split payment is required. Click below to complete payment.";
+                $state['dashboard_disclaimer'] = "Payment required!";
+                $state['loyalty_btn_text']  = "Make Profit Split";
+                $state['loyalty_btn_class'] = "btn-loyalty-action";
+                $state['loyalty_btn_action']= "profit_split_redirect";
+                return $state;
+            }
+        }
+
+        foreach ($allLoyaltyStatuses as $status) {
+            if (in_array($status, $confirmedStatuses)) {
+                $state['show_payment_confirmed_notice'] = true;
+                break;
+            }
+        }
+
+        if (!$brokerConnected) {
+            $state['show_connect_broker'] = true;
+            $state['loyalties_message']   = "Broker Not Connected";
+            $state['loyalty_text']        = "Connect your broker account to get started with trading.";
+            $state['dashboard_disclaimer']= "Broker connection required.";
+            $state['loyalty_btn_text']    = "Connect Broker";
+            $state['loyalty_btn_class']   = "btn-loyalty-action btn-connect-broker";
+            $state['loyalty_btn_action']  = "connect_broker";
             return $state;
         }
-    }
 
-    foreach ($allLoyaltyStatuses as $status) {
-        if (in_array($status, $confirmedStatuses)) {
-            $state['show_payment_confirmed_notice'] = true;
-            break;
-        }
-    }
-
-    // =====================================================================
-    // LEVEL 2: BROKER CONNECTION
-    // =====================================================================
-    if (!$brokerConnected) {
-        $state['show_connect_broker'] = true;
-        $state['loyalties_message']   = "Broker Not Connected";
-        $state['loyalty_text']        = "Connect your broker account to get started with trading.";
-        $state['dashboard_disclaimer']= "Broker connection required.";
-        $state['loyalty_btn_text']    = "Connect Broker";
-        $state['loyalty_btn_class']   = "btn-loyalty-action btn-connect-broker";
-        $state['loyalty_btn_action']  = "connect_broker";
-        return $state;
-    }
-
-    // =====================================================================
-    // LEVEL 3: CHILD STATES
-    // =====================================================================
-    if ($resetContract === 1) {
-        $state['show_reset_button']    = true;
-        $state['dashboard_disclaimer'] = "Time for the Next Phase!";
-        $state['loyalties_message']    = "Ready for a new Contract?";
-        $state['loyalty_text']         = "Your path is clear. Click below to embark on your next contract.";
-        $state['loyalty_btn_text']     = "Let's get started";
-        $state['loyalty_btn_class']    = "btn-loyalty-action btn-reset";
-        $state['loyalty_btn_action']   = "reset";
-        return $state;
-    }
-
-    if ($balanceVerif === 'not-verified' || $balanceVerif === '' || $balanceVerif === null) {
-        $state['show_apply_button']    = true;
-        $state['loyalties_message']    = "Balance Verification Required";
-        $state['loyalty_text']         = "Please apply for verification now if you have deposited funds.";
-        $state['dashboard_disclaimer'] = "Balance verification required. Apply if you have funded your broker account.";
-        $state['loyalty_btn_text']     = "Apply for Verification";
-        $state['loyalty_btn_class']    = "btn-loyalty-action";
-        $state['loyalty_btn_action']   = "apply";
-        return $state;
-    }
-
-    if ($balanceVerif === 'applied-for-verification') {
-        $state['loyalties_message']    = "Balance Verification Pending";
-        $state['loyalty_text']         = "Your account is pending balance review. This check usually takes between 24 and 48 hours.";
-        $state['dashboard_disclaimer'] = "Balance verification in progress.";
-        $state['loyalty_btn_text']     = "Under Review";
-        $state['loyalty_btn_class']    = "btn-loyalty-paid";
-        $state['loyalty_btn_action']   = "";
-        return $state;
-    }
-
-    if ($balanceVerif === 'verified') {
-        $isExecutionEmpty  = ($executionStartDate === null || $executionStartDate === '' || $executionStartDate === '0000-00-00');
-        $isContractActive  = false;
-        $contractCompleted = false;
-        $contractDaysLeft  = 0;
-
-        if (!$isExecutionEmpty) {
-            $start = new DateTime($executionStartDate);
-            $end   = clone $start;
-            $end->modify("+{$contractDur} days");
-
-            $today = new DateTime(); $today->setTime(0, 0, 0);
-            $endClone = clone $end; $endClone->setTime(0, 0, 0);
-
-            $contractDaysLeft = (int)$today->diff($endClone)->format('%r%a');
-
-            if ($contractDaysLeft <= 0) $contractCompleted = true;
-            else                        $isContractActive = true;
+        if ($resetContract === 1) {
+            $state['show_reset_button']    = true;
+            $state['dashboard_disclaimer'] = "Time for the Next Phase!";
+            $state['loyalties_message']    = "Ready for a new Contract?";
+            $state['loyalty_text']         = "Your path is clear. Click below to embark on your next contract.";
+            $state['loyalty_btn_text']     = "Let's get started";
+            $state['loyalty_btn_class']    = "btn-loyalty-action btn-reset";
+            $state['loyalty_btn_action']   = "reset";
+            return $state;
         }
 
-        if ($isContractActive) {
-            $state['loyalties_message']    = "Contract Active";
-            $state['loyalty_text']         = $contractDaysLeft . " days left.";
-            $state['dashboard_disclaimer'] = "Trading is active.";
-            $state['loyalty_btn_text']     = "Active";
-            $state['loyalty_btn_class']    = "btn-loyalty-confirmed";
+        if ($balanceVerif === 'not-verified' || $balanceVerif === '' || $balanceVerif === null) {
+            $state['show_apply_button']    = true;
+            $state['loyalties_message']    = "Balance Verification Required";
+            $state['loyalty_text']         = "Please apply for verification now if you have deposited funds.";
+            $state['dashboard_disclaimer'] = "Balance verification required. Apply if you have funded your broker account.";
+            $state['loyalty_btn_text']     = "Apply for Verification";
+            $state['loyalty_btn_class']    = "btn-loyalty-action";
+            $state['loyalty_btn_action']   = "apply";
+            return $state;
+        }
+
+        if ($balanceVerif === 'applied-for-verification') {
+            $state['loyalties_message']    = "Balance Verification Pending";
+            $state['loyalty_text']         = "Your account is pending balance review. This check usually takes between 24 and 48 hours.";
+            $state['dashboard_disclaimer'] = "Balance verification in progress.";
+            $state['loyalty_btn_text']     = "Under Review";
+            $state['loyalty_btn_class']    = "btn-loyalty-paid";
             $state['loyalty_btn_action']   = "";
             return $state;
         }
 
-        if ($contractCompleted) {
-            if ($profitAndLoss > $minProfitSplit) {
-                $state['show_profit_split'] = true;
-                $state['loyalties_message'] = "Contract Ended - Payment Required";
-                $state['loyalty_text'] = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split.";
-                $state['dashboard_disclaimer'] = "Contract completed - Profit split required!";
-                $state['loyalty_btn_text'] = "Make Profit Split";
-                $state['loyalty_btn_class'] = "btn-loyalty-action";
-                $state['loyalty_btn_action'] = "profit_split_redirect";
+        if ($balanceVerif === 'verified') {
+            $isExecutionEmpty  = ($executionStartDate === null || $executionStartDate === '' || $executionStartDate === '0000-00-00');
+            $isContractActive  = false;
+            $contractCompleted = false;
+            $contractDaysLeft  = 0;
+
+            if (!$isExecutionEmpty) {
+                $start = new DateTime($executionStartDate);
+                $end   = clone $start;
+                $end->modify("+{$contractDur} days");
+
+                $today = new DateTime(); $today->setTime(0, 0, 0);
+                $endClone = clone $end; $endClone->setTime(0, 0, 0);
+
+                $contractDaysLeft = (int)$today->diff($endClone)->format('%r%a');
+
+                if ($contractDaysLeft <= 0) $contractCompleted = true;
+                else                        $isContractActive = true;
+            }
+
+            if ($isContractActive) {
+                $state['loyalties_message']    = "Contract Active";
+                $state['loyalty_text']         = $contractDaysLeft . " days left.";
+                $state['dashboard_disclaimer'] = "Trading is active.";
+                $state['loyalty_btn_text']     = "Active";
+                $state['loyalty_btn_class']    = "btn-loyalty-confirmed";
+                $state['loyalty_btn_action']   = "";
+                return $state;
+            }
+
+            if ($contractCompleted) {
+                if ($profitAndLoss > $minProfitSplit) {
+                    $state['show_profit_split'] = true;
+                    $state['loyalties_message'] = "Contract Ended - Payment Required";
+                    $state['loyalty_text'] = "Your contract has ended with a profit of $" . number_format($profitAndLoss, 2) . ". Please complete the profit split.";
+                    $state['dashboard_disclaimer'] = "Contract completed - Profit split required!";
+                    $state['loyalty_btn_text'] = "Make Profit Split";
+                    $state['loyalty_btn_class'] = "btn-loyalty-action";
+                    $state['loyalty_btn_action'] = "profit_split_redirect";
+                    return $state;
+                }
+
+                $state['show_reenroll_button'] = true;
+                $state['loyalty_btn_text']     = "Enroll";
+                $state['loyalty_btn_class']    = "btn-loyalty-action";
+                $state['loyalty_btn_action']   = "enroll";
+
+                if ($profitAndLoss < 0) {
+                    $state['loyalties_message']    = "Ready for New Contract";
+                    $state['loyalty_text']         = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new contract.";
+                    $state['dashboard_disclaimer'] = "Contract completed with loss. You can start a new contract.";
+                } elseif ($profitAndLoss > 0) {
+                    $state['loyalties_message']    = "Ready for New Contract";
+                    $state['loyalty_text']         = "Profit of $" . number_format($profitAndLoss, 2) . " is below the split threshold. You keep 100% of the profit.";
+                    $state['dashboard_disclaimer'] = "Contract completed. Profit below split threshold.";
+                } else {
+                    $state['loyalties_message']    = "Ready for New Contract";
+                    $state['loyalty_text']         = "Your contract has ended with no profit. Click Enroll to start a new contract.";
+                    $state['dashboard_disclaimer'] = "Contract completed with no profit.";
+                }
+                return $state;
+            }
+
+            if ($brokerBalance < $minDeposit) {
+                $state['loyalties_message']    = "Deposit Required";
+                $state['loyalty_text']         = "Your balance is below the minimum deposit of $" . number_format($minDeposit, 2) . ".";
+                $state['dashboard_disclaimer'] = "Minimum deposit required before enrollment.";
+                $state['loyalty_btn_text']     = "Deposit Funds";
+                $state['loyalty_btn_class']    = "btn-loyalty-action";
+                $state['loyalty_btn_action']   = "deposit";
                 return $state;
             }
 
             $state['show_reenroll_button'] = true;
+            $state['loyalties_message']    = "Ready to Start";
+            $state['loyalty_text']         = "Click Enroll to start a new trading contract.";
+            $state['dashboard_disclaimer'] = "No active contract.";
             $state['loyalty_btn_text']     = "Enroll";
             $state['loyalty_btn_class']    = "btn-loyalty-action";
             $state['loyalty_btn_action']   = "enroll";
-
-            if ($profitAndLoss < 0) {
-                $state['loyalties_message']    = "Ready for New Contract";
-                $state['loyalty_text']         = "Don't give up! Every loss is a learning opportunity. Click Enroll to start a new contract.";
-                $state['dashboard_disclaimer'] = "Contract completed with loss. You can start a new contract.";
-            } elseif ($profitAndLoss > 0) {
-                $state['loyalties_message']    = "Ready for New Contract";
-                $state['loyalty_text']         = "Profit of $" . number_format($profitAndLoss, 2) . " is below the split threshold. You keep 100% of the profit.";
-                $state['dashboard_disclaimer'] = "Contract completed. Profit below split threshold.";
-            } else {
-                $state['loyalties_message']    = "Ready for New Contract";
-                $state['loyalty_text']         = "Your contract has ended with no profit. Click Enroll to start a new contract.";
-                $state['dashboard_disclaimer'] = "Contract completed with no profit.";
-            }
-            return $state;
-        }
-
-        if ($brokerBalance < $minDeposit) {
-            $state['loyalties_message']    = "Deposit Required";
-            $state['loyalty_text']         = "Your balance is below the minimum deposit of $" . number_format($minDeposit, 2) . ".";
-            $state['dashboard_disclaimer'] = "Minimum deposit required before enrollment.";
-            $state['loyalty_btn_text']     = "Deposit Funds";
-            $state['loyalty_btn_class']    = "btn-loyalty-action";
-            $state['loyalty_btn_action']   = "deposit";
             return $state;
         }
 
@@ -581,461 +483,345 @@ function determineDashboardState(array $u, array $cfg, $latestRevenueRecord, boo
         return $state;
     }
 
-    // Fallback
-    $state['show_reenroll_button'] = true;
-    $state['loyalties_message']    = "Ready to Start";
-    $state['loyalty_text']         = "Click Enroll to start a new trading contract.";
-    $state['dashboard_disclaimer'] = "No active contract.";
-    $state['loyalty_btn_text']     = "Enroll";
-    $state['loyalty_btn_class']    = "btn-loyalty-action";
-    $state['loyalty_btn_action']   = "enroll";
-    return $state;
-}
+    $state = determineDashboardState(
+        $user,
+        [
+            'min_broker_balance'   => $MIN_BROKER_BALANCE,
+            'contract_duration'    => $CONTRACT_DURATION,
+            'min_profit_for_split' => $MIN_PROFIT_FOR_SPLIT,
+        ],
+        $latestRevenueRecord,
+        $userHasVps,
+        (bool)$hasProgramme
+    );
 
-$state = determineDashboardState(
-    $user,
-    [
-        'min_broker_balance'   => $MIN_BROKER_BALANCE,
-        'contract_duration'    => $CONTRACT_DURATION,
-        'min_profit_for_split' => $MIN_PROFIT_FOR_SPLIT,
-    ],
-    $latestRevenueRecord,
-    $userHasVps,
-    (bool)$hasProgramme
-);
+    $show_get_vps          = $state['show_get_vps'] ?? false;
+    $show_explore_programme= $state['show_explore_programme'] ?? false;
+    $show_reset_button     = $state['show_reset_button'];
+    $show_apply_button     = $state['show_apply_button'];
+    $show_reenroll_button  = $state['show_reenroll_button'];
+    $show_payment_note     = $state['show_payment_note'];
+    $show_payment_failed   = $state['show_payment_failed'];
+    $showProfitSplit       = $state['show_profit_split'];
+    $showWithdrawButtons   = $state['show_withdraw_buttons'];
+    $show_connect_broker   = $state['show_connect_broker'] ?? false;
+    $show_find_manager     = $state['show_find_manager'] ?? false;
+    $show_payment_confirmed_notice = $state['show_payment_confirmed_notice'] ?? false;
+    $loyalties_message     = $state['loyalties_message'];
+    $loyalty_text          = $state['loyalty_text'];
+    $dashboard_disclaimer  = $state['dashboard_disclaimer'];
+    $loyalty_btn_text      = $state['loyalty_btn_text'];
+    $loyalty_btn_class     = $state['loyalty_btn_class'];
+    $loyalty_btn_action    = $state['loyalty_btn_action'];
 
-$show_get_vps          = $state['show_get_vps'] ?? false;
-$show_explore_programme= $state['show_explore_programme'] ?? false;
-$show_reset_button     = $state['show_reset_button'];
-$show_apply_button     = $state['show_apply_button'];
-$show_reenroll_button  = $state['show_reenroll_button'];
-$show_payment_note     = $state['show_payment_note'];
-$show_payment_failed   = $state['show_payment_failed'];
-$showProfitSplit       = $state['show_profit_split'];
-$showWithdrawButtons   = $state['show_withdraw_buttons'];
-$show_connect_broker   = $state['show_connect_broker'] ?? false;
-$show_find_manager     = $state['show_find_manager'] ?? false;
-$show_payment_confirmed_notice = $state['show_payment_confirmed_notice'] ?? false;
-$loyalties_message     = $state['loyalties_message'];
-$loyalty_text          = $state['loyalty_text'];
-$dashboard_disclaimer  = $state['dashboard_disclaimer'];
-$loyalty_btn_text      = $state['loyalty_btn_text'];
-$loyalty_btn_class     = $state['loyalty_btn_class'];
-$loyalty_btn_action    = $state['loyalty_btn_action'];
+    // --- Contract date display values ---
+    $formatted_start_date = "Not started";
+    $formatted_end_date   = "Not started";
+    $contractDaysLeft     = 0;
+    $is_contract_active   = false;
+    $contract_completed   = false;
 
-// --- Contract date display values ---
-$formatted_start_date = "Not started";
-$formatted_end_date   = "Not started";
-$contractDaysLeft     = 0;
-$is_contract_active   = false;
-$contract_completed   = false;
+    if ($executionStartDate && $executionStartDate !== '0000-00-00') {
+        $start = new DateTime($executionStartDate);
+        $formatted_start_date = $start->format('M d, Y');
 
-if ($executionStartDate && $executionStartDate !== '0000-00-00') {
-    $start = new DateTime($executionStartDate);
-    $formatted_start_date = $start->format('M d, Y');
+        $end = clone $start;
+        $end->modify("+{$CONTRACT_DURATION} days");
+        $formatted_end_date = $end->format('M d, Y');
 
-    $end = clone $start;
-    $end->modify("+{$CONTRACT_DURATION} days");
-    $formatted_end_date = $end->format('M d, Y');
+        $today = new DateTime(); $today->setTime(0, 0, 0);
+        $end_clone = clone $end; $end_clone->setTime(0, 0, 0);
 
-    $today = new DateTime(); $today->setTime(0, 0, 0);
-    $end_clone = clone $end; $end_clone->setTime(0, 0, 0);
+        $interval = $today->diff($end_clone);
+        $contractDaysLeft = (int)$interval->format('%r%a');
 
-    $interval = $today->diff($end_clone);
-    $contractDaysLeft = (int)$interval->format('%r%a');
-
-    if ($contractDaysLeft <= 0) {
-        $contract_completed = true;
-        $is_contract_active = false;
-    } else {
-        $is_contract_active = true;
-    }
-}
-
-// --- Balance card display status ---
-$balance_unverified         = false;
-$balance_under_verification = false;
-$balance_check_failed       = false;
-
-if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
-    $balance_unverified = true;
-} elseif ($balanceVerificationStatus === 'applied-for-verification') {
-    $balance_under_verification = true;
-} elseif ($balanceVerificationStatus === 'verified' && $brokerBalance < $MIN_INITIAL_DEPOSIT) {
-    $balance_check_failed = true;
-}
-
-// Extract remaining user data
-$fullName        = $user['fullname'];
-$login           = $user['login'] ?? 'N/A';
-$server          = $user['server'] ?? 'N/A';
-$balanceDisplay  = $user['balance_display'] ?? 'show';
-$broker          = strtolower($user['broker'] ?? 'unknown');
-$tradesString    = $user['trades'] ?? '';
-$broker_connected = (!empty($user['broker']) && !empty($user['server']) && !empty($user['login']));
-$application_status = $user['application_status'] ?? '';
-
-// --- BALANCE CALCULATIONS ---
-$depositBalance = $brokerBalance;
-$currentBalance = $brokerBalance + $profitAndLoss;
-
-$profitToSplit = max(0, $profitAndLoss);
-$serverShare   = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
-$userShare     = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
-
-// --- Determine Deposit Link ---
-// --- Determine Deposit Link (uses same logic as connect_investor_broker.php) ---
-$brokerLink   = '';
-$brokerLinks  = [];   // keyed by formatted broker name, e.g. "Bybit" => "bybit.com"
-
-if (!empty($serverAccount['brokers_link']) && !empty($serverAccount['brokers'])) {
-    // Parse brokers_link: "Bybit:https://bybit.com, Exness:https://exness.com"
-    $raw_links   = explode(',', $serverAccount['brokers_link']);
-    $raw_brokers = explode(',', $serverAccount['brokers']);
-
-    // Extract clean domain names from each link entry
-    $cleaned_links = [];
-    foreach ($raw_links as $link) {
-        $link = trim($link);
-        if ($link === '') continue;
-
-        // Drop the "broker:" prefix if present
-        if (strpos($link, ':') !== false) {
-            $link = trim(substr($link, strrpos($link, ':') + 1));
+        if ($contractDaysLeft <= 0) {
+            $contract_completed = true;
+            $is_contract_active = false;
+        } else {
+            $is_contract_active = true;
         }
-
-        // Grab the bare domain (e.g. bybit.com)
-        if (preg_match('/([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})/', $link, $matches)) {
-            $link = $matches[1];
-        }
-
-        $link = strtolower(trim($link));
-        if (!empty($link)) $cleaned_links[] = $link;
     }
 
-    // Pair each broker name with its cleaned link
-    foreach ($raw_brokers as $index => $entry) {
-        $entry = trim($entry);
-        if ($entry === '') continue;
+    // --- Balance card display status ---
+    $balance_unverified         = false;
+    $balance_under_verification = false;
+    $balance_check_failed       = false;
 
-        $broker_name = (strpos($entry, ':') !== false)
-            ? trim(substr($entry, strrpos($entry, ':') + 1))
-            : $entry;
-        $broker_name = preg_replace('/[^a-zA-Z0-9\s]/', '', $broker_name);
-        $broker_name = trim($broker_name);
-        $broker_name_clean = strtolower($broker_name);
+    if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
+        $balance_unverified = true;
+    } elseif ($balanceVerificationStatus === 'applied-for-verification') {
+        $balance_under_verification = true;
+    } elseif ($balanceVerificationStatus === 'verified' && $brokerBalance < $MIN_INITIAL_DEPOSIT) {
+        $balance_check_failed = true;
+    }
 
-        if ($broker_name === '') continue;
+    // Extract remaining user data
+    $fullName        = $user['fullname'];
+    $login           = $user['login'] ?? 'N/A';
+    $server          = $user['server'] ?? 'N/A';
+    $balanceDisplay  = $user['balance_display'] ?? 'show';
+    $broker          = strtolower($user['broker'] ?? 'unknown');
+    $tradesString    = $user['trades'] ?? '';
+    $broker_connected = (!empty($user['broker']) && !empty($user['server']) && !empty($user['login']));
+    $application_status = $user['application_status'] ?? '';
 
-        $formatted_name = ucfirst($broker_name);
-        $link = isset($cleaned_links[$index]) ? $cleaned_links[$index] : '';
+    // --- BALANCE CALCULATIONS ---
+    $depositBalance = $brokerBalance;
+    $currentBalance = $brokerBalance + $profitAndLoss;
 
-        // Fallback: try to match by broker name inside any cleaned link
-        if (empty($link)) {
-            foreach ($cleaned_links as $cleaned_link) {
-                if (strpos($cleaned_link, $broker_name_clean) !== false) {
-                    $link = $cleaned_link;
-                    break;
+    $profitToSplit = max(0, $profitAndLoss);
+    $serverShare   = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
+    $userShare     = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
+
+    // --- Determine Deposit Link ---
+    $brokerLink   = '';
+    $brokerLinks  = [];
+
+    if (!empty($serverAccount['brokers_link']) && !empty($serverAccount['brokers'])) {
+        $raw_links   = explode(',', $serverAccount['brokers_link']);
+        $raw_brokers = explode(',', $serverAccount['brokers']);
+
+        $cleaned_links = [];
+        foreach ($raw_links as $link) {
+            $link = trim($link);
+            if ($link === '') continue;
+
+            if (strpos($link, ':') !== false) {
+                $link = trim(substr($link, strrpos($link, ':') + 1));
+            }
+
+            if (preg_match('/([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})/', $link, $matches)) {
+                $link = $matches[1];
+            }
+
+            $link = strtolower(trim($link));
+            if (!empty($link)) $cleaned_links[] = $link;
+        }
+
+        foreach ($raw_brokers as $index => $entry) {
+            $entry = trim($entry);
+            if ($entry === '') continue;
+
+            $broker_name = (strpos($entry, ':') !== false)
+                ? trim(substr($entry, strrpos($entry, ':') + 1))
+                : $entry;
+            $broker_name = preg_replace('/[^a-zA-Z0-9\s]/', '', $broker_name);
+            $broker_name = trim($broker_name);
+            $broker_name_clean = strtolower($broker_name);
+
+            if ($broker_name === '') continue;
+
+            $formatted_name = ucfirst($broker_name);
+            $link = isset($cleaned_links[$index]) ? $cleaned_links[$index] : '';
+
+            if (empty($link)) {
+                foreach ($cleaned_links as $cleaned_link) {
+                    if (strpos($cleaned_link, $broker_name_clean) !== false) {
+                        $link = $cleaned_link;
+                        break;
+                    }
                 }
             }
-        }
 
-        if (!isset($brokerLinks[$formatted_name])) {
-            $brokerLinks[$formatted_name] = $link;
+            if (!isset($brokerLinks[$formatted_name])) {
+                $brokerLinks[$formatted_name] = $link;
+            }
         }
     }
-}
 
-// Match the user's current broker (case-insensitive) to a link
-$userBrokerNormalized = strtolower(trim($broker));   // e.g. "bybit"
-$matchedLink = '';
+    $userBrokerNormalized = strtolower(trim($broker));
+    $matchedLink = '';
 
-foreach ($brokerLinks as $name => $link) {
-    if (strtolower($name) === $userBrokerNormalized) {
-        $matchedLink = $link;
-        break;
-    }
-}
-
-// Fallback: try to find any broker key that contains the user's broker name
-if (empty($matchedLink)) {
     foreach ($brokerLinks as $name => $link) {
-        if (strpos(strtolower($name), $userBrokerNormalized) !== false) {
+        if (strtolower($name) === $userBrokerNormalized) {
             $matchedLink = $link;
             break;
         }
     }
-}
 
-// Last-resort fallbacks: harvhub, then any link at all
-if (empty($matchedLink) && isset($brokerLinks['harvhub'])) {
-    $matchedLink = $brokerLinks['harvhub'];
-}
-if (empty($matchedLink) && !empty($brokerLinks)) {
-    $first = reset($brokerLinks);
-    if (!empty($first)) $matchedLink = $first;
-}
-
-// Build the final URL (https:// prefix if missing)
-if (!empty($matchedLink)) {
-    $brokerLink = (strpos($matchedLink, '://') === false) ? 'https://' . $matchedLink : $matchedLink;
-}
-
-$brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
-
-// ==================== POST HANDLING ====================
-
-// Toggle Balance Display
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_balance_display'])) {
-    $currentStatus = $user['balance_display'];
-    $newStatus = ($currentStatus === 'show') ? 'hide' : 'show';
-
-    $upd = $pdo->prepare("UPDATE $tableName SET balance_display = ? WHERE email = ?");
-    $upd->execute([$newStatus, $email]);
-
-    if ($newStatus === 'show') unset($_SESSION['password_verified']);
-    unset($_SESSION['password_error']);
-    $_SESSION['prg_redirect_safe'] = true;
-    $_SESSION['toggle_success_message'] = "Balance display toggled to " . ucfirst($newStatus) . ".";
-
-    header("Location: mydashboard.php?redirect_to_app=1", true, 303);
-    exit;
-}
-
-// Handle enrollment
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reenroll'])) {
-    $today   = date('Y-m-d');
-    $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($today)));
-
-    $startFormatted = date('dmY', strtotime($today));
-    $endFormatted   = date('dmY', strtotime($endDate));
-    $contractId     = "sd-{$startFormatted}-ed-{$endFormatted}";
-
-    $stmt = $pdo->prepare("SELECT broker_balance FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $currentData     = $stmt->fetch(PDO::FETCH_ASSOC);
-    $startingBalance = (float)($currentData['broker_balance'] ?? 0);
-
-    $insertStmt = $pdo->prepare("
-        INSERT INTO $revenueHistoryTable
-        (user_email, contract_id, execution_start_date, execution_end_date, starting_balance, current_balance, profit, user_share, server_share, loyalties, invested_with)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ");
-    $insertStmt->execute([
-        $email,
-        $contractId,
-        $today,
-        $endDate,
-        $startingBalance,
-        $startingBalance,
-        0,
-        0,
-        0,
-        'active',
-        $DEVELOPER_NAME ?: null
-    ]);
-
-    $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, contract_id = ?, reset_contract = 0 WHERE email = ?");
-    $upd->execute([$today, $contractId, $email]);
-
-    unset($_SESSION['reenroll_password_verified']);
-    unset($_SESSION['reenroll_password_verified_time']);
-
-    $_SESSION['prg_redirect_safe'] = true;
-    $_SESSION['enroll_success_message'] = "Contract enrolled successfully! Your " . $CONTRACT_DURATION . "-day contract has started.";
-
-    header("Location: mydashboard.php?redirect_to_app=1", true, 303);
-    exit;
-}
-
-// Handle Apply for Verification
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_for_verification'])) {
-    try {
-        $upd = $pdo->prepare("UPDATE $tableName SET balance_verification = 'applied-for-verification' WHERE email = ?");
-        $upd->execute([$email]);
-
-        $_SESSION['apply_success_message'] = "Your application has been submitted successfully!";
-        $_SESSION['apply_success_details'] = "Our team will verify your account. Please ensure you have deposited the minimum required amount of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
-        $_SESSION['prg_redirect_safe'] = true;
-
-        header("Location: mydashboard.php?redirect_to_app=1", true, 303);
-        exit;
-    } catch (Exception $e) {
-        $_SESSION['apply_error'] = "An error occurred. Please try again.";
-        header("Location: mydashboard.php?redirect_to_app=1", true, 303);
-        exit;
-    }
-}
-
-// Handle Reset Contract
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reset_contract'])) {
-    if ($latestRevenueRecord && $latestRevenueRecord['loyalties'] !== 'payment-confirmed') {
-        updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, 'payment-confirmed');
-    }
-
-    $resetData = [
-        'broker_balance'      => 0,
-        'profitandloss'       => 0,
-        'contract_id'         => NULL,
-        'execution_start_date'=> NULL,
-        'balance_verification'=> 'not-verified',
-        'reset_contract'      => 0,
-        'recent_highest_balance' => NULL,
-        'recent_highest_balance_last_update' => NULL,
-        'loyalties'           => NULL
-    ];
-
-    $setClauses = []; $params = [];
-    foreach ($resetData as $key => $value) {
-        $setClauses[] = "$key = ?";
-        $params[] = $value;
-    }
-    $params[] = $email;
-
-    $upd = $pdo->prepare("UPDATE $tableName SET " . implode(', ', $setClauses) . " WHERE email = ?");
-    $upd->execute($params);
-
-    $_SESSION['prg_redirect_safe'] = true;
-    $_SESSION['reset_success_message'] = "Your contract has been reset successfully. Please apply for verification to start a new contract.";
-
-    header("Location: mydashboard.php?redirect_to_app=1", true, 303);
-    exit;
-}
-
-// Logout
-if (isset($_GET['logout'])) {
-    session_unset();
-    session_destroy();
-    header("Location: index.php");
-    exit;
-}
-
-// ==================== NOTIFICATIONS ====================
-$notifications = [];
-$unreadCount = 0;
-
-if (!empty($user['notifications'])) {
-    $notificationsData = json_decode($user['notifications'], true);
-    if (is_array($notificationsData)) {
-        foreach ($notificationsData as $id => $notification) {
-            if (isset($notification['update']) && $notification['update'] === 'new') $unreadCount++;
-
-            $message = $notification['message'] ?? '';
-            $message = preg_replace('/^[\?\?]+\s*/', '', $message);
-            $message = preg_replace('/[\?\?]/', '', $message);
-
-            $notifications[] = [
-                'id'      => $id,
-                'section' => $notification['section'] ?? 'General',
-                'message' => $message,
-                'time'    => $notification['time'] ?? date('Y-m-d H:i:s'),
-                'type'    => $notification['type'] ?? 'info',
-                'update'  => $notification['update'] ?? 'read'
-            ];
-        }
-        usort($notifications, function($a, $b) {
-            return strtotime($b['time']) - strtotime($a['time']);
-        });
-    }
-}
-
-// AJAX: mark read
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_notifications_read'])) {
-    header('Content-Type: application/json');
-    if (!isset($_SESSION['user_email'])) { echo json_encode(['success' => false, 'message' => 'Unauthorized']); exit; }
-    $email = strtolower($_SESSION['user_email']);
-    $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $currentNotifications = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($currentNotifications && !empty($currentNotifications['notifications'])) {
-        $notificationsData = json_decode($currentNotifications['notifications'], true);
-        if (is_array($notificationsData)) {
-            foreach ($notificationsData as $id => &$notification) {
-                if ($notification['update'] === 'new') $notification['update'] = 'read';
+    if (empty($matchedLink)) {
+        foreach ($brokerLinks as $name => $link) {
+            if (strpos(strtolower($name), $userBrokerNormalized) !== false) {
+                $matchedLink = $link;
+                break;
             }
-            $updatedNotifications = json_encode($notificationsData);
-            $upd = $pdo->prepare("UPDATE $tableName SET notifications = ? WHERE email = ?");
-            $upd->execute([$updatedNotifications, $email]);
-            echo json_encode(['success' => true, 'message' => 'Notifications marked as read']);
+        }
+    }
+
+    if (empty($matchedLink) && isset($brokerLinks['harvhub'])) {
+        $matchedLink = $brokerLinks['harvhub'];
+    }
+    if (empty($matchedLink) && !empty($brokerLinks)) {
+        $first = reset($brokerLinks);
+        if (!empty($first)) $matchedLink = $first;
+    }
+
+    if (!empty($matchedLink)) {
+        $brokerLink = (strpos($matchedLink, '://') === false) ? 'https://' . $matchedLink : $matchedLink;
+    }
+
+    $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
+
+    // ==================== POST HANDLING ====================
+
+    // Toggle Balance Display
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_balance_display'])) {
+        $currentStatus = $user['balance_display'];
+        $newStatus = ($currentStatus === 'show') ? 'hide' : 'show';
+
+        $upd = $pdo->prepare("UPDATE $tableName SET balance_display = ? WHERE email = ?");
+        $upd->execute([$newStatus, $email]);
+
+        if ($newStatus === 'show') unset($_SESSION['password_verified']);
+        unset($_SESSION['password_error']);
+        $_SESSION['prg_redirect_safe'] = true;
+        $_SESSION['toggle_success_message'] = "Balance display toggled to " . ucfirst($newStatus) . ".";
+
+        header("Location: mydashboard.php?redirect_to_app=1", true, 303);
+        exit;
+    }
+
+    // Handle enrollment
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reenroll'])) {
+        $today   = date('Y-m-d');
+        $endDate = date('Y-m-d', strtotime("+{$CONTRACT_DURATION} days", strtotime($today)));
+
+        $startFormatted = date('dmY', strtotime($today));
+        $endFormatted   = date('dmY', strtotime($endDate));
+        $contractId     = "sd-{$startFormatted}-ed-{$endFormatted}";
+
+        $stmt = $pdo->prepare("SELECT broker_balance FROM $tableName WHERE email = ?");
+        $stmt->execute([$email]);
+        $currentData     = $stmt->fetch(PDO::FETCH_ASSOC);
+        $startingBalance = (float)($currentData['broker_balance'] ?? 0);
+
+        $insertStmt = $pdo->prepare("
+            INSERT INTO $revenueHistoryTable
+            (user_email, contract_id, execution_start_date, execution_end_date, starting_balance, current_balance, profit, user_share, server_share, loyalties, invested_with)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $insertStmt->execute([
+            $email,
+            $contractId,
+            $today,
+            $endDate,
+            $startingBalance,
+            $startingBalance,
+            0,
+            0,
+            0,
+            'active',
+            $DEVELOPER_NAME ?: null
+        ]);
+
+        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, contract_id = ?, reset_contract = 0 WHERE email = ?");
+        $upd->execute([$today, $contractId, $email]);
+
+        unset($_SESSION['reenroll_password_verified']);
+        unset($_SESSION['reenroll_password_verified_time']);
+
+        $_SESSION['prg_redirect_safe'] = true;
+        $_SESSION['enroll_success_message'] = "Contract enrolled successfully! Your " . $CONTRACT_DURATION . "-day contract has started.";
+
+        header("Location: mydashboard.php?redirect_to_app=1", true, 303);
+        exit;
+    }
+
+    // Handle Apply for Verification
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_for_verification'])) {
+        try {
+            $upd = $pdo->prepare("UPDATE $tableName SET balance_verification = 'applied-for-verification' WHERE email = ?");
+            $upd->execute([$email]);
+
+            $_SESSION['apply_success_message'] = "Your application has been submitted successfully!";
+            $_SESSION['apply_success_details'] = "Our team will verify your account. Please ensure you have deposited the minimum required amount of $" . number_format($MIN_INITIAL_DEPOSIT, 2) . ".";
+            $_SESSION['prg_redirect_safe'] = true;
+
+            header("Location: mydashboard.php?redirect_to_app=1", true, 303);
+            exit;
+        } catch (Exception $e) {
+            $_SESSION['apply_error'] = "An error occurred. Please try again.";
+            header("Location: mydashboard.php?redirect_to_app=1", true, 303);
             exit;
         }
     }
-    echo json_encode(['success' => false, 'message' => 'No notifications to mark']);
-    exit;
-}
 
-// AJAX: check new
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_new_notifications'])) {
-    header('Content-Type: application/json');
-    if (!isset($_SESSION['user_email'])) { echo json_encode(['success' => false, 'message' => 'Unauthorized']); exit; }
-    $email = strtolower($_SESSION['user_email']);
-    $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $currentNotifications = $stmt->fetch(PDO::FETCH_ASSOC);
-    $unread = 0;
-    if ($currentNotifications && !empty($currentNotifications['notifications'])) {
-        $notificationsData = json_decode($currentNotifications['notifications'], true);
-        if (is_array($notificationsData)) {
-            foreach ($notificationsData as $notification) {
-                if (isset($notification['update']) && $notification['update'] === 'new') $unread++;
-            }
+    // Handle Reset Contract
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_reset_contract'])) {
+        if ($latestRevenueRecord && $latestRevenueRecord['loyalties'] !== 'payment-confirmed') {
+            updateRevenueHistoryLoyalties($pdo, $revenueHistoryTable, $email, 'payment-confirmed');
         }
-    }
-    echo json_encode(['success' => true, 'unread_count' => $unread]);
-    exit;
-}
 
-// AJAX: get list
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_notifications_list'])) {
-    header('Content-Type: application/json');
-    if (!isset($_SESSION['user_email'])) { echo json_encode(['success' => false, 'message' => 'Unauthorized']); exit; }
-    $email = strtolower($_SESSION['user_email']);
-    $stmt = $pdo->prepare("SELECT notifications FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $notifications = [];
-    $unread = 0;
-    if (!empty($result['notifications'])) {
-        $notificationsData = json_decode($result['notifications'], true);
-        if (is_array($notificationsData)) {
-            foreach ($notificationsData as $id => $notification) {
-                if (isset($notification['update']) && $notification['update'] === 'new') $unread++;
-                $message = $notification['message'] ?? '';
-                $message = preg_replace('/^[\?\?]+\s*/', '', $message);
-                $message = preg_replace('/[\?\?]/', '', $message);
-                $message = preg_replace('/[\x{1F300}-\x{1F6FF}]/u', '', $message);
-                $notifications[] = [
-                    'id'      => $id,
-                    'section' => $notification['section'] ?? 'General',
-                    'message' => trim($message),
-                    'time'    => $notification['time'] ?? date('Y-m-d H:i:s'),
-                    'type'    => $notification['type'] ?? 'info',
-                    'update'  => $notification['update'] ?? 'read'
-                ];
-            }
-            usort($notifications, function($a, $b) {
-                return strtotime($b['time']) - strtotime($a['time']);
-            });
+        $resetData = [
+            'broker_balance'      => 0,
+            'profitandloss'       => 0,
+            'contract_id'         => NULL,
+            'execution_start_date'=> NULL,
+            'balance_verification'=> 'not-verified',
+            'reset_contract'      => 0,
+            'recent_highest_balance' => NULL,
+            'recent_highest_balance_last_update' => NULL,
+            'loyalties'           => NULL
+        ];
+
+        $setClauses = []; $params = [];
+        foreach ($resetData as $key => $value) {
+            $setClauses[] = "$key = ?";
+            $params[] = $value;
         }
+        $params[] = $email;
+
+        $upd = $pdo->prepare("UPDATE $tableName SET " . implode(', ', $setClauses) . " WHERE email = ?");
+        $upd->execute($params);
+
+        $_SESSION['prg_redirect_safe'] = true;
+        $_SESSION['reset_success_message'] = "Your contract has been reset successfully. Please apply for verification to start a new contract.";
+
+        header("Location: mydashboard.php?redirect_to_app=1", true, 303);
+        exit;
     }
-    echo json_encode(['success' => true, 'notifications' => $notifications, 'unread_count' => $unread]);
-    exit;
-}
 
-// ==================== AJAX: LIVE STATE ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
-    header('Content-Type: application/json');
+    // Logout
+    if (isset($_GET['logout'])) {
+        session_unset();
+        session_destroy();
+        header("Location: index.php");
+        exit;
+    }
 
-    if (!isset($_SESSION['user_email'])) { echo json_encode(['error' => 'Unauthorized']); exit; }
+    // ==================== AJAX: LIVE STATE (every 1s poll) ====================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST'
+        && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
+        && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
 
-    $email = strtolower($_SESSION['user_email']);
+        while (ob_get_level() > 0) { ob_end_clean(); }
 
-    $stmt = $pdo->prepare("SELECT id, broker_balance, profitandloss, loyalties, execution_start_date, broker, server, login, application_status, balance_verification, reset_contract FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
 
-    if ($liveUser) {
-        // Re-resolve active investment on each poll
+        if (!isset($_SESSION['user_email'])) {
+            echo json_encode(['error' => 'Unauthorized']);
+            exit;
+        }
+
+        $email = strtolower($_SESSION['user_email']);
+
+        $stmt = $pdo->prepare("
+            SELECT id, fullname, broker, server, login, broker_balance, profitandloss,
+                   loyalties, execution_start_date, application_status, balance_verification,
+                   reset_contract, recent_highest_balance, balance_display
+            FROM $tableName WHERE email = ?
+        ");
+        $stmt->execute([$email]);
+        $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$liveUser) {
+            echo json_encode(['error' => 'User not found']);
+            exit;
+        }
+
         $liveInvestment = null;
         try {
             $s = $pdo->prepare("SELECT * FROM $programmeInvestorsTable WHERE investorid = ? ORDER BY invested_at DESC, id DESC LIMIT 1");
@@ -1045,92 +831,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
         $liveHasProgramme = ($liveInvestment && !empty($liveInvestment['programme_id']));
 
-        // ==================== SYNC ACCOUNT MANAGEMENT FROM DEVELOPER ====================
-        // Copy the developer's master account management settings into the
-        // investor's own row on every live-state poll. Runs silently so a
-        // failure never breaks the dashboard poll.
-        if ($liveHasProgramme && !empty($liveInvestment['developerid'])) {
-            $liveDeveloperId = (int)$liveInvestment['developerid'];
-            $liveUserId = (int)$liveUser['id'];
-
-            try {
-                $stmtMaster = $pdo->prepare("
-                    SELECT * FROM accountmanagement
-                    WHERE developerid = ? AND investorid = 0
-                    LIMIT 1
-                ");
-                $stmtMaster->execute([$liveDeveloperId]);
-                $masterRow = $stmtMaster->fetch(PDO::FETCH_ASSOC);
-
-                if ($masterRow) {
-                    $syncColumns = [
-                        'enable_risk_reward_correction',
-                        'minimum_risk_reward',
-                        'fixed_risk_reward',
-                        'enable_breakeven',
-                        'breakeven_dictionary',
-                        'restrictions_duration',
-                        'minimum_balance_risk_distance',
-                        'maximum_balance_risk_distance',
-                        'account_balance_default_risk_management',
-                        'account_balance_maximum_risk_management',
-                        'daily_target_config',
-                        'restrict_order_from_timeframe',
-                        'use_recent_highest_balance_as_current_balance',
-                        'additional_configurations',
-                        'skip_orders_close_to_position',
-                        'cancel_orders_close_to_position',
-                        'also_restrict_opposite_order_too_close_to_position',
-                        'switch_invalid_to_instant_order',
-                        'enable_order_type_conversion',
-                    ];
-
-                    $values = [];
-                    foreach ($syncColumns as $col) {
-                        $values[] = $masterRow[$col] ?? null;
-                    }
-
-                    $stmtInv = $pdo->prepare("
-                        SELECT id FROM accountmanagement
-                        WHERE developerid = ? AND investorid = ?
-                        LIMIT 1
-                    ");
-                    $stmtInv->execute([$liveDeveloperId, $liveUserId]);
-                    $investorRow = $stmtInv->fetch(PDO::FETCH_ASSOC);
-
-                    if ($investorRow) {
-                        $setParts = [];
-                        foreach ($syncColumns as $col) {
-                            $setParts[] = "`$col` = ?";
-                        }
-                        $sql = "UPDATE accountmanagement SET " . implode(', ', $setParts)
-                             . " WHERE developerid = ? AND investorid = ?";
-                        $values[] = $liveDeveloperId;
-                        $values[] = $liveUserId;
-                        $upd = $pdo->prepare($sql);
-                        $upd->execute($values);
-                    } else {
-                        $insCols = array_merge(['developerid', 'investorid'], $syncColumns);
-                        $placeholders = implode(',', array_fill(0, count($insCols), '?'));
-                        $sql = "INSERT INTO accountmanagement (`"
-                             . implode('`,`', $insCols) . "`) VALUES ($placeholders)";
-                        $ins = $pdo->prepare($sql);
-                        $ins->execute(array_merge([$liveDeveloperId, $liveUserId], $values));
-                    }
-                }
-            } catch (PDOException $e) {
-                // Silent fail — don't break the live-state response
-            }
-        }
-        // ==================== END SYNC ACCOUNT MANAGEMENT ====================
-
-        // Resolve per-programme overrides on each poll
         $liveContractDuration    = (int)($serverAccount['contract_duration'] ?? 30);
         $liveMinBrokerBalance    = (float)($serverAccount['min_broker_balance'] ?? 0);
         $liveMinInitialDeposit   = $liveMinBrokerBalance;
         $liveMinProfitSplit      = (float)($serverAccount['min_profit_for_split'] ?? 30);
         $liveServerSharePercent  = (int)($serverAccount['server_share_percent'] ?? 30);
         $liveUserSharePercent    = (int)($serverAccount['user_share_percent'] ?? 70);
+
+        $liveProgrammeName = '';
+        $liveDeveloperName = '';
 
         if ($liveHasProgramme) {
             $pi_cd  = (int)($liveInvestment['contract_duration'] ?? 0);
@@ -1141,9 +850,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
             if ($pi_min > 0) { $liveMinBrokerBalance = $pi_min; $liveMinInitialDeposit = $pi_min; }
             if ($pi_dev > 0) $liveServerSharePercent = $pi_dev;
             if ($pi_inv > 0) $liveUserSharePercent   = $pi_inv;
+
+            if (!empty($liveInvestment['programme_id'])) {
+                try {
+                    $p = $pdo->prepare("SELECT program_name FROM $programmeTable WHERE id = ? LIMIT 1");
+                    $p->execute([(int)$liveInvestment['programme_id']]);
+                    $rowP = $p->fetch(PDO::FETCH_ASSOC);
+                    if ($rowP) $liveProgrammeName = $rowP['program_name'] ?? '';
+                } catch (PDOException $e) {}
+            }
+
+            if (!empty($liveInvestment['developerid'])) {
+                try {
+                    $d = $pdo->prepare("SELECT fullname FROM $tableName WHERE id = ? LIMIT 1");
+                    $d->execute([(int)$liveInvestment['developerid']]);
+                    $rowD = $d->fetch(PDO::FETCH_ASSOC);
+                    if ($rowD) $liveDeveloperName = $rowD['fullname'] ?? '';
+                } catch (PDOException $e) {}
+            }
         }
 
-        // VPS check
         $liveUserId = (int)$liveUser['id'];
         $liveUserHasVps = false;
         try {
@@ -1161,13 +887,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
         $latestRevenueRecord = getLatestRevenueHistory($pdo, $revenueHistoryTable, $email);
 
-        $brokerBalance      = (float)($liveUser['broker_balance'] ?? 0);
-        $profitAndLoss      = (float)($liveUser['profitandloss'] ?? 0);
-        $currentBalance     = $brokerBalance + $profitAndLoss;
-        $executionStartDate = $liveUser['execution_start_date'] ?? null;
-        $loyaltiesStatus    = $liveUser['loyalties'] ?? null;
+        $brokerBalance        = (float)($liveUser['broker_balance'] ?? 0);
+        $profitAndLoss        = (float)($liveUser['profitandloss'] ?? 0);
+        $currentBalance       = $brokerBalance + $profitAndLoss;
+        $executionStartDate   = $liveUser['execution_start_date'] ?? null;
+        $loyaltiesStatus      = $liveUser['loyalties'] ?? null;
         $balanceVerificationStatus = $liveUser['balance_verification'] ?? 'not-verified';
-        $resetContractStatus = (int)($liveUser['reset_contract'] ?? 0);
+        $resetContractStatus  = (int)($liveUser['reset_contract'] ?? 0);
+        $recentHighestBalance = (float)($liveUser['recent_highest_balance'] ?? 0);
+
+        if ($currentBalance > $recentHighestBalance) {
+            try {
+                $updPeak = $pdo->prepare("UPDATE $tableName SET recent_highest_balance = ?, recent_highest_balance_last_update = CURDATE() WHERE email = ?");
+                $updPeak->execute([$currentBalance, $email]);
+                $recentHighestBalance = $currentBalance;
+            } catch (PDOException $e) {}
+        }
 
         $contractDaysLeft = 0;
         $is_contract_active = false;
@@ -1192,6 +927,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
             else                        { $is_contract_active = true; }
         }
 
+        $balance_unverified         = false;
+        $balance_under_verification = false;
+        $balance_check_failed       = false;
+
+        if ($balanceVerificationStatus === 'not-verified' || empty($balanceVerificationStatus)) {
+            $balance_unverified = true;
+        } elseif ($balanceVerificationStatus === 'applied-for-verification') {
+            $balance_under_verification = true;
+        } elseif ($balanceVerificationStatus === 'verified' && $brokerBalance < $liveMinInitialDeposit) {
+            $balance_check_failed = true;
+        }
+
+        $liveBrokerConnected = (!empty($liveUser['broker']) && !empty($liveUser['server']) && !empty($liveUser['login']));
+
         $ajaxState = determineDashboardState(
             $liveUser,
             [
@@ -1204,32 +953,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
             (bool)$liveHasProgramme
         );
 
-        // Recompute live developer name for programme if present
-        $liveDeveloperName = '';
-        if ($liveHasProgramme && !empty($liveInvestment['developerid'])) {
-            try {
-                $d = $pdo->prepare("SELECT fullname FROM $tableName WHERE id = ? LIMIT 1");
-                $d->execute([(int)$liveInvestment['developerid']]);
-                $rowD = $d->fetch(PDO::FETCH_ASSOC);
-                if ($rowD) $liveDeveloperName = $rowD['fullname'] ?? '';
-            } catch (PDOException $e) {}
-        }
-
         echo json_encode([
             'success'                       => true,
-            'deposit_balance'               => number_format($brokerBalance, 2),
-            'profit_loss'                   => number_format($profitAndLoss, 2),
-            'current_balance'               => number_format($currentBalance, 2),
+
+            // Balances
+            'deposit_balance'               => number_format($brokerBalance, 2, '.', ''),
+            'profit_loss'                   => number_format($profitAndLoss, 2, '.', ''),
+            'current_balance'               => number_format($currentBalance, 2, '.', ''),
+            'recent_highest_balance'        => number_format($recentHighestBalance, 2, '.', ''),
             'profit_loss_class'             => $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative',
             'current_balance_class'         => $currentBalance >= 0 ? 'profit-positive' : 'profit-negative',
+            'peak_above'                    => ($recentHighestBalance > $currentBalance),
+
+            // Contract dates
             'contract_days_left'            => $is_contract_active ? $contractDaysLeft : 0,
             'is_contract_active'            => $is_contract_active,
             'contract_completed'            => $contract_completed,
             'formatted_start_date'          => $formatted_start_date,
             'formatted_end_date'            => $formatted_end_date,
+            'contract_duration'             => $liveContractDuration,
+
+            // Balance card state
+            'balance_unverified'            => $balance_unverified,
+            'balance_under_verification'    => $balance_under_verification,
+            'balance_check_failed'          => $balance_check_failed,
+            'min_initial_deposit'           => $liveMinInitialDeposit,
+
+            // Connectivity
+            'broker_connected'              => $liveBrokerConnected,
+            'user_has_vps'                  => $liveUserHasVps,
+            'has_programme'                 => $liveHasProgramme,
+
+            // Programme identity
+            'programme_name'                => $liveProgrammeName,
+            'developer_name'                => $liveDeveloperName,
+
+            // Contract settings
+            'min_profit_for_split'          => $liveMinProfitSplit,
+            'min_broker_balance'            => $liveMinBrokerBalance,
+            'server_share_percent'          => $liveServerSharePercent,
+            'user_share_percent'            => $liveUserSharePercent,
+
+            // Loyalties / state
             'loyalties_status'              => $loyaltiesStatus,
             'balance_verification_status'   => $balanceVerificationStatus,
             'reset_contract'                => $resetContractStatus,
+
+            // State machine output
             'show_explore_programme'        => $ajaxState['show_explore_programme'] ?? false,
             'show_get_vps'                  => $ajaxState['show_get_vps'] ?? false,
             'show_reset_button'             => $ajaxState['show_reset_button'],
@@ -1240,73 +1010,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
             'show_connect_broker'           => $ajaxState['show_connect_broker'] ?? false,
             'show_find_manager'             => $ajaxState['show_find_manager'] ?? false,
             'show_payment_confirmed_notice' => $ajaxState['show_payment_confirmed_notice'] ?? false,
+
+            // State machine strings
             'loyalties_message'             => $ajaxState['loyalties_message'],
             'loyalty_text'                  => $ajaxState['loyalty_text'],
             'loyalty_btn_text'              => $ajaxState['loyalty_btn_text'],
             'loyalty_btn_class'             => $ajaxState['loyalty_btn_class'],
             'loyalty_btn_action'            => $ajaxState['loyalty_btn_action'],
             'dashboard_disclaimer'          => $ajaxState['dashboard_disclaimer'],
+
+            // Extras
             'broker'                        => strtolower($liveUser['broker'] ?? 'unknown'),
-            'profit_to_split'               => number_format(max(0, $profitAndLoss), 2),
-            'balance_check_failed'          => ($balanceVerificationStatus === 'verified' && $brokerBalance < $liveMinInitialDeposit),
-            'min_initial_deposit'           => $liveMinInitialDeposit,
-            'broker_connected'              => (!empty($liveUser['broker']) && !empty($liveUser['server']) && !empty($liveUser['login'])),
+            'profit_to_split'               => number_format(max(0, $profitAndLoss), 2, '.', ''),
             'application_status'            => $liveUser['application_status'] ?? '',
-            'user_has_vps'                  => $liveUserHasVps,
-            'has_programme'                 => $liveHasProgramme,
-            'programme_name'                => $liveHasProgramme && $liveInvestment ? ($liveInvestment['programme_id']) : null,
-            'developer_name'                => $liveDeveloperName,
-            'contract_duration'             => $liveContractDuration,
-            'min_broker_balance'            => $liveMinBrokerBalance,
-            'server_share_percent'          => $liveServerSharePercent,
-            'user_share_percent'            => $liveUserSharePercent
         ]);
-    } else {
-        echo json_encode(['error' => 'User not found']);
+        exit;
     }
-    exit;
-}
 
-// ==================== MAP ACTION TO ONCLICK ====================
-$loyalty_btn_onclick = '';
-switch ($loyalty_btn_action) {
-    case 'explore_programme':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'programmes.php\'"';
-        break;
-    case 'get_vps':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'vps.php\'"';
-        break;
-    case 'enroll':
-        $loyalty_btn_onclick = 'onclick="openReenrollModal()"';
-        break;
-    case 'profit_split_redirect':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'profit_split.php\'"';
-        break;
-    case 'payment_failed_redirect':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'profit_split.php?retry=1\'"';
-        break;
-    case 'deposit':
-        $loyalty_btn_onclick = 'onclick="window.open(\'' . $brokerTarget . '\', \'_blank\')"';
-        break;
-    case 'reset':
-        $loyalty_btn_onclick = 'onclick="openResetModal()"';
-        break;
-    case 'apply':
-        $loyalty_btn_onclick = 'onclick="openApplyModal()"';
-        break;
-    case 'connect_broker':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'app.php#connect_investor_broker\'"';
-        break;
-    case 'find_manager':
-        $loyalty_btn_onclick = 'onclick="window.location.href=\'programmes.php\'"';
-        break;
-    default:
-        $loyalty_btn_onclick = '';
-        break;
-}
+    // ==================== MAP ACTION TO ONCLICK ====================
+    $loyalty_btn_onclick = '';
+    switch ($loyalty_btn_action) {
+        case 'explore_programme':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'programmes.php\'"';
+            break;
+        case 'get_vps':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'vps.php\'"';
+            break;
+        case 'enroll':
+            $loyalty_btn_onclick = 'onclick="openReenrollModal()"';
+            break;
+        case 'profit_split_redirect':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'profit_split.php\'"';
+            break;
+        case 'payment_failed_redirect':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'profit_split.php?retry=1\'"';
+            break;
+        case 'deposit':
+            $loyalty_btn_onclick = 'onclick="window.open(\'' . $brokerTarget . '\', \'_blank\')"';
+            break;
+        case 'reset':
+            $loyalty_btn_onclick = 'onclick="openResetModal()"';
+            break;
+        case 'apply':
+            $loyalty_btn_onclick = 'onclick="openApplyModal()"';
+            break;
+        case 'connect_broker':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'app.php#connect_investor_broker\'"';
+            break;
+        case 'find_manager':
+            $loyalty_btn_onclick = 'onclick="window.location.href=\'programmes.php\'"';
+            break;
+        default:
+            $loyalty_btn_onclick = '';
+            break;
+    }
 
-$applySuccessMessage = isset($_SESSION['apply_success_message']) ? $_SESSION['apply_success_message'] : null;
-$applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['apply_success_details'] : null;
+    $applySuccessMessage = isset($_SESSION['apply_success_message']) ? $_SESSION['apply_success_message'] : null;
+    $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['apply_success_details'] : null;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1321,24 +1081,27 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
 
 <div class="mydashboard-box">
 
-    <?php if ($contract_completed && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT && $profitAndLoss > 0): ?>
-        <div class="threshold-warning">
-            <span class="warning-icon">!</span>
+    <div id="thresholdWarning" class="threshold-warning" style="<?= ($contract_completed && $profitAndLoss <= $MIN_PROFIT_FOR_SPLIT && $profitAndLoss > 0) ? '' : 'display:none;' ?>">
+        <span class="warning-icon">!</span>
+        <span id="thresholdWarningText">
             Your profit of $<?= number_format($profitAndLoss, 2) ?> is below the minimum split threshold of $<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?>. No profit split required - you can enroll directly.
-        </div>
-    <?php endif; ?>
+        </span>
+    </div>
 
     <!-- Account Header -->
     <div class="account-header">
         <div class="account-info">
             <?php if ($hasProgramme && $DEVELOPER_NAME): ?>
-                <span class="account-label"><?= htmlspecialchars($DEVELOPER_NAME) ?>'s Programme</span>
+                <span class="account-label" id="accountDeveloperLabel"><?= htmlspecialchars($DEVELOPER_NAME) ?>'s Programme</span>
                 <?php if ($PROGRAMME_NAME): ?>
-                    <span class="account-number"><?= htmlspecialchars($PROGRAMME_NAME) ?></span>
+                    <span class="account-number" id="accountProgrammeName"><?= htmlspecialchars($PROGRAMME_NAME) ?></span>
+                <?php else: ?>
+                    <span class="account-number" id="accountProgrammeName" style="display:none;"></span>
                 <?php endif; ?>
+            <?php else: ?>
+                <span class="account-label" id="accountDeveloperLabel" style="display:none;"></span>
+                <span class="account-number" id="accountProgrammeName" style="display:none;"></span>
             <?php endif; ?>
-        </div>
-        <div class="account-actions" style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border-color); padding-top: 14px;">
         </div>
         <div class="account-info">
             <span class="account-label">Account</span>
@@ -1346,33 +1109,24 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
             <span class="account-server"><?= htmlspecialchars($server) ?></span>
         </div>
         <div class="account-info">
-            <?php if (!empty($dashboard_disclaimer)): ?>
-                <span class="account-label"><?= htmlspecialchars($dashboard_disclaimer) ?>
-                <?php if ($loyaltiesStatus === 'unpaid-payment'): ?>
-                    <span class="payment-required-badge">Payment Required</span>
-                <?php endif; ?>
-                </span>
-            <?php endif; ?>
+            <span class="account-label" id="dashboardDisclaimer">
+                <?= htmlspecialchars($dashboard_disclaimer) ?>
+                <span class="payment-required-badge" id="paymentRequiredBadge" style="<?= ($loyaltiesStatus === 'unpaid-payment') ? '' : 'display:none;' ?>">Payment Required</span>
+            </span>
         </div>
         <div class="account-info">
-            <?php if ($profitAndLoss < 0 && $contract_completed): ?>
-                <span class="account-label">Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!</span>
-            <?php endif; ?>
+            <span class="account-label" id="encouragementNote" style="<?= ($profitAndLoss < 0 && $contract_completed) ? '' : 'display:none;' ?>">
+                Don't give up! Every loss is a setup for a greater comeback. Your next contract could be your breakthrough!
+            </span>
         </div>
 
         <div class="account-actions" style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border-color); padding-top: 14px;">
             <?php if (!$hasProgramme): ?>
-                <a href="programmes.php" class="btn-account-action btn-get-vps">
-                    Explore Programme
-                </a>
+                <a href="programmes.php" class="btn-account-action btn-get-vps">Explore Programme</a>
             <?php elseif (!$userHasVps): ?>
-                <a href="vps.php" class="btn-account-action btn-get-vps">
-                    Get VPS
-                </a>
+                <a href="vps.php" class="btn-account-action btn-get-vps">Get VPS</a>
             <?php elseif (!$broker_connected): ?>
-                <a href="#connect_investor_broker" class="btn-account-action btn-connect-broker">
-                    Connect Broker
-                </a>
+                <a href="#connect_investor_broker" class="btn-account-action btn-connect-broker">Connect Broker</a>
             <?php endif; ?>
         </div>
     </div>
@@ -1428,12 +1182,18 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
             </button>
         </div>
 
-        <!-- Profit & Loss Card -->
+        <!-- Profit & Loss Card (with inline chart) -->
         <div class="stat-card pnl-card">
             <div class="card-label">Profit & Loss</div>
-            <div class="card-value <?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
-                <span class="currency-symbol">$</span>
-                <span class="value-amount"><?= number_format($profitAndLoss, 2) ?></span>
+            <div class="card-value-row">
+                <div class="card-value <?= $profitAndLoss >= 0 ? 'profit-positive' : 'profit-negative' ?>">
+                    <span class="currency-symbol">$</span>
+                    <span class="value-amount"><?= number_format($profitAndLoss, 2) ?></span>
+                </div>
+
+                <div class="chart-bars-container">
+                    <div class="chart-bars-wrapper" id="chartBarsWrapper"></div>
+                </div>
             </div>
             <div class="card-sub">Yield Performance</div>
             <div class="pnl-indicator <?= $profitAndLoss > 0 ? 'positive' : ($profitAndLoss < 0 ? 'negative' : 'neutral') ?>">
@@ -1443,9 +1203,133 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
                 else echo '— Static';
                 ?>
             </div>
+
+            <script>
+                // =================================================================
+                // Chart state — caches the last rendered values and the last
+                // rendered broker-connected flag, so we only touch the DOM when
+                // something actually changed.
+                // =================================================================
+                window.__chartState = window.__chartState || {
+                    start: null,
+                    current: null,
+                    brokerConnected: null
+                };
+
+                function renderChartBars(force, overrideStart, overrideCurrent, overrideConnected) {
+                    var wrapper = document.getElementById('chartBarsWrapper');
+                    if (!wrapper) return;
+
+                    var startingBalance = (typeof overrideStart === 'number')
+                        ? overrideStart
+                        : <?php echo isset($depositBalance) ? (float)$depositBalance : 0; ?>;
+                    var currentBalance  = (typeof overrideCurrent === 'number')
+                        ? overrideCurrent
+                        : <?php echo isset($currentBalance) ? (float)$currentBalance : 0; ?>;
+                    var brokerConnected = (typeof overrideConnected === 'boolean')
+                        ? overrideConnected
+                        : <?php echo $broker_connected ? 'true' : 'false'; ?>;
+
+                    if (!brokerConnected) {
+                        if (wrapper.children.length !== 0) wrapper.innerHTML = '';
+                        window.__chartState.start = startingBalance;
+                        window.__chartState.current = currentBalance;
+                        window.__chartState.brokerConnected = false;
+                        return;
+                    }
+
+                    // If nothing changed and we already have 9 bars, do nothing.
+                    var state = window.__chartState;
+                    if (!force &&
+                        state.start !== null &&
+                        state.current !== null &&
+                        state.brokerConnected === true &&
+                        Math.abs(state.start   - startingBalance) < 0.005 &&
+                        Math.abs(state.current - currentBalance)  < 0.005 &&
+                        wrapper.children.length === 9) {
+                        return;
+                    }
+
+                    state.start = startingBalance;
+                    state.current = currentBalance;
+                    state.brokerConnected = true;
+
+                    var totalBars = 9;
+                    var isProfit    = currentBalance > startingBalance;
+                    var isBreakEven = Math.abs(currentBalance - startingBalance) < 0.005;
+
+                    var containerHeight = wrapper.offsetHeight || 50;
+                    var usableHeight = containerHeight - 2;
+
+                    var minBarHeight = 1;
+                    var maxBarHeight = Math.max(usableHeight, minBarHeight + (totalBars - 1));
+                    var step = (maxBarHeight - minBarHeight) / (totalBars - 1);
+
+                    var bars = [];
+
+                    if (isBreakEven) {
+                        for (var i = 0; i < totalBars; i++) {
+                            var h = minBarHeight + step * i;
+                            bars.push({ height: h, color: 'equal' });
+                        }
+                    } else if (isProfit) {
+                        for (var i = 0; i < totalBars; i++) {
+                            var h = minBarHeight + step * i;
+                            bars.push({ height: h, color: 'green' });
+                        }
+                    } else {
+                        for (var i = 0; i < totalBars; i++) {
+                            var h = maxBarHeight - step * i;
+                            bars.push({ height: h, color: 'red' });
+                        }
+                    }
+
+                    var html = '';
+                    for (var i = 0; i < bars.length; i++) {
+                        html += '<div class="chart-bar-item">' +
+                                '<div class="chart-bar ' + bars[i].color + '" ' +
+                                'style="height:' + bars[i].height.toFixed(2) + 'px;"></div>' +
+                                '</div>';
+                    }
+                    wrapper.innerHTML = html;
+
+                    window.chartData = {
+                        startingBalance: startingBalance,
+                        currentBalance: currentBalance,
+                        profitAndLoss: currentBalance - startingBalance
+                    };
+                }
+
+                function updateChartBars() { renderChartBars(true); }
+
+                function handleResize() {
+                    var wrapper = document.getElementById('chartBarsWrapper');
+                    if (wrapper && wrapper.children.length > 0) renderChartBars(true);
+                }
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        renderChartBars(true);
+                        window.addEventListener('resize', handleResize);
+                    });
+                } else {
+                    renderChartBars(true);
+                    window.addEventListener('resize', handleResize);
+                }
+
+                // Only rebuild if the wrapper was wiped out by something else.
+                var observer = new MutationObserver(function() {
+                    var wrapper = document.getElementById('chartBarsWrapper');
+                    if (wrapper && wrapper.children.length === 0) renderChartBars(true);
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+
+                window.renderChartBars = renderChartBars;
+                window.updateChartBars = updateChartBars;
+            </script>
         </div>
 
-        <!-- Current Balance Card -->
+        <!-- Current Balance Card (with Peak Balance badge) -->
         <div class="stat-card current-balance-card">
             <div class="card-label">Current Balance</div>
             <div class="card-value-row">
@@ -1454,8 +1338,15 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
                     <span class="value-amount"><?= number_format($currentBalance, 2) ?></span>
                 </div>
 
-                <div class="chart-bars-container">
-                    <div class="chart-bars-wrapper" id="chartBarsWrapper"></div>
+                <?php
+                $peakBalance = $recentHighestBalance;
+                $isPeakAbove = ($peakBalance > $currentBalance);
+                ?>
+                <div class="peak-balance <?= $isPeakAbove ? 'peak-above' : '' ?>">
+                    <span class="peak-label">Peak</span>
+                    <span class="peak-value">
+                        <span class="peak-currency">$</span><span class="peak-amount"><?= number_format($peakBalance, 2) ?></span>
+                    </span>
                 </div>
             </div>
             <div class="card-sub">Harvest Value</div>
@@ -1466,156 +1357,58 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
                 else echo '— Fallow';
                 ?>
             </div>
-
-            <script>
-                function renderChartBars() {
-                    var wrapper = document.getElementById('chartBarsWrapper');
-                    if (!wrapper) return;
-
-                    var startingBalance = <?php echo isset($depositBalance) ? $depositBalance : 0; ?>;
-                    var currentBalance  = <?php echo isset($currentBalance) ? $currentBalance : 0; ?>;
-                    var profitAndLoss   = <?php echo isset($profitAndLoss) ? $profitAndLoss : 0; ?>;
-                    var brokerConnected = <?php echo $broker_connected ? 'true' : 'false'; ?>;
-
-                    if (!brokerConnected) { wrapper.innerHTML = ''; return; }
-
-                    var totalBars = 9;
-                    var isProfit = currentBalance > startingBalance;
-                    var isBreakEven = Math.abs(currentBalance - startingBalance) < 0.01;
-
-                    var containerHeight = wrapper.offsetHeight || 50;
-                    var usableHeight = containerHeight - 2;
-                    var maxHeightPercent = 0.95;
-                    var minHeightPercent = 0.05;
-
-                    var bars = [];
-
-                    if (isBreakEven) {
-                        var height = usableHeight * 0.5;
-                        for (var i = 0; i < totalBars; i++) bars.push({ height: height, color: 'equal' });
-                    } else if (isProfit) {
-                        for (var i = 0; i < totalBars; i++) {
-                            var progress = i / (totalBars - 1);
-                            var easedProgress = progress * progress * (3 - 2 * progress);
-                            var valueAtPoint = startingBalance + (currentBalance - startingBalance) * easedProgress;
-                            var minValue = Math.min(startingBalance, currentBalance, 0);
-                            var maxValue = Math.max(startingBalance, currentBalance, 0.01);
-                            var heightPercent = (valueAtPoint - minValue) / (maxValue - minValue);
-                            var clampedPercent = Math.max(0, Math.min(1, heightPercent));
-                            var height = (minHeightPercent + (maxHeightPercent - minHeightPercent) * clampedPercent) * usableHeight;
-                            bars.push({ height: height, color: 'green' });
-                        }
-                    } else {
-                        var minValue = Math.min(startingBalance, currentBalance);
-                        var maxValue = Math.max(startingBalance, currentBalance);
-                        var range = maxValue - minValue;
-                        for (var i = 0; i < totalBars; i++) {
-                            var progress = i / (totalBars - 1);
-                            var valueAtPoint = startingBalance + (currentBalance - startingBalance) * progress;
-                            var heightPercent = (valueAtPoint - minValue) / (range || 0.01);
-                            var clampedPercent = Math.max(0, Math.min(1, heightPercent));
-                            var height = (minHeightPercent + (maxHeightPercent - minHeightPercent) * clampedPercent) * usableHeight;
-                            bars.push({ height: height, color: 'red' });
-                        }
-                    }
-
-                    var html = '';
-                    for (var i = 0; i < bars.length; i++) {
-                        html += '<div class="chart-bar-item"><div class="chart-bar ' + bars[i].color + '" style="height: ' + bars[i].height + 'px;"></div></div>';
-                    }
-                    wrapper.innerHTML = html;
-
-                    window.chartData = { startingBalance: startingBalance, currentBalance: currentBalance, profitAndLoss: profitAndLoss };
-                }
-
-                function updateChartBars() { renderChartBars(); }
-                function handleResize() {
-                    var wrapper = document.getElementById('chartBarsWrapper');
-                    if (wrapper && wrapper.children.length > 0) renderChartBars();
-                }
-
-                if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', function() {
-                        renderChartBars();
-                        window.addEventListener('resize', handleResize);
-                    });
-                } else {
-                    renderChartBars();
-                    window.addEventListener('resize', handleResize);
-                }
-
-                var observer = new MutationObserver(function() {
-                    var wrapper = document.getElementById('chartBarsWrapper');
-                    if (wrapper && wrapper.children.length === 0) renderChartBars();
-                });
-                observer.observe(document.body, { childList: true, subtree: true });
-
-                window.renderChartBars = renderChartBars;
-                window.updateChartBars = updateChartBars;
-            </script>
         </div>
     </div>
 
     <!-- Loyalty / Contract Card -->
     <?php if ($hasProgramme && $userHasVps && $broker_connected): ?>
-    <div class="loyalty-card">
+    <div class="loyalty-card" id="loyaltyCard">
         <div class="loyalty-header">
             <div class="loyalty-status">
-                <span class="status-indicator <?= strpos($loyalties_message, 'Active') !== false ? 'active' : (strpos($loyalties_message, 'Completed') !== false ? 'completed' : '') ?>"></span>
-                <span class="loyalty-status-msg"><?= htmlspecialchars($loyalties_message) ?></span>
+                <span class="status-indicator <?= strpos($loyalties_message, 'Active') !== false ? 'active' : (strpos($loyalties_message, 'Completed') !== false ? 'completed' : '') ?>" id="statusIndicator"></span>
+                <span class="loyalty-status-msg" id="loyaltyStatusMsg"><?= htmlspecialchars($loyalties_message) ?></span>
             </div>
-            <div class="loyalty-badge"><?= htmlspecialchars($loyalty_text) ?></div>
+            <div class="loyalty-badge" id="loyaltyBadge"><?= htmlspecialchars($loyalty_text) ?></div>
         </div>
 
         <div class="loyalty-body">
-            <?php if ($is_contract_active && $executionStartDate && $executionStartDate !== '0000-00-00'): ?>
-                <div class="contract-dates">
-                    <span class="date-label">Started</span>
-                    <span class="date-value"><?= htmlspecialchars($formatted_start_date) ?></span>
-                    <span class="date-divider">→</span>
-                    <span class="date-label">Ends</span>
-                    <span class="date-value"><?= htmlspecialchars($formatted_end_date) ?></span>
-                </div>
-            <?php endif; ?>
+            <div class="contract-dates" id="contractDates" style="<?= ($is_contract_active && $executionStartDate && $executionStartDate !== '0000-00-00') ? '' : 'display:none;' ?>">
+                <span class="date-label">Started</span>
+                <span class="date-value" id="contractStartDate"><?= htmlspecialchars($formatted_start_date) ?></span>
+                <span class="date-divider">→</span>
+                <span class="date-label">Ends</span>
+                <span class="date-value" id="contractEndDate"><?= htmlspecialchars($formatted_end_date) ?></span>
+            </div>
 
-            <?php if ($is_contract_active): ?>
-                <div class="contract-duration">
-                    <span class="duration-label">Contract Duration</span>
-                    <span class="duration-value"><?= $CONTRACT_DURATION ?> days</span>
-                </div>
-            <?php endif; ?>
+            <div class="contract-duration" id="contractDurationRow" style="<?= $is_contract_active ? '' : 'display:none;' ?>">
+                <span class="duration-label">Contract Duration</span>
+                <span class="duration-value" id="contractDurationValue"><?= $CONTRACT_DURATION ?> days</span>
+            </div>
 
-            <?php if ($MIN_PROFIT_FOR_SPLIT > 0): ?>
-                <div class="split-threshold">
-                    <span class="threshold-label">Min profit for split</span>
-                    <span class="threshold-value">$<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?></span>
-                </div>
-            <?php endif; ?>
+            <div class="split-threshold" id="splitThresholdRow" style="<?= ($MIN_PROFIT_FOR_SPLIT > 0) ? '' : 'display:none;' ?>">
+                <span class="threshold-label">Min profit for split</span>
+                <span class="threshold-value" id="splitThresholdValue">$<?= number_format($MIN_PROFIT_FOR_SPLIT, 2) ?></span>
+            </div>
         </div>
 
         <div class="loyalty-actions">
-            <?php if (!$show_payment_note): ?>
-                <button
-                    <?= $loyalty_btn_onclick ?>
-                    class="btn-action <?= htmlspecialchars($loyalty_btn_class) ?>"
-                    <?= ($loyalty_btn_action === '') ? 'disabled' : '' ?>
-                >
-                    <?= htmlspecialchars($loyalty_btn_text) ?>
-                </button>
+            <button
+                id="loyaltyActionBtn"
+                <?= $loyalty_btn_onclick ?>
+                class="btn-action <?= htmlspecialchars($loyalty_btn_class) ?>"
+                <?= ($loyalty_btn_action === '') ? 'disabled' : '' ?>
+            >
+                <?= htmlspecialchars($loyalty_btn_text) ?>
+            </button>
 
-                <?php if ($loyalty_btn_action === 'deposit'): ?>
-                    <button
-                        onclick="openApplyModal()"
-                        class="btn-action btn-loyalty-action"
-                    >
-                        I have deposited, apply for verification
-                    </button>
-                <?php endif; ?>
-            <?php else: ?>
-                <button class="btn-action btn-loyalty-paid" disabled>
-                    <?= htmlspecialchars($loyalty_btn_text) ?>
-                </button>
-            <?php endif; ?>
+            <button
+                id="loyaltyDepositBtn"
+                onclick="openApplyModal()"
+                class="btn-action btn-loyalty-action"
+                style="<?= ($loyalty_btn_action === 'deposit') ? '' : 'display:none;' ?>"
+            >
+                I have deposited, apply for verification
+            </button>
         </div>
     </div>
     <?php endif; ?>
@@ -1755,208 +1548,57 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
 </script>
 
 <script>
-    // ============== LIVE BALANCE / STATE UPDATES ==============
-    const depositBalanceEl = document.querySelector('.stat-card:first-child .value-amount');
-    const profitLossEl     = document.querySelector('.stat-card:nth-child(2) .value-amount');
-    const currentBalanceEl = document.querySelector('.stat-card:nth-child(3) .value-amount');
+    // =====================================================================
+    // LIVE DASHBOARD — polls every 1 second and refreshes every field
+    // =====================================================================
 
-    let isUpdating = false;
-    let updateInterval = null;
-    let retryCount = 0;
-    const MAX_RETRIES = 3;
-
-    async function fetchLiveBalances() {
-        if (isUpdating) return;
-        isUpdating = true;
-
+    var DASHBOARD_POLL_URL = (function() {
         try {
-            const response = await fetch(window.location.href, {
-                method: 'POST',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                credentials: 'same-origin'
-            });
-            if (!response.ok) throw new Error('Network response was not ok');
-            const data = await response.json();
-
-            if (data.success) {
-                retryCount = 0;
-
-                if (depositBalanceEl && data.deposit_balance)
-                    animateValue(depositBalanceEl, depositBalanceEl.innerText.replace('$', ''), data.deposit_balance, '$');
-                if (profitLossEl && data.profit_loss) {
-                    animateValue(profitLossEl, profitLossEl.innerText.replace('$', ''), data.profit_loss, '$');
-                    const pnlCard = profitLossEl.closest('.card-value');
-                    if (pnlCard) pnlCard.className = 'card-value ' + data.profit_loss_class;
-                }
-                if (currentBalanceEl && data.current_balance) {
-                    animateValue(currentBalanceEl, currentBalanceEl.innerText.replace('$', ''), data.current_balance, '$');
-                    const currentCard = currentBalanceEl.closest('.card-value');
-                    if (currentCard) currentCard.className = 'card-value ' + data.current_balance_class;
-                }
-
-                if (typeof window.renderChartBars === 'function') window.renderChartBars();
-
-                const contractDatesEl = document.querySelector('.contract-dates');
-                if (contractDatesEl && data.formatted_start_date && data.formatted_end_date) {
-                    contractDatesEl.innerHTML = `
-                        <span class="date-label">Started</span>
-                        <span class="date-value">${data.formatted_start_date}</span>
-                        <span class="date-divider">→</span>
-                        <span class="date-label">Ends</span>
-                        <span class="date-value">${data.formatted_end_date}</span>
-                    `;
-                    contractDatesEl.style.display = 'flex';
-                } else if (contractDatesEl && !data.formatted_start_date) {
-                    contractDatesEl.style.display = 'none';
-                }
-
-                const loyaltyTextEl = document.querySelector('.loyalty-badge');
-                if (loyaltyTextEl && data.loyalty_text) loyaltyTextEl.innerHTML = data.loyalty_text;
-
-                const loyaltiesEl = document.querySelector('.loyalty-status-msg');
-                if (loyaltiesEl && data.loyalties_message) loyaltiesEl.innerHTML = data.loyalties_message;
-
-                const loyaltyBtn = document.querySelector('.loyalty-actions .btn-action');
-                if (loyaltyBtn) {
-                    if (data.show_explore_programme || data.has_programme === false) {
-                        loyaltyBtn.innerHTML = "Explore Programme";
-                        loyaltyBtn.className = 'btn-action btn-loyalty-action btn-explore-programme';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', "window.location.href='programmes.php'");
-                        loyaltyBtn.disabled = false;
-                        const loyaltiesMsgEl = document.querySelector('.loyalty-status-msg');
-                        if (loyaltiesMsgEl) loyaltiesMsgEl.innerHTML = "No Programme Joined";
-                        const loyaltyTextEl2 = document.querySelector('.loyalty-badge');
-                        if (loyaltyTextEl2) loyaltyTextEl2.innerHTML = "You haven't invested in any developer programme yet. Explore programmes to start your investment journey.";
-                        return;
-                    }
-
-                    if (data.show_get_vps || data.user_has_vps === false) {
-                        loyaltyBtn.innerHTML = "Get VPS";
-                        loyaltyBtn.className = 'btn-action btn-get-vps';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', "window.location.href='vps.php'");
-                        loyaltyBtn.disabled = false;
-                        const loyaltiesMsgEl = document.querySelector('.loyalty-status-msg');
-                        if (loyaltiesMsgEl) loyaltiesMsgEl.innerHTML = "VPS Required";
-                        const loyaltyTextEl2 = document.querySelector('.loyalty-badge');
-                        if (loyaltyTextEl2) loyaltyTextEl2.innerHTML = "You need a Virtual Private Server to run automated trading. Get one to unlock your dashboard.";
-                        return;
-                    }
-
-                    if (data.reset_contract === 1) {
-                        loyaltyBtn.innerHTML = "Let's get started";
-                        loyaltyBtn.className = 'btn-action btn-reset';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', 'openResetModal()');
-                        loyaltyBtn.disabled = false;
-                        const loyaltiesMsgEl = document.querySelector('.loyalty-status-msg');
-                        if (loyaltiesMsgEl) loyaltiesMsgEl.innerHTML = "Ready for a new Contract?";
-                        const loyaltyTextEl2 = document.querySelector('.loyalty-badge');
-                        if (loyaltyTextEl2) loyaltyTextEl2.innerHTML = "Your path is clear. Click below to embark on your next contract.";
-                        return;
-                    }
-
-                    if (data.show_connect_broker) {
-                        loyaltyBtn.innerHTML = "Connect Broker";
-                        loyaltyBtn.className = 'btn-action btn-connect-broker';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', "window.location.href='app.php#connect_investor_broker'");
-                        loyaltyBtn.disabled = false;
-                    } else if (data.show_find_manager) {
-                        loyaltyBtn.innerHTML = "Find Trade Manager";
-                        loyaltyBtn.className = 'btn-action btn-loyalty-action';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', "window.location.href='programmes.php'");
-                        loyaltyBtn.disabled = false;
-                    } else if (data.show_apply_button) {
-                        loyaltyBtn.innerHTML = "Apply for Verification";
-                        loyaltyBtn.className = 'btn-action btn-apply';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
-                        loyaltyBtn.disabled = false;
-                    } else if (data.show_reenroll_button) {
-                        loyaltyBtn.innerHTML = "Enroll";
-                        loyaltyBtn.className = 'btn-action btn-loyalty-action';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.setAttribute('onclick', 'openReenrollModal()');
-                        loyaltyBtn.disabled = false;
-                    } else if (data.show_payment_note) {
-                        loyaltyBtn.innerHTML = data.loyalty_btn_text || "Awaiting Confirmation";
-                        loyaltyBtn.className = 'btn-action btn-loyalty-paid';
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.disabled = true;
-                    } else if (data.loyalty_btn_text) {
-                        loyaltyBtn.innerHTML = data.loyalty_btn_text;
-                        loyaltyBtn.className = 'btn-action ' + data.loyalty_btn_class;
-                        loyaltyBtn.removeAttribute('onclick');
-                        loyaltyBtn.disabled = false;
-
-                        switch (data.loyalty_btn_action) {
-                            case 'explore_programme':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='programmes.php'");
-                                break;
-                            case 'get_vps':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='vps.php'");
-                                break;
-                            case 'enroll':
-                                loyaltyBtn.setAttribute('onclick', 'openReenrollModal()');
-                                break;
-                            case 'deposit':
-                                const brokerTarget = '<?= htmlspecialchars($brokerTarget) ?>';
-                                loyaltyBtn.setAttribute('onclick', `window.open('${brokerTarget}', '_blank')`);
-                                break;
-                            case 'profit_split_redirect':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='profit_split.php'");
-                                break;
-                            case 'payment_failed_redirect':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='profit_split.php?retry=1'");
-                                break;
-                            case 'apply':
-                                loyaltyBtn.setAttribute('onclick', 'openApplyModal()');
-                                break;
-                            case 'reset':
-                                loyaltyBtn.setAttribute('onclick', 'openResetModal()');
-                                break;
-                            case 'connect_broker':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='app.php#connect_investor_broker'");
-                                break;
-                            case 'find_manager':
-                                loyaltyBtn.setAttribute('onclick', "window.location.href='programmes.php'");
-                                break;
-                            default:
-                                loyaltyBtn.disabled = true;
-                                break;
-                        }
-                    }
-                }
-            } else if (data.error) {
-                retryCount++;
-                if (retryCount >= MAX_RETRIES) stopLiveUpdates();
-            }
-        } catch (error) {
-            retryCount++;
-            if (retryCount >= MAX_RETRIES) stopLiveUpdates();
-        } finally {
-            isUpdating = false;
+            var base = document.baseURI || window.location.href;
+            var url = new URL('mydashboard.php', base);
+            return url.toString();
+        } catch (e) {
+            return 'mydashboard.php';
         }
-    }
+    })();
 
-    function animateValue(element, start, end, prefix = '', suffix = '', duration = 300) {
+    // --- Cached DOM references ---
+    var depositBalanceEl = document.querySelector('.stat-card:first-child .value-amount');
+    var profitLossEl     = document.querySelector('.stat-card:nth-child(2) .value-amount');
+    var currentBalanceEl = document.querySelector('.stat-card:nth-child(3) .value-amount');
+    var peakAmountEl     = document.querySelector('.peak-balance .peak-amount');
+    var peakContainer    = document.querySelector('.peak-balance');
+
+    var isUpdating       = false;
+    var updateInterval   = null;
+    var retryCount       = 0;
+    var MAX_RETRIES      = 5;
+    var currentInterval  = 1000;
+    var pollRunning      = true;
+
+    // ---------- Animation helper ----------
+    function animateValue(element, start, end, prefix, suffix, duration) {
         if (!element) return;
-        start = parseFloat(start.toString().replace(/[^0-9.-]/g, '')) || 0;
-        end = parseFloat(end.toString().replace(/[^0-9.-]/g, '')) || 0;
-        if (start === end) return;
-        const range = end - start;
-        let current = start;
-        let startTime = null;
+        prefix = prefix || '';
+        suffix = suffix || '';
+        duration = duration || 300;
+
+        start = parseFloat(String(start).replace(/[^0-9.-]/g, '')) || 0;
+        end   = parseFloat(String(end).replace(/[^0-9.-]/g, '')) || 0;
+
+        if (start === end) {
+            element.innerText = prefix + end.toFixed(2) + suffix;
+            return;
+        }
+
+        var range = end - start;
+        var current = start;
+        var startTime = null;
+
         function step(timestamp) {
             if (!startTime) startTime = timestamp;
-            const elapsed = timestamp - startTime;
-            const progress = Math.min(1, elapsed / duration);
+            var elapsed = timestamp - startTime;
+            var progress = Math.min(1, elapsed / duration);
             current = start + (range * progress);
             element.innerText = prefix + current.toFixed(2) + suffix;
             if (progress < 1) requestAnimationFrame(step);
@@ -1965,37 +1607,392 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
         requestAnimationFrame(step);
     }
 
-    function startLiveUpdates(intervalSeconds = 5) {
-        if (updateInterval) clearInterval(updateInterval);
-        fetchLiveBalances();
-        updateInterval = setInterval(fetchLiveBalances, intervalSeconds * 1000);
+    function toNum(v) {
+        return parseFloat(String(v).replace(/[^0-9.-]/g, '')) || 0;
     }
+
+    // ---------- Update all dashboard UI from the JSON payload ----------
+    function refreshDashboardUI(data) {
+        if (!data || !data.success) return;
+
+        var depositNum = toNum(data.deposit_balance);
+        var profitNum  = toNum(data.profit_loss);
+        var currentNum = toNum(data.current_balance);
+        var peakNum    = toNum(data.recent_highest_balance);
+
+        // ---- Balances ----
+        if (depositBalanceEl && data.deposit_balance !== undefined) {
+            animateValue(depositBalanceEl, depositBalanceEl.innerText, depositNum, '');
+        }
+
+        if (profitLossEl && data.profit_loss !== undefined) {
+            animateValue(profitLossEl, profitLossEl.innerText, profitNum, '');
+
+            var pnlCard = profitLossEl.closest('.card-value');
+            if (pnlCard) pnlCard.className = 'card-value ' + data.profit_loss_class;
+
+            // P&L indicator — always derived from the polled value
+            var pnlIndicator = document.querySelector('.pnl-card .pnl-indicator');
+            if (pnlIndicator) {
+                if (profitNum > 0) {
+                    pnlIndicator.className = 'pnl-indicator positive';
+                    pnlIndicator.textContent = '▲ Profit';
+                } else if (profitNum < 0) {
+                    pnlIndicator.className = 'pnl-indicator negative';
+                    pnlIndicator.textContent = '▼ Loss';
+                } else {
+                    pnlIndicator.className = 'pnl-indicator neutral';
+                    pnlIndicator.textContent = '— Static';
+                }
+            }
+        }
+
+        if (currentBalanceEl && data.current_balance !== undefined) {
+            animateValue(currentBalanceEl, currentBalanceEl.innerText, currentNum, '');
+
+            var currentCard = currentBalanceEl.closest('.card-value');
+            if (currentCard) currentCard.className = 'card-value ' + data.current_balance_class;
+
+            // Current balance indicator — Nourishing / Deteriorating / Fallow
+            var currentIndicator = document.querySelector('.current-balance-card .pnl-indicator');
+            if (currentIndicator) {
+                if (currentNum > depositNum) {
+                    currentIndicator.className = 'pnl-indicator positive';
+                    currentIndicator.textContent = '▲ Nourishing';
+                } else if (currentNum < depositNum) {
+                    currentIndicator.className = 'pnl-indicator negative';
+                    currentIndicator.textContent = '▼ Deteriorating';
+                } else {
+                    currentIndicator.className = 'pnl-indicator neutral';
+                    currentIndicator.textContent = '— Fallow';
+                }
+            }
+        }
+
+        // ---- Peak badge ----
+        if (peakAmountEl && data.recent_highest_balance !== undefined) {
+            peakAmountEl.textContent = peakNum.toFixed(2);
+            if (peakContainer) {
+                if (data.peak_above) peakContainer.classList.add('peak-above');
+                else                 peakContainer.classList.remove('peak-above');
+            }
+        }
+
+        // ---- Chart ----
+        // Pass the fresh values into the chart function. The chart itself
+        // will short-circuit if the values are unchanged, so no flicker.
+        if (typeof window.renderChartBars === 'function') {
+            window.renderChartBars(false, depositNum, currentNum, !!data.broker_connected);
+        }
+
+        // ---- Contract dates ----
+        var contractDatesEl = document.getElementById('contractDates');
+        if (contractDatesEl) {
+            if (data.formatted_start_date && data.formatted_end_date) {
+                document.getElementById('contractStartDate').textContent = data.formatted_start_date;
+                document.getElementById('contractEndDate').textContent   = data.formatted_end_date;
+                contractDatesEl.style.display = '';
+            } else {
+                contractDatesEl.style.display = 'none';
+            }
+        }
+
+        // ---- Contract duration row ----
+        var contractDurationRow = document.getElementById('contractDurationRow');
+        if (contractDurationRow) {
+            if (data.is_contract_active) {
+                var durVal = document.getElementById('contractDurationValue');
+                if (durVal) durVal.textContent = data.contract_duration + ' days';
+                contractDurationRow.style.display = '';
+            } else {
+                contractDurationRow.style.display = 'none';
+            }
+        }
+
+        // ---- Split threshold row ----
+        var splitRow = document.getElementById('splitThresholdRow');
+        if (splitRow) {
+            if (data.min_profit_for_split > 0) {
+                var splitVal = document.getElementById('splitThresholdValue');
+                if (splitVal) splitVal.textContent = '$' + parseFloat(data.min_profit_for_split).toFixed(2);
+                splitRow.style.display = '';
+            } else {
+                splitRow.style.display = 'none';
+            }
+        }
+
+        // ---- Loyalty text ----
+        var loyaltyBadge = document.getElementById('loyaltyBadge');
+        if (loyaltyBadge && data.loyalty_text !== undefined) loyaltyBadge.innerHTML = data.loyalty_text;
+
+        var loyaltiesMsgEl = document.getElementById('loyaltyStatusMsg');
+        if (loyaltiesMsgEl && data.loyalties_message !== undefined) {
+            loyaltiesMsgEl.innerHTML = data.loyalties_message;
+        }
+
+        // ---- Status indicator dot ----
+        var statusIndicator = document.getElementById('statusIndicator');
+        if (statusIndicator && data.loyalties_message) {
+            statusIndicator.classList.remove('active', 'completed');
+            if (data.loyalties_message.indexOf('Active') !== -1) {
+                statusIndicator.classList.add('active');
+            } else if (data.loyalties_message.indexOf('Completed') !== -1) {
+                statusIndicator.classList.add('completed');
+            }
+        }
+
+        // ---- Dashboard disclaimer ----
+        var disclaimerEl = document.getElementById('dashboardDisclaimer');
+        if (disclaimerEl && data.dashboard_disclaimer !== undefined) {
+            var badge = document.getElementById('paymentRequiredBadge');
+            disclaimerEl.innerHTML = '';
+            disclaimerEl.appendChild(document.createTextNode(data.dashboard_disclaimer));
+            if (badge) {
+                badge.style.display = (data.loyalties_status === 'unpaid-payment') ? '' : 'none';
+                disclaimerEl.appendChild(badge);
+            }
+        }
+
+        // ---- Encouragement note ----
+        var encourageEl = document.getElementById('encouragementNote');
+        if (encourageEl) {
+            if (profitNum < 0 && data.contract_completed) {
+                encourageEl.style.display = '';
+            } else {
+                encourageEl.style.display = 'none';
+            }
+        }
+
+        // ---- Threshold warning ----
+        var thresholdWarn = document.getElementById('thresholdWarning');
+        var thresholdTxt  = document.getElementById('thresholdWarningText');
+        if (thresholdWarn && thresholdTxt) {
+            var minSplit = parseFloat(String(data.min_profit_for_split).replace(/[^0-9.-]/g, '')) || 0;
+            if (data.contract_completed && profitNum > 0 && profitNum <= minSplit) {
+                thresholdTxt.textContent =
+                    'Your profit of $' + profitNum.toFixed(2) +
+                    ' is below the minimum split threshold of $' + minSplit.toFixed(2) +
+                    '. No profit split required - you can enroll directly.';
+                thresholdWarn.style.display = '';
+            } else {
+                thresholdWarn.style.display = 'none';
+            }
+        }
+
+        // ---- Loyalty action button ----
+        var loyaltyBtn = document.getElementById('loyaltyActionBtn');
+        var depositBtn = document.getElementById('loyaltyDepositBtn');
+
+        if (loyaltyBtn) {
+            if (data.show_explore_programme || data.has_programme === false) {
+                loyaltyBtn.textContent = "Explore Programme";
+                loyaltyBtn.className = 'btn-action btn-loyalty-action btn-explore-programme';
+                loyaltyBtn.onclick = function() { window.location.href = 'programmes.php'; };
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.show_get_vps || data.user_has_vps === false) {
+                loyaltyBtn.textContent = "Get VPS";
+                loyaltyBtn.className = 'btn-action btn-loyalty-action btn-get-vps';
+                loyaltyBtn.onclick = function() { window.location.href = 'vps.php'; };
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.reset_contract === 1) {
+                loyaltyBtn.textContent = "Let's get started";
+                loyaltyBtn.className = 'btn-action btn-loyalty-action btn-reset';
+                loyaltyBtn.onclick = openResetModal;
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.show_connect_broker) {
+                loyaltyBtn.textContent = "Connect Broker";
+                loyaltyBtn.className = 'btn-action btn-connect-broker';
+                loyaltyBtn.onclick = function() { window.location.href = 'app.php#connect_investor_broker'; };
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.show_apply_button) {
+                loyaltyBtn.textContent = "Apply for Verification";
+                loyaltyBtn.className = 'btn-action btn-apply';
+                loyaltyBtn.onclick = openApplyModal;
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.show_reenroll_button) {
+                loyaltyBtn.textContent = "Enroll";
+                loyaltyBtn.className = 'btn-action btn-loyalty-action';
+                loyaltyBtn.onclick = openReenrollModal;
+                loyaltyBtn.disabled = false;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.show_payment_note) {
+                loyaltyBtn.textContent = data.loyalty_btn_text || "Awaiting Confirmation";
+                loyaltyBtn.className = 'btn-action btn-loyalty-paid';
+                loyaltyBtn.onclick = null;
+                loyaltyBtn.disabled = true;
+                if (depositBtn) depositBtn.style.display = 'none';
+            } else if (data.loyalty_btn_text) {
+                loyaltyBtn.textContent = data.loyalty_btn_text;
+                loyaltyBtn.className = 'btn-action ' + (data.loyalty_btn_class || '');
+                loyaltyBtn.disabled = false;
+
+                switch (data.loyalty_btn_action) {
+                    case 'explore_programme':
+                        loyaltyBtn.onclick = function() { window.location.href = 'programmes.php'; };
+                        break;
+                    case 'get_vps':
+                        loyaltyBtn.onclick = function() { window.location.href = 'vps.php'; };
+                        break;
+                    case 'enroll':
+                        loyaltyBtn.onclick = openReenrollModal;
+                        break;
+                    case 'deposit':
+                        var brokerTarget = '<?= htmlspecialchars($brokerTarget) ?>';
+                        loyaltyBtn.onclick = function() { window.open(brokerTarget, '_blank'); };
+                        if (depositBtn) depositBtn.style.display = '';
+                        break;
+                    case 'profit_split_redirect':
+                        loyaltyBtn.onclick = function() { window.location.href = 'profit_split.php'; };
+                        break;
+                    case 'payment_failed_redirect':
+                        loyaltyBtn.onclick = function() { window.location.href = 'profit_split.php?retry=1'; };
+                        break;
+                    case 'apply':
+                        loyaltyBtn.onclick = openApplyModal;
+                        break;
+                    case 'reset':
+                        loyaltyBtn.onclick = openResetModal;
+                        break;
+                    case 'connect_broker':
+                        loyaltyBtn.onclick = function() { window.location.href = 'app.php#connect_investor_broker'; };
+                        break;
+                    case 'find_manager':
+                        loyaltyBtn.onclick = function() { window.location.href = 'programmes.php'; };
+                        break;
+                    default:
+                        loyaltyBtn.disabled = true;
+                        if (depositBtn) depositBtn.style.display = 'none';
+                        break;
+                }
+
+                if (data.loyalty_btn_action !== 'deposit' && depositBtn) {
+                    depositBtn.style.display = 'none';
+                }
+            }
+        }
+
+        // ---- Programme name / developer name in header ----
+        var devLabel = document.getElementById('accountDeveloperLabel');
+        var progName = document.getElementById('accountProgrammeName');
+        if (devLabel && progName) {
+            if (data.has_programme && data.developer_name) {
+                devLabel.textContent = data.developer_name + "'s Programme";
+                devLabel.style.display = '';
+                if (data.programme_name) {
+                    progName.textContent = data.programme_name;
+                    progName.style.display = '';
+                } else {
+                    progName.style.display = 'none';
+                }
+            } else {
+                devLabel.style.display = 'none';
+                progName.style.display = 'none';
+            }
+        }
+    }
+
+    // ---------- Poll the server ----------
+    async function fetchLiveBalances() {
+        if (isUpdating) return;
+        isUpdating = true;
+
+        try {
+            var response = await fetch(DASHBOARD_POLL_URL, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Cache-Control': 'no-cache'
+                },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            });
+
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+
+            var raw = await response.text();
+            var data;
+            try {
+                data = JSON.parse(raw);
+            } catch (parseErr) {
+                throw new Error('Non-JSON response');
+            }
+
+            if (data && data.success) {
+                retryCount = 0;
+                currentInterval = 1000;
+                refreshDashboardUI(data);
+            } else if (data && data.error) {
+                retryCount++;
+            }
+        } catch (error) {
+            retryCount++;
+        } finally {
+            isUpdating = false;
+        }
+
+        if (retryCount === 0) {
+            currentInterval = 1000;
+        } else if (retryCount === 1) {
+            currentInterval = 3000;
+        } else if (retryCount === 2) {
+            currentInterval = 5000;
+        } else if (retryCount >= MAX_RETRIES) {
+            currentInterval = 15000;
+        }
+
+        scheduleNextPoll();
+    }
+
+    function scheduleNextPoll() {
+        if (!pollRunning) return;
+        if (updateInterval) clearTimeout(updateInterval);
+        updateInterval = setTimeout(fetchLiveBalances, currentInterval);
+    }
+
+    function startLiveUpdates() {
+        pollRunning = true;
+        if (updateInterval) clearTimeout(updateInterval);
+        fetchLiveBalances();
+    }
+
     function stopLiveUpdates() {
-        if (updateInterval) { clearInterval(updateInterval); updateInterval = null; }
+        pollRunning = false;
+        if (updateInterval) { clearTimeout(updateInterval); updateInterval = null; }
     }
 
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
-            if (updateInterval) {
-                clearInterval(updateInterval);
-                updateInterval = setInterval(fetchLiveBalances, 30000);
-            }
+            stopLiveUpdates();
         } else {
-            if (updateInterval) {
-                clearInterval(updateInterval);
-                updateInterval = setInterval(fetchLiveBalances, 5000);
-            }
-            fetchLiveBalances();
+            startLiveUpdates();
         }
     });
 
-    startLiveUpdates(5);
+    window.addEventListener('focus', function() { if (pollRunning) fetchLiveBalances(); });
+
+    startLiveUpdates();
+
     window.addEventListener('beforeunload', function() { stopLiveUpdates(); });
 </script>
 
 <script>
     // ============== NOTIFICATION SYSTEM ==============
     let notificationPanelOpen = false;
+
+    var NOTIF_URL = (function() {
+        try {
+            var base = document.baseURI || window.location.href;
+            return new URL('mydashboard.php', base).toString();
+        } catch (e) {
+            return 'mydashboard.php';
+        }
+    })();
 
     function toggleNotifications() {
         const panel = document.getElementById('notificationPanel');
@@ -2013,7 +2010,7 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
     function markNotificationsAsRead() {
         const unreadItems = document.querySelectorAll('.notification-item.unread');
         if (unreadItems.length === 0) return;
-        fetch(window.location.href, {
+        fetch(NOTIF_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: 'mark_notifications_read=1'
@@ -2030,7 +2027,7 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
     }
 
     function refreshNotifications() {
-        fetch(window.location.href, {
+        fetch(NOTIF_URL, {
             method: 'POST',
             headers: {
                 'X-Requested-With': 'XMLHttpRequest',
@@ -2100,7 +2097,7 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
     }
 
     function pollNewNotifications() {
-        fetch(window.location.href, {
+        fetch(NOTIF_URL, {
             method: 'POST',
             headers: {
                 'X-Requested-With': 'XMLHttpRequest',
@@ -2144,28 +2141,24 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
 </script>
 <script>
     // ============== ACCOUNT MANAGEMENT AUTO-SYNC ==============
-    // Polls the server every 10 seconds (and on page load) to copy the
-    // developer's master account management settings into the investor's row.
     (function() {
         var syncInterval = null;
-        var lastSyncHash = null;
         var isSyncing = false;
 
-        function hashString(str) {
-            var hash = 0;
-            for (var i = 0; i < str.length; i++) {
-                var chr = str.charCodeAt(i);
-                hash = ((hash << 5) - hash) + chr;
-                hash |= 0;
+        var SYNC_URL = (function() {
+            try {
+                var base = document.baseURI || window.location.href;
+                return new URL('mydashboard.php', base).toString();
+            } catch (e) {
+                return 'mydashboard.php';
             }
-            return hash;
-        }
+        })();
 
         function syncAccountManagement() {
             if (isSyncing) return;
             isSyncing = true;
 
-            fetch(window.location.href.split('?')[0], {
+            fetch(SYNC_URL, {
                 method: 'POST',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
@@ -2175,23 +2168,13 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
                 credentials: 'same-origin'
             })
             .then(function(response) { return response.json(); })
-            .then(function(data) {
-                isSyncing = false;
-                if (data.success) {
-                    // Optional: log to console for debugging
-                    // console.log('[AM Sync] Account management synced from developer ' + data.developerid);
-                }
-            })
-            .catch(function() {
-                isSyncing = false;
-            });
+            .then(function() { isSyncing = false; })
+            .catch(function() { isSyncing = false; });
         }
 
         function startSync(intervalSeconds) {
             stopSync();
-            // Initial sync on load
             syncAccountManagement();
-            // Periodic sync
             syncInterval = setInterval(syncAccountManagement, intervalSeconds * 1000);
         }
 
@@ -2202,17 +2185,12 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
             }
         }
 
-        // Sync every 10 seconds
         startSync(10);
 
-        // Sync when page becomes visible again
         document.addEventListener('visibilitychange', function() {
-            if (!document.hidden) {
-                syncAccountManagement();
-            }
+            if (!document.hidden) syncAccountManagement();
         });
 
-        // Sync on window focus
         window.addEventListener('focus', function() {
             syncAccountManagement();
         });
@@ -2221,7 +2199,6 @@ $applySuccessDetails = isset($_SESSION['apply_success_details']) ? $_SESSION['ap
             stopSync();
         });
 
-        // Expose for manual triggering if needed
         window.syncAccountManagement = syncAccountManagement;
     })();
 </script>

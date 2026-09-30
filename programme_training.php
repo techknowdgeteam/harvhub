@@ -2,20 +2,8 @@
 // programme_training.php — Candlestick chart viewer for a programme
 // Multi-root team model: Root #1 is foundation, heirs inherit from existing roots/refs.
 // Supports re-projection of a configured higher-TF configuration onto a lower TF.
-//
-// CHANGES IN THIS VERSION:
-//  * Client-side scanner now persists native matches on EVERY chart load
-//    (page load, symbol change, timeframe change, candles-modal change).
-//  * persist_matches is now a "full snapshot" endpoint: it ALWAYS wipes
-//    rows for the current (user, programme, symbol, timeframe) tuple and
-//    re-inserts whatever the client sent. Empty payload = table cleaned.
-//  * Client tracks a signature of the last persisted snapshot to avoid
-//    redundant round-trips when nothing changed.
-//  * Persist also fires once full older-candle history has been loaded,
-//    so trades whose exit_at is far in the past can resolve.
-//  * TIMEFRAME SWITCHING: No modal. Clicking a timeframe directly loads the
-//    chart and displays BOTH its native configuration AND all applicable
-//    higher-TF projections simultaneously on the same chart.
+// ANCHOR REMOVED ENTIRELY.
+
 session_start();
 
 try {
@@ -131,8 +119,7 @@ try {
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at,
-                   anchor_candle_id, anchor_candle_index
+                   root_ref_count, resolved_root_id, triggered_at
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -140,19 +127,15 @@ try {
         $cStmt->execute([$userId, $programmeId]);
 
         $byTree     = [];
-        $rowById    = [];   // id => row (for anchor lookup)
         while ($r = $cStmt->fetch(PDO::FETCH_ASSOC)) {
             $tid = (int)$r['tree_id'];
             if (!isset($byTree[$tid])) {
                 $byTree[$tid] = [
-                    'tree_id'             => $tid,
-                    'roots'               => [],
-                    'drawings'            => [],
-                    'trades'              => [],
-                    '_orphans'            => [],
-                    'anchor_candle_id'    => null,
-                    'anchor_candle_index' => null,
-                    'anchor_row'          => null,
+                    'tree_id'   => $tid,
+                    'roots'     => [],
+                    'drawings'  => [],
+                    'trades'    => [],
+                    '_orphans'  => [],
                 ];
             }
             $row = [
@@ -190,17 +173,10 @@ try {
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
-                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
-                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
-            $rowById[$row['id']] = $row;
 
             if ($row['row_role'] === 'root') {
                 $byTree[$tid]['roots'][] = $row;
-                if ($byTree[$tid]['anchor_candle_id'] === null && $row['anchor_candle_id'] !== null) {
-                    $byTree[$tid]['anchor_candle_id']    = (int)$row['anchor_candle_id'];
-                    $byTree[$tid]['anchor_candle_index'] = $row['anchor_candle_index'];
-                }
             } elseif ($row['row_role'] === 'drawing') {
                 $byTree[$tid]['drawings'][] = $row;
             } elseif ($row['row_role'] === 'trade') {
@@ -209,17 +185,6 @@ try {
                 $byTree[$tid]['_orphans'][] = $row;
             }
         }
-
-        // Resolve each tree's anchor_candle_id to its full config row
-        // (the anchor may be a root OR a root_ref). This is what the client
-        // anchor-finder uses to locate the anchored candle independently of
-        // operators/refs/candle_type checks.
-        foreach ($byTree as $tid => &$tree) {
-            if ($tree['anchor_candle_id'] !== null && isset($rowById[$tree['anchor_candle_id']])) {
-                $tree['anchor_row'] = $rowById[$tree['anchor_candle_id']];
-            }
-        }
-        unset($tree);
 
         foreach ($byTree as $tid => &$tree) {
             $roots   = &$tree['roots'];
@@ -394,10 +359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_recent'
 }
 
 // ==================== AJAX: PERSIST MATCHES ====================
-// Full-snapshot semantics: for the (user, programme, symbol, timeframe)
-// tuple we ALWAYS delete existing rows, then insert what the client sent.
-// If the client sent an empty `trees` array, the table ends up clean —
-// this is the self-cleansing behaviour we want.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
     header('Content-Type: application/json');
 
@@ -424,7 +385,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
         $runToken = bin2hex(random_bytes(16));
     }
 
-    // Guard: ensure the programme actually belongs to this user.
     try {
         $owner = $pdo->prepare("SELECT id FROM programme WHERE id = ? AND userid = ? LIMIT 1");
         $owner->execute([$programmeId, $userId]);
@@ -435,9 +395,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
         echo json_encode(['success'=>false,'message'=>'Ownership check failed: '.$e->getMessage()]); exit;
     }
 
-    // Pre-scan the payload so we can short-circuit the whole transaction
-    // when there is genuinely nothing to insert. We still want the DELETE
-    // to run in that case, to enforce "self-cleansing".
     $totalRows = 0;
     foreach ($trees as $tree) {
         $matched = is_array($tree['matched'] ?? null) ? $tree['matched'] : [];
@@ -473,21 +430,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                      resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
                      outcome_status, outcome_candle_time, outcome_price,
                      is_foundation, evaluation_priority, status,
-                     anchor_match, anchor_match_index, triggered_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?,
+                     triggered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 
+                        ?, ?, ?, ?, ?, ?, 
+                        ?, ?, ?, ?, 
+                        ?, ?, ?, ?, ?, ?, 
+                        ?, ?, ?, ?, ?, ?, ?, 
+                        ?, ?, ?, ?, 
+                        ?, ?, ?, 
+                        ?, ?, ?, ?, 
+                        ?, ?, ?, ?, 
+                        ?, ?, 
+                        ?, ?, ?, 
+                        ?, ?, ?, ?, ?, 
+                        ?, ?, ?, 
+                        ?, ?, ?, 
                         ?, ?, ?)
             ");
 
@@ -570,10 +527,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                         isset($m['evaluation_priority']) ? (int)$m['evaluation_priority'] : 1,
                         $m['status'] ?? 'matched',
 
-                        !empty($m['anchor_match']) ? 1 : 0,
-                        (isset($m['anchor_match_index']) && $m['anchor_match_index'] !== '')
-                            ? (string)$m['anchor_match_index'] : null,
-
                         $m['triggered_at'] ?? $now,
                     ]);
                     $insertedRows++;
@@ -629,7 +582,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                    resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
                    outcome_status, outcome_candle_time, outcome_price,
                    is_foundation, evaluation_priority, status,
-                   anchor_match, anchor_match_index, triggered_at, created_at
+                   triggered_at, created_at
             FROM programme_candles_configuration
             WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -700,8 +653,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                 'is_foundation'         => (int)$r['is_foundation'],
                 'evaluation_priority'   => (int)$r['evaluation_priority'],
                 'status'                => $r['status'],
-                'anchor_match'          => (int)$r['anchor_match'],
-                'anchor_match_index'    => $r['anchor_match_index'],
                 'triggered_at'          => $r['triggered_at'],
                 'created_at'            => $r['created_at'],
             ];
@@ -1159,6 +1110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     .pt-tsc-win   .pt-tsc-value { color: #2ecc71; }
     .pt-tsc-loss  .pt-tsc-value { color: #c0392b; }
     .pt-tsc-pending .pt-tsc-value { color: #e3b341; }
+    .pt-trade-order-badge.missed { background: rgba(149,165,166,0.2); color: #7f8c8d; }
     body.dark-mode .pt-trades-summary-card {
         background: linear-gradient(135deg, rgba(39,174,96,0.18), rgba(39,174,96,0.06));
         border-color: rgba(39,174,96,0.5);
@@ -1232,11 +1184,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     @keyframes pt-proj-spin {
         to { transform: rotate(360deg); }
     }
-    /* ============================================================
-    GLOBAL iOS ZOOM FIX
-    iOS Safari auto-zooms any input with font-size < 16px.
-    Force 16px on all form controls at mobile widths.
-    ============================================================ */
     @media (max-width: 768px) {
         input,
         select,
@@ -1646,76 +1593,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         return s + '|' + total + '|' + tids.join(',');
     }
 
-    // ==================== ANCHOR LOOKUP ====================
-    function ptBuildAnchorLookup() {
-        var byRowId = {};
-        (PT_TREES || []).forEach(function (t) {
-            if (t.anchor_candle_id == null || !t.anchor_candle_index) return;
-            var key = parseInt(t.anchor_candle_id, 10);
-            if (isNaN(key)) return;
-            if (byRowId[key] == null) {
-                byRowId[key] = {
-                    index:  String(t.anchor_candle_index),
-                    treeId: t.tree_id
-                };
-            }
-        });
-        return { byRowId: byRowId };
-    }
-
-    function ptNativeAnchorFlag(rowId, lookup) {
-        if (rowId == null || !lookup) return { anchor_match: 0, anchor_match_index: null };
-        var rec = lookup.byRowId[rowId];
-        if (!rec) return { anchor_match: 0, anchor_match_index: null };
-        return { anchor_match: 1, anchor_match_index: rec.index };
-    }
-
-    function ptPickAnchorSubBar(list, index, sourceRow) {
-        if (!list || !list.length) return null;
-        var idx = String(index || '').toLowerCase().trim();
-
-        switch (idx) {
-            case 'open_time':
-            case 'open':
-                return list[0];
-
-            case 'close_time':
-            case 'close':
-                return list[list.length - 1];
-
-            case 'high': {
-                var bestHigh = list[0];
-                for (var i = 1; i < list.length; i++) {
-                    if (list[i].high > bestHigh.high) bestHigh = list[i];
-                }
-                return bestHigh;
-            }
-
-            case 'low': {
-                var bestLow = list[0];
-                for (var j = 1; j < list.length; j++) {
-                    if (list[j].low < bestLow.low) bestLow = list[j];
-                }
-                return bestLow;
-            }
-
-            default: {
-                var srcVal = sourceRow ? sourceRow[idx] : null;
-                if (srcVal == null) return list[list.length - 1];
-
-                var bestIdx = 0;
-                var bestDiff = Infinity;
-                for (var k = 0; k < list.length; k++) {
-                    var v = list[k][idx];
-                    if (v == null) continue;
-                    var d = Math.abs(v - srcVal);
-                    if (d < bestDiff) { bestDiff = d; bestIdx = k; }
-                }
-                return list[bestIdx];
-            }
-        }
-    }
-
     // ==================== INIT ====================
     document.addEventListener('DOMContentLoaded', function () {
         PT_CANVAS      = document.getElementById('ptChartCanvas');
@@ -1801,6 +1678,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (PT_CANDLES.length) ptScheduleDraw();
         });
     });
+
+    // ==================== SIDEBAR NAVIGATION ====================
+    (function () {
+        var sidebar = document.getElementById('sidebarNav');
+        var desktopToggle = document.getElementById('sidebarToggle');
+        var mobileMenuBtn = document.getElementById('mobileMenuBtn');
+        var overlay = document.getElementById('sidebarOverlay');
+        var body = document.body;
+
+        if (!sidebar) return;
+
+        function isMobile() { return window.innerWidth <= 768; }
+
+        function openMobileSidebar() {
+            sidebar.classList.add('expanded');
+            if (overlay) overlay.classList.add('active');
+            body.style.overflow = 'hidden';
+        }
+        function closeMobileSidebar() {
+            sidebar.classList.remove('expanded');
+            if (overlay) overlay.classList.remove('active');
+            body.style.overflow = '';
+        }
+        function toggleDesktopSidebar() {
+            var isExpanded = sidebar.classList.contains('expanded');
+            if (isExpanded) {
+                sidebar.classList.remove('expanded');
+                body.classList.remove('sidebar-expanded-desktop');
+            } else {
+                sidebar.classList.add('expanded');
+                body.classList.add('sidebar-expanded-desktop');
+            }
+        }
+
+        if (mobileMenuBtn) {
+            mobileMenuBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (isMobile()) openMobileSidebar();
+            });
+        }
+        if (desktopToggle) {
+            desktopToggle.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (!isMobile()) toggleDesktopSidebar();
+            });
+        }
+        if (overlay) {
+            overlay.addEventListener('click', function () {
+                if (isMobile()) closeMobileSidebar();
+            });
+        }
+
+        document.querySelectorAll('.sidebar-menu-item').forEach(function (item) {
+            item.addEventListener('click', function () {
+                if (isMobile()) setTimeout(closeMobileSidebar, 150);
+            });
+        });
+
+        var resizeTimer;
+        window.addEventListener('resize', function () {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                if (isMobile()) {
+                    body.classList.remove('sidebar-expanded-desktop');
+                    sidebar.classList.remove('expanded');
+                    if (overlay) overlay.classList.remove('active');
+                    body.style.overflow = '';
+                } else {
+                    if (overlay) overlay.classList.remove('active');
+                    body.style.overflow = '';
+                    if (sidebar.classList.contains('expanded')) {
+                        body.classList.add('sidebar-expanded-desktop');
+                    }
+                }
+            }, 150);
+        });
+
+        if (isMobile()) {
+            sidebar.classList.remove('expanded');
+            if (overlay) overlay.classList.remove('active');
+            body.style.overflow = '';
+            body.classList.remove('sidebar-expanded-desktop');
+        } else {
+            sidebar.classList.remove('expanded');
+            body.classList.remove('sidebar-expanded-desktop');
+        }
+    })();
 
     // ==================== DEBUG MODAL EVENTS ====================
     function ptAttachDebugModalEvents() {
@@ -2249,8 +2213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             });
         });
 
-        var anchorLookup = ptBuildAnchorLookup();
-
         var projected = [];
         rows.forEach(function (r) {
             var o = ptNormTs(r.open_time || '');
@@ -2263,35 +2225,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var level = (r.price_level || r.entry_from_price_level || r.draw_from_price_level || 'close').toLowerCase();
             var sub = ptPickSubBar(list, level, r);
             if (!sub) return;
-
-            var anchorRec = (r.source_row_id != null)
-                ? anchorLookup.byRowId[parseInt(r.source_row_id, 10)]
-                : null;
-
-            if (anchorRec) {
-                var anchorSub = ptPickAnchorSubBar(list, anchorRec.index, r);
-                if (anchorSub) {
-                    var anchorClone = ptCloneRowWithSubBar(r, anchorSub, level);
-                    anchorClone._anchor_target    = true;
-                    anchorClone._anchor_src_row_id = r.source_row_id;
-                    anchorClone._anchor_index      = anchorRec.index;
-                    anchorClone._anchor_tree_id    = anchorRec.treeId;
-                    projected.push(anchorClone);
-
-                    ptDebugLine('data', 'Anchor resolved in projection', {
-                        sourceTF: sourceTF,
-                        targetTF: targetTF,
-                        sourceRowId: r.source_row_id,
-                        index: anchorRec.index,
-                        anchorTime: anchorSub.time
-                    });
-                } else {
-                    ptDebugLine('warn', 'Anchor index could not be resolved to a sub-bar', {
-                        sourceRowId: r.source_row_id,
-                        index: anchorRec.index
-                    });
-                }
-            }
 
             var projectedRow = ptCloneRowWithSubBar(r, sub, level);
             projected.push(projectedRow);
@@ -2308,8 +2241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             sourceTF: sourceTF,
             sourceRows: rows.length,
             subsFetched: subs.length,
-            projectedRows: projected.length,
-            anchorMarked: projected.filter(function (x) { return x._anchor_target; }).length
+            projectedRows: projected.length
         });
 
         var modal = document.getElementById('ptTradesModal');
@@ -2362,6 +2294,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
         }
 
+        if (out._parent_close_time == null) {
+            out._parent_open_time  = src.open_time  != null ? src.open_time  : null;
+            out._parent_close_time = src.close_time != null ? src.close_time : null;
+            out._parent_timeframe  = src.timeframe  != null ? src.timeframe  : (src._projected_from || null);
+        }
+
         out.candle_record_id    = sub.id;
         out.candle_time         = sub.time;
         out.open_time           = sub.open_time;
@@ -2382,14 +2320,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         out._projected_sub_time  = sub.time;
         out._projected_is_sub    = true;
 
-        out._anchor_target       = false;
-        out._anchor_src_row_id   = null;
-        out._anchor_index        = null;
-        out._anchor_tree_id      = null;
-
         return out;
     }
 
+    function ptResolveProjectedEntryStartIdx(row, entryIdx) {
+        if (entryIdx == null || entryIdx < 0) return null;
+
+        var closeTs = row && row._parent_close_time
+            ? ptNormTs(row._parent_close_time)
+            : '';
+
+        if (!closeTs && row && row._parent_open_time) {
+            var openTs = ptNormTs(row._parent_open_time);
+            var spanMs = ptTfMs(row._parent_timeframe || row._projected_from || row.timeframe || '');
+            if (openTs && spanMs) {
+                var openDate = ptDateFromTs(openTs);
+                if (openDate) {
+                    var closeDate = new Date(openDate.getTime() + spanMs);
+                    closeTs = ptTsFromDate(closeDate);
+                }
+            }
+        }
+
+        if (!closeTs && row && row.close_time) {
+            closeTs = ptNormTs(row.close_time);
+        }
+        if (!closeTs && row && row.open_time) {
+            var openTs2 = ptNormTs(row.open_time);
+            var spanMs2 = ptTfMs(row._projected_from || row.timeframe || '');
+            if (openTs2 && spanMs2) {
+                var openDate2 = ptDateFromTs(openTs2);
+                if (openDate2) {
+                    var closeDate2 = new Date(openDate2.getTime() + spanMs2);
+                    closeTs = ptTsFromDate(closeDate2);
+                }
+            }
+        }
+
+        if (!closeTs) {
+            return entryIdx + 1;
+        }
+
+        for (var i = entryIdx; i < PT_CANDLES.length; i++) {
+            var t = ptNormTs(PT_CANDLES[i].time);
+            if (t >= closeTs) return i;
+        }
+        return PT_CANDLES.length;
+    }
+
+    // ============================================================
+    // PROJECTED OUTCOME RE-EVALUATION — same markers, resolved on the
+    // lower TF and stored on each projected matched_trade row.
+    // ============================================================
     function ptReevaluateProjectedTradeOutcomes() {
         if (!PT_CANDLES.length) return;
 
@@ -2422,15 +2404,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
                 if (exitPrice == null && targetPrice == null) return;
 
+                var startIdx = ptResolveProjectedEntryStartIdx(r, entryIdx);
+                if (startIdx == null || startIdx >= PT_CANDLES.length) {
+                    r.outcome_status              = 'pending';
+                    r.outcome_candle_time         = null;
+                    r.outcome_price               = null;
+                    r._projected_outcome          = true;
+                    r._entry_triggered            = false;
+                    r._entry_trigger_idx          = null;
+                    r._entry_trigger_candle_time  = null;
+                    r._tp_hit_idx                 = null;
+                    r._tp_hit_candle_time         = null;
+                    r._sl_hit_idx                 = null;
+                    r._sl_hit_candle_time         = null;
+                    return;
+                }
+
                 var hitStatus = 'pending';
                 var hitTime   = null;
                 var hitPrice  = null;
+                var orderType = r.order_type || '';
+                var needsFill = ptOrderNeedsEntryFill(orderType);
+                var entryTriggered = !needsFill;
+                var entryTriggerIdx = needsFill ? null : entryIdx;
 
-                for (var i = entryIdx; i < PT_CANDLES.length; i++) {
+                for (var i = startIdx; i < PT_CANDLES.length; i++) {
                     var c = PT_CANDLES[i];
+                    if (!c) continue;
+
+                    if (!entryTriggered) {
+                        // Target before entry fill → missed
+                        if (targetPrice != null) {
+                            var tgtPre = (direction > 0) ? (c.high >= targetPrice) : (c.low <= targetPrice);
+                            if (tgtPre) {
+                                hitStatus = 'missed';
+                                hitTime  = c.time;
+                                hitPrice = targetPrice;
+                                break;
+                            }
+                        }
+                        if (entryPrice != null && ptEntryIsTriggeredOnCandle(orderType, c, entryPrice)) {
+                            entryTriggered = true;
+                            entryTriggerIdx = i;
+                            // same bar may also resolve TP/SL
+                        } else {
+                            continue;
+                        }
+                    }
+
                     var hitStop = false;
                     var hitTarget = false;
-
                     if (direction > 0) {
                         if (exitPrice  != null) hitStop   = (c.low  <= exitPrice);
                         if (targetPrice != null) hitTarget = (c.high >= targetPrice);
@@ -2446,9 +2469,271 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 r.outcome_status       = hitStatus;
                 r.outcome_candle_time  = hitTime;
                 r.outcome_price        = hitPrice;
+                r._entry_triggered     = entryTriggered;
+
+                // Resolve trigger / hit candle indices on the projected TF.
+                var trigIdx = null;
+                if (!needsFill) {
+                    trigIdx = entryIdx;
+                } else if (entryTriggerIdx != null && PT_CANDLES[entryTriggerIdx]) {
+                    trigIdx = entryTriggerIdx;
+                } else {
+                    trigIdx = entryIdx;
+                }
+                var trigCandle = PT_CANDLES[trigIdx] || null;
+
+                var tpIdx = null;
+                var tpCandle = null;
+                var slIdx = null;
+                var slCandle = null;
+                if (hitStatus === 'profit' && hitTime != null && idxByTime[hitTime] != null) {
+                    tpIdx = idxByTime[hitTime];
+                    tpCandle = PT_CANDLES[tpIdx] || null;
+                } else if (hitStatus === 'stop' && hitTime != null && idxByTime[hitTime] != null) {
+                    slIdx = idxByTime[hitTime];
+                    slCandle = PT_CANDLES[slIdx] || null;
+                }
+
+                r._entry_trigger_idx          = trigIdx;
+                r._entry_trigger_candle_time  = trigCandle ? trigCandle.time : null;
+                r._tp_hit_idx                 = tpIdx;
+                r._tp_hit_candle_time         = tpCandle ? tpCandle.time : null;
+                r._sl_hit_idx                 = slIdx;
+                r._sl_hit_candle_time         = slCandle ? slCandle.time : null;
+
                 r._projected_outcome   = true;
             });
         });
+    }
+
+    // ============================================================
+    // PROJECTED LONG/SHORT OVERLAY — reads trigger / hit markers
+    // recorded on the projected row by ptReevaluateProjectedTradeOutcomes.
+    // ============================================================
+    // ============================================================
+    // PROJECTED LONG/SHORT OVERLAY — reads trigger / hit markers
+    // recorded on the projected row by ptReevaluateProjectedTradeOutcomes.
+    //
+    // IMPORTANT: the recorded *_idx values live in the SOURCE TF's candle
+    // array (they were produced while scanning the higher-TF series that
+    // was projected down). When drawing on the LOWER TF we must re-map
+    // them via the recorded *_candle_time strings — the *_idx values are
+    // only meaningful against the source TF's own array. Falls back to
+    // the raw index only when the corresponding time string is missing.
+    // ============================================================
+    function ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
+        if (!PT_DRAW_CTX) return;
+        if (!PT_CANDLES.length) return;
+        if (!rows.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        var projByName = {};
+        var projByTreeRole = {};
+        rows.forEach(function (r) {
+            var nm = (r.candle_name || '').trim();
+            if (nm) {
+                if (!projByName[nm]) projByName[nm] = [];
+                projByName[nm].push(r);
+            }
+            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
+            if (!projByTreeRole[key]) projByTreeRole[key] = [];
+            projByTreeRole[key].push(r);
+        });
+
+        var halfBody = PT_VIEW.candleWidth / 2;
+
+        PT_DRAW_CTX.save();
+
+        rows.forEach(function (entryRow) {
+            if (entryRow.row_role !== 'matched_trade') return;
+            if (!entryRow.resolved_direction) return;
+
+            // No overlay for missed entries — price reached TP without filling entry
+            if (entryRow.outcome_status === 'missed') return;
+            if (entryRow._entry_triggered === false) return;
+
+            var treeId = entryRow.tree_id || 0;
+
+            // Resolve the entry candle index on the CURRENT (lower) TF.
+            var entryIdx = idxByTime[entryRow.candle_time];
+            if (entryIdx == null) return;
+            if (entryIdx > lastVisible) return;
+
+            var entryPrice = (entryRow.entry_price != null)
+                ? entryRow.entry_price
+                : (entryRow.candle_center != null ? entryRow.candle_center : entryRow.close);
+            if (entryPrice == null) return;
+
+            function resolveTo(key) {
+                if (!key) return null;
+                var bare = key.replace(/_(axis|specific_price_level)$/, '');
+                var candidates = projByName[bare] || [];
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i].tree_id === treeId) {
+                        var ci = idxByTime[candidates[i].candle_time];
+                        if (ci != null) return ci;
+                    }
+                }
+                for (var j = 0; j < candidates.length; j++) {
+                    var cj = idxByTime[candidates[j].candle_time];
+                    if (cj != null) return cj;
+                }
+                if (bare === 'ROOT') {
+                    var roots = projByTreeRole[treeId + '|matched_root'] || [];
+                    for (var k = 0; k < roots.length; k++) {
+                        if (roots[k].is_foundation) {
+                            var rk = idxByTime[roots[k].candle_time];
+                            if (rk != null) return rk;
+                        }
+                    }
+                    if (roots.length) {
+                        var r0 = idxByTime[roots[0].candle_time];
+                        if (r0 != null) return r0;
+                    }
+                }
+                var refMatch = /^REF:(\d+)$/.exec(bare);
+                if (refMatch) {
+                    var n = parseInt(refMatch[1], 10);
+                    var refs = projByTreeRole[treeId + '|matched_ref'] || [];
+                    if (refs[n]) {
+                        var rn = idxByTime[refs[n].candle_time];
+                        if (rn != null) return rn;
+                    }
+                }
+                return null;
+            }
+
+            var exitIdx   = null;
+            var exitPrice = (entryRow.exit_price != null) ? entryRow.exit_price : null;
+            if (entryRow.exit_at) {
+                exitIdx = resolveTo(entryRow.exit_at);
+                if (exitPrice == null && exitIdx != null) {
+                    var ec = PT_CANDLES[exitIdx];
+                    if (ec) {
+                        var lvl = entryRow.exit_at_price_level;
+                        exitPrice = (lvl && ec[lvl] != null) ? ec[lvl] : ec.close;
+                    }
+                }
+            }
+
+            var targetIdx   = null;
+            var targetPrice = (entryRow.target_price != null)
+                ? entryRow.target_price
+                : (entryRow.resolved_price != null ? entryRow.resolved_price : null);
+
+            var isRR = (entryRow.target === 'minimum_risk_reward' ||
+                        entryRow.target === 'fixed_risk_reward');
+
+            if (!isRR && entryRow.target) {
+                targetIdx = resolveTo(entryRow.target);
+                if (targetPrice == null && targetIdx != null) {
+                    var tc = PT_CANDLES[targetIdx];
+                    if (tc) {
+                        var lvl2 = entryRow.target_price_level;
+                        targetPrice = (lvl2 && tc[lvl2] != null) ? tc[lvl2] : tc.close;
+                    }
+                }
+            }
+
+            if (exitPrice == null || targetPrice == null) return;
+
+            // ------------------------------------------------------------
+            // Resolve trigger index on the CURRENT (lower) TF.
+            //
+            // The stored _entry_trigger_idx refers to the position in the
+            // SOURCE TF's array. Re-map by time first; only fall back to
+            // the raw index if the time string is absent.
+            // ------------------------------------------------------------
+            var triggerIdx = null;
+            if (entryRow._entry_trigger_candle_time &&
+                idxByTime[entryRow._entry_trigger_candle_time] != null) {
+                triggerIdx = idxByTime[entryRow._entry_trigger_candle_time];
+            } else if (entryRow.entry_trigger_candle_time &&
+                       idxByTime[entryRow.entry_trigger_candle_time] != null) {
+                triggerIdx = idxByTime[entryRow.entry_trigger_candle_time];
+            } else if (entryRow._entry_trigger_idx != null) {
+                triggerIdx = entryRow._entry_trigger_idx;
+            } else if (entryRow.entry_trigger_idx != null) {
+                triggerIdx = entryRow.entry_trigger_idx;
+            } else {
+                triggerIdx = entryIdx;
+            }
+
+            // ------------------------------------------------------------
+            // Resolve resolution (TP / SL hit) index on the CURRENT TF.
+            // Same reasoning — prefer the recorded *_candle_time strings,
+            // fall back to the recorded indices, then to outcome_candle_time.
+            // ------------------------------------------------------------
+            var resolutionIdx = null;
+
+            if (entryRow.outcome_status === 'profit') {
+                if (entryRow._tp_hit_candle_time && idxByTime[entryRow._tp_hit_candle_time] != null) {
+                    resolutionIdx = idxByTime[entryRow._tp_hit_candle_time];
+                } else if (entryRow.tp_hit_candle_time && idxByTime[entryRow.tp_hit_candle_time] != null) {
+                    resolutionIdx = idxByTime[entryRow.tp_hit_candle_time];
+                } else if (entryRow._tp_hit_idx != null) {
+                    resolutionIdx = entryRow._tp_hit_idx;
+                } else if (entryRow.tp_hit_idx != null) {
+                    resolutionIdx = entryRow.tp_hit_idx;
+                }
+            } else if (entryRow.outcome_status === 'stop') {
+                if (entryRow._sl_hit_candle_time && idxByTime[entryRow._sl_hit_candle_time] != null) {
+                    resolutionIdx = idxByTime[entryRow._sl_hit_candle_time];
+                } else if (entryRow.sl_hit_candle_time && idxByTime[entryRow.sl_hit_candle_time] != null) {
+                    resolutionIdx = idxByTime[entryRow.sl_hit_candle_time];
+                } else if (entryRow._sl_hit_idx != null) {
+                    resolutionIdx = entryRow._sl_hit_idx;
+                } else if (entryRow.sl_hit_idx != null) {
+                    resolutionIdx = entryRow.sl_hit_idx;
+                }
+            }
+
+            if (resolutionIdx == null) {
+                if (entryRow.outcome_candle_time && idxByTime[entryRow.outcome_candle_time] != null) {
+                    resolutionIdx = idxByTime[entryRow.outcome_candle_time];
+                } else if (targetIdx != null && entryRow.outcome_status === 'profit') {
+                    resolutionIdx = targetIdx;
+                } else if (exitIdx != null && entryRow.outcome_status === 'stop') {
+                    resolutionIdx = exitIdx;
+                } else {
+                    resolutionIdx = lastVisible;
+                }
+            }
+
+            var hitSide = '';
+            var st = entryRow.outcome_status || '';
+            if (st === 'profit')    hitSide = 'target';
+            else if (st === 'stop') hitSide = 'stop';
+
+            if (resolutionIdx <= entryIdx) resolutionIdx = entryIdx + 1;
+            if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
+            if (triggerIdx < entryIdx)       triggerIdx = entryIdx;
+            if (triggerIdx > resolutionIdx)  triggerIdx = resolutionIdx;
+
+            if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
+            if (entryIdx > lastVisible) return;
+
+            var entryCenterX      = baseX + entryIdx     * step + step / 2;
+            var triggerCenterX    = baseX + triggerIdx   * step + step / 2;
+            var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
+
+            var x1       = entryCenterX - halfBody;
+            var x2       = resolutionCenterX + halfBody;
+            var xTrigger = triggerCenterX - halfBody;
+            if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
+
+            var yEntry  = pToY(entryPrice);
+            var yStop   = pToY(exitPrice);
+            var yTarget = pToY(targetPrice);
+
+            if (yEntry < chartTop - 4000 || yEntry > chartBottom + 4000) return;
+
+            ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide);
+        });
+
+        PT_DRAW_CTX.restore();
     }
 
     function ptRefreshTradeButtonSafe() {
@@ -2813,6 +3098,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var rr = (hit.targetRR && hit.targetRR.ratio != null) ? hit.targetRR.ratio : 0;
             var status = hit.outcome ? hit.outcome.status : 'pending';
 
+            // Missed entries never entered — exclude from win/loss, liquidity, consecutive losses
+            if (status === 'missed') {
+                return;
+            }
+
             if (status === 'stop' || status === 'profit') {
                 stats.resolved++;
                 if (status === 'stop') stats.losses++;
@@ -2948,12 +3238,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var wonCount    = 0;
         var lostCount   = 0;
         var pendCount   = 0;
+        var missedCount = 0;
 
         hits.forEach(function (h) {
             totalHits++;
             var rr = (h.targetRR && h.targetRR.ratio != null) ? h.targetRR.ratio : 0;
-            sumRR += rr;
             var st = h.outcome ? h.outcome.status : 'pending';
+            // Missed entries do not contribute to R:R totals or win/loss
+            if (st === 'missed') {
+                missedCount++;
+                return;
+            }
+            sumRR += rr;
             if (st === 'profit')      { sumWinRR  += rr; wonCount++;  }
             else if (st === 'stop')   { sumLossRR += rr; lostCount++; }
             else                      { pendCount++; }
@@ -2994,6 +3290,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         html += '      <span class="pt-tsc-label">Lost R:R (' + lostCount + ')</span>';
         html += '      <span class="pt-tsc-value">' + sumLossRR.toFixed(2) + '</span>';
         html += '    </div>';
+
+        if (missedCount > 0) {
+            html += '    <div class="pt-tsc-cell pt-tsc-danger">';
+            html += '      <span class="pt-tsc-label">Missed Entries</span>';
+            html += '      <span class="pt-tsc-value">' + missedCount + '</span>';
+            html += '    </div>';
+        }
 
         if (pendCount > 0) {
             html += '    <div class="pt-tsc-cell pt-tsc-pending">';
@@ -3061,182 +3364,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
 
     // ============================================================
-    // ANCHOR HELPERS
-    // ============================================================
-    function ptTreeIsAnchored(tree) {
-        return !!(tree
-            && tree.anchor_candle_id != null
-            && tree.anchor_candle_index);
-    }
-
-    function ptFindAnchorRow(tree) {
-        if (!tree || tree.anchor_candle_id == null) return null;
-        var id = parseInt(tree.anchor_candle_id, 10);
-        if (isNaN(id)) return null;
-
-        if (tree.anchor_row && parseInt(tree.anchor_row.id, 10) === id) {
-            return tree.anchor_row;
-        }
-
-        var pools = [tree.roots || [], tree.drawings || [], tree.trades || []];
-        for (var p = 0; p < pools.length; p++) {
-            for (var i = 0; i < pools[p].length; i++) {
-                if (parseInt(pools[p][i].id, 10) === id) return pools[p][i];
-            }
-        }
-
-        var roots = tree.roots || [];
-        for (var r = 0; r < roots.length; r++) {
-            var refs = roots[r].root_refs || [];
-            for (var j = 0; j < refs.length; j++) {
-                if (parseInt(refs[j].id, 10) === id) return refs[j];
-            }
-        }
-
-        return null;
-    }
-
-    // ============================================================
-    // ANCHOR RESOLUTION (single-candle semantics)
-    // ============================================================
-    function ptFindAnchorMatches(tree, firstVisible, lastVisible) {
-        var anchorRow = ptFindAnchorRow(tree);
-        if (!anchorRow) return [];
-        if (!anchorRow.price_level) return [];
-
-        // ── Path 1: exact candle_time on the anchor row ─────────────
-        if (anchorRow.candle_time) {
-            var wantTime = ptNormTs(anchorRow.candle_time);
-            for (var i = 0; i < PT_CANDLES.length; i++) {
-                if (ptNormTs(PT_CANDLES[i].time) === wantTime) {
-                    return [i];
-                }
-            }
-            return [];
-        }
-
-        // ── Path 2: resolve via persisted matches by source_row_id ──
-        if (anchorRow.source_row_id != null && PT_PERSISTED_MATCHES.length) {
-            var srcId = parseInt(anchorRow.source_row_id, 10);
-            for (var p = 0; p < PT_PERSISTED_MATCHES.length; p++) {
-                var pm = PT_PERSISTED_MATCHES[p];
-                if (pm.source_row_id === srcId && pm.candle_time) {
-                    var wantTime2 = ptNormTs(pm.candle_time);
-                    for (var k = 0; k < PT_CANDLES.length; k++) {
-                        if (ptNormTs(PT_CANDLES[k].time) === wantTime2) {
-                            return [k];
-                        }
-                    }
-                }
-            }
-            return [];
-        }
-
-        // ── Path 3: first pattern match only ────────────────────────
-        var anchorPos = parseInt(anchorRow.candle_position, 10);
-        if (isNaN(anchorPos)) anchorPos = 0;
-
-        var refs = anchorRow.root_refs || [];
-        var firstRef = null;
-        for (var q = 0; q < refs.length; q++) {
-            if (refs[q].row_role === 'root_ref') { firstRef = refs[q]; break; }
-        }
-
-        var refRow = null;
-        var refPos = 0;
-        if (firstRef) {
-            refRow = firstRef;
-            refPos = parseInt(firstRef.candle_position, 10);
-            if (isNaN(refPos)) refPos = 0;
-        }
-
-        var probe = {
-            id:              anchorRow.id,
-            candle_name:     anchorRow.candle_name,
-            price_level:     anchorRow.price_level,
-            timeframe:       PT_CURRENT_TIMEFRAME,
-            candle_type:     anchorRow.candle_type,
-            candle_position: anchorPos,
-            candle_search:   '',
-            operator:        anchorRow.operator,
-            root_refs:       refRow ? [{
-                id:              refRow.id,
-                row_role:        'root_ref',
-                candle_name:     refRow.candle_name,
-                price_level:     refRow.price_level,
-                candle_type:     refRow.candle_type,
-                candle_position: refPos,
-                candle_search:   '',
-                operator:        refRow.operator,
-                re_ref_pairs:    []
-            }] : []
-        };
-
-        var lo = firstVisible;
-        var hi = lastVisible;
-        if (anchorPos > 0) lo = Math.max(lo, firstVisible - anchorPos);
-        if (anchorPos < 0) hi = Math.min(hi, lastVisible - anchorPos);
-        if (refRow && refPos > 0) hi = Math.min(hi, lastVisible - refPos);
-        if (refRow && refPos < 0) lo = Math.max(lo, firstVisible - refPos);
-
-        for (var m = lo; m <= hi; m++) {
-            if (ptRootMatchesAt(probe, m, firstVisible, lastVisible)) {
-                return [m + anchorPos];
-            }
-        }
-
-        return [];
-    }
-
-    function ptEvaluateTreeAtAnchor(tree, originIdx, firstVisible, lastVisible) {
-        var roots = tree.roots || [];
-        if (!roots.length) return [];
-
-        var treeTf = roots[0].timeframe;
-        if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return [];
-
-        var sorted = roots.slice().sort(function (a, b) {
-            var pa = parseInt(a.evaluation_priority, 10) || 1;
-            var pb = parseInt(b.evaluation_priority, 10) || 1;
-            return pa - pb;
-        });
-
-        var foundation = sorted[0];
-        var fOff = parseInt(foundation.candle_position, 10);
-        if (isNaN(fOff)) fOff = 0;
-        var fAbs = originIdx + fOff;
-
-        if (!ptRootMatchesAt(foundation, fAbs, firstVisible, lastVisible)) {
-            return [];
-        }
-
-        var matched = [{ root: foundation, absIdx: fAbs }];
-
-        for (var r = 1; r < sorted.length; r++) {
-            var hr  = sorted[r];
-            var off = parseInt(hr.candle_position, 10);
-            if (isNaN(off)) off = 0;
-            var hAbs = originIdx + off;
-            if (ptRootMatchesAt(hr, hAbs, firstVisible, lastVisible)) {
-                matched.push({ root: hr, absIdx: hAbs });
-            }
-        }
-        return matched;
-    }
-
-    // ============================================================
     // SCAN
+    // ============================================================
+    // ============================================================
+    // SCAN — records trigger / TP / SL candle indices on every
+    // matched_trade row so downstream draw code never re-derives them.
     // ============================================================
     function ptScanTrades() {
         var out = [];
         if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
         if (!PT_CANDLES.length) return out;
-
-        var anchorLookup = ptBuildAnchorLookup();
-
-        function anchorFlagFor(rowId) {
-            return ptNativeAnchorFlag(rowId, anchorLookup);
-        }
 
         PT_TREES.forEach(function (tree) {
             var roots = tree.roots || [];
@@ -3250,27 +3387,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var seenEntryByRule = {};
             var matchedFlat = [];
 
-            var anchored = ptTreeIsAnchored(tree);
-
-            if (anchored) {
-                var treeTf = roots[0].timeframe;
-                if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return;
-            }
-
-            var origins = [];
-            if (anchored) {
-                origins = ptFindAnchorMatches(tree, 0, PT_CANDLES.length - 1);
-                if (!origins.length) return;
-            } else {
-                for (var z = 0; z < PT_CANDLES.length; z++) origins.push(z);
-            }
-
-            for (var oi = 0; oi < origins.length; oi++) {
-                var origin = origins[oi];
-
-                var matched = anchored
-                    ? ptEvaluateTreeAtAnchor(tree, origin, 0, PT_CANDLES.length - 1)
-                    : ptEvaluateTreeAt(tree, origin, 0, PT_CANDLES.length - 1);
+            for (var origin = 0; origin < PT_CANDLES.length; origin++) {
+                var matched = ptEvaluateTreeAt(tree, origin, 0, PT_CANDLES.length - 1);
                 if (!matched.length) continue;
 
                 var foundationMatch = matched[0];
@@ -3284,8 +3402,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var root = m.root;
                     var rc   = PT_CANDLES[m.absIdx];
                     if (!rc) return;
-
-                    var rootAnchor = anchorFlagFor(root.id);
 
                     matchedFlat.push({
                         row_role:          'matched_root',
@@ -3312,9 +3428,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         operator:          root.operator,
                         is_foundation:     mi === 0 ? 1 : 0,
                         evaluation_priority: mi + 1,
-                        status:            'matched',
-                        anchor_match:      rootAnchor.anchor_match,
-                        anchor_match_index: rootAnchor.anchor_match_index
+                        status:            'matched'
                     });
 
                     (root.root_refs || []).forEach(function (ref) {
@@ -3324,8 +3438,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         if (refAbs < 0 || refAbs >= PT_CANDLES.length) return;
                         var rfc = PT_CANDLES[refAbs];
                         if (!rfc) return;
-
-                        var refAnchor = anchorFlagFor(ref.id);
 
                         matchedFlat.push({
                             row_role:          'matched_ref',
@@ -3351,17 +3463,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             candle_search:     ref.candle_search,
                             operator:          root.operator,
                             evaluation_priority: mi + 1,
-                            status:            'matched',
-                            anchor_match:      refAnchor.anchor_match,
-                            anchor_match_index: refAnchor.anchor_match_index
+                            status:            'matched'
                         });
 
                         (ref.re_ref_pairs || []).forEach(function (pair) {
                             var a = pair.author, b = pair.referenced;
                             if (!a || !b) return;
-
-                            var aAnchor = anchorFlagFor(a.id);
-                            var bAnchor = anchorFlagFor(b.id);
 
                             matchedFlat.push({
                                 row_role:          'matched_reref_author',
@@ -3387,9 +3494,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     a.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
-                                status:            'matched',
-                                anchor_match:      aAnchor.anchor_match,
-                                anchor_match_index: aAnchor.anchor_match_index
+                                status:            'matched'
                             });
                             matchedFlat.push({
                                 row_role:          'matched_reref_servant',
@@ -3415,9 +3520,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     b.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
-                                status:            'matched',
-                                anchor_match:      bAnchor.anchor_match,
-                                anchor_match_index: bAnchor.anchor_match_index
+                                status:            'matched'
                             });
                         });
                     });
@@ -3428,8 +3531,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
                     var fc = PT_CANDLES[fromIdx];
                     if (!fc) return;
-
-                    var drAnchor = anchorFlagFor(dr.id);
 
                     matchedFlat.push({
                         row_role:              'matched_drawing',
@@ -3456,9 +3557,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         draw_to_price_level:   dr.draw_to_price_level,
                         drawing_color:         dr.drawing_color,
                         evaluation_priority:   1,
-                        status:                'matched',
-                        anchor_match:          drAnchor.anchor_match,
-                        anchor_match_index:    drAnchor.anchor_match_index
+                        status:                'matched'
                     });
                 });
 
@@ -3523,22 +3622,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         : (target && target.price != null ? target.price : null);
                     var outcome;
                     if (direction !== 0 && exit && exit.price != null) {
-                        outcome = ptDetectTradeOutcome(entry, exit, targetPrice, direction, null);
+                        outcome = ptDetectTradeOutcome(entry, exit, targetPrice, direction, null, trade.order_type);
                     } else {
-                        outcome = { status: 'pending', candleIdx: null, candle: null, price: null };
+                        outcome = { status: 'pending', candleIdx: null, candle: null, price: null,
+                                    entryTriggered: false, entryTriggerIdx: null };
                     }
-
-                    hits.push({
-                        trade:     trade,
-                        entry:     entry,
-                        exit:      exit,
-                        target:    target,
-                        targetRR:  targetRR,
-                        direction: direction,
-                        outcome:   outcome,
-                        i0:        origin,
-                        matched:   matched
-                    });
 
                     var entryCandle = entry.candle;
                     var entryPrice  = (entry.price != null) ? entry.price : null;
@@ -3547,9 +3635,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                         ? targetRR.price
                                         : (target && target.price != null ? target.price : null);
 
-                    var trAnchor = anchorFlagFor(trade.id);
+                    // Recorded trigger / hit candle indices for this trade.
+                    var entryTriggerIdx = (outcome && outcome.entryTriggerIdx != null)
+                        ? outcome.entryTriggerIdx
+                        : entry.idx;
+                    var entryTriggerCandle = PT_CANDLES[entryTriggerIdx] || entryCandle;
 
-                    matchedFlat.push({
+                    var tpHitIdx = null;
+                    var tpHitCandle = null;
+                    var slHitIdx = null;
+                    var slHitCandle = null;
+
+                    if (outcome && outcome.candleIdx != null) {
+                        if (outcome.status === 'profit') {
+                            tpHitIdx = outcome.candleIdx;
+                            tpHitCandle = PT_CANDLES[tpHitIdx] || null;
+                        } else if (outcome.status === 'stop') {
+                            slHitIdx = outcome.candleIdx;
+                            slHitCandle = PT_CANDLES[slHitIdx] || null;
+                        }
+                    }
+
+                    var matchedTradeRow = {
                         row_role:          'matched_trade',
                         source_row_id:     trade.id || null,
                         candle_record_id:  entryCandle ? (entryCandle.id || null) : null,
@@ -3592,15 +3699,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         resolved_reward:   targetRR ? targetRR.reward : null,
                         resolved_ratio:    targetRR ? targetRR.ratio  : null,
 
+                        // Persisted trigger / hit markers.
+                        entry_trigger_idx:          entryTriggerIdx,
+                        entry_trigger_candle_time:  entryTriggerCandle ? entryTriggerCandle.time : null,
+                        tp_hit_idx:                 tpHitIdx,
+                        tp_hit_candle_time:         tpHitCandle ? tpHitCandle.time : null,
+                        sl_hit_idx:                 slHitIdx,
+                        sl_hit_candle_time:         slHitCandle ? slHitCandle.time : null,
+
                         outcome_status:    outcome.status,
                         outcome_candle_time: outcome.candle ? outcome.candle.time : null,
                         outcome_price:     outcome.price,
                         evaluation_priority: ti + 1,
                         status:            outcome.status === 'profit' ? 'resolved_win'
                                             : outcome.status === 'stop' ? 'resolved_loss'
-                                            : 'pending',
-                        anchor_match:      trAnchor.anchor_match,
-                        anchor_match_index: trAnchor.anchor_match_index
+                                            : outcome.status === 'missed' ? 'missed_entry'
+                                            : 'pending'
+                    };
+                    matchedFlat.push(matchedTradeRow);
+
+                    hits.push({
+                        trade:            trade,
+                        entry:            entry,
+                        exit:             exit,
+                        target:           target,
+                        targetRR:         targetRR,
+                        direction:        direction,
+                        outcome:          outcome,
+                        i0:               origin,
+                        matched:          matched,
+                        matchedTradeRow:  matchedTradeRow
                     });
                 });
             }
@@ -3720,6 +3848,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             } else if (hit.outcome.status === 'profit') {
                 statusText = 'Profit reached';
                 statusCls  = 'up';
+            } else if (hit.outcome.status === 'missed') {
+                statusText = 'Missed entry';
+                statusCls  = 'dn';
             } else {
                 statusText = 'Pending';
                 statusCls  = '';
@@ -3849,48 +3980,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         };
     }
 
-    function ptDetectTradeOutcome(entry, exitObj, targetPrice, direction, horizonIdx) {
-        if (!entry || !entry.candle || !exitObj || exitObj.price == null) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null };
+    // Returns true when the order-type entry condition is satisfied on candle `c`.
+    // buy_limit / sell_stop  → low must trade through (or at) entry from above
+    // buy_stop  / sell_limit → high must trade through (or at) entry from below
+    // buy / sell (market)    → treated as filled at the signal candle (always true)
+    function ptEntryIsTriggeredOnCandle(orderType, candle, entryPrice) {
+        if (!candle || entryPrice == null || isNaN(entryPrice)) return false;
+        var ot = (orderType || '').toLowerCase();
+        if (ot === 'buy_limit' || ot === 'sell_stop') {
+            return candle.low <= entryPrice;
+        }
+        if (ot === 'buy_stop' || ot === 'sell_limit') {
+            return candle.high >= entryPrice;
+        }
+        // market buy / sell — entry is considered filled at the indicated candle
+        return true;
+    }
+
+    function ptOrderNeedsEntryFill(orderType) {
+        var ot = (orderType || '').toLowerCase();
+        return (ot === 'buy_limit' || ot === 'sell_stop' ||
+                ot === 'buy_stop'  || ot === 'sell_limit');
+    }
+
+    /**
+     * Detect trade outcome with proper entry-fill gate.
+     *
+     * Scanning always starts at the candle AFTER the closed entry-indicated candle
+     * (entryIdx + 1). For limit/stop orders the entry must actually be hit first:
+     *   - buy_limit / sell_stop : low  <= entryPrice
+     *   - buy_stop  / sell_limit: high >= entryPrice
+     * If take-profit is reached on any candle before entry is filled → 'missed'.
+     * Stop-loss is only evaluated after entry has been filled.
+     * Market buy/sell are treated as filled immediately (no fill wait).
+     */
+    function ptDetectTradeOutcome(entry, exitObj, targetPrice, direction, horizonIdx, orderType) {
+        if (!entry || !entry.candle) {
+            return { status: 'pending', candleIdx: null, candle: null, price: null, entryTriggered: false, entryTriggerIdx: null };
         }
         var entryIdx = entry.idx;
         if (entryIdx == null || entryIdx < 0 || entryIdx >= PT_CANDLES.length) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null };
+            return { status: 'pending', candleIdx: null, candle: null, price: null, entryTriggered: false, entryTriggerIdx: null };
         }
-        var stopPrice = exitObj.price;
-        if (stopPrice == null) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null };
-        }
-        if (targetPrice == null || isNaN(targetPrice)) {
-            for (var s = entryIdx; s < PT_CANDLES.length; s++) {
-                if (horizonIdx != null && s > horizonIdx) break;
-                var cs = PT_CANDLES[s];
-                if (direction > 0  && cs.low  <= stopPrice) return { status: 'stop', candleIdx: s, candle: cs, price: stopPrice };
-                if (direction < 0  && cs.high >= stopPrice) return { status: 'stop', candleIdx: s, candle: cs, price: stopPrice };
-            }
-            return { status: 'pending', candleIdx: null, candle: null, price: null };
+        var entryPrice = (entry.price != null) ? entry.price : null;
+        var stopPrice  = (exitObj && exitObj.price != null) ? exitObj.price : null;
+
+        var startIdx = entryIdx + 1;
+        var lastIdx  = (horizonIdx != null) ? Math.min(horizonIdx, PT_CANDLES.length - 1) : (PT_CANDLES.length - 1);
+
+        var needsFill = ptOrderNeedsEntryFill(orderType);
+        var entryTriggered = !needsFill; // market orders are filled at signal
+        var entryTriggerIdx = needsFill ? null : entryIdx;
+
+        // No more candles after signal → pending
+        if (startIdx > lastIdx) {
+            return { status: 'pending', candleIdx: null, candle: null, price: null,
+                     entryTriggered: entryTriggered, entryTriggerIdx: entryTriggerIdx };
         }
 
-        var lastIdx = (horizonIdx != null) ? Math.min(horizonIdx, PT_CANDLES.length - 1) : (PT_CANDLES.length - 1);
-
-        for (var i = entryIdx; i <= lastIdx; i++) {
+        for (var i = startIdx; i <= lastIdx; i++) {
             var c = PT_CANDLES[i];
-            var hitStop = false;
+            if (!c) continue;
+
+            // --- Phase 1: wait for entry fill (limit/stop only) ---
+            if (!entryTriggered) {
+                // Did take-profit print before entry was ever filled?
+                if (targetPrice != null && !isNaN(targetPrice)) {
+                    var tgtHitPre = (direction > 0)
+                        ? (c.high >= targetPrice)
+                        : (c.low  <= targetPrice);
+                    if (tgtHitPre) {
+                        // Target reached without entry → missed entry
+                        return { status: 'missed', candleIdx: i, candle: c, price: targetPrice,
+                                 entryTriggered: false, entryTriggerIdx: null };
+                    }
+                }
+                // Check entry fill condition
+                if (entryPrice != null && ptEntryIsTriggeredOnCandle(orderType, c, entryPrice)) {
+                    entryTriggered = true;
+                    entryTriggerIdx = i;
+                    // Fall through: same candle can also hit stop/target after fill
+                } else {
+                    continue;
+                }
+            }
+
+            // --- Phase 2: entry is filled — evaluate stop then target ---
+            var hitStop   = false;
             var hitTarget = false;
 
             if (direction > 0) {
-                hitStop   = (c.low  <= stopPrice);
-                hitTarget = (c.high >= targetPrice);
-            } else {
-                hitStop   = (c.high >= stopPrice);
-                hitTarget = (c.low  <= targetPrice);
+                if (stopPrice   != null) hitStop   = (c.low  <= stopPrice);
+                if (targetPrice != null && !isNaN(targetPrice)) hitTarget = (c.high >= targetPrice);
+            } else if (direction < 0) {
+                if (stopPrice   != null) hitStop   = (c.high >= stopPrice);
+                if (targetPrice != null && !isNaN(targetPrice)) hitTarget = (c.low  <= targetPrice);
             }
 
-            if (hitStop)   return { status: 'stop',   candleIdx: i, candle: c, price: stopPrice };
-            if (hitTarget) return { status: 'profit', candleIdx: i, candle: c, price: targetPrice };
+            // Prefer stop if both print on the same bar (conservative)
+            if (hitStop)   return { status: 'stop',   candleIdx: i, candle: c, price: stopPrice,
+                                    entryTriggered: true, entryTriggerIdx: entryTriggerIdx };
+            if (hitTarget) return { status: 'profit', candleIdx: i, candle: c, price: targetPrice,
+                                    entryTriggered: true, entryTriggerIdx: entryTriggerIdx };
         }
 
-        return { status: 'pending', candleIdx: null, candle: null, price: null };
+        return { status: 'pending', candleIdx: null, candle: null, price: null,
+                 entryTriggered: entryTriggered, entryTriggerIdx: entryTriggerIdx };
     }
 
     function ptTradeDirection(trade) {
@@ -3971,26 +4166,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         rows.forEach(function (r) {
             if (!byTree[r.tree_id]) {
                 byTree[r.tree_id] = {
-                    tree_id:              r.tree_id,
-                    roots:                [],
-                    drawings:             [],
-                    trades:               [],
-                    _orphans:             [],
-                    anchor_candle_id:     null,
-                    anchor_candle_index:  null,
-                    anchor_row:           null
+                    tree_id:   r.tree_id,
+                    roots:     [],
+                    drawings:  [],
+                    trades:    [],
+                    _orphans:  []
                 };
             }
 
             var t = byTree[r.tree_id];
-
-            if (t.anchor_candle_id === null
-                && r.anchor_candle_id != null
-                && r.anchor_candle_index) {
-                t.anchor_candle_id    = parseInt(r.anchor_candle_id, 10);
-                t.anchor_candle_index = String(r.anchor_candle_index);
-                t.anchor_row          = r;
-            }
 
             if (r.row_role === 'root')             t.roots.push(r);
             else if (r.row_role === 'drawing')     t.drawings.push(r);
@@ -4748,10 +4932,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_CTX.fillText(priceText, chipX2 + boxW2 / 2, chipY2 + boxH2 / 2 + 0.5);
         }
 
-        // ---- Draw native programme drawings ----
         ptDrawProgrammeDrawings(pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
 
-        // ---- Draw ALL projected drawings (from every source TF) ----
         if (PT_PROJECTION_MODES.length) {
             PT_PROJECTION_MODES.forEach(function (m) {
                 var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
@@ -4760,12 +4942,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             });
         }
 
-        // ---- Projected anchor markers (the 'A' glyph) ----
-        if (PT_PROJECTION_MODES.length) {
-            ptDrawProjectedAnchorMarkers(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-        }
-
-        // ---- Long/short overlays ----
         if (PT_LONG_SHORT_ON) {
             ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
             if (PT_PROJECTION_MODES.length) {
@@ -4783,202 +4959,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_CANVAS._ptChartBot = chartBottom;
 
         ptUpdateJumpLatestVisibility();
-    }
-
-    // ============================================================
-    // CURRENT TF / TREE / TREE-TF CONTEXT RESOLVER
-    // ============================================================
-    // For the currently displayed timeframe (PT_CURRENT_TIMEFRAME) this walks
-    // every configured tree and reports:
-    //   - the current timeframe we are on
-    //   - the tree's configured timeframe (treeTf, from roots[0].timeframe)
-    //   - the tree id
-    //   - whether the tree is anchored (has anchor_candle_id + anchor_candle_index)
-    //   - the anchor's config row id + anchor_candle_index (the relative offset)
-    //   - the resolved anchor candle index/time on the CURRENT chart
-    //
-    // This is the single source of truth for "which tree / which TF / which
-    // anchor" the 'A' glyph belongs to.
-    function ptGetCurrentTreeTfContext() {
-        var out = {
-            currentTimeframe: PT_CURRENT_TIMEFRAME,
-            currentSymbol:    PT_CURRENT_SYMBOL,
-            projectionMode:   PT_PROJECTION_MODES.length > 0,
-            trees:            []
-        };
-
-        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
-
-        PT_TREES.forEach(function (tree) {
-            var roots = tree.roots || [];
-            if (!roots.length) return;
-
-            var treeTf = roots[0].timeframe || null;
-            var anchored = ptTreeIsAnchored(tree);
-
-            // Only report trees whose native TF matches the chart we are on,
-            // OR (in projection mode) any tree we can project. When not in
-            // projection mode, native-only.
-            var isNative = (treeTf === PT_CURRENT_TIMEFRAME);
-            var isProjectable = out.projectionMode && treeTf && treeTf !== PT_CURRENT_TIMEFRAME;
-
-            if (!isNative && !isProjectable) return;
-
-            var anchorRow   = ptFindAnchorRow(tree);
-            var anchorRowId = anchorRow ? anchorRow.id : null;
-
-            // Resolve the anchor to an actual candle on THIS chart (native only;
-            // projections resolve their own anchor inside ptBuildProjectionFromSubs).
-            var resolvedAnchorIdx  = null;
-            var resolvedAnchorTime = null;
-
-            if (isNative && anchored) {
-                var origins = ptFindAnchorMatches(tree, 0, PT_CANDLES.length - 1);
-                if (origins.length) {
-                    resolvedAnchorIdx  = origins[0];
-                    var ac = PT_CANDLES[resolvedAnchorIdx];
-                    resolvedAnchorTime = ac ? ac.time : null;
-                }
-            }
-
-            out.trees.push({
-                treeId:             tree.tree_id,
-                treeTf:             treeTf,
-                matchesCurrentTf:   isNative,
-                isProjectable:      isProjectable,
-                anchored:           anchored,
-                anchorCandleId:     tree.anchor_candle_id != null ? tree.anchor_candle_id : null,
-                anchorCandleIndex:  tree.anchor_candle_index != null ? String(tree.anchor_candle_index) : null,
-                anchorRowRole:      anchorRow ? anchorRow.row_role : null,
-                anchorRowName:      anchorRow ? anchorRow.candle_name : null,
-                resolvedAnchorIdx:  resolvedAnchorIdx,
-                resolvedAnchorTime: resolvedAnchorTime
-            });
-        });
-
-        return out;
-    }
-
-    // ============================================================
-    // PROJECTED ANCHOR MARKERS
-    // ============================================================
-    function ptDrawProjectedAnchorMarkers(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!PT_CANDLES.length) return;
-        if (!PT_PROJECTION_MODES.length) return;
-
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
-
-        // ---- Resolve the current TF / tree / tree-TF context once ----
-        var ctx = ptGetCurrentTreeTfContext();
-
-        console.groupCollapsed(
-            '[PT Anchor] current TF=' + ctx.currentTimeframe +
-            '  symbol=' + ctx.currentSymbol +
-            '  projectionMode=' + ctx.projectionMode +
-            '  trees=' + ctx.trees.length
-        );
-        console.log('Current timeframe :', ctx.currentTimeframe);
-        console.log('Current symbol    :', ctx.currentSymbol);
-        console.log('Projection mode   :', ctx.projectionMode);
-        console.table(ctx.trees.map(function (t) {
-            return {
-                treeId:             t.treeId,
-                treeTf:             t.treeTf,
-                matchesCurrentTf:   t.matchesCurrentTf,
-                isProjectable:      t.isProjectable,
-                anchored:           t.anchored,
-                anchorCandleId:     t.anchorCandleId,
-                anchorCandleIndex:  t.anchorCandleIndex,
-                anchorRowRole:      t.anchorRowRole,
-                resolvedAnchorIdx:  t.resolvedAnchorIdx,
-                resolvedAnchorTime: t.resolvedAnchorTime
-            };
-        }));
-        console.groupEnd();
-
-        // Mirror into the debug console so it shows up alongside other events.
-        ptDebugLine('cfg', 'Anchor context resolved', {
-            currentTimeframe: ctx.currentTimeframe,
-            currentSymbol:    ctx.currentSymbol,
-            projectionMode:   ctx.projectionMode,
-            trees:            ctx.trees
-        });
-
-        var drawnKeys = {};
-        var glyphSize = Math.max(12, Math.min(20, PT_VIEW.candleWidth * 1.2));
-
-        PT_DRAW_CTX.save();
-        PT_DRAW_CTX.textAlign    = 'center';
-        PT_DRAW_CTX.textBaseline = 'alphabetic';
-        PT_DRAW_CTX.font         = 'bold ' + glyphSize + 'px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-        PT_DRAW_CTX.lineWidth    = 3;
-        PT_DRAW_CTX.strokeStyle  = 'rgba(0,0,0,0.85)';
-        PT_DRAW_CTX.fillStyle    = '#ffd54a';
-
-        PT_PROJECTION_MODES.forEach(function (mode) {
-            var rows = PT_PROJECTED_BY_TF[mode.sourceTF] || [];
-            if (!rows.length) return;
-
-            rows.forEach(function (r) {
-                if (!r._anchor_target) return;
-
-                var idx = idxByTime[r.candle_time];
-                if (idx == null) return;
-
-                if (idx < firstVisible || idx > lastVisible) return;
-
-                var dedupKey = (r._anchor_tree_id != null ? r._anchor_tree_id : 'x')
-                             + '|' + (r._anchor_src_row_id != null ? r._anchor_src_row_id : 'x')
-                             + '|' + r.candle_time;
-                if (drawnKeys[dedupKey]) return;
-                drawnKeys[dedupKey] = true;
-
-                var candle = PT_CANDLES[idx];
-                if (!candle) return;
-
-                var cx = baseX + idx * step + step / 2;
-                var yTop = pToY(candle.high);
-
-                if (yTop < chartTop - 200 || yTop > chartBottom + 200) return;
-
-                var glyphY = yTop - Math.max(4, glyphSize * 0.25);
-                if (glyphY < chartTop) glyphY = chartTop + glyphSize;
-
-                PT_DRAW_CTX.strokeText('A', cx, glyphY);
-                PT_DRAW_CTX.fillText('A', cx, glyphY);
-
-                // ---- Log which anchor this 'A' represents ----
-                var treeId    = r._anchor_tree_id != null ? r._anchor_tree_id : null;
-                var treeEntry = null;
-                for (var i = 0; i < ctx.trees.length; i++) {
-                    if (ctx.trees[i].treeId === treeId) { treeEntry = ctx.trees[i]; break; }
-                }
-
-                console.log(
-                    '[PT Anchor A] current TF=' + PT_CURRENT_TIMEFRAME +
-                    '  tree=' + (treeId != null ? treeId : '?') +
-                    '  treeTf=' + (treeEntry ? treeEntry.treeTf : '?') +
-                    '  anchorRowId=' + r._anchor_src_row_id +
-                    '  anchorIndex=' + r._anchor_index +
-                    '  candleTime=' + r.candle_time
-                );
-
-                ptDebugLine('cfg', 'A drawn', {
-                    currentTimeframe: PT_CURRENT_TIMEFRAME,
-                    sourceTimeframe:  mode.sourceTF,
-                    treeId:           treeId,
-                    treeTf:           treeEntry ? treeEntry.treeTf : null,
-                    anchorRowId:      r._anchor_src_row_id,
-                    anchorIndex:      r._anchor_index,
-                    candleTime:       r.candle_time,
-                    candleIdx:        idx
-                });
-            });
-        });
-
-        PT_DRAW_CTX.restore();
     }
 
     // ============================================================
@@ -5280,27 +5260,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             var drawings = tree.drawings || [];
             if (!drawings.length) return;
 
-            var anchored = ptTreeIsAnchored(tree);
-
-            if (anchored) {
-                var treeTf = roots[0].timeframe;
-                if (!treeTf || treeTf !== PT_CURRENT_TIMEFRAME) return;
-            }
-
-            var origins = [];
-            if (anchored) {
-                origins = ptFindAnchorMatches(tree, firstVisible, lastVisible);
-                if (!origins.length) return;
-            } else {
-                origins = ptRootCandidateIndices(firstVisible, lastVisible);
-            }
+            var origins = ptRootCandidateIndices(firstVisible, lastVisible);
 
             origins.forEach(function (origin) {
                 if (origin < 0 || origin >= PT_CANDLES.length) return;
 
-                var matched = anchored
-                    ? ptEvaluateTreeAtAnchor(tree, origin, firstVisible, lastVisible)
-                    : ptEvaluateTreeAt(tree, origin, firstVisible, lastVisible);
+                var matched = ptEvaluateTreeAt(tree, origin, firstVisible, lastVisible);
                 if (!matched.length) return;
 
                 var foundationMatch = matched[0];
@@ -5562,160 +5527,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_DRAW_CTX.stroke();
         }
     }
+    // Shared renderer: draws the red (risk) and green (reward) zones spanning
+    // from the entry candle body to the resolution candle. The reached side is
+    // split into two segments:
+    //   [x1 .. xTrigger] → light wash (from entry candle to trigger candle)
+    //   [xTrigger .. x2] → dim tone   (from trigger candle to TP/SL hit)
+    // The unreached side keeps a single light wash across the whole span.
+    function ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide) {
+        var RED_LIGHT   = 'rgba(231, 76, 60, 0.12)';
+        var RED_DIM     = 'rgba(231, 76, 60, 0.38)';
+        var GREEN_LIGHT = 'rgba(39, 174, 96, 0.12)';
+        var GREEN_DIM   = 'rgba(39, 174, 96, 0.38)';
 
-    function ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!PT_CANDLES.length) return;
-        if (!rows.length) return;
+        var redTop      = Math.min(yEntry, yStop);
+        var redBottom   = Math.max(yEntry, yStop);
+        var greenTop    = Math.min(yEntry, yTarget);
+        var greenBottom = Math.max(yEntry, yTarget);
 
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+        // Clamp the trigger split so it always lives inside [x1, x2].
+        if (xTrigger < x1) xTrigger = x1;
+        if (xTrigger > x2) xTrigger = x2;
 
-        var projByName = {};
-        var projByTreeRole = {};
-        rows.forEach(function (r) {
-            var nm = (r.candle_name || '').trim();
-            if (nm) {
-                if (!projByName[nm]) projByName[nm] = [];
-                projByName[nm].push(r);
+        var leftW  = xTrigger - x1;
+        var rightW = x2 - xTrigger;
+
+        if (hitSide === 'stop') {
+            // Unreached (green) — single light wash across the whole span.
+            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
+            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
+
+            // Reached (red) — light from entry to trigger, dim from trigger to hit.
+            PT_DRAW_CTX.fillStyle = RED_LIGHT;
+            PT_DRAW_CTX.fillRect(x1, redTop, leftW, redBottom - redTop);
+
+            if (rightW > 0) {
+                PT_DRAW_CTX.fillStyle = RED_DIM;
+                PT_DRAW_CTX.fillRect(xTrigger, redTop, rightW, redBottom - redTop);
             }
-            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
-            if (!projByTreeRole[key]) projByTreeRole[key] = [];
-            projByTreeRole[key].push(r);
-        });
-
-        var halfBody = PT_VIEW.candleWidth / 2;
-
-        PT_DRAW_CTX.save();
-
-        rows.forEach(function (entryRow) {
-            if (entryRow.row_role !== 'matched_trade') return;
-            if (!entryRow.resolved_direction) return;
-
-            var treeId = entryRow.tree_id || 0;
-
-            var entryIdx = idxByTime[entryRow.candle_time];
-            if (entryIdx == null) return;
-            if (entryIdx > lastVisible) return;
-
-            var entryPrice = (entryRow.entry_price != null)
-                ? entryRow.entry_price
-                : (entryRow.candle_center != null ? entryRow.candle_center : entryRow.close);
-            if (entryPrice == null) return;
-
-            function resolveTo(key) {
-                if (!key) return null;
-                var bare = key.replace(/_(axis|specific_price_level)$/, '');
-                var candidates = projByName[bare] || [];
-                for (var i = 0; i < candidates.length; i++) {
-                    if (candidates[i].tree_id === treeId) {
-                        var ci = idxByTime[candidates[i].candle_time];
-                        if (ci != null) return ci;
-                    }
-                }
-                for (var j = 0; j < candidates.length; j++) {
-                    var cj = idxByTime[candidates[j].candle_time];
-                    if (cj != null) return cj;
-                }
-                if (bare === 'ROOT') {
-                    var roots = projByTreeRole[treeId + '|matched_root'] || [];
-                    for (var k = 0; k < roots.length; k++) {
-                        if (roots[k].is_foundation) {
-                            var rk = idxByTime[roots[k].candle_time];
-                            if (rk != null) return rk;
-                        }
-                    }
-                    if (roots.length) {
-                        var r0 = idxByTime[roots[0].candle_time];
-                        if (r0 != null) return r0;
-                    }
-                }
-                var refMatch = /^REF:(\d+)$/.exec(bare);
-                if (refMatch) {
-                    var n = parseInt(refMatch[1], 10);
-                    var refs = projByTreeRole[treeId + '|matched_ref'] || [];
-                    if (refs[n]) {
-                        var rn = idxByTime[refs[n].candle_time];
-                        if (rn != null) return rn;
-                    }
-                }
-                return null;
-            }
-
-            var exitIdx   = null;
-            var exitPrice = (entryRow.exit_price != null) ? entryRow.exit_price : null;
-            if (entryRow.exit_at) {
-                exitIdx = resolveTo(entryRow.exit_at);
-                if (exitPrice == null && exitIdx != null) {
-                    var ec = PT_CANDLES[exitIdx];
-                    if (ec) {
-                        var lvl = entryRow.exit_at_price_level;
-                        exitPrice = (lvl && ec[lvl] != null) ? ec[lvl] : ec.close;
-                    }
-                }
-            }
-
-            var targetIdx   = null;
-            var targetPrice = (entryRow.target_price != null)
-                ? entryRow.target_price
-                : (entryRow.resolved_price != null ? entryRow.resolved_price : null);
-
-            var isRR = (entryRow.target === 'minimum_risk_reward' ||
-                        entryRow.target === 'fixed_risk_reward');
-
-            if (!isRR && entryRow.target) {
-                targetIdx = resolveTo(entryRow.target);
-                if (targetPrice == null && targetIdx != null) {
-                    var tc = PT_CANDLES[targetIdx];
-                    if (tc) {
-                        var lvl2 = entryRow.target_price_level;
-                        targetPrice = (lvl2 && tc[lvl2] != null) ? tc[lvl2] : tc.close;
-                    }
-                }
-            }
-
-            if (exitPrice == null || targetPrice == null) return;
-
-            var resolutionIdx = lastVisible;
-            if (entryRow.outcome_candle_time && idxByTime[entryRow.outcome_candle_time] != null) {
-                resolutionIdx = idxByTime[entryRow.outcome_candle_time];
-            } else if (targetIdx != null) {
-                resolutionIdx = targetIdx;
-            } else if (exitIdx != null) {
-                resolutionIdx = exitIdx;
-            }
-            if (resolutionIdx < entryIdx) resolutionIdx = entryIdx;
-            if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
-
-            if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
-
-            var entryCenterX      = baseX + entryIdx * step + step / 2;
-            var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
-
-            var x1 = entryCenterX - halfBody;
-            var x2 = resolutionCenterX + halfBody;
-            if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
-
-            var yEntry  = pToY(entryPrice);
-            var yStop   = pToY(exitPrice);
-            var yTarget = pToY(targetPrice);
-
-            if (yEntry < chartTop - 4000 || yEntry > chartBottom + 4000) return;
-
-            var redTop    = Math.min(yEntry, yStop);
-            var redBottom = Math.max(yEntry, yStop);
-            PT_DRAW_CTX.fillStyle = 'rgba(231, 76, 60, 0.12)';
+        } else if (hitSide === 'target') {
+            // Unreached (red) — single light wash across the whole span.
+            PT_DRAW_CTX.fillStyle = RED_LIGHT;
             PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
 
-            var greenTop    = Math.min(yEntry, yTarget);
-            var greenBottom = Math.max(yEntry, yTarget);
-            PT_DRAW_CTX.fillStyle = 'rgba(39, 174, 96, 0.12)';
-            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
-        });
+            // Reached (green) — light from entry to trigger, dim from trigger to hit.
+            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
+            PT_DRAW_CTX.fillRect(x1, greenTop, leftW, greenBottom - greenTop);
 
-        PT_DRAW_CTX.restore();
+            if (rightW > 0) {
+                PT_DRAW_CTX.fillStyle = GREEN_DIM;
+                PT_DRAW_CTX.fillRect(xTrigger, greenTop, rightW, greenBottom - greenTop);
+            }
+        } else {
+            // Unresolved / pending — keep both sides in their light state.
+            PT_DRAW_CTX.fillStyle = RED_LIGHT;
+            PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
+
+            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
+            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
+        }
     }
 
+    // ============================================================
+    // LIVE LONG/SHORT OVERLAY — reads trigger / hit markers directly
+    // from the matched_trade row that ptScanTrades produced.
+    // ============================================================
     function ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
         if (!PT_DRAW_CTX) return;
         if (!PT_CANDLES.length) return;
@@ -5729,6 +5604,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
         allHits.forEach(function (treeRes) {
             treeRes.hits.forEach(function (hit) {
+                // No overlay for missed entries — price reached TP without filling entry
+                if (hit.outcome && hit.outcome.status === 'missed') return;
+                if (hit.outcome && hit.outcome.entryTriggered === false) return;
+
                 var entry  = hit.entry;
                 var exitO  = hit.exit;
                 var target = hit.targetRR ? { price: hit.targetRR.price }
@@ -5738,27 +5617,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 if (!exitO || exitO.price == null) return;
                 if (!target || target.price == null) return;
 
+                // LEFT edge anchors on the ENTRY candle body itself.
                 var entryIdx = entry.idx;
+                if (entryIdx == null || entryIdx < 0) return;
+
                 var entryPrice  = entry.price;
                 var stopPrice   = exitO.price;
                 var targetPrice = target.price;
 
-                if (entryIdx == null || entryIdx < 0) return;
+                var row = hit.matchedTradeRow || null;
 
-                var resolutionIdx = (hit.outcome && hit.outcome.candleIdx != null)
-                    ? hit.outcome.candleIdx
-                    : lastVisible;
-                if (resolutionIdx < entryIdx) resolutionIdx = entryIdx;
+                // Resolution candle (TP or SL hit). Prefer the recorded hit
+                // index on the row; fall back to the outcome's candle index.
+                var resolutionIdx = (row && row.tp_hit_idx != null)
+                    ? row.tp_hit_idx
+                    : ((row && row.sl_hit_idx != null)
+                        ? row.sl_hit_idx
+                        : ((hit.outcome && hit.outcome.candleIdx != null)
+                            ? hit.outcome.candleIdx
+                            : lastVisible));
+
+                // Entry TRIGGER candle — read from the recorded row.
+                var triggerIdx = (row && row.entry_trigger_idx != null)
+                    ? row.entry_trigger_idx
+                    : ((hit.outcome && hit.outcome.entryTriggerIdx != null)
+                        ? hit.outcome.entryTriggerIdx
+                        : entryIdx);
+
+                var hitSide = '';
+                if (hit.outcome && hit.outcome.status === 'profit')    hitSide = 'target';
+                else if (hit.outcome && hit.outcome.status === 'stop') hitSide = 'stop';
+
+                if (resolutionIdx <= entryIdx) resolutionIdx = entryIdx + 1;
                 if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
+                if (triggerIdx < entryIdx)       triggerIdx = entryIdx;
+                if (triggerIdx > resolutionIdx)  triggerIdx = resolutionIdx;
 
                 if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
                 if (entryIdx > lastVisible) return;
 
-                var entryCenterX      = baseX + entryIdx * step + step / 2;
+                var entryCenterX      = baseX + entryIdx     * step + step / 2;
+                var triggerCenterX    = baseX + triggerIdx   * step + step / 2;
                 var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
 
-                var x1 = entryCenterX - halfBody;
-                var x2 = resolutionCenterX + halfBody;
+                var x1       = entryCenterX - halfBody;
+                var x2       = resolutionCenterX + halfBody;
+                var xTrigger = triggerCenterX - halfBody;
                 if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
 
                 var yEntry  = pToY(entryPrice);
@@ -5767,15 +5671,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
                 if (yEntry < chartTop - 2000 || yEntry > chartBottom + 2000) return;
 
-                var redTop    = Math.min(yEntry, yStop);
-                var redBottom = Math.max(yEntry, yStop);
-                PT_DRAW_CTX.fillStyle = 'rgba(231, 76, 60, 0.12)';
-                PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
-
-                var greenTop    = Math.min(yEntry, yTarget);
-                var greenBottom = Math.max(yEntry, yTarget);
-                PT_DRAW_CTX.fillStyle = 'rgba(39, 174, 96, 0.12)';
-                PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
+                ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide);
             });
         });
 

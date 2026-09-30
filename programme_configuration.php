@@ -1,8 +1,9 @@
 <?php
 // programme_configuration.php
 // Modal-only configuration builder for a programme.
-// Refined: multi-root with heir inheritance, authority selection, one-ref-per-root.
-// NEW: per-tree global timeframe (dictator) + GLOBAL anchor candle (across all trees).
+// Multi-root with heir inheritance, authority selection, one-ref-per-root.
+// Per-tree global timeframe (dictator).
+// ANCHOR REMOVED ENTIRELY.
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -66,7 +67,6 @@ $pcDrawingTools = ['trendline'];
 $pcDrawingColors = ['green','blue','red','purple','custom'];
 $pcTargetTypes = ['risk_reward','set_target'];
 $pcRiskRewardModes = ['fixed_risk_reward','minimum_risk_reward'];
-$pcAnchorIndexes = ['open_time','close_time'];
 
 // ==================== CANDLE NAMES ====================
 $pcCandleNames = [];
@@ -98,8 +98,7 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at,
-                   anchor_candle_id, anchor_candle_index
+                   root_ref_count, resolved_root_id, triggered_at
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -113,8 +112,6 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 $byTree[$tid] = [
                     'tree_id'   => $tid,
                     'timeframe' => '',
-                    'anchor_candle_id'    => null,
-                    'anchor_candle_index' => '',
                     'collapsed' => true,
                     'roots'     => [],
                     'drawings'  => [],
@@ -156,18 +153,11 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
-                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
-                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
             if ($r['row_role'] === 'root') {
                 $byTree[$tid]['roots'][] = $row;
                 if ($byTree[$tid]['timeframe'] === '' && !empty($row['timeframe'])) {
                     $byTree[$tid]['timeframe'] = $row['timeframe'];
-                }
-                // Tree-level anchor: first root that carries one wins
-                if ($byTree[$tid]['anchor_candle_id'] === null && $row['anchor_candle_id'] !== null) {
-                    $byTree[$tid]['anchor_candle_id']    = $row['anchor_candle_id'];
-                    $byTree[$tid]['anchor_candle_index'] = $row['anchor_candle_index'];
                 }
             } elseif ($r['row_role'] === 'drawing') {
                 $byTree[$tid]['drawings'][] = $row;
@@ -264,22 +254,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     $trees       = is_array($payload['trees'] ?? null) ? $payload['trees'] : [];
     $singleTreeId = isset($payload['tree_id']) ? (int)$payload['tree_id'] : 0;
 
-    $oldRootIdToName  = [];
-    $oldRootIdToOrder = [];
-    $pendingAnchors   = [];
-    if ($singleTreeId > 0) {
-        $capture = $pdo->prepare("
-            SELECT id, candle_name, root_order
-            FROM programme_configuration
-            WHERE userid = ? AND programmeid = ? AND tree_id = ? AND row_role = 'root'
-        ");
-        $capture->execute([$uId, $programmeId, $singleTreeId]);
-        while ($cr = $capture->fetch(PDO::FETCH_ASSOC)) {
-            $oldRootIdToName[(int)$cr['id']]  = (string)$cr['candle_name'];
-            $oldRootIdToOrder[(int)$cr['id']] = (int)$cr['root_order'];
-        }
-    }
-
     $rrOverrides = is_array($payload['accountManagement'] ?? null) ? $payload['accountManagement'] : [];
 
     try {
@@ -309,17 +283,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                  target, target_price_level,
                  authority_source_id, authority_source_role,
                  root_order, evaluation_priority, is_foundation_root,
-                 root_ref_count, resolved_root_id, triggered_at,
-                 anchor_candle_id, anchor_candle_index)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 root_ref_count, resolved_root_id, triggered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         foreach ($insertTrees as $tree) {
             $treeId = $singleTreeId > 0 ? $singleTreeId : $nextTreeId++;
 
             $treeTimeframe = isset($tree['timeframe']) ? trim((string)$tree['timeframe']) : '';
-            $treeAnchorLocalKey = isset($tree['anchor_local_key']) ? (string)$tree['anchor_local_key'] : '';
-            $treeAnchorIndex    = isset($tree['anchor_candle_index']) ? trim((string)$tree['anchor_candle_index']) : '';
 
             $roots = is_array($tree['roots'] ?? null) ? $tree['roots'] : [];
             if (!$roots) continue;
@@ -332,7 +303,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             $rootDbIds            = [];
             $rootLocalKeyByIndex  = [];
 
-            // ---- 1) INSERT ROOTS (anchor written at tree level below) ----
+            // ---- 1) INSERT ROOTS ----
             foreach ($roots as $rIdx => $rootRow) {
                 $isFoundation = ($rIdx === 0) ? 1 : 0;
                 $rootOrder    = $rIdx + 1;
@@ -354,8 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     null, null, null, null, null, null,
                     null, 'none',
                     $rootOrder, $evalPriority, $isFoundation,
-                    0, null, null,
-                    null, null
+                    0, null, null
                 ]);
 
                 $rootDbId = (int)$pdo->lastInsertId();
@@ -394,8 +364,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                         null, null, null, null, null, null,
                         null, 'none',
                         1, 1, 0,
-                        0, null, null,
-                        null, null
+                        0, null, null
                     ]);
                     $refDbId = (int)$pdo->lastInsertId();
 
@@ -425,8 +394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                             null, null, null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, 'none',
-                            1, 1, 0, 0, null, null,
-                            null, null
+                            1, 1, 0, 0, null, null
                         ]);
                         $authorDbId = (int)$pdo->lastInsertId();
 
@@ -441,8 +409,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                             null, null, null, null, null, null, null,
                             null, null, null, null, null, null,
                             null, 'none',
-                            1, 1, 0, 0, null, null,
-                            null, null
+                            1, 1, 0, 0, null, null
                         ]);
                     }
                 }
@@ -484,96 +451,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $upd->execute([$srcDbId, $srcRole, $childDbId]);
             }
 
-            // ---- 4.5) APPLY TREE-LEVEL ANCHOR TO ALL ROOTS ----
-            //
-            // The anchor is GLOBAL across all trees. It may point at:
-            //   1) a root in THIS tree (fast path — resolved via $rootLocalToDb)
-            //   2) a root in ANOTHER tree (resolved by candle name across the
-            //      whole programme)
-            //
-            // We also record the anchor intent so a post-pass (section 7) can
-            // re-resolve it after every tree has been inserted — this is what
-            // makes "Save All" survive a page reload.
-            $anchorGlobalKey  = isset($tree['anchor_global_key'])  ? (string)$tree['anchor_global_key']  : '';
-            $anchorCandleName = isset($tree['anchor_candle_name']) ? trim((string)$tree['anchor_candle_name']) : '';
-            $anchorIndexRaw   = isset($tree['anchor_candle_index']) ? trim((string)$tree['anchor_candle_index']) : '';
-            $anchorIndex      = in_array($anchorIndexRaw, ['open_time', 'close_time'], true)
-                                    ? $anchorIndexRaw : null;
-
-            $anchorDbId = 0;
-
-            // Fast path: anchor points at a root in the current tree.
-            if ($anchorGlobalKey !== '' && isset($rootLocalToDb[$anchorGlobalKey])) {
-                $anchorDbId = (int)$rootLocalToDb[$anchorGlobalKey];
-            }
-
-            // Cross-tree path: resolve by candle name across the whole programme.
-            // This also covers the case where the anchor root was inserted
-            // earlier in this same request (previous tree in the loop).
-            if ($anchorDbId <= 0 && $anchorCandleName !== '') {
-                $anchorLookup = $pdo->prepare("
-                    SELECT id
-                    FROM programme_configuration
-                    WHERE userid = ? AND programmeid = ? AND row_role = 'root'
-                      AND candle_name = ?
-                    ORDER BY tree_id ASC, root_order ASC
-                    LIMIT 1
-                ");
-                $anchorLookup->execute([$uId, $programmeId, $anchorCandleName]);
-                $anchorRow = $anchorLookup->fetch(PDO::FETCH_ASSOC);
-                if ($anchorRow) {
-                    $anchorDbId = (int)$anchorRow['id'];
-                }
-            }
-
-            if ($anchorDbId > 0) {
-                foreach ($rootDbIds as $rdb) {
-                    $upd2 = $pdo->prepare("
-                        UPDATE programme_configuration
-                        SET anchor_candle_id = ?, anchor_candle_index = ?
-                        WHERE id = ?
-                    ");
-                    $upd2->execute([$anchorDbId, $anchorIndex, (int)$rdb]);
-                }
-            } else if ($anchorCandleName !== '') {
-                // Anchor target not inserted yet (it lives in a LATER tree in
-                // this request). Queue it for the post-pass below.
-                if (!isset($pendingAnchors)) { $pendingAnchors = []; }
-                $pendingAnchors[] = [
-                    'root_db_ids'  => array_values($rootDbIds),
-                    'candle_name'  => $anchorCandleName,
-                    'anchor_index' => $anchorIndex
-                ];
-            }
-            // ---- 4.6) REPAIR CROSS-TREE ANCHOR REFERENCES ----
-            if ($singleTreeId > 0 && !empty($oldRootIdToName)) {
-                $newRootIdByNameOrder = [];
-                foreach ($rootDbIds as $rIdx2 => $newRootId) {
-                    $rootRowNow = isset($roots[$rIdx2]) ? $roots[$rIdx2] : null;
-                    if (!$rootRowNow) continue;
-                    $nm    = (string)($rootRowNow['candle_name'] ?? '');
-                    $order = $rIdx2 + 1;
-                    if ($nm === '') continue;
-                    $newRootIdByNameOrder[$nm . '::' . $order] = (int)$newRootId;
-                }
-
-                foreach ($oldRootIdToName as $oldId => $oldName) {
-                    $oldOrder = isset($oldRootIdToOrder[$oldId]) ? $oldRootIdToOrder[$oldId] : 0;
-                    $key = $oldName . '::' . $oldOrder;
-                    if (!isset($newRootIdByNameOrder[$key])) continue;
-                    $newAnchorId = $newRootIdByNameOrder[$key];
-
-                    $repair = $pdo->prepare("
-                        UPDATE programme_configuration
-                        SET anchor_candle_id = ?
-                        WHERE userid = ? AND programmeid = ?
-                        AND tree_id <> ?
-                        AND anchor_candle_id = ?
-                    ");
-                    $repair->execute([$newAnchorId, $uId, $programmeId, $singleTreeId, $oldId]);
-                }
-            }
-
             // ---- 5) DRAWINGS ----
             $drawings = is_array($tree['drawings'] ?? null) ? $tree['drawings'] : [];
             foreach ($drawings as $d) {
@@ -606,8 +483,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     $color,
                     null, null, null, null, null, null,
                     null, 'none',
-                    1, 1, 0, 0, null, null,
-                    null, null
+                    1, 1, 0, 0, null, null
                 ]);
             }
 
@@ -648,8 +524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     $exitAt, $exitLvl,
                     $target, $targetLvl,
                     null, 'none',
-                    1, 1, 0, 0, null, null,
-                    null, null
+                    1, 1, 0, 0, null, null
                 ]);
             }
         }
@@ -708,46 +583,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             }
         }
 
-        // ---- 7) POST-PASS: RESOLVE DEFERRED GLOBAL ANCHORS ----
-        //
-        // Any tree whose anchor pointed at a root belonging to a LATER tree in
-        // this same request could not be resolved during that tree's insert.
-        // Now that every root across every tree exists in the DB, resolve them
-        // by candle name.
-        if (!empty($pendingAnchors) && is_array($pendingAnchors)) {
-            foreach ($pendingAnchors as $pa) {
-                $paName = isset($pa['candle_name']) ? trim((string)$pa['candle_name']) : '';
-                if ($paName === '') continue;
-
-                $lookup = $pdo->prepare("
-                    SELECT id
-                    FROM programme_configuration
-                    WHERE userid = ? AND programmeid = ? AND row_role = 'root'
-                      AND candle_name = ?
-                    ORDER BY tree_id ASC, root_order ASC
-                    LIMIT 1
-                ");
-                $lookup->execute([$uId, $programmeId, $paName]);
-                $resolvedRow = $lookup->fetch(PDO::FETCH_ASSOC);
-                if (!$resolvedRow) continue;
-
-                $resolvedId    = (int)$resolvedRow['id'];
-                $resolvedIndex = isset($pa['anchor_index']) ? $pa['anchor_index'] : null;
-                if (!in_array($resolvedIndex, ['open_time', 'close_time'], true)) {
-                    $resolvedIndex = null;
-                }
-
-                $upd = $pdo->prepare("
-                    UPDATE programme_configuration
-                    SET anchor_candle_id = ?, anchor_candle_index = ?
-                    WHERE id = ?
-                ");
-                foreach ((array)$pa['root_db_ids'] as $rootId) {
-                    $upd->execute([$resolvedId, $resolvedIndex, (int)$rootId]);
-                }
-            }
-        }
-
         $pdo->commit();
 
         // ---- Return canonical rows + latest accountmanagement ----
@@ -762,8 +597,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at,
-                   anchor_candle_id, anchor_candle_index
+                   root_ref_count, resolved_root_id, triggered_at
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -806,8 +640,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
-                'anchor_candle_id'         => $r['anchor_candle_id'] !== null ? (int)$r['anchor_candle_id'] : null,
-                'anchor_candle_index'      => $r['anchor_candle_index'],
             ];
         }
 
@@ -849,7 +681,8 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 
 <!-- ============================================================
      PROGRAMME CONFIGURATION — MODAL (Multi-Root / Heir Model)
-     Tree-level global timeframe + GLOBAL anchor candle.
+     Tree-level global timeframe.
+     ANCHOR REMOVED.
      ============================================================ -->
 <div id="pcModal" class="pc-modal" aria-hidden="true"
      data-programme-id="<?= (int)$pcProgrammeId ?>"
@@ -950,7 +783,6 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 <script type="application/json" id="pcTargetTypesJson"><?= json_encode(array_values($pcTargetTypes)) ?></script>
 <script type="application/json" id="pcRiskRewardModesJson"><?= json_encode(array_values($pcRiskRewardModes)) ?></script>
 <script type="application/json" id="pcAccountManagementJson"><?= json_encode($pcAccountManagement) ?></script>
-<script type="application/json" id="pcAnchorIndexesJson"><?= json_encode(array_values($pcAnchorIndexes)) ?></script>
 
 <!-- ============================================================ TEMPLATES ============================================================ -->
 
@@ -982,27 +814,6 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
                     <span class="pc-section-hint">
                         Applied to every root, ref, drawing and trade in this tree.
                     </span>
-                </div>
-            </div>
-
-            <!-- GLOBAL ANCHOR CANDLE (across all trees) -->
-            <div class="pc-tree-anchor-bar" data-role="treeAnchorBar">
-                <div class="pc-tree-anchor-field">
-                    <label class="pc-label">
-                        <i class="fa-solid fa-anchor"></i>
-                        Anchor candle
-                        <span class="pc-section-hint" style="display:inline;margin-left:4px;">(optional — sync every root to one candle's time)</span>
-                    </label>
-                    <div class="pc-tree-anchor-grid">
-                        <div class="pc-field">
-                            <label class="pc-label">Anchor to candle</label>
-                            <select class="pc-input pc-select pc-tree-anchor-root" data-field="tree_anchor_root"></select>
-                        </div>
-                        <div class="pc-field pc-tree-anchor-index-field" data-role="treeAnchorIndexField" style="display:none;">
-                            <label class="pc-label">Select <span data-role="treeAnchorNameLabel">candle</span> index time:</label>
-                            <select class="pc-input pc-select pc-tree-anchor-index" data-field="tree_anchor_index"></select>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -1317,7 +1128,7 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 
 /* Tree-level global timeframe bar */
 .pc-tree-timeframe-bar {
-    margin-bottom: 10px; padding: 12px 14px; border-radius: 10px;
+    margin-bottom: 14px; padding: 12px 14px; border-radius: 10px;
     background: rgba(46,139,87,0.07);
     border: 1px solid rgba(46,139,87,0.25);
 }
@@ -1331,33 +1142,6 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 body.dark-mode .pc-tree-timeframe-bar {
     background: rgba(46,139,87,0.16); border-color: rgba(46,139,87,0.5);
 }
-
-/* GLOBAL anchor candle bar (across all trees) */
-.pc-tree-anchor-bar {
-    margin-bottom: 14px; padding: 12px 14px; border-radius: 10px;
-    background: rgba(74,123,216,0.05);
-    border: 1px dashed rgba(74,123,216,0.5);
-}
-.pc-tree-anchor-field { display: flex; flex-direction: column; gap: 6px; }
-.pc-tree-anchor-field > .pc-label {
-    font-size: 0.76rem; color: #4a7bd8; font-weight: 800;
-    display: inline-flex; align-items: center; gap: 6px; margin: 0;
-}
-.pc-tree-anchor-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-}
-.pc-tree-anchor-grid .pc-field { min-width: 0; }
-.pc-tree-anchor-grid .pc-label { color: #4a7bd8; }
-@media (max-width: 600px) {
-    .pc-tree-anchor-grid { grid-template-columns: 1fr; }
-}
-body.dark-mode .pc-tree-anchor-bar {
-    background: rgba(74,123,216,0.1); border-color: rgba(74,123,216,0.5);
-}
-body.dark-mode .pc-tree-anchor-field > .pc-label,
-body.dark-mode .pc-tree-anchor-grid .pc-label { color: #6c93e0; }
 
 .pc-root-list { display: flex; flex-direction: column; gap: 12px; }
 .pc-root-wrap { border-left: 3px solid var(--accent, #2e8b57); border-radius: 8px;
@@ -1526,7 +1310,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     var PC_TARGET_TYPES    = JSON.parse(document.getElementById('pcTargetTypesJson').textContent      || '[]');
     var PC_RR_MODES        = JSON.parse(document.getElementById('pcRiskRewardModesJson').textContent  || '[]');
     var PC_ACCOUNT_MGMT    = JSON.parse(document.getElementById('pcAccountManagementJson').textContent|| '{}');
-    var PC_ANCHOR_INDEXES  = JSON.parse(document.getElementById('pcAnchorIndexesJson').textContent   || '["open_time","close_time"]');
 
     var PC = {
         programmeId:   <?= (int)$pcProgrammeId ?>,
@@ -1572,86 +1355,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             sel.appendChild(o);
         });
         if (cur !== undefined && cur !== null && cur !== '') sel.value = cur;
-    }
-
-    // ============================================================
-    // GLOBAL CANDLE COLLECTION (across ALL trees)
-    // ============================================================
-    function buildGlobalAnchorOptions() {
-        var opts = [];
-        var seen = {};
-
-        PC.trees.forEach(function (tree, treeIdx) {
-            (tree.roots || []).forEach(function (root, rootIdx) {
-                var nm = (root.fields.candle_name || '').trim();
-                if (!nm) return;
-
-                var key = nm + '::root::' + tree.localId + '::' + root.localId;
-                if (seen[key]) return;
-                seen[key] = true;
-
-                opts.push({
-                    value: key,
-                    label: nm + ' (Tree ' + (treeIdx + 1) + ' Root #' + (rootIdx + 1) + ')'
-                });
-
-                (root.refs || []).forEach(function (ref, refIdx) {
-                    var refNm = (ref.fields.candle_name || '').trim();
-                    if (!refNm) return;
-
-                    var refKey = refNm + '::ref::' + tree.localId + '::' + ref.localId;
-                    if (seen[refKey]) return;
-                    seen[refKey] = true;
-
-                    opts.push({
-                        value: refKey,
-                        label: refNm + ' (Tree ' + (treeIdx + 1) + ' Root#' + (rootIdx + 1) + ' Ref#' + (refIdx + 1) + ')'
-                    });
-                });
-            });
-        });
-
-        return opts;
-    }
-
-    // Resolve an anchor selection value to a concrete root in the CURRENT tree.
-    // Anchor values are global: "candleName::root::treeLocalId::rootLocalId"
-    // or "candleName::ref::treeLocalId::refLocalId"
-    function resolveAnchorForTree(tree, anchorValue) {
-        if (!anchorValue || !tree) return null;
-
-        var parts = anchorValue.split('::');
-        if (parts.length < 4) return null;
-
-        var kind      = parts[1]; // 'root' or 'ref'
-        var treeLid   = parts[2];
-        var entityLid = parts[3];
-
-        // Only return a match when the anchor lives in the tree being saved.
-        if (treeLid !== tree.localId) return null;
-
-        if (kind === 'root') {
-            var root = (tree.roots || []).filter(function (r) { return r.localId === entityLid; })[0];
-            if (root) return { type: 'root', localId: root.localId };
-
-            // Fallback: anchor stored as a root local key from a previous save
-            var asRoot = (tree.roots || []).filter(function (r) { return r.localId === parts[0]; })[0];
-            if (asRoot) return { type: 'root', localId: asRoot.localId };
-            return null;
-        }
-
-        if (kind === 'ref') {
-            var found = null;
-            (tree.roots || []).forEach(function (r) {
-                (r.refs || []).forEach(function (ref) {
-                    if (ref.localId === entityLid) found = ref.localId;
-                });
-            });
-            if (found) return { type: 'ref', localId: found };
-            return null;
-        }
-
-        return null;
     }
 
     // ============================================================
@@ -1754,15 +1457,10 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 dbTreeId: t.tree_id,
                 collapsed: true,
                 timeframe: treeTf,
-                anchorLocalKey: null,      // global anchor value (new format) or local key fallback
-                anchorDbId: t.anchor_candle_id || null,
-                anchorIndex: t.anchor_candle_index || '',
                 roots:    [],
                 drawings: [],
                 trades:   []
             };
-
-            var dbIdToLocal = {};
 
             (t.roots || []).forEach(function (rootRow, rIdx) {
                 var rootLocal = uid();
@@ -1783,7 +1481,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     refs: []
                 };
                 tree.roots.push(root);
-                if (rootRow.id) dbIdToLocal[rootRow.id] = rootLocal;
 
                 (rootRow.root_refs || []).forEach(function (rf) {
                     var refBlock = {
@@ -1834,10 +1531,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 });
             });
 
-            // Stash the raw DB anchor id; resolution happens in a second sweep
-            // once every tree's roots are known.
-            tree._rawAnchorDbId = tree.anchorDbId || null;
-
             (t.drawings || []).forEach(function (dr) {
                 tree.drawings.push({
                     localId: uid(),
@@ -1884,39 +1577,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             });
 
             PC.trees.push(tree);
-        });
-
-        // ---- Second sweep: resolve every tree's raw anchor DB id to a
-        // global anchor key now that all trees' roots are available. ----
-        PC.trees.forEach(function (tree) {
-            var rawId = tree._rawAnchorDbId;
-            if (!rawId) {
-                tree.anchorLocalKey = tree.anchorLocalKey || null;
-                return;
-            }
-
-            var foundGlobal = null;
-            PC.trees.forEach(function (otherTree) {
-                (otherTree.roots || []).forEach(function (otherRoot) {
-                    if (otherRoot.dbId === rawId) {
-                        var nm = (otherRoot.fields.candle_name || '').trim();
-                        if (nm) {
-                            foundGlobal = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
-                        }
-                    }
-                    (otherRoot.refs || []).forEach(function (otherRef) {
-                        if (otherRef.dbId === rawId) {
-                            var refNm = (otherRef.fields.candle_name || '').trim();
-                            if (refNm) {
-                                foundGlobal = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
-                            }
-                        }
-                    });
-                });
-            });
-
-            tree.anchorLocalKey = foundGlobal || null;
-            delete tree._rawAnchorDbId;
         });
     }
 
@@ -2396,135 +2056,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     renderTrees();
                 });
             }
-            // ── GLOBAL ANCHOR CANDLE (across all trees) ──
-            var treeAnchorRootSel    = group.querySelector('[data-field="tree_anchor_root"]');
-            var treeAnchorIndexField = group.querySelector('[data-role="treeAnchorIndexField"]');
-            var treeAnchorIndexSel   = group.querySelector('[data-field="tree_anchor_index"]');
-            var treeAnchorNameLabel  = group.querySelector('[data-role="treeAnchorNameLabel"]');
-
-            if (treeAnchorRootSel) {
-                // ---- Derive anchorLocalKey from the persisted DB id, every render.
-                //      This makes the anchor immune to uid() churn and render order.
-                if (tree.anchorDbId) {
-                    var resolvedKey = null;
-                    PC.trees.forEach(function (otherTree) {
-                        (otherTree.roots || []).forEach(function (otherRoot) {
-                            if (otherRoot.dbId === tree.anchorDbId) {
-                                var nm = (otherRoot.fields.candle_name || '').trim();
-                                if (nm) {
-                                    resolvedKey = nm + '::root::' + otherTree.localId + '::' + otherRoot.localId;
-                                }
-                            }
-                            (otherRoot.refs || []).forEach(function (otherRef) {
-                                if (otherRef.dbId === tree.anchorDbId) {
-                                    var refNm = (otherRef.fields.candle_name || '').trim();
-                                    if (refNm) {
-                                        resolvedKey = refNm + '::ref::' + otherTree.localId + '::' + otherRef.localId;
-                                    }
-                                }
-                            });
-                        });
-                    });
-                    if (resolvedKey) {
-                        tree.anchorLocalKey = resolvedKey;
-                    }
-                }
-
-                var anchorOpts = buildGlobalAnchorOptions();
-
-                if (anchorOpts.length === 0) {
-                    fillSelect(treeAnchorRootSel, [
-                        { value: '', label: 'No named candles to anchor to' }
-                    ]);
-                    treeAnchorRootSel.disabled = true;
-                    if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
-                } else {
-                    treeAnchorRootSel.disabled = false;
-                    fillSelect(treeAnchorRootSel, anchorOpts, { placeholder: '— none —' });
-
-                    // ---- Restore the model value WITHOUT ever nulling it.
-                    //      If the saved key is not among the current options
-                    //      (target renamed / tree deleted), inject a stale
-                    //      option so the user sees it and the value survives.
-                    if (tree.anchorLocalKey) {
-                        var exists = anchorOpts.some(function (o) { return o.value === tree.anchorLocalKey; });
-                        if (!exists) {
-                            var staleName = String(tree.anchorLocalKey).split('::')[0] || 'saved anchor';
-                            var staleOpt  = document.createElement('option');
-                            staleOpt.value = tree.anchorLocalKey;
-                            staleOpt.textContent = staleName + ' (saved — target not found)';
-                            treeAnchorRootSel.appendChild(staleOpt);
-                        }
-                        treeAnchorRootSel.value = tree.anchorLocalKey;
-                    } else {
-                        treeAnchorRootSel.value = '';
-                    }
-
-                    function syncTreeAnchorIndexField() {
-                        var chosen = treeAnchorRootSel.value;
-
-                        // Resolve the chosen key back to a numeric db id so
-                        // the model always carries a durable anchorDbId.
-                        var newAnchorDbId = null;
-                        if (chosen) {
-                            var parts = String(chosen).split('::');
-                            if (parts.length >= 4) {
-                                var chosenKind = parts[1];
-                                var chosenTlid = parts[2];
-                                var chosenEid  = parts[3];
-                                PC.trees.forEach(function (otherTree) {
-                                    if (otherTree.localId !== chosenTlid) return;
-                                    if (chosenKind === 'root') {
-                                        (otherTree.roots || []).forEach(function (r) {
-                                            if (r.localId === chosenEid) newAnchorDbId = r.dbId;
-                                        });
-                                    } else if (chosenKind === 'ref') {
-                                        (otherTree.roots || []).forEach(function (r) {
-                                            (r.refs || []).forEach(function (rf) {
-                                                if (rf.localId === chosenEid) newAnchorDbId = rf.dbId;
-                                            });
-                                        });
-                                    }
-                                });
-                            }
-                        }
-
-                        if (!chosen) {
-                            if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
-                            tree.anchorLocalKey = null;
-                            tree.anchorDbId     = null;
-                            tree.anchorIndex    = '';
-                            if (treeAnchorIndexSel) treeAnchorIndexSel.value = '';
-                            return;
-                        }
-
-                        tree.anchorLocalKey = chosen;
-                        tree.anchorDbId     = newAnchorDbId;
-
-                        // Derive a display name from the option label
-                        var chosenOpt = anchorOpts.filter(function (o) { return o.value === chosen; })[0];
-                        var chosenName = chosenOpt ? chosenOpt.label : 'candle';
-                        if (treeAnchorNameLabel) treeAnchorNameLabel.textContent = chosenName;
-
-                        if (treeAnchorIndexSel) {
-                            fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
-                            if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
-                                treeAnchorIndexSel.value = tree.anchorIndex;
-                            }
-                        }
-                        if (treeAnchorIndexField) treeAnchorIndexField.style.display = '';
-                    }
-
-                    treeAnchorRootSel.addEventListener('change', syncTreeAnchorIndexField);
-                    if (treeAnchorIndexSel) {
-                        treeAnchorIndexSel.addEventListener('change', function () {
-                            tree.anchorIndex = treeAnchorIndexSel.value;
-                        });
-                    }
-
-                    syncTreeAnchorIndexField();
-                }
-            }
 
             var rootList = group.querySelector('[data-role="rootList"]');
             tree.roots.forEach(function (root, rIdx) {
@@ -2604,10 +2135,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             removable: true,
             removeHandler: function () { removeRoot(tree.localId, root.localId); },
             onNameChange: function (newVal) {
-                // NO renderTrees() here — that would destroy the input being typed in.
-                // Instead, update the tree header + GLOBAL anchor dropdowns in place.
                 refreshTreeHeaderInPlace(tree);
-                refreshAllAnchorDropdownsInPlace();
                 updateServantsFromRoot(tree, root, 'candle_name', newVal);
                 updateServantDOMs(tree, root, 'candle_name', newVal);
                 refreshDynamicSelects(tree, groupEl);
@@ -2657,7 +2185,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     root.fields.candle_position = src.fields.candle_position;
                     root.fields.candle_search   = src.fields.candle_search || '';
                 }
-                // Select change → full re-render is fine here (no text focus to lose).
                 renderTrees();
             });
         }
@@ -2701,76 +2228,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             if (tree.trades.length)   bits.push(tree.trades.length + ' trade');
             sub.textContent = bits.length ? '· ' + bits.join(' · ') : '';
         }
-    }
-
-    // Refresh EVERY tree's global anchor dropdown (since anchors span all trees)
-    function refreshAllAnchorDropdownsInPlace() {
-        var anchorOpts = buildGlobalAnchorOptions();
-        var validValues = anchorOpts.map(function (o) { return o.value; });
-
-        PC.trees.forEach(function (tree) {
-            var group = document.querySelector('.pc-tree[data-tree-local-id="' + tree.localId + '"]');
-            if (!group) return;
-
-            var treeAnchorRootSel    = group.querySelector('[data-field="tree_anchor_root"]');
-            var treeAnchorIndexField = group.querySelector('[data-role="treeAnchorIndexField"]');
-            var treeAnchorIndexSel   = group.querySelector('[data-field="tree_anchor_index"]');
-            var treeAnchorNameLabel  = group.querySelector('[data-role="treeAnchorNameLabel"]');
-
-            if (!treeAnchorRootSel) return;
-
-            var curVal = treeAnchorRootSel.value;
-
-            if (anchorOpts.length === 0) {
-                fillSelect(treeAnchorRootSel, [
-                    { value: '', label: 'No named candles to anchor to' }
-                ]);
-                treeAnchorRootSel.disabled = true;
-                if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
-                return;
-            }
-
-            treeAnchorRootSel.disabled = false;
-            treeAnchorRootSel.innerHTML = '';
-            var ph = document.createElement('option');
-            ph.value = ''; ph.textContent = '— none —';
-            treeAnchorRootSel.appendChild(ph);
-            anchorOpts.forEach(function (o) {
-                var opt = document.createElement('option');
-                opt.value = o.value; opt.textContent = o.label;
-                treeAnchorRootSel.appendChild(opt);
-            });
-
-            // Restore prior value if it still exists; NEVER null the model
-            // from a refresh — the model is the source of truth.
-            var desiredKey = curVal || tree.anchorLocalKey || '';
-            if (desiredKey && validValues.indexOf(desiredKey) === -1) {
-                // Inject a stale option so the user still sees what's stored.
-                var staleName2 = String(desiredKey).split('::')[0] || 'saved anchor';
-                var staleOpt2  = document.createElement('option');
-                staleOpt2.value = desiredKey;
-                staleOpt2.textContent = staleName2 + ' (saved — target not found)';
-                treeAnchorRootSel.appendChild(staleOpt2);
-            }
-            treeAnchorRootSel.value = desiredKey || '';
-
-            // Refresh the index-time label/field for whatever is selected now
-            var chosen = treeAnchorRootSel.value;
-            if (chosen) {
-                var chosenOpt = anchorOpts.filter(function (o) { return o.value === chosen; })[0];
-                var chosenName = chosenOpt ? chosenOpt.label : 'candle';
-                if (treeAnchorNameLabel) treeAnchorNameLabel.textContent = chosenName;
-                if (treeAnchorIndexField) treeAnchorIndexField.style.display = '';
-                if (treeAnchorIndexSel) {
-                    fillSelect(treeAnchorIndexSel, PC_ANCHOR_INDEXES, { placeholder: '— select index —' });
-                    if (tree.anchorIndex && PC_ANCHOR_INDEXES.indexOf(tree.anchorIndex) !== -1) {
-                        treeAnchorIndexSel.value = tree.anchorIndex;
-                    }
-                }
-            } else {
-                if (treeAnchorIndexField) treeAnchorIndexField.style.display = 'none';
-            }
-        });
     }
 
     function refreshDynamicSelects(tree, groupEl) {
@@ -2824,7 +2281,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             onNameChange: function (newVal) {
                 updateAuthorsFromRef(tree, ref, 'candle_name', newVal);
                 updateAuthorDOMs(tree, ref, 'candle_name', newVal);
-                refreshAllAnchorDropdownsInPlace();
                 refreshDynamicSelects(tree, groupEl);
             },
             onTypeChange: function (newVal) {
@@ -2891,8 +2347,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             dbTreeId: null,
             collapsed: false,
             timeframe: PC_CURRENT_TF || (PC_TIMEFRAMES[0] || ''),
-            anchorLocalKey: null,
-            anchorIndex: '',
             roots: [],
             drawings: [],
             trades: []
@@ -3014,11 +2468,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
         if (tree.roots.length <= 1) return;
         tree.roots = tree.roots.filter(function (r) { return r.localId !== rootLocalId; });
         tree.roots.forEach(function (r, i) { r.rootOrder = i + 1; r.isFoundation = (i === 0); });
-        // Clear tree-level anchor if it pointed at the removed root
-        if (tree.anchorLocalKey && tree.anchorLocalKey.indexOf('::' + tree.localId + '::' + rootLocalId) !== -1) {
-            tree.anchorLocalKey = null;
-            tree.anchorIndex = '';
-        }
         renderTrees();
     }
 
@@ -3035,51 +2484,11 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // SNAPSHOT
     // ============================================================
     function pcBuildTreeSnapshot(tree) {
-        // Send BOTH the global anchor key AND the anchor candle name so the
-        // server can resolve the anchor even when it lives in a different tree.
-        // Do NOT null out cross-tree anchors here — that was the original bug.
-        var anchorGlobalKey  = tree.anchorLocalKey || null;
-        var anchorCandleName = null;
-
-        if (anchorGlobalKey) {
-            // Global anchor value format:
-            //   "candleName::root::treeLocalId::rootLocalId"
-            //   "candleName::ref::treeLocalId::refLocalId"
-            var parts = String(anchorGlobalKey).split('::');
-            if (parts.length >= 4 && parts[0]) {
-                anchorCandleName = parts[0];
-            } else {
-                // Legacy fallback: anchor stored as a plain local key that
-                // belongs to THIS tree. Resolve it locally so the server still
-                // receives something usable.
-                var resolved = resolveAnchorForTree(tree, anchorGlobalKey);
-                if (resolved) {
-                    if (resolved.type === 'root') {
-                        var r = (tree.roots || []).filter(function (x) {
-                            return x.localId === resolved.localId;
-                        })[0];
-                        if (r) anchorCandleName = (r.fields.candle_name || '').trim() || null;
-                    } else if (resolved.type === 'ref') {
-                        (tree.roots || []).forEach(function (r) {
-                            (r.refs || []).forEach(function (ref) {
-                                if (ref.localId === resolved.localId) {
-                                    anchorCandleName = (ref.fields.candle_name || '').trim() || null;
-                                }
-                            });
-                        });
-                    }
-                }
-            }
-        }
-
         var t = {
-            timeframe:           tree.timeframe || '',
-            anchor_global_key:   anchorGlobalKey,
-            anchor_candle_name:  anchorCandleName,
-            anchor_candle_index: tree.anchorIndex || '',
-            roots:               [],
-            drawings:            [],
-            trades:              []
+            timeframe: tree.timeframe || '',
+            roots:     [],
+            drawings:  [],
+            trades:    []
         };
 
         (tree.roots || []).forEach(function (root, rIdx) {
@@ -3351,9 +2760,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 return {
                     localId: t.localId,
                     dbTreeId: t.dbTreeId,
-                    anchorLocalKey: t.anchorLocalKey,
-                    anchorDbId: t.anchorDbId,
-                    anchorIndex: t.anchorIndex,
                     roots: t.roots.map(function (r) {
                         return { localId: r.localId, dbId: r.dbId, name: r.fields.candle_name };
                     })

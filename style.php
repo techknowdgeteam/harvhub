@@ -24,15 +24,16 @@
 
     /* ===== ROOT VARIABLES - LIGHT MODE ===== */
     :root {
+        --hero1:#0b3d2e;--hero2:#12a36b;
         --bg: #f0f4f8;
         --bg-card: #ffffff;
         --text: #1a2332;
         --text-secondary: #5a6c7d;
         --text-muted: #8a9aa8;
         --text-light: #e8edf2;
-        --accent: #2d7b8c;
+        --accent: #2ecc8f;
         --accent-light: #e8f4f7;
-        --accent-hover: #236673;
+        --accent-hover: #2ecc8fba;
         --success: #2ecc71;
         --success-bg: #eafaf1;
         --danger: #e74c3c;
@@ -59,15 +60,16 @@
 
     /* ===== DARK MODE ===== */
     body.dark-mode {
-        --bg: #0d1117;
-        --bg-card: #161b22;
+        --hero1:#0b3d2e;--hero2:#12a36b;
+        --bg: black;
+        --bg-card: #0c1311;
         --text: #e6edf3;
         --text-secondary: #8b949e;
         --text-muted: #6e7681;
         --text-light: #30363d;
-        --accent: #3fb5c9;
+        --accent: #2ecc8f;
         --accent-light: #1a2a30;
-        --accent-hover: #4ec5d9;
+        --accent-hover: #2ecc8fba;
         --success: #3fb950;
         --success-bg: #1a2a1a;
         --danger: #f85149;
@@ -76,7 +78,7 @@
         --warning-bg: #2a241a;
         --info: #58a6ff;
         --info-bg: #1a2430;
-        --border-color: #30363d;
+        --border-color: #0c1311;
         --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
         --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
         --modal-overlay: rgba(0, 0, 0, 0.8);
@@ -472,7 +474,7 @@
     }
 
     body.dark-mode #reenrollModal .reenroll-instructions {
-        background: var(--bg, #0d1117);
+        background: var(--bg, #0c1311);
         border-color: var(--border-color, #30363d);
     }
 
@@ -496,7 +498,7 @@
     }
 
     body.dark-mode #reenrollModal .checkbox-container-legal {
-        background: var(--bg, #0d1117);
+        background: var(--bg, #0c1311);
         border-color: var(--border-color, #30363d);
     }
 
@@ -610,10 +612,10 @@
         display: none !important;
     }
 
-    /* Also remove the extra padding when nav is hidden */
     body.page-revenue_history {
         padding-bottom: 20px !important;
     }
+
     /* ===== MAIN CONTAINER - CENTERED, MAX WIDTH 800px ===== */
     .revenue-wrapper {
         width: 100%;
@@ -622,50 +624,34 @@
         padding: 20px 16px 100px 16px;
     }
 
-    /* ===== HEADER ===== */
-    .revenue-header {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        margin-bottom: 24px;
-        flex-wrap: wrap;
-        gap: 12px;
-    }
-
-    .revenue-header .back-btn {
-        background: var(--bg-card);
-        padding: 8px 20px;
-        border-radius: var(--radius-sm, 8px);
-        color: var(--text);
-        text-decoration: none;
-        font-weight: 500;
-        font-size: 0.9rem;
-        transition: all 0.2s ease;
-    }
-
-    .revenue-header .back-btn:hover {
-        background: var(--accent, #2ecc71);
-        color: #fff;
-    }
-
-    /* ===== REVENUE ITEM (CARD) ===== */
+    /* ============================================================
+    REVENUE ITEM (CARD)
+    ============================================================ */
     .revenue-item {
         background: var(--bg-card);
         margin-bottom: 8px;
         overflow: hidden;
         transition: all 0.25s ease;
         cursor: pointer;
+        border-radius: var(--radius-sm, 8px);
     }
 
-    /* ===== FOLDED STATE (COLLAPSED) ===== */
+    /* ============================================================
+    FOLDED (COLLAPSED) STATE
+    ------------------------------------------------------------
+    Layout (single row, no wrap):
+      [ icon ]  [ user-share          ]
+                [ start – end date     ]              [ status ] [ ▼ ]
+    The icon spans the full height of the two text lines.
+    ============================================================ */
     .revenue-header-folded {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 14px 16px;
-        gap: 10px;
+        padding: 12px 14px;
+        gap: 12px;
         transition: background 0.2s ease;
-        min-height: 56px;
+        min-height: 58px;
     }
 
     .revenue-header-folded:hover {
@@ -676,43 +662,67 @@
         background: var(--bg-hover, rgba(255,255,255,0.03));
     }
 
-    .revenue-left {
+    /* Icon wrapper — spans the full folded header height */
+    .revenue-icon-wrap {
         display: flex;
         align-items: center;
-        gap: 12px;
-        flex: 0 1 auto;
-        min-width: 0;
+        justify-content: center;
+        align-self: stretch;   /* <-- makes the icon vertically span the header */
+        flex-shrink: 0;
+        width: 28px;
     }
 
     .revenue-icon {
-        font-size: 0.9rem;
-        flex-shrink: 0;
+        font-size: 1.1rem;
         line-height: 1;
+        display: inline-block;
+    }
+
+    /* The stacked text block (user-share on top, date-range below) */
+    .revenue-folded-text {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+        flex: 1 1 auto;
+        min-width: 0;           /* allow text truncation if needed */
     }
 
     .revenue-user-share {
-        font-size: 1.4rem;
+        font-size: 1.15rem;
         font-weight: 700;
         color: var(--text);
+        line-height: 1.15;
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
-    .revenue-user-share .currency {
-        font-size: 1.2rem;
-        font-weight: 600;
+    .revenue-date-range {
+        font-size: 0.7rem;
+        font-weight: 500;
         color: var(--text-muted);
+        letter-spacing: 0.2px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
+    /* Right side: status + toggle, vertically centered */
     .revenue-right {
         display: flex;
         align-items: center;
         gap: 10px;
         flex: 0 0 auto;
-        margin-left: auto;
+        flex-shrink: 0;
     }
 
+    /* ============================================================
+    STATUS BADGES
+    ============================================================ */
     .revenue-status-badge {
-        padding: 3px 12px;
+        padding: 3px 10px;
         border-radius: 20px;
         font-size: 0.55rem;
         font-weight: 700;
@@ -721,7 +731,6 @@
         white-space: nowrap;
     }
 
-    /* Status Colors */
     .status-active { background: var(--success-bg, #d4edda); color: var(--success, #28a745); }
     .status-payment-confirmed { background: var(--info-bg, #d1ecf1); color: var(--info, #17a2b8); }
     .status-payment-made { background: var(--warning-bg, #fff3cd); color: var(--warning, #ffc107); }
@@ -733,12 +742,15 @@
     .status-completed { background: var(--success-bg, #d4edda); color: var(--success, #28a745); }
     .status-default { background: var(--bg, #e9ecef); color: var(--text-muted, #6c757d); }
 
+    /* ============================================================
+    TOGGLE ARROW
+    ============================================================ */
     .revenue-toggle {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         color: var(--text-muted);
         transition: transform 0.3s ease;
         flex-shrink: 0;
-        width: 18px;
+        width: 14px;
         text-align: center;
         font-weight: 700;
     }
@@ -747,34 +759,40 @@
         transform: rotate(180deg);
     }
 
-    /* ===== EXPANDED STATE (DETAILS) ===== */
+    /* ============================================================
+    EXPANDED STATE (DETAILS)
+    ------------------------------------------------------------
+    Single-column, clean label/value rows.
+    ============================================================ */
     .revenue-details {
         max-height: 0;
         overflow: hidden;
         transition: max-height 0.35s ease, padding 0.35s ease, opacity 0.25s ease;
         opacity: 0;
-        padding: 0 16px;
+        padding: 0 14px;
     }
 
     .revenue-item.expanded .revenue-details {
-        max-height: 800px;
+        max-height: 900px;
         opacity: 1;
-        padding: 0 16px 16px 16px;
+        padding: 0 14px 14px 14px;
     }
 
     .revenue-details-inner {
         border-top: 1px solid var(--border-color);
-        padding-top: 14px;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 6px 20px;
+        padding-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
     }
 
+    /* Each detail row: label on left, value on right */
     .revenue-detail-row {
         display: flex;
         justify-content: space-between;
-        align-items: center;
-        padding: 5px 0;
+        align-items: baseline;
+        gap: 12px;
+        padding: 8px 0;
         font-size: 0.85rem;
         border-bottom: 1px solid var(--border-color-light, rgba(0,0,0,0.04));
     }
@@ -784,30 +802,35 @@
     }
 
     .revenue-detail-row.full-width {
-        grid-column: 1 / -1;
+        /* kept for compatibility; single-column layout already uses full width */
+        display: flex;
     }
 
     .revenue-detail-label {
         color: var(--text-muted);
         font-weight: 500;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         text-transform: uppercase;
-        letter-spacing: 0.3px;
+        letter-spacing: 0.4px;
         flex-shrink: 0;
+        white-space: nowrap;
     }
 
     .revenue-detail-value {
         color: var(--text);
         font-weight: 600;
         text-align: right;
-        word-break: break-all;
-        max-width: 60%;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        max-width: 65%;
+        line-height: 1.35;
     }
 
     .revenue-detail-value.mono {
         font-family: 'SF Mono', 'Courier New', monospace;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         font-weight: 500;
+        letter-spacing: -0.2px;
     }
 
     .revenue-detail-value.profit-positive {
@@ -822,7 +845,9 @@
         color: var(--text-muted);
     }
 
-    /* ===== EMPTY STATE ===== */
+    /* ============================================================
+    EMPTY STATE
+    ============================================================ */
     .empty-revenue {
         text-align: center;
         padding: 60px 20px;
@@ -848,7 +873,9 @@
         color: var(--text-muted);
     }
 
-    /* ===== FLOATING CLOSE BUTTON ===== */
+    /* ============================================================
+    FLOATING CLOSE BUTTON
+    ============================================================ */
     .floating-close-btn {
         position: fixed;
         bottom: 30px;
@@ -891,92 +918,70 @@
     }
 
     /* ============================================================
-        RESPONSIVE
-        ============================================================ */
+    RESPONSIVE
+    ============================================================ */
 
     @media (max-width: 600px) {
         .revenue-wrapper {
             padding: 12px 10px 90px 10px;
         }
 
-        .revenue-header .back-btn {
-            font-size: 0.75rem;
-            padding: 5px 14px;
-        }
-
         .revenue-header-folded {
-            padding: 12px 14px;
-            gap: 8px;
-            min-height: 50px;
-            flex-wrap: nowrap;
+            padding: 10px 12px;
+            gap: 10px;
+            min-height: 54px;
         }
 
-        .revenue-left {
-            gap: 8px;
-            flex: 0 1 auto;
-            min-width: 0;
+        .revenue-icon-wrap {
+            width: 24px;
         }
 
         .revenue-icon {
-            font-size: 0.9rem;
+            font-size: 1rem;
         }
 
         .revenue-user-share {
-            font-size: 1.2rem;
+            font-size: 1.05rem;
         }
 
-        .revenue-user-share .currency {
-            font-size: 0.75rem;
+        .revenue-date-range {
+            font-size: 0.65rem;
         }
 
         .revenue-right {
             gap: 6px;
-            flex: 0 0 auto;
-            margin-left: auto;
-            flex-shrink: 0;
         }
 
         .revenue-status-badge {
-            font-size: 0.45rem;
-            padding: 2px 10px;
-            letter-spacing: 0.3px;
+            font-size: 0.5rem;
+            padding: 2px 9px;
         }
 
         .revenue-toggle {
-            font-size: 0.65rem;
-            width: 16px;
+            font-size: 0.6rem;
+            width: 12px;
         }
 
-        .revenue-details-inner {
-            grid-template-columns: 1fr;
-            gap: 4px;
-            padding-top: 12px;
+        .revenue-item.expanded .revenue-details {
+            padding: 0 12px 12px 12px;
         }
 
         .revenue-detail-row {
             font-size: 0.8rem;
-            padding: 4px 0;
-        }
-
-        .revenue-detail-value {
-            max-width: 55%;
-            font-size: 0.8rem;
-        }
-
-        .revenue-detail-row.full-width {
-            grid-column: 1;
-        }
-
-        .revenue-item.expanded .revenue-details {
-            padding: 0 14px 14px 14px;
+            padding: 7px 0;
         }
 
         .revenue-detail-label {
-            font-size: 0.7rem;
+            font-size: 0.68rem;
+        }
+
+        .revenue-detail-value {
+            font-size: 0.8rem;
+            max-width: 60%;
         }
 
         .revenue-detail-value.mono {
-            font-size: 0.7rem;
+            font-size: 0.68rem;
         }
 
         .floating-close-btn {
@@ -993,49 +998,57 @@
         }
 
         .revenue-header-folded {
-            padding: 10px 12px;
-            gap: 6px;
-            min-height: 46px;
+            padding: 9px 10px;
+            gap: 8px;
+            min-height: 50px;
         }
 
-        .revenue-left {
-            gap: 6px;
+        .revenue-icon-wrap {
+            width: 22px;
         }
 
         .revenue-icon {
-            font-size: 1rem;
+            font-size: 0.95rem;
         }
 
         .revenue-user-share {
-            font-size: 0.85rem;
+            font-size: 0.95rem;
         }
 
-        .revenue-right {
-            gap: 4px;
+        .revenue-date-range {
+            font-size: 0.6rem;
         }
 
         .revenue-status-badge {
-            font-size: 0.4rem;
-            padding: 2px 8px;
+            font-size: 0.45rem;
+            padding: 2px 7px;
         }
 
         .revenue-toggle {
-            font-size: 0.6rem;
-            width: 14px;
+            font-size: 0.55rem;
+            width: 11px;
+        }
+
+        .revenue-item.expanded .revenue-details {
+            padding: 0 10px 10px 10px;
         }
 
         .revenue-detail-row {
             font-size: 0.75rem;
-            padding: 3px 0;
+            padding: 6px 0;
+        }
+
+        .revenue-detail-label {
+            font-size: 0.62rem;
         }
 
         .revenue-detail-value {
-            max-width: 50%;
             font-size: 0.75rem;
+            max-width: 58%;
         }
 
-        .revenue-item.expanded .revenue-details {
-            padding: 0 12px 12px 12px;
+        .revenue-detail-value.mono {
+            font-size: 0.62rem;
         }
 
         .floating-close-btn {
@@ -1048,17 +1061,21 @@
 
     @media (max-width: 340px) {
         .revenue-user-share {
-            font-size: 0.75rem;
+            font-size: 0.85rem;
+        }
+
+        .revenue-date-range {
+            font-size: 0.55rem;
         }
 
         .revenue-status-badge {
-            font-size: 0.35rem;
+            font-size: 0.4rem;
             padding: 1px 6px;
         }
 
         .revenue-toggle {
             font-size: 0.5rem;
-            width: 12px;
+            width: 10px;
         }
     }
 </style>
@@ -1629,11 +1646,12 @@
     }
 
     /* ============================================================
-    CURRENT BALANCE CARD WITH INLINE CHART
+    CURRENT BALANCE CARD WITH PEAK BADGE
     ============================================================ */
     .current-balance-card .card-value-row {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 12px;
         width: 100%;
     }
@@ -1662,7 +1680,92 @@
         letter-spacing: -0.5px;
     }
 
-    .current-balance-card .chart-bars-container {
+    /* ---- Peak Balance Badge (right side, smaller font) ---- */
+    .current-balance-card .peak-balance {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 2px;
+        flex-shrink: 0;
+        padding: 6px 12px;
+        background: var(--bg);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        min-width: 0;
+    }
+
+    .current-balance-card .peak-balance .peak-label {
+        font-size: 0.55rem;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--text-muted);
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .current-balance-card .peak-balance .peak-value {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--accent);
+        font-family: 'SF Mono', 'Monaco', monospace;
+        letter-spacing: -0.3px;
+        white-space: nowrap;
+    }
+
+    .current-balance-card .peak-balance .peak-value .peak-currency {
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        margin-right: 1px;
+    }
+
+    /* Highlight peak when current balance is below peak */
+    .current-balance-card .peak-balance.peak-above {
+        border-color: var(--warning);
+        background: var(--warning-bg);
+    }
+
+    .current-balance-card .peak-balance.peak-above .peak-value {
+        color: var(--warning);
+    }
+
+    /* ============================================================
+    PROFIT & LOSS CARD WITH INLINE CHART
+    ============================================================ */
+    .pnl-card .card-value-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+    }
+
+    .pnl-card .card-value {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 0;
+        flex-wrap: wrap;
+    }
+
+    .pnl-card .card-value .currency-symbol {
+        font-size: 1.4rem;
+        font-weight: 400;
+        color: var(--text-muted);
+    }
+
+    .pnl-card .card-value .value-amount {
+        font-size: 2.2rem;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+
+    .pnl-card .chart-bars-container {
         flex: 1;
         margin-top: 0;
         padding-top: 0;
@@ -1670,26 +1773,31 @@
         min-width: 60px;
     }
 
-    .current-balance-card .chart-bars-wrapper {
+    .pnl-card .chart-bars-wrapper {
         height: 40px;
         gap: 1.5px;
     }
 
-    .current-balance-card .chart-bar-item {
+    .pnl-card .chart-bar-item {
         flex: 1;
         max-width: 8px;
         min-width: 2px;
         margin: 0 0.5px;
     }
 
-    .current-balance-card .chart-bar {
+    .pnl-card .chart-bar {
         min-height: 2px;
         border-radius: 1px 1px 0 0;
     }
 
-    /* Remove Start/Now labels for current balance card */
-    .current-balance-card .chart-labels {
+    /* Remove Start/Now labels for pnl card */
+    .pnl-card .chart-labels {
         display: none;
+    }
+
+    /* PNL indicator stays below */
+    .pnl-card .pnl-indicator {
+        margin-top: 8px;
     }
 
     /* ===== RESPONSIVE DESIGN ===== */
@@ -1707,15 +1815,25 @@
             margin: 0 0.3px;
         }
 
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 36px;
             gap: 1px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 7px;
             min-width: 2px;
             margin: 0 0.3px;
+        }
+
+        .current-balance-card .peak-balance {
+            padding: 5px 10px;
+        }
+
+        .current-balance-card .peak-balance .peak-value {
+            font-size: 0.85rem;
         }
     }
 
@@ -1736,28 +1854,45 @@
             font-size: 5px;
         }
 
-        .current-balance-card .card-value-row {
+        .current-balance-card .card-value-row,
+        .pnl-card .card-value-row {
             gap: 8px;
             flex-wrap: nowrap;
         }
         
-        .current-balance-card .card-value {
+        .current-balance-card .card-value,
+        .pnl-card .card-value {
             font-size: 1.8rem;
         }
         
-        .current-balance-card .card-value .value-amount {
+        .current-balance-card .card-value .value-amount,
+        .pnl-card .card-value .value-amount {
             font-size: 1.8rem;
         }
         
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 32px;
             gap: 1px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 6px;
             min-width: 1.5px;
             margin: 0 0.3px;
+        }
+
+        .current-balance-card .peak-balance {
+            padding: 4px 8px;
+        }
+
+        .current-balance-card .peak-balance .peak-label {
+            font-size: 0.5rem;
+        }
+
+        .current-balance-card .peak-balance .peak-value {
+            font-size: 0.8rem;
         }
     }
 
@@ -1784,27 +1919,50 @@
             font-size: 6px;
         }
 
-        .current-balance-card .card-value-row {
+        .current-balance-card .card-value-row,
+        .pnl-card .card-value-row {
             gap: 6px;
         }
         
-        .current-balance-card .card-value {
+        .current-balance-card .card-value,
+        .pnl-card .card-value {
             font-size: 1.4rem;
         }
         
-        .current-balance-card .card-value .value-amount {
+        .current-balance-card .card-value .value-amount,
+        .pnl-card .card-value .value-amount {
             font-size: 1.4rem;
         }
         
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 28px;
             gap: 0.5px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 5px;
             min-width: 1.5px;
             margin: 0 0.2px;
+        }
+
+        .current-balance-card .peak-balance {
+            padding: 3px 6px;
+            border-radius: 6px;
+        }
+
+        .current-balance-card .peak-balance .peak-label {
+            font-size: 0.45rem;
+            letter-spacing: 0.5px;
+        }
+
+        .current-balance-card .peak-balance .peak-value {
+            font-size: 0.7rem;
+        }
+
+        .current-balance-card .peak-balance .peak-value .peak-currency {
+            font-size: 0.6rem;
         }
     }
 
@@ -1821,12 +1979,14 @@
             margin: 0 0.15px;
         }
 
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 24px;
             gap: 0.5px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 4px;
             min-width: 1px;
             margin: 0 0.15px;
@@ -1846,12 +2006,14 @@
             margin: 0 0.2px;
         }
 
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 26px;
             gap: 0.5px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 5px;
             min-width: 1.5px;
             margin: 0 0.2px;
@@ -1869,11 +2031,13 @@
             min-width: 2px;
         }
 
-        .current-balance-card .chart-bars-wrapper {
+        .current-balance-card .chart-bars-wrapper,
+        .pnl-card .chart-bars-wrapper {
             height: 30px;
         }
         
-        .current-balance-card .chart-bar-item {
+        .current-balance-card .chart-bar-item,
+        .pnl-card .chart-bar-item {
             max-width: 5px;
             min-width: 2px;
         }
@@ -3238,7 +3402,7 @@
     /* ============================================
     ACTIVITY PAGE STYLES (Balance Log)
     ============================================ */
-    .activities-container {
+    .activi-container {
         max-width: 800px;
         margin: 0 auto;
         padding: 0 15px;
