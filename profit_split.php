@@ -1,4 +1,5 @@
 <?php
+   // profit_split.php — SUB-ACCOUNT SCOPED
     session_start();
 
     // ==================== CHECK LOGIN ====================
@@ -31,19 +32,57 @@
         die("Database connection failed.");
     }
 
-    // ==================== FETCH USER ====================
-    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ?");
-    $stmt->execute([$email]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    // ==================== RESOLVE ACTIVE SUB ACCOUNT ====================
+    $activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
+
+    if ($activeSubAccountId > 0) {
+        $stmt = $pdo->prepare("
+            SELECT * FROM $tableName
+            WHERE sub_account_id = ? AND LOWER(email) = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$activeSubAccountId, $email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    } else {
+        $user = null;
+    }
+
+    if (!$user) {
+        $stmt = $pdo->prepare("
+            SELECT * FROM $tableName
+            WHERE LOWER(email) = ? AND is_main_account = 0
+            ORDER BY id ASC LIMIT 1
+        ");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    if (!$user) {
+        $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
 
     if (!$user) {
         header("Location: index.php");
         exit;
     }
 
-    $userId = (int)$user['id'];
+    $userId             = (int)$user['id'];
+    $activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
+    $mainAccountId      = (int)($user['main_account_id'] ?? 0);
 
-    // ==================== FETCH SERVER ACCOUNT (fallbacks) ====================
+    // Persist back — every subsequent write uses this
+    $_SESSION['active_sub_account_id']  = $activeSubAccountId;
+    $_SESSION['active_main_account_id'] = $mainAccountId;
+
+    if ($activeSubAccountId <= 0) {
+        $repair = $pdo->prepare("UPDATE $tableName SET sub_account_id = id WHERE id = ?");
+        $repair->execute([$userId]);
+        $activeSubAccountId = $userId;
+        $_SESSION['active_sub_account_id'] = $activeSubAccountId;
+    }
+
+    // ==================== FETCH SERVER ACCOUNT ====================
     $stmt = $pdo->prepare("SELECT * FROM $serverAccountTable WHERE id = 1 LIMIT 1");
     $stmt->execute();
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -55,34 +94,36 @@
     $darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
     $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
-    // ==================== DEFAULTS FROM SERVER ACCOUNT ====================
     $SERVER_SHARE_PERCENT = (int)($serverAccount['server_share_percent'] ?? 30);
     $USER_SHARE_PERCENT   = (int)($serverAccount['user_share_percent'] ?? 70);
     $MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
 
     // =====================================================================
-    // REUSABLE PAYLOAD BUILDER — used by both the initial render and AJAX
+    // PAYLOAD BUILDER — NOW STRICTLY SUB-ACCOUNT SCOPED
     // =====================================================================
-    function buildProfitSplitPayload($pdo, $email, $userId, $user, $serverAccount, $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable) {
-        // ---- Server-level split defaults ----
+    function buildProfitSplitPayload(
+        $pdo, $email, $userId, $activeSubAccountId, $user, $serverAccount,
+        $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable
+    ) {
         $SERVER_SHARE_PERCENT = (int)($serverAccount['server_share_percent'] ?? 30);
         $USER_SHARE_PERCENT   = (int)($serverAccount['user_share_percent'] ?? 70);
         $MIN_PROFIT_FOR_SPLIT = (float)($serverAccount['min_profit_for_split'] ?? 30);
         $SERVER_CONTRACT_DURATION = (int)($serverAccount['contract_duration'] ?? 30);
 
-        // ---- Find user's active programme investment ----
         $activeInvestment     = null;
         $investmentProgramme  = null;
         $investmentDeveloper  = null;
 
         try {
+            // STRICT: only this sub-account's investment
             $stmt = $pdo->prepare("
                 SELECT * FROM $programmeInvestorsTable
                 WHERE investorid = ?
+                  AND sub_account_id = ?
                 ORDER BY invested_at DESC, id DESC
                 LIMIT 1
             ");
-            $stmt->execute([$userId]);
+            $stmt->execute([$userId, $activeSubAccountId]);
             $activeInvestment = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($activeInvestment) {
@@ -122,14 +163,12 @@
             }
         }
 
-        // ---- Contract duration (needed to compute expiry) ----
         $contractDuration = $SERVER_CONTRACT_DURATION;
         if ($hasProgramme && !empty($activeInvestment['contract_duration'])) {
             $pi_cd = (int)$activeInvestment['contract_duration'];
             if ($pi_cd > 0) $contractDuration = $pi_cd;
         }
 
-        // ---- User financial state ----
         $brokerBalance   = (float)($user['broker_balance'] ?? 0);
         $profitAndLoss   = (float)($user['profitandloss'] ?? 0);
         $loyaltiesStatus = $user['loyalties'] ?? null;
@@ -138,7 +177,6 @@
         $serverShare   = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
         $userShare     = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
 
-        // ---- Contract expiry check ----
         $executionStartDate  = $user['execution_start_date'] ?? null;
         $balanceVerification = $user['balance_verification'] ?? 'not-verified';
 
@@ -158,19 +196,27 @@
 
                 if ($daysLeft <= 0) { $isContractExpired = true; $isContractActive = false; }
                 else                { $isContractActive  = true;  $isContractExpired = false; }
-            } catch (Exception $e) {
-                // Bad date — treat as no contract
-            }
+            } catch (Exception $e) {}
         }
 
-        // ---- Latest revenue history row ----
-        $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
-        $stmt->execute([$email]);
-        $latestRevenue = $stmt->fetch(PDO::FETCH_ASSOC);
+        // STRICT: latest revenue_history row for THIS sub-account only
+        $latestRevenue = null;
+        try {
+            $stmt = $pdo->prepare("
+                SELECT * FROM $revenueHistoryTable
+                WHERE LOWER(user_email) = ?
+                  AND sub_account_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$email, $activeSubAccountId]);
+            $latestRevenue = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $latestRevenue = null;
+        }
 
         $latestRevenueLoyalty = $latestRevenue['loyalties'] ?? null;
 
-        // ---- Status flags ----
         $isUnpaid      = ($loyaltiesStatus === 'unpaid-payment' || $loyaltiesStatus === 'unpaid');
         $isFailed      = ($loyaltiesStatus === 'payment-failed' || $loyaltiesStatus === 'failed-payment');
         $isPaymentMade = ($loyaltiesStatus === 'payment-made');
@@ -181,7 +227,6 @@
             $isPaymentMade = ($latestRevenueLoyalty === 'payment-made');
         }
 
-        // ---- INFER unpaid state (mirrors determineDashboardState) ----
         if (!$isUnpaid && !$isFailed && !$isPaymentMade) {
             $isVerified           = ($balanceVerification === 'verified');
             $profitAboveThreshold = ($profitAndLoss > $MIN_PROFIT_FOR_SPLIT);
@@ -333,7 +378,7 @@
     }
 
     // =====================================================================
-    // AJAX: LIVE PROFIT SPLIT (JSON)
+    // AJAX: LIVE PROFIT SPLIT
     // =====================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST'
         && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
@@ -351,8 +396,22 @@
         }
 
         try {
-            $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE email = ?");
-            $stmt->execute([$email]);
+            $liveSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
+
+            if ($liveSubId > 0) {
+                $stmt = $pdo->prepare("
+                    SELECT * FROM $tableName
+                    WHERE sub_account_id = ? AND LOWER(email) = ?
+                    LIMIT 1
+                ");
+                $stmt->execute([$liveSubId, $email]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT * FROM $tableName
+                    WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1
+                ");
+                $stmt->execute([$email]);
+            }
             $liveUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$liveUser) {
@@ -360,15 +419,17 @@
                 exit;
             }
 
-            $liveUserId = (int)$liveUser['id'];
+            $liveUserId       = (int)$liveUser['id'];
+            $liveSubAccountId = (int)($liveUser['sub_account_id'] ?? $liveUserId);
 
             $payload = buildProfitSplitPayload(
-                $pdo, $email, $liveUserId, $liveUser, $serverAccount,
+                $pdo, $email, $liveUserId, $liveSubAccountId, $liveUser, $serverAccount,
                 $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable
             );
 
             echo json_encode([
                 'success'              => true,
+                'sub_account_id'       => $liveSubAccountId,
                 'has_programme'        => $payload['hasProgramme'],
                 'programme_name'       => $payload['PROGRAMME_NAME'],
                 'developer_name'       => $payload['DEVELOPER_NAME'],
@@ -404,10 +465,10 @@
     }
 
     // =====================================================================
-    // INITIAL PAGE RENDER (non-AJAX)
+    // INITIAL PAGE RENDER
     // =====================================================================
     $payload = buildProfitSplitPayload(
-        $pdo, $email, $userId, $user, $serverAccount,
+        $pdo, $email, $userId, $activeSubAccountId, $user, $serverAccount,
         $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable
     );
 
@@ -437,7 +498,7 @@
     $isRetry = isset($_GET['retry']) && $_GET['retry'] == 1;
 
     // =========================================================================
-    // POST Handling - Confirm Payment
+    // POST Handling — Confirm Payment (NOW SUB-ACCOUNT SCOPED)
     // =========================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['final_confirm_payment'])) {
         $coin = $_POST['payment_coin'] ?? 'N/A';
@@ -445,25 +506,46 @@
         $datetime = date('Y-m-d H:i:s');
         $paymentDetails = "Amount: $" . number_format($amount, 2) . ", Coin: " . htmlspecialchars($coin) . ", Confirmed_at: " . $datetime;
 
-        $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC LIMIT 1");
-        $stmt->execute([$email]);
-        $latestRecord = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($latestRecord) {
-            $updateStmt = $pdo->prepare("
-                UPDATE $revenueHistoryTable
-                SET loyalties = 'payment-made', payment_details = ?, payment_date = ?
-                WHERE id = ?
+        // STRICT: update only THIS sub-account's latest revenue_history row
+        try {
+            $stmt = $pdo->prepare("
+                SELECT id FROM $revenueHistoryTable
+                WHERE LOWER(user_email) = ?
+                  AND sub_account_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
             ");
-            $updateStmt->execute([$paymentDetails, $datetime, $latestRecord['id']]);
-        }
+            $stmt->execute([$email, $activeSubAccountId]);
+            $latestRecord = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        $upd = $pdo->prepare("UPDATE $tableName SET loyalties = 'payment-made', paymentdetails = ? WHERE email = ?");
-        $upd->execute([$paymentDetails, $email]);
+            if ($latestRecord) {
+                $updateStmt = $pdo->prepare("
+                    UPDATE $revenueHistoryTable
+                    SET loyalties = 'payment-made', payment_details = ?, payment_date = ?
+                    WHERE id = ? AND sub_account_id = ?
+                ");
+                $updateStmt->execute([
+                    $paymentDetails,
+                    $datetime,
+                    $latestRecord['id'],
+                    $activeSubAccountId
+                ]);
+            }
+        } catch (PDOException $e) {}
+
+        // STRICT: update only THIS sub-account's harvhub row
+        try {
+            $upd = $pdo->prepare("
+                UPDATE $tableName
+                SET loyalties = 'payment-made', paymentdetails = ?
+                WHERE id = ? AND sub_account_id = ?
+            ");
+            $upd->execute([$paymentDetails, $userId, $activeSubAccountId]);
+        } catch (PDOException $e) {}
 
         $_SESSION['prg_redirect_safe'] = true;
         $_SESSION['payment_success_message'] = "Payment submitted successfully! Waiting for server confirmation.";
-        header("Location: app.php#mydashboard");
+        header("Location: investorapp.php");
         exit;
     }
 
@@ -475,79 +557,125 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-    <title>Profit Split - Harvhub</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
+<title>Profit Split - Harvhub</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+<link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
     <?php include 'style.php'; ?>
 <style>
-    /* ============================================================
-    GLOBAL iOS ZOOM FIX
-    ============================================================ */
     @media (max-width: 768px) {
-        input,
-        select,
-        textarea,
-        .dd-input,
-        .dd-select,
-        .dd-am-input,
-        .dd-inline-input,
-        .dd-req-input,
-        .dd-json-edit-textarea,
-        .pt-modal-input {
+        input, select, textarea,
+        .dd-input, .dd-select, .dd-am-input, .dd-inline-input,
+        .dd-req-input, .dd-json-edit-textarea, .pt-modal-input {
             font-size: 16px !important;
         }
     }
 
     /* ============================================================
-    CREAM BLUE PALETTE
-    ============================================================ */
-    :root {
-        --cb-light:  #eaf4fb;
-        --cb-mid:    #a8d0ec;
-        --cb-base:   #6fa8d1;
-        --cb-deep:   #4a7ea8;
-        --cb-dark:   #2e5d80;
+       TOPBAR — matches vps.php exactly
+       ============================================================ */
+    .profit-split-topbar {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 56px;
+        padding: 12px 16px 8px;
+        box-sizing: border-box;
+        border-bottom: 1px solid var(--border-color, #e0e0e0);
+        max-width: 720px;
+        margin: 0 auto;
+        width: 100%;
+    }
+
+    body.dark-mode .profit-split-topbar {
+        border-bottom-color: var(--border-color, #333);
+    }
+
+    .profit-split-topbar-back {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--bg-card, #f5f5f5);
+        border: 1px solid var(--border-color, #e0e0e0);
+        color: var(--text, #222);
+        text-decoration: none;
+        cursor: pointer;
+        font-size: 0.95rem;
+        transition: all 0.2s ease;
+        padding: 0;
+    }
+
+    .profit-split-topbar-back:hover {
+        background: var(--accent, #2e8b57);
+        color: #fff;
+        border-color: var(--accent, #2e8b57);
+        transform: translateY(-50%) translateX(-2px);
+    }
+
+    body.dark-mode .profit-split-topbar-back {
+        background: var(--bg-card, #1e1e2a);
+        border-color: var(--border-color, #333);
+        color: var(--text, #eee);
+    }
+
+    body.dark-mode .profit-split-topbar-back:hover {
+        background: var(--accent, #2e8b57);
+        color: #fff;
+        border-color: var(--accent, #2e8b57);
+    }
+
+    .profit-split-topbar-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text, #222);
+        margin: 0;
+        letter-spacing: -0.3px;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: calc(100% - 120px);
+        line-height: 1.2;
+    }
+
+    body.dark-mode .profit-split-topbar-title { color: var(--text, #eee); }
+
+    @media (max-width: 480px) {
+        .profit-split-topbar {
+            min-height: 52px;
+            padding: 8px 12px 6px;
+        }
+        .profit-split-topbar-back {
+            left: 12px;
+            width: 34px;
+            height: 34px;
+            font-size: 0.85rem;
+        }
+        .profit-split-topbar-title {
+            font-size: 1.25rem;
+            max-width: calc(100% - 100px);
+        }
     }
 
     .profit-split-container {
         max-width: 800px;
-        margin: 40px auto;
-        padding: 0 20px;
+        margin: 0 auto;
+        padding: 20px 20px 40px;
     }
 
-    .profit-split-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 30px;
-        flex-wrap: wrap;
-        gap: 16px;
-    }
-
-    .profit-split-header h1 {
-        font-size: 1.8rem;
-        color: var(--text);
-        margin: 0;
-    }
-
-    .profit-split-header .back-btn {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        padding: 10px 24px;
-        border-radius: var(--radius-sm);
-        color: var(--text);
-        text-decoration: none;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }
-
-    .profit-split-header .back-btn:hover {
-        background: var(--cb-base);
-        color: #fff;
-        border-color: var(--cb-base);
-    }
-
+    /* ============================================================
+       CARDS
+       ============================================================ */
     .profit-card {
         background: var(--bg-card);
         border: 1px solid var(--border-color);
@@ -575,9 +703,9 @@
 
     .programme-badge {
         display: inline-block;
-        background: rgba(111, 168, 209, 0.12);
-        border: 1px solid var(--cb-base);
-        color: var(--cb-deep);
+        background: rgba(46, 139, 87, 0.10);
+        border: 1px solid var(--accent, #2e8b57);
+        color: var(--accent, #2e8b57);
         font-size: 0.75rem;
         font-weight: 700;
         text-transform: uppercase;
@@ -587,6 +715,9 @@
         margin-bottom: 16px;
     }
 
+    /* ============================================================
+       SPLIT GRID
+       ============================================================ */
     .split-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -621,15 +752,23 @@
         margin-top: 8px;
     }
 
+    /* Your Share = info tint (kept distinct from programme share) */
     .split-box.user-box .split-amount { color: var(--info); }
-    .split-box.server-box .split-amount { color: var(--cb-deep); }
+    /* Programme Share = green accent (theme) */
+    .split-box.server-box .split-amount { color: var(--accent, #2e8b57); }
 
+    /* ============================================================
+       ACTION SECTION
+       ============================================================ */
     .action-section {
         margin-top: 20px;
         padding-top: 20px;
         border-top: 1px solid var(--border-color);
     }
 
+    /* ============================================================
+       PAYMENT STATUS
+       ============================================================ */
     .payment-status {
         padding: 16px 20px;
         border-radius: var(--radius-sm);
@@ -639,65 +778,48 @@
         gap: 12px;
     }
 
-    .payment-status.info {
-        background: var(--info-bg);
-        border: 1px solid var(--info);
-        color: var(--info);
-    }
-
-    .payment-status.warning {
-        background: var(--warning-bg);
-        border: 1px solid var(--warning);
-        color: var(--warning);
-    }
-
-    .payment-status.success {
-        background: var(--success-bg);
-        border: 1px solid var(--success);
-        color: var(--success);
-    }
-
-    .payment-status.danger {
-        background: var(--danger-bg);
-        border: 1px solid var(--danger);
-        color: var(--danger);
-    }
+    .payment-status.info    { background: var(--info-bg);    border: 1px solid var(--info);    color: var(--info); }
+    .payment-status.warning { background: var(--warning-bg); border: 1px solid var(--warning); color: var(--warning); }
+    .payment-status.success { background: var(--success-bg); border: 1px solid var(--success); color: var(--success); }
+    .payment-status.danger  { background: var(--danger-bg);  border: 1px solid var(--danger);  color: var(--danger); }
 
     /* ============================================================
-    PAY PROGRAMME SHARE — CREAM BLUE
-    ============================================================ */
+       BUTTONS
+       ============================================================ */
+
+    /* --- Pay Programme Share (OUTLINED GREEN — secondary feel) --- */
     .btn-pay-server {
         display: inline-block;
         padding: 14px 40px;
-        background: linear-gradient(135deg, var(--cb-mid), var(--cb-base));
-        color: #1a3c53;
-        border: none;
+        background: transparent;
+        color: var(--accent, #2e8b57);
+        border: 2px solid var(--accent, #2e8b57);
         border-radius: var(--radius-sm);
         font-size: 1rem;
         font-weight: 700;
         cursor: pointer;
         transition: all 0.2s ease;
         width: 100%;
-        box-shadow: 0 2px 8px rgba(111, 168, 209, 0.25);
         -webkit-tap-highlight-color: transparent;
     }
 
     .btn-pay-server:hover {
-        background: linear-gradient(135deg, var(--cb-light), var(--cb-mid));
+        background: rgba(46, 139, 87, 0.08);
         transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(111, 168, 209, 0.4);
+        box-shadow: 0 4px 16px rgba(46, 139, 87, 0.2);
     }
 
     .btn-pay-server:active {
-        transform: translateY(0);
+        transform: translateY(0) scale(0.98);
     }
 
-    .btn-pay-server:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
+    .btn-pay-server:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    body.dark-mode .btn-pay-server:hover {
+        background: rgba(46, 139, 87, 0.16);
     }
 
+    /* --- Withdraw Your Share (SOLID GREEN — primary feel) --- */
     .btn-withdraw-profit {
         display: inline-block;
         padding: 14px 40px;
@@ -721,18 +843,16 @@
     }
 
     .btn-withdraw-profit.disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        pointer-events: none;
-        transform: none;
+        opacity: 0.5; cursor: not-allowed; pointer-events: none; transform: none;
     }
 
+    /* --- Retry (uses theme warning — still distinct) --- */
     .btn-retry {
         display: inline-block;
         padding: 14px 40px;
-        background: linear-gradient(135deg, #f39c12, #e67e22);
-        color: #fff;
-        border: none;
+        background: transparent;
+        color: var(--warning);
+        border: 2px solid var(--warning);
         border-radius: var(--radius-sm);
         font-size: 1rem;
         font-weight: 600;
@@ -743,18 +863,21 @@
     }
 
     .btn-retry:hover {
+        background: rgba(243, 156, 18, 0.08);
         transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(243, 156, 18, 0.3);
+        box-shadow: 0 4px 16px rgba(243, 156, 18, 0.2);
     }
 
-    /* ============================================================
-    CONFIRM PAYMENT button inside modal — cream blue
-    ============================================================ */
+    .btn-retry:active {
+        transform: translateY(0) scale(0.98);
+    }
+
+    /* --- Confirm Payment (solid green) --- */
     .btn-confirm-payment {
         display: inline-block;
         padding: 14px 40px;
-        background: linear-gradient(135deg, var(--cb-mid), var(--cb-base));
-        color: #1a3c53;
+        background: var(--accent, #2e8b57);
+        color: #fff;
         border: none;
         border-radius: var(--radius-sm);
         font-size: 1rem;
@@ -762,28 +885,21 @@
         cursor: pointer;
         transition: all 0.2s ease;
         width: 100%;
-        box-shadow: 0 2px 8px rgba(111, 168, 209, 0.25);
+        box-shadow: 0 2px 8px rgba(46, 139, 87, 0.25);
         -webkit-tap-highlight-color: transparent;
     }
 
     .btn-confirm-payment:hover {
-        background: linear-gradient(135deg, var(--cb-light), var(--cb-mid));
+        background: var(--accent-hover, #3cb371);
         transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(111, 168, 209, 0.4);
+        box-shadow: 0 4px 16px rgba(46, 139, 87, 0.4);
     }
 
-    .btn-confirm-payment:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-    }
+    .btn-confirm-payment:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
     /* ============================================================
-    COIN SELECTOR (BTC / ETH / USDT)
-    - Kill the browser's default white tap-highlight
-    - Kill the focus/active ring on labels
-    - Keep the same cream-blue look in every state
-    ============================================================ */
+       COIN SELECTOR
+       ============================================================ */
     .coin-selector {
         display: flex;
         gap: 12px;
@@ -793,12 +909,9 @@
     }
 
     .coin-selector input[type="radio"] {
-        /* Visually hidden but still focusable for accessibility */
         position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
         overflow: hidden;
         clip: rect(0, 0, 0, 0);
         white-space: nowrap;
@@ -811,14 +924,9 @@
         border-radius: var(--radius-sm);
         cursor: pointer;
         font-weight: 600;
-        transition: background-color 0.15s ease,
-                    border-color 0.15s ease,
-                    color 0.15s ease,
-                    box-shadow 0.15s ease;
+        transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
         background: var(--bg);
         color: var(--text);
-
-        /* Crucial: kill the browser's white tap highlight */
         -webkit-tap-highlight-color: transparent;
         -webkit-touch-callout: none;
         -webkit-user-select: none;
@@ -828,65 +936,57 @@
         outline: none;
     }
 
-    /* Hover state */
     .coin-selector label:hover {
-        border-color: var(--cb-base);
-        background: var(--cb-light);
-        color: var(--cb-dark);
+        border-color: var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.08);
+        color: var(--accent, #2e8b57);
     }
 
-    /* Active / pressed state — override the browser white flash */
     .coin-selector label:active {
-        background: var(--cb-mid);
-        border-color: var(--cb-base);
-        color: #12303f;
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.25);
+        background: rgba(46, 139, 87, 0.16);
+        border-color: var(--accent, #2e8b57);
+        color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.25);
     }
 
-    /* Focus state — keep it cream-blue, not browser-default */
     .coin-selector label:focus,
     .coin-selector label:focus-visible {
         outline: none;
-        border-color: var(--cb-base);
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.35);
-        background: var(--cb-light);
-        color: var(--cb-dark);
+        border-color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
+        background: rgba(46, 139, 87, 0.08);
+        color: var(--accent, #2e8b57);
     }
 
-    /* Selected (radio checked) state */
     .coin-selector input[type="radio"]:checked + label {
-        border-color: var(--cb-base);
-        background: var(--cb-light);
-        color: var(--cb-dark);
+        border-color: var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.12);
+        color: var(--accent, #2e8b57);
         font-weight: 700;
     }
 
-    /* Selected + hover — do not let it flip to another colour */
     .coin-selector input[type="radio"]:checked + label:hover {
-        border-color: var(--cb-base);
-        background: var(--cb-light);
-        color: var(--cb-dark);
+        border-color: var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.12);
+        color: var(--accent, #2e8b57);
     }
 
-    /* Selected + active — keep it cream-blue so no white flash */
     .coin-selector input[type="radio"]:checked + label:active {
-        border-color: var(--cb-base);
-        background: var(--cb-mid);
-        color: #12303f;
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.35);
+        border-color: var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.2);
+        color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
-    /* Selected + focus — cream-blue ring, no white */
     .coin-selector input[type="radio"]:checked + label:focus,
     .coin-selector input[type="radio"]:checked + label:focus-visible {
         outline: none;
-        border-color: var(--cb-base);
-        background: var(--cb-light);
-        color: var(--cb-dark);
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.35);
+        border-color: var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.12);
+        color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
-    /* Dark mode — same states, just tinted for the dark palette */
     body.dark-mode .coin-selector label {
         background: var(--bg-card);
         color: var(--text);
@@ -898,22 +998,22 @@
     body.dark-mode .coin-selector input[type="radio"]:checked + label,
     body.dark-mode .coin-selector input[type="radio"]:checked + label:hover,
     body.dark-mode .coin-selector input[type="radio"]:checked + label:focus {
-        background: #2e5d80;
+        background: rgba(46, 139, 87, 0.2);
         color: #f3f9fd;
-        border-color: var(--cb-mid);
+        border-color: var(--accent, #2e8b57);
     }
 
     body.dark-mode .coin-selector label:active,
     body.dark-mode .coin-selector input[type="radio"]:checked + label:active {
-        background: #4a7ea8;
+        background: rgba(46, 139, 87, 0.3);
         color: #ffffff;
-        border-color: var(--cb-light);
-        box-shadow: 0 0 0 3px rgba(168, 208, 236, 0.35);
+        border-color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
     /* ============================================================
-    CRYPTO DETAILS + ADDRESS
-    ============================================================ */
+       CRYPTO DETAILS
+       ============================================================ */
     .crypto-details {
         background: var(--bg);
         padding: 16px;
@@ -926,37 +1026,34 @@
         font-family: 'SF Mono', 'Courier New', monospace;
         font-size: 0.9rem;
         word-break: break-all;
-        color: var(--cb-dark);
+        color: var(--accent, #2e8b57);
         background: var(--bg-card);
         cursor: pointer;
         padding: 8px 12px;
         border-radius: 4px;
         display: inline-block;
         border: 1px solid transparent;
-        transition: background-color 0.15s ease,
-                    color 0.15s ease,
-                    border-color 0.15s ease,
-                    box-shadow 0.15s ease;
+        transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
         user-select: all;
         -webkit-user-select: all;
         -webkit-tap-highlight-color: transparent;
     }
 
     .crypto-details .address:hover {
-        background: var(--cb-light);
-        color: var(--cb-dark);
-        border-color: var(--cb-mid);
+        background: rgba(46, 139, 87, 0.08);
+        color: var(--accent, #2e8b57);
+        border-color: var(--accent, #2e8b57);
     }
 
     .crypto-details .address:active,
     .crypto-details .address:focus,
     .crypto-details .address:focus-visible,
     .crypto-details .address.selected {
-        background: #d6e8f5;
-        color: #12303f;
-        border-color: var(--cb-base);
+        background: rgba(46, 139, 87, 0.16);
+        color: var(--accent, #2e8b57);
+        border-color: var(--accent, #2e8b57);
         outline: none;
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.25);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.25);
         font-weight: 600;
     }
 
@@ -967,21 +1064,24 @@
     }
 
     body.dark-mode .crypto-details .address:hover {
-        background: #22323f;
+        background: rgba(46, 139, 87, 0.15);
         color: #e4f0fa;
-        border-color: var(--cb-deep);
+        border-color: var(--accent, #2e8b57);
     }
 
     body.dark-mode .crypto-details .address:active,
     body.dark-mode .crypto-details .address:focus,
     body.dark-mode .crypto-details .address:focus-visible,
     body.dark-mode .crypto-details .address.selected {
-        background: #2e5d80;
+        background: rgba(46, 139, 87, 0.25);
         color: #f3f9fd;
-        border-color: var(--cb-mid);
-        box-shadow: 0 0 0 3px rgba(111, 168, 209, 0.35);
+        border-color: var(--accent, #2e8b57);
+        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
+    /* ============================================================
+       CHECKBOX
+       ============================================================ */
     .checkbox-container {
         display: flex;
         align-items: center;
@@ -997,6 +1097,7 @@
         width: 20px;
         height: 20px;
         cursor: pointer;
+        accent-color: var(--accent, #2e8b57);
     }
 
     .disclaimer {
@@ -1006,6 +1107,9 @@
         margin-top: 12px;
     }
 
+    /* ============================================================
+       MODAL ACTIONS
+       ============================================================ */
     .modal-actions {
         display: flex;
         gap: 12px;
@@ -1024,29 +1128,16 @@
         -webkit-tap-highlight-color: transparent;
     }
 
-    .modal-actions .btn-cancel {
-        background: #555;
-        color: white;
-    }
+    .modal-actions .btn-cancel { background: #555; color: white; }
+    .modal-actions .btn-cancel:hover { background: #666; }
 
-    .modal-actions .btn-cancel:hover {
-        background: #666;
-    }
+    .modal-actions .btn-confirm { background: var(--success); color: white; }
+    .modal-actions .btn-confirm:hover { background: #27ae60; }
+    .modal-actions .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    .modal-actions .btn-confirm {
-        background: var(--success);
-        color: white;
-    }
-
-    .modal-actions .btn-confirm:hover {
-        background: #27ae60;
-    }
-
-    .modal-actions .btn-confirm:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
+    /* ============================================================
+       SPLIT ACTIONS
+       ============================================================ */
     .split-actions {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1054,6 +1145,9 @@
         margin-top: 16px;
     }
 
+    /* ============================================================
+       INFO CARD (No programme / no split)
+       ============================================================ */
     .info-card {
         background: var(--bg-card);
         border: 1px solid var(--border-color);
@@ -1063,37 +1157,34 @@
         box-shadow: var(--shadow);
     }
 
-    .info-card h2 {
-        color: var(--text);
-        margin-bottom: 8px;
-    }
+    .info-card h2 { color: var(--text); margin-bottom: 8px; }
+    .info-card p { color: var(--text-muted); margin-bottom: 20px; }
 
-    .info-card p {
-        color: var(--text-muted);
-        margin-bottom: 20px;
-    }
-
+    /* ============================================================
+       RESPONSIVE
+       ============================================================ */
     @media (max-width: 768px) {
-        .split-grid {
-            grid-template-columns: 1fr;
-        }
-        .split-actions {
-            grid-template-columns: 1fr;
-        }
-        .profit-split-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
+        .split-grid { grid-template-columns: 1fr; }
+        .split-actions { grid-template-columns: 1fr; }
     }
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
 
+<!-- ============================================================
+     TOPBAR — identical to vps.php
+     ============================================================ -->
+<div class="profit-split-topbar">
+    <a href="#"
+       class="profit-split-topbar-back"
+       onclick="event.preventDefault(); closeProfitSplit(); return false;"
+       aria-label="Back to Dashboard">
+        <i class="fa-solid fa-arrow-left"></i>
+    </a>
+    <h1 class="profit-split-topbar-title">Profit Split</h1>
+</div>
+
 <div class="profit-split-container">
-    <div class="profit-split-header">
-        <h1>Profit Split</h1>
-        <a href="app.php#mydashboard" class="back-btn">← Back to Dashboard</a>
-    </div>
 
     <div id="paymentSuccessNotice" style="<?= $paymentSuccessMessage ? '' : 'display:none;' ?>">
         <?php if ($paymentSuccessMessage): ?>
@@ -1103,7 +1194,6 @@
         <?php endif; ?>
     </div>
 
-    <!-- LIVE STATE BLOCK — replaced wholesale on every poll -->
     <div id="profitSplitStateBlock">
         <?php if (!$hasProgramme): ?>
             <div class="info-card">
@@ -1229,14 +1319,13 @@
             <div class="info-card">
                 <h2>No Active Profit Split Required</h2>
                 <p>You don't have any pending profit split payments at this time.</p>
-                <a href="app.php#mydashboard" class="back-btn" style="display: inline-block;">Return to Dashboard</a>
+                <a href="#" onclick="event.preventDefault(); closeProfitSplit(); return false;" class="back-btn" style="display: inline-block;">Return to Dashboard</a>
             </div>
         <?php endif; ?>
     </div>
 </div>
 
 <?php if ($hasProgramme && ($isUnpaid || $isFailed || $isRetry)): ?>
-<!-- Payment Modal -->
 <div id="paymentModal" class="modal">
     <div class="modal-content">
         <h2 style="color: var(--cb-deep);">Pay Programme Share</h2>
@@ -1279,14 +1368,11 @@
         <p class="disclaimer">Click only after payment has been successfully sent. Your payment will be verified by the server.</p>
 
         <div class="modal-actions">
-            <button onclick="closePaymentModal()" class="btn-cancel">
-                Cancel
-            </button>
+            <button onclick="closePaymentModal()" class="btn-cancel">Cancel</button>
         </div>
     </div>
 </div>
 
-<!-- Final Confirmation Modal -->
 <div id="finalConfirmationModal" class="modal">
     <div class="modal-content">
         <h2 style="color: var(--success);">Final Confirmation</h2>
@@ -1313,6 +1399,53 @@
 <?php endif; ?>
 
 <script>
+    (function () {
+        document.body.classList.add('page-profit_split');
+
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+
+        var WATCHED = [
+            'page-connect_investor_broker',
+            'profile-page-open',
+            'page-revenue_history',
+            'page-profit_split',
+            'page-vps',
+            'page-disconnect_broker',
+            'page-programmes',
+            'page-verify_code',
+            'page-forgot_password'
+        ];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
+
+    function closeProfitSplit() {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchTab', tab: 'mydashboard' }, '*');
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'investorapp.php?tab=mydashboard';
+    }
+    window.closeProfitSplit = closeProfitSplit;
+
     const serverAccounts = {
         btc: {
             address: "<?= htmlspecialchars($serverAccount['btc_address'] ?? 'N/A') ?>",
@@ -1334,10 +1467,6 @@
     const confirmPaidBtn = document.getElementById('confirmPaidBtn');
     const paymentConfirmationCheck = document.getElementById('paymentConfirmationCheck');
 
-    // =====================================================================
-    // POLL PAUSE FLAG — the live poll will skip re-rendering while a modal
-    // is open, so the user can interact with the payment form / address.
-    // =====================================================================
     var modalOpen = false;
 
     function openPaymentModal() {
@@ -1436,11 +1565,6 @@
         });
     });
 
-    // =====================================================================
-    // EVENT DELEGATION — attach the "open payment modal" handler on a
-    // STABLE parent (#profitSplitStateBlock) so re-rendering the inner
-    // HTML does not destroy the handler.
-    // =====================================================================
     (function bindPaymentDelegation() {
         var stableParent = document.getElementById('profitSplitStateBlock');
         if (!stableParent) return;
@@ -1460,9 +1584,6 @@
         togglePaidButton();
     });
 
-    // =====================================================================
-    // LIVE POLL — same pattern as mydashboard.php / revenue_history.php
-    // =====================================================================
     var PROFIT_SPLIT_POLL_URL = (function() {
         try {
             var base = document.baseURI || window.location.href;
@@ -1479,14 +1600,12 @@
     var currentInterval = 1000;
     var pollRunning     = true;
 
-    // ---- helpers ----
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text == null ? '' : String(text);
         return div.innerHTML;
     }
 
-    // ---- Build the inner HTML for the state block from the JSON payload ----
     function buildStateBlockHtml(data) {
         if (!data.has_programme) {
             return '' +
@@ -1537,7 +1656,7 @@
             '<div class="info-card">' +
             '  <h2>No Active Profit Split Required</h2>' +
             '  <p>You don\'t have any pending profit split payments at this time.</p>' +
-            '  <a href="app.php#mydashboard" class="back-btn" style="display: inline-block;">Return to Dashboard</a>' +
+            '  <a href="#" onclick="event.preventDefault(); closeProfitSplit(); return false;" class="back-btn" style="display: inline-block;">Return to Dashboard</a>' +
             '</div>';
     }
 
@@ -1600,12 +1719,9 @@
             '</div>';
     }
 
-    // ---- Apply the payload to the DOM ----
     function refreshProfitSplitUI(data) {
         if (!data || !data.success) return;
 
-        // Do NOT replace the state block while a modal is open — that
-        // would tear down the modal's interactive elements.
         if (!modalOpen) {
             var block = document.getElementById('profitSplitStateBlock');
             if (block) {
@@ -1613,7 +1729,6 @@
             }
         }
 
-        // Keep the modal's displayed amount and hidden inputs in sync
         var hiddenAmount = document.getElementById('serverShareAmountHidden');
         if (hiddenAmount && data.server_share !== undefined) {
             hiddenAmount.value = parseFloat(data.server_share).toFixed(2);
@@ -1632,7 +1747,6 @@
         }
     }
 
-    // ---- Poll the server ----
     async function fetchProfitSplit() {
         if (isUpdating) return;
         isUpdating = true;

@@ -2,8 +2,18 @@
 // verify_code.php
 // Generic email verification gate.
 // Accepts: ?source=<page_to_return_to>&action=<optional_action_label>
-// On success, sets $_SESSION['verified_<source>'] = true,
-// then redirects back to:  <source>.php?verified=1
+//
+// On success:
+//   - Sets $_SESSION['verified_<source>'] = true            (legacy flat key)
+//   - Sets $_SESSION['verified_<source>_<subId>'] = true    (sub-account scoped key)
+//   - Also records a timestamp so downstream pages can check freshness if needed.
+//
+// Then redirects (via shell escape) back to:  <source>.php?verified=1
+//
+// SHELL NOTE: This page may be loaded inside investorapp.php's iframe
+// shell. To avoid nesting the shell inside itself, the success and cancel
+// paths render a tiny escape page that uses window.top.location.href to
+// reload the browser tab on <source>.php (full page, no shell).
 
 session_start();
 
@@ -27,12 +37,40 @@ if (!isset($_SESSION['user_email'])) {
 
 $email = strtolower($_SESSION['user_email']);
 
+// ==================== RESOLVE ACTIVE SUB ACCOUNT ====================
+// We resolve the sub account id here too, so the scoped session key we set
+// matches the one disconnect_broker.php (and other callers) will check.
+$activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
+
+if ($activeSubAccountId <= 0) {
+    // Try to resolve from the DB, same rules as the caller pages.
+    try {
+        $q = $pdo->prepare("SELECT sub_account_id FROM harvhub WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+        $q->execute([$email]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            $q = $pdo->prepare("SELECT sub_account_id, id FROM harvhub WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
+            $q->execute([$email]);
+            $row = $q->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if ($row) {
+            $activeSubAccountId = (int)($row['sub_account_id'] ?? $row['id'] ?? 0);
+        }
+    } catch (Exception $e) {}
+
+    if ($activeSubAccountId > 0) {
+        $_SESSION['active_sub_account_id'] = $activeSubAccountId;
+    }
+}
+
 // ==================== SOURCE / ACTION PARAMS ====================
 $source = isset($_GET['source']) ? preg_replace('/[^a-z0-9_]/i', '', $_GET['source']) : '';
 $action = isset($_GET['action']) ? trim($_GET['action']) : 'Verify Identity';
 
 if (empty($source)) {
-    header("Location: app.php");
+    header("Location: investorapp.php");
     exit;
 }
 
@@ -40,11 +78,16 @@ $source_file = $source . '.php';
 
 $allowed_sources = ['disconnect_broker', 'connect_investor_broker', 'mydashboard'];
 if (!in_array($source, $allowed_sources, true)) {
-    header("Location: app.php");
+    header("Location: investorapp.php");
     exit;
 }
 
-$session_key = 'verified_' . $source;
+// Legacy flat key (kept for compatibility with any other page that still checks it)
+$session_key_flat  = 'verified_' . $source;
+// Sub-account scoped key (this is what disconnect_broker.php checks)
+$session_key_scoped = ($activeSubAccountId > 0)
+    ? 'verified_' . $source . '_' . $activeSubAccountId
+    : $session_key_flat;
 
 // ==================== FETCH MAILER CREDENTIALS ====================
 $mailer_email  = '';
@@ -121,7 +164,6 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
             . '</head>'
             . '<body style="margin:0;padding:0;background-color:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
 
-            // Preheader — inbox preview line
             . '<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f5f7;opacity:0;">'
             . 'Complete your verification — use this code to confirm ' . $safeAction . '.'
             . '</div>'
@@ -131,13 +173,11 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
 
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);overflow:hidden;">'
 
-            // Header
             . '<tr><td style="padding:32px 40px 8px 40px;text-align:center;">'
             . '<div style="display:inline-block;width:56px;height:56px;line-height:56px;border-radius:14px;background-color:#2e8b57;color:#ffffff;font-weight:700;font-size:26px;text-align:center;">H</div>'
             . '<h1 style="margin:16px 0 0 0;font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.2px;">HarvHub</h1>'
             . '</td></tr>'
 
-            // Body
             . '<tr><td style="padding:24px 40px 8px 40px;">'
             . '<h2 style="margin:0 0 12px 0;font-size:18px;font-weight:600;color:#111827;">Complete your verification</h2>'
             . '<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#4b5563;">'
@@ -148,7 +188,6 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
             . '</p>'
             . '</td></tr>'
 
-            // Code block
             . '<tr><td style="padding:8px 40px 8px 40px;">'
             . '<div style="background-color:#f0f9f4;border:1px solid #d6ede0;border-radius:10px;padding:24px;text-align:center;">'
             . '<p style="margin:0 0 8px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#4b5563;font-weight:600;">Verification code</p>'
@@ -159,19 +198,16 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
             . '</div>'
             . '</td></tr>'
 
-            // Safety
             . '<tr><td style="padding:16px 40px 8px 40px;">'
             . '<p style="margin:0;font-size:14px;line-height:1.6;color:#4b5563;">'
             . 'If you did not request this action, please disregard this email and consider changing your password.'
             . '</p>'
             . '</td></tr>'
 
-            // Divider
             . '<tr><td style="padding:24px 40px 0 40px;">'
             . '<div style="border-top:1px solid #e5e7eb;"></div>'
             . '</td></tr>'
 
-            // Footer
             . '<tr><td style="padding:20px 40px 32px 40px;">'
             . '<p style="margin:0 0 6px 0;font-size:13px;color:#6b7280;">'
             . 'This is an automated security message from HarvHub. Please do not reply to this email.'
@@ -183,7 +219,6 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
 
             . '</table>'
 
-            // Sub-footer
             . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;margin-top:20px;">'
             . '<tr><td style="padding:0 8px;text-align:center;font-size:12px;color:#9ca3af;line-height:1.6;">'
             . 'For your security, HarvHub will never ask for your password or verification code via email, phone, or chat.'
@@ -233,17 +268,47 @@ function sendVerifyEmail($toEmail, $toName, $code, $action, $mailer_email, $brev
     return ($httpCode >= 200 && $httpCode < 300);
 }
 
+// ==================== SHELL ESCAPE HELPER ====================
+function renderShellEscape($target, $label = 'Returning…') {
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title><?= htmlspecialchars($label) ?></title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0;background:#000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#6e7681;font-size:0.9rem;font-weight:600;">
+            <?= htmlspecialchars($label) ?>
+        </div>
+        <script>
+            (function () {
+                var target = <?= json_encode($target) ?>;
+                try {
+                    if (window.top && window.top !== window) {
+                        window.top.location.href = target;
+                        return;
+                    }
+                } catch (e) {}
+                window.location.href = target;
+            })();
+        </script>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
 // ==================== HANDLE: SEND CODE ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vc_action']) && $_POST['vc_action'] === 'send_code') {
     $code = generateCode();
 
-    // Remove any old codes for this email
     try {
         $del = $pdo->prepare("DELETE FROM password_resets WHERE email = ?");
         $del->execute([$email]);
     } catch (Exception $e) {}
 
-    // Store code
     try {
         $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 YEAR))");
         $stmt->execute([$email, $code]);
@@ -296,14 +361,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['vc_action']) && $_POS
             $upd = $pdo->prepare("UPDATE password_resets SET used = 1 WHERE id = ?");
             $upd->execute([$rec['id']]);
 
-            $_SESSION[$session_key] = true;
+            // -------- Set BOTH keys so every caller finds it --------
+            $_SESSION[$session_key_flat]   = true;   // "verified_disconnect_broker"
+            $_SESSION[$session_key_scoped] = true;   // "verified_disconnect_broker_42"
+            $_SESSION['verified_' . $source . '_time'] = time();
 
+            // Clear the verification wizard state so the next visit starts fresh
             unset($_SESSION['vc_step']);
             unset($_SESSION['vc_error']);
             unset($_SESSION['vc_success']);
 
-            header('Location: ' . $source_file . '?verified=1');
-            exit;
+            renderShellEscape($source_file . '?verified=1', 'Verified — returning…');
         }
     } catch (Exception $e) {
         $_SESSION['vc_error'] = 'Verification failed. Please try again.';
@@ -342,8 +410,8 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === '1') {
     unset($_SESSION['vc_step']);
     unset($_SESSION['vc_error']);
     unset($_SESSION['vc_success']);
-    header('Location: ' . $source_file);
-    exit;
+
+    renderShellEscape($source_file, 'Cancelled — returning…');
 }
 
 // ==================== PULL STATE ====================
@@ -375,12 +443,69 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 <title>Verify Identity - HarvHub</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
+    /* ============================================================
+       THEME TOKENS — light default, .dark-mode overrides
+       ============================================================ */
+    :root {
+        --vc-bg:              #f0f4f8;
+        --vc-glow-1:          rgba(46, 139, 87, 0.08);
+        --vc-glow-2:          rgba(46, 139, 87, 0.05);
+        --vc-card-bg:         #ffffff;
+        --vc-card-border:     rgba(0, 0, 0, 0.08);
+        --vc-card-shadow:     0 20px 60px rgba(0, 0, 0, 0.12);
+        --vc-text:            #1a2332;
+        --vc-text-muted:      #60736d;
+        --vc-text-soft:       #4b5563;
+        --vc-accent:          #2e8b57;
+        --vc-accent-contrast: #ffffff;
+        --vc-input-bg:        #f7fafc;
+        --vc-input-border:    rgba(0, 0, 0, 0.12);
+        --vc-input-text:      #1a2332;
+        --vc-input-focus:     rgba(46, 139, 87, 0.15);
+        --vc-error-bg:        rgba(220, 53, 69, 0.08);
+        --vc-error-border:    #dc3545;
+        --vc-error-text:      #c82333;
+        --vc-success-bg:      rgba(46, 139, 87, 0.10);
+        --vc-success-border:  #2e8b57;
+        --vc-success-text:    #1e6b40;
+        --vc-label-bg:        rgba(46, 139, 87, 0.10);
+        --vc-label-text:      #1e6b40;
+        --vc-footer:          #8a9aa8;
+    }
+    body.dark-mode {
+        --vc-bg:              #000000;
+        --vc-glow-1:          rgba(26, 0, 51, 0.6);
+        --vc-glow-2:          rgba(0, 0, 51, 0.6);
+        --vc-card-bg:         rgba(20, 20, 30, 0.95);
+        --vc-card-border:     rgba(255, 255, 255, 0.06);
+        --vc-card-shadow:     0 20px 60px rgba(0, 0, 0, 0.8);
+        --vc-text:            #e4e6eb;
+        --vc-text-muted:      #aaa;
+        --vc-text-soft:       #c8ccd4;
+        --vc-accent:          #2e8b57;
+        --vc-accent-contrast: #000000;
+        --vc-input-bg:        #1a1a2e;
+        --vc-input-border:    #333;
+        --vc-input-text:      #ffffff;
+        --vc-input-focus:     rgba(46, 139, 87, 0.2);
+        --vc-error-bg:        rgba(255, 107, 107, 0.08);
+        --vc-error-border:    #ff6b6b;
+        --vc-error-text:      #ff6b6b;
+        --vc-success-bg:      rgba(46, 139, 87, 0.10);
+        --vc-success-border:  #2e8b57;
+        --vc-success-text:    #90ee90;
+        --vc-label-bg:        rgba(46, 139, 87, 0.15);
+        --vc-label-text:      #2e8b57;
+        --vc-footer:          #666;
+    }
+
     * { margin:0; padding:0; box-sizing:border-box; }
+
     html, body {
         height:100%;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background:#000;
-        color:#e4e6eb;
+        background: var(--vc-bg);
+        color: var(--vc-text);
         display:flex;
         align-items:center;
         justify-content:center;
@@ -388,35 +513,40 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         overflow:hidden;
         position:fixed;
         width:100%;
+        transition: background 0.3s ease, color 0.3s ease;
     }
     body::before {
         content:"";
         position:absolute; inset:0;
         background:
-            radial-gradient(circle at 20% 80%, #1a0033 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, #000033 0%, transparent 50%);
+            radial-gradient(circle at 20% 80%, var(--vc-glow-1) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, var(--vc-glow-2) 0%, transparent 50%);
         opacity:0.6;
         pointer-events:none;
+        transition: background 0.3s ease;
     }
+
     .vc-container {
         position:relative;
         z-index:1;
-        background: rgba(20,20,30,0.95);
-        border:1px solid rgba(255,255,255,0.06);
+        background: var(--vc-card-bg);
+        border:1px solid var(--vc-card-border);
         border-radius:20px;
         padding:30px 25px;
         max-width:500px;
         width:100%;
-        box-shadow:0 20px 60px rgba(0,0,0,0.8);
+        box-shadow: var(--vc-card-shadow);
         max-height:95vh;
         overflow-y:auto;
+        transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     }
+
     .vc-header { text-align:center; margin-bottom:18px; }
-    .vc-header h2 { color:#2e8b57; font-size:1.2rem; margin-bottom:6px; }
+    .vc-header h2 { color: var(--vc-accent); font-size:1.2rem; margin-bottom:6px; }
     .vc-header .vc-action-label {
         display:inline-block;
-        background: rgba(46,139,87,0.15);
-        color:#2e8b57;
+        background: var(--vc-label-bg);
+        color: var(--vc-label-text);
         font-size:0.75rem;
         padding:4px 12px;
         border-radius:20px;
@@ -424,16 +554,15 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
     }
     .vc-description {
         text-align:center;
-        color:#aaa;
+        color: var(--vc-text-muted);
         font-size:0.9rem;
         margin-bottom:20px;
         line-height:1.5;
     }
     .vc-error {
         text-align:center;
-        color:#ff6b6b;
-        background: rgba(255,107,107,0.08);
-        border-left:3px solid #ff6b6b;
+        color: var(--vc-error-text);
+        background: var(--vc-error-bg);
         font-size:0.85rem;
         padding:8px 12px;
         border-radius:8px;
@@ -441,9 +570,8 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
     }
     .vc-success {
         text-align:center;
-        color:#90ee90;
-        background: rgba(46,139,87,0.1);
-        border-left:3px solid #2e8b57;
+        color: var(--vc-success-text);
+        background: var(--vc-success-bg);
         font-size:0.85rem;
         padding:8px 12px;
         border-radius:8px;
@@ -461,17 +589,17 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         font-size:1.4rem;
         font-weight:bold;
         border-radius:10px;
-        border:1px solid #333;
-        background:#1a1a2e;
-        color:#fff;
+        border:1px solid var(--vc-input-border);
+        background: var(--vc-input-bg);
+        color: var(--vc-input-text);
         padding:0;
         -webkit-appearance:none;
         outline:none;
-        transition: border-color .2s, box-shadow .2s;
+        transition: border-color .2s, box-shadow .2s, background .3s, color .3s;
     }
     .vc-code-row input:focus {
-        border-color:#2e8b57;
-        box-shadow:0 0 15px rgba(46,139,87,0.2);
+        border-color: var(--vc-accent);
+        box-shadow:0 0 15px var(--vc-input-focus);
     }
     .vc-btn {
         width:100%;
@@ -481,8 +609,8 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         border:none;
         border-radius:10px;
         cursor:pointer;
-        background:#2e8b57;
-        color:#000;
+        background: var(--vc-accent);
+        color: var(--vc-accent-contrast);
         transition: transform .15s, opacity .2s;
         margin-top:5px;
     }
@@ -491,18 +619,18 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
     .vc-btn:disabled { opacity:.4; cursor:not-allowed; transform:none; }
     .vc-btn-secondary {
         background: transparent;
-        color:#888;
-        border:1px solid #333;
+        color: var(--vc-text-muted);
+        border:1px solid var(--vc-card-border);
         margin-top:10px;
     }
-    .vc-btn-secondary:hover { background: rgba(255,255,255,0.05); }
+    .vc-btn-secondary:hover { background: rgba(127,127,127,0.08); }
     .vc-links {
         text-align:center;
         margin-top:14px;
         font-size:0.85rem;
     }
     .vc-links a {
-        color:#2e8b57;
+        color: var(--vc-accent);
         text-decoration:none;
         margin:0 6px;
     }
@@ -511,7 +639,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         text-align:center;
         margin-top:15px;
         font-size:0.7rem;
-        color:#666;
+        color: var(--vc-footer);
     }
     @media (max-width: 480px) {
         .vc-code-row input { width:38px; height:44px; font-size:1.2rem; }
@@ -532,7 +660,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
     }
 </style>
 </head>
-<body>
+<body class="<?= htmlspecialchars($darkModeClass) ?>">
 
 <div class="vc-container">
 
@@ -563,7 +691,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         </form>
 
         <div class="vc-links">
-            <a href="<?= htmlspecialchars($source_file) ?>?cancel=1">Cancel</a>
+            <a href="verify_code.php?source=<?= urlencode($source) ?>&action=<?= urlencode($action) ?>&cancel=1">Cancel</a>
         </div>
 
     <?php elseif ($step === 'verify'): ?>
@@ -605,7 +733,7 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
         <div class="vc-links">
             <a href="verify_code.php?resend=1&source=<?= urlencode($source) ?>&action=<?= urlencode($action) ?>">Resend Code</a>
             &nbsp;|&nbsp;
-            <a href="<?= htmlspecialchars($source_file) ?>?cancel=1">Cancel</a>
+            <a href="verify_code.php?source=<?= urlencode($source) ?>&action=<?= urlencode($action) ?>&cancel=1">Cancel</a>
         </div>
 
     <?php endif; ?>
@@ -614,6 +742,46 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 </div>
 
 <script>
+    // =====================================================================
+    // SHELL BRIDGE — hide header + bottom nav in the investor shell,
+    // receive theme changes, and report our body class.
+    // =====================================================================
+    (function () {
+        document.body.classList.add('page-verify_code');
+
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+
+        var WATCHED = [
+            'page-connect_investor_broker',
+            'profile-page-open',
+            'page-revenue_history',
+            'page-profit_split',
+            'page-vps',
+            'page-disconnect_broker',
+            'page-programmes',
+            'page-verify_code',
+            'page-forgot_password'
+        ];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
+
     // ==================== AUTO-ADVANCE OTP INPUTS + AUTO-SUBMIT ====================
     (function() {
         var inputs = document.querySelectorAll('.vc-code-input');

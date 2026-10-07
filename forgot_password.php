@@ -1,4 +1,5 @@
 <?php
+// forgot_password.php
 session_start();
 
 // ==================== DATABASE CONNECTION ====================
@@ -13,148 +14,142 @@ try {
     die("Database connection failed.");
 }
 
-// ==================== FETCH MAILER CREDENTIALS FROM server_account ====================
-$mailer_email = '';
-$mailer_password = '';
+// ==================== DETECT LOGGED-IN MODE ====================
+$isLoggedIn      = isset($_SESSION['user_email']) && !empty($_SESSION['user_email']);
+$loggedInEmail   = $isLoggedIn ? strtolower(trim($_SESSION['user_email'])) : '';
+
+// ==================== FETCH MAILER CREDENTIALS ====================
+$mailer_email  = '';
+$brevo_api_key = '';
 
 try {
     $stmt = $pdo->prepare("SELECT mailer_email, mailer_password FROM server_account WHERE id = 1 LIMIT 1");
     $stmt->execute();
     $mailerData = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if ($mailerData) {
-        $mailer_email = trim($mailerData['mailer_email'] ?? '');
-        $mailer_password = trim($mailerData['mailer_password'] ?? '');
+        $mailer_email  = trim($mailerData['mailer_email'] ?? '');
+        $brevo_api_key = trim($mailerData['mailer_password'] ?? '');
     }
-} catch (Exception $e) {
-    error_log("Failed to fetch mailer credentials: " . $e->getMessage());
+} catch (Exception $e) {}
+
+// ==================== BREVO API MAILER ====================
+function sendResetEmail($email, $code, $mailer_email, $brevo_api_key) {
+
+    if (empty($mailer_email) || empty($brevo_api_key)) {
+        $_SESSION['reset_error'] = 'Mail configuration missing. Please contact support.';
+        return false;
+    }
+
+    $safeCode = htmlspecialchars($code);
+
+    $payload = [
+        'sender' => ['name' => 'HarvHub', 'email' => $mailer_email],
+        'to' => [['email' => $email]],
+        'subject' => 'Password reset code',
+        'htmlContent' =>
+            '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>'
+            . '<body style="margin:0;padding:0;background-color:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+            . '<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f5f7;opacity:0;">Reset your password — use this code to verify your identity.</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f4f5f7;padding:40px 16px;"><tr><td align="center">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);overflow:hidden;">'
+            . '<tr><td style="padding:32px 40px 8px 40px;text-align:center;">'
+            . '<div style="display:inline-block;width:56px;height:56px;line-height:56px;border-radius:14px;background-color:#2e8b57;color:#ffffff;font-weight:700;font-size:26px;text-align:center;">H</div>'
+            . '<h1 style="margin:16px 0 0 0;font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.2px;">HarvHub</h1>'
+            . '</td></tr>'
+            . '<tr><td style="padding:24px 40px 8px 40px;">'
+            . '<h2 style="margin:0 0 12px 0;font-size:18px;font-weight:600;color:#111827;">Reset your password</h2>'
+            . '<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#4b5563;">We received a request to reset your HarvHub password. Enter the verification code below to continue and set a new password.</p>'
+            . '</td></tr>'
+            . '<tr><td style="padding:8px 40px 8px 40px;">'
+            . '<div style="background-color:#f0f9f4;border:1px solid #d6ede0;border-radius:10px;padding:24px;text-align:center;">'
+            . '<p style="margin:0 0 8px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#4b5563;font-weight:600;">Verification code</p>'
+            . '<div style="font-family:\'SF Mono\',Menlo,Consolas,\'Courier New\',monospace;font-size:34px;font-weight:700;letter-spacing:10px;color:#2e8b57;padding-left:10px;">' . $safeCode . '</div>'
+            . '<p style="margin:12px 0 0 0;font-size:13px;color:#6b7280;">This code expires in 15 minutes</p>'
+            . '</div></td></tr>'
+            . '<tr><td style="padding:16px 40px 8px 40px;">'
+            . '<p style="margin:0;font-size:14px;line-height:1.6;color:#4b5563;">Enter this code on the password reset page to set a new password. For your security, do not share this code with anyone.</p>'
+            . '</td></tr>'
+            . '<tr><td style="padding:16px 40px 8px 40px;">'
+            . '<p style="margin:0;font-size:14px;line-height:1.6;color:#4b5563;">If you did not request a password reset, you can safely disregard this message — no action is required.</p>'
+            . '</td></tr>'
+            . '<tr><td style="padding:24px 40px 0 40px;"><div style="border-top:1px solid #e5e7eb;"></div></td></tr>'
+            . '<tr><td style="padding:20px 40px 32px 40px;">'
+            . '<p style="margin:0 0 6px 0;font-size:13px;color:#6b7280;">This is an automated message from HarvHub. Please do not reply to this email.</p>'
+            . '<p style="margin:0;font-size:12px;color:#9ca3af;">&copy; ' . date('Y') . ' HarvHub. All rights reserved.</p>'
+            . '</td></tr></table>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;margin-top:20px;">'
+            . '<tr><td style="padding:0 8px;text-align:center;font-size:12px;color:#9ca3af;line-height:1.6;">For your security, HarvHub will never ask for your password or verification code via email, phone, or chat.</td></tr>'
+            . '</table></td></tr></table></body></html>',
+        'textContent' =>
+            "Reset your password — use this code to verify your identity.\n\nHARVHUB\n=====================================\n\nReset your password\n\nWe received a request to reset your HarvHub password.\nEnter the verification code below to continue and set\na new password.\n\nVERIFICATION CODE: $code\n\nThis code expires in 15 minutes.\n\nEnter this code on the password reset page to set a new\npassword. For your security, do not share this code\nwith anyone.\n\nIf you did not request a password reset, you can safely\ndisregard this message - no action is required.\n\n-------------------------------------\nThis is an automated message from HarvHub.\nPlease do not reply to this email.\n\n© " . date('Y') . " HarvHub. All rights reserved.\n\nFor your security, HarvHub will never ask for your\npassword or verification code via email, phone, or chat.\n",
+    ];
+
+    $ch = curl_init('https://api.brevo.com/v3/smtp/email');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_HTTPHEADER     => [
+            'accept: application/json',
+            'api-key: ' . $brevo_api_key,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_TIMEOUT        => 15,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode >= 200 && $httpCode < 300) return true;
+
+    $_SESSION['reset_error'] = 'Failed to send reset email. Please try again.';
+    return false;
 }
 
-// Fallback defaults if not set in database
-if (empty($mailer_email)) {
-    $mailer_email = 'techknowdgeteam@gmail.com';
-}
-if (empty($mailer_password)) {
-    $mailer_password = 'rqcrossbioujepda';
-}
-
-// ==================== DETERMINE SOURCE ====================
-// Check if request came from mydashboard.php
-$source = isset($_GET['source']) ? $_GET['source'] : (isset($_SESSION['reset_source']) ? $_SESSION['reset_source'] : 'index');
-// If source is not explicitly set but user is logged in, assume dashboard
-if ($source === 'index' && isset($_SESSION['user_email']) && !empty($_SESSION['user_email'])) {
-    $source = 'dashboard';
-}
-// Store in session for persistence
-$_SESSION['reset_source'] = $source;
-
-// If source is 'dashboard' and we have a logged-in email, pre-fill it
-$prefill_email = '';
-if ($source === 'dashboard' && isset($_SESSION['user_email'])) {
-    $prefill_email = $_SESSION['user_email'];
-}
-
-// ==================== FUNCTIONS ====================
 function generateResetCode() {
     return str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
 }
 
-function sendResetEmail($email, $code, $mailer_email, $mailer_password) {
-    // PHPMailer setup - make sure the paths are correct
-    require_once 'PHPMailer/src/PHPMailer.php';
-    require_once 'PHPMailer/src/SMTP.php';
-    require_once 'PHPMailer/src/Exception.php';
-    
-    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
-    
+function storeResetCode($pdo, $email, $code) {
     try {
-        // Server settings
-        $mail->isSMTP();
-        $mail->Host       = 'smtp.gmail.com';
-        $mail->SMTPAuth   = true;
-        $mail->Username   = $mailer_email;
-        $mail->Password   = $mailer_password;
-        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port       = 587;
-        
-        // Recipients
-        $mail->setFrom($mailer_email, 'HarvHub Support');
-        $mail->addAddress($email); // Sends to the user requesting reset
-        
-        // Content
-        $mail->isHTML(true);
-        $mail->Subject = 'Password Reset Code - HarvHub';
-        $mail->Body    = "
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; color: #333; }
-                    .container { max-width: 500px; margin: 0 auto; padding: 20px; background: #f9f9f9; border-radius: 10px; }
-                    .code { font-size: 32px; font-weight: bold; color: #2e8b57; text-align: center; padding: 20px; background: #fff; border-radius: 8px; margin: 20px 0; letter-spacing: 5px; }
-                    .footer { font-size: 12px; color: #999; text-align: center; margin-top: 20px; }
-                </style>
-            </head>
-            <body>
-                <div class='container'>
-                    <h2 style='text-align:center; color:#2e8b57;'>HarvHub</h2>
-                    <h3 style='text-align:center;'>Password Reset Request</h3>
-                    <p>We received a request to reset your password. Enter the following verification code:</p>
-                    <div class='code'>$code</div>
-                    <p>If you didn't request this, please ignore this email.</p>
-                    <div class='footer'>HarvHub Security</div>
-                </div>
-            </body>
-            </html>
-        ";
-        $mail->AltBody = "Your password reset code is: $code\n\nHarvHub Security";
-        
-        $mail->send();
-        return true;
-    } catch (Exception $e) {
-        error_log("Mail Error: " . $mail->ErrorInfo);
+        $stmt = $pdo->prepare("DELETE FROM password_resets WHERE email = ?");
+        $stmt->execute([$email]);
+
+        $expires_at = date('Y-m-d H:i:s', strtotime('+15 minutes'));
+        $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, ?)");
+        return $stmt->execute([$email, $code, $expires_at]);
+    } catch (PDOException $e) {
         return false;
     }
 }
 
-function storeResetCode($pdo, $email, $code) {
-    // Delete any existing reset codes for this email
-    $stmt = $pdo->prepare("DELETE FROM password_resets WHERE email = ?");
-    $stmt->execute([$email]);
-    
-    // Insert new reset code with no expiry
-    $stmt = $pdo->prepare("INSERT INTO password_resets (email, reset_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 YEAR))");
-    return $stmt->execute([$email, $code]);
-}
-
 function verifyResetCode($pdo, $email, $code) {
-    $stmt = $pdo->prepare("
-        SELECT id, reset_code, expires_at, used 
-        FROM password_resets 
-        WHERE email = ? 
-        ORDER BY created_at DESC 
-        LIMIT 1
-    ");
-    $stmt->execute([$email]);
-    $record = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$record) {
-        return ['valid' => false, 'message' => 'No reset request found.'];
+    try {
+        $stmt = $pdo->prepare("SELECT id, reset_code, used, expires_at FROM password_resets WHERE email = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$email]);
+        $record = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$record) return ['valid' => false, 'message' => 'No reset request found. Please request a new code.'];
+        if ($record['used'] == 1) return ['valid' => false, 'message' => 'This code has already been used. Please request a new code.'];
+
+        $expires_at = strtotime($record['expires_at']);
+        if ($expires_at < time()) return ['valid' => false, 'message' => 'Reset code has expired. Please request a new code.'];
+        if ($record['reset_code'] !== $code) return ['valid' => false, 'message' => 'Invalid verification code. Please try again.'];
+
+        return ['valid' => true, 'message' => 'Code verified successfully.'];
+    } catch (PDOException $e) {
+        return ['valid' => false, 'message' => 'Database error occurred. Please try again.'];
     }
-    
-    if ($record['used'] == 1) {
-        return ['valid' => false, 'message' => 'This code has already been used.'];
-    }
-    
-    if ($record['reset_code'] !== $code) {
-        return ['valid' => false, 'message' => 'Invalid verification code. Please try again.'];
-    }
-    
-    return ['valid' => true, 'message' => 'Code verified successfully.'];
 }
 
 function markCodeAsUsed($pdo, $email) {
-    $stmt = $pdo->prepare("UPDATE password_resets SET used = 1 WHERE email = ? ORDER BY created_at DESC LIMIT 1");
-    return $stmt->execute([$email]);
+    try {
+        $stmt = $pdo->prepare("UPDATE password_resets SET used = 1 WHERE email = ? ORDER BY created_at DESC LIMIT 1");
+        return $stmt->execute([$email]);
+    } catch (PDOException $e) {
+        return false;
+    }
 }
 
 function updatePassword($pdo, $email, $new_password) {
@@ -167,61 +162,83 @@ function maskEmail($email) {
     $parts = explode('@', $email);
     $username = $parts[0];
     $domain = $parts[1] ?? '';
-    
-    if (strlen($username) <= 2) {
-        $masked = $username;
-    } else {
-        $masked = substr($username, 0, 2) . str_repeat('*', strlen($username) - 4) . substr($username, -2);
-    }
-    
+
+    if (strlen($username) <= 2) $masked = $username;
+    else $masked = substr($username, 0, 2) . str_repeat('*', strlen($username) - 4) . substr($username, -2);
+
     return $masked . '@' . $domain;
 }
 
-// ==================== HANDLE ACTIONS ====================
-$email = $_SESSION['reset_email'] ?? $prefill_email;
-$step = $_SESSION['reset_step'] ?? 'request'; // request, verify, reset
+// ==================== GET SOURCE ====================
+$source = isset($_GET['source']) ? $_GET['source'] : (isset($_SESSION['reset_source']) ? $_SESSION['reset_source'] : 'index');
+$_SESSION['reset_source'] = $source;
+
+if ($source === 'dev_login') {
+    $return_url = 'dev_login.php';
+} elseif ($source === 'app') {
+    $return_url = 'investorapp.php';
+} elseif ($source === 'mydashboard' || $source === 'dashboard') {
+    $return_url = 'investorapp.php';
+} else {
+    $return_url = 'index.php';
+}
+
+$email = $_SESSION['pending_reset_email'] ?? '';
+$step = $_SESSION['reset_step'] ?? 'request';
 $error = $_SESSION['reset_error'] ?? '';
 $success = $_SESSION['reset_success'] ?? '';
+$return_to = $_SESSION['return_after_reset'] ?? $return_url;
 
-// ==================== HANDLE REQUEST CODE ====================
+if ($isLoggedIn && $step === 'request' && empty($_SESSION['pending_reset_email'])) {
+    $_SESSION['pending_reset_email'] = $loggedInEmail;
+    $email = $loggedInEmail;
+}
+
+// ==================== HANDLE REQUEST RESET ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_reset') {
-    $email = trim(strtolower($_POST['reset_email'] ?? ''));
-    
+    if ($isLoggedIn) {
+        $email = $loggedInEmail;
+    } else {
+        $email = trim(strtolower($_POST['email'] ?? ''));
+        if ($email === '') $email = trim(strtolower($_SESSION['pending_reset_email'] ?? ''));
+    }
+
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $_SESSION['reset_error'] = 'Please enter a valid email address.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
-    // Check if user exists
-    $stmt = $pdo->prepare("SELECT id, email FROM harvhub WHERE email = ? LIMIT 1");
+
+    $stmt = $pdo->prepare("SELECT id FROM harvhub WHERE email = ? LIMIT 1");
     $stmt->execute([$email]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$user) {
         $_SESSION['reset_error'] = 'No account found with this email address.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
-    // Generate and store reset code
+
     $code = generateResetCode();
-    
+    $maskedEmail = maskEmail($email);
+
     if (!storeResetCode($pdo, $email, $code)) {
         $_SESSION['reset_error'] = 'Failed to generate reset code. Please try again.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
-    // Send email using credentials from server_account
-    if (sendResetEmail($email, $code, $mailer_email, $mailer_password)) {
-        $_SESSION['reset_email'] = $email;
+
+    if (sendResetEmail($email, $code, $mailer_email, $brevo_api_key)) {
+        $_SESSION['pending_reset_email'] = $email;
         $_SESSION['reset_step'] = 'verify';
-        $_SESSION['reset_success'] = 'A verification code has been sent to your email.';
+        $_SESSION['reset_success'] = "A verification code has been sent to {$maskedEmail}.";
+        unset($_SESSION['reset_error']);
     } else {
-        $_SESSION['reset_error'] = 'Failed to send email. Please try again or contact support.';
+        if (empty($_SESSION['reset_error'])) {
+            $_SESSION['reset_error'] = 'Failed to send reset email. Please try again or contact support.';
+        }
     }
-    
+
     header('Location: forgot_password.php?source=' . $source);
     exit;
 }
@@ -229,24 +246,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // ==================== HANDLE VERIFY CODE ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'verify_code') {
     $code = trim($_POST['reset_code'] ?? '');
-    $email = $_SESSION['reset_email'] ?? '';
-    
+    $email = $_SESSION['pending_reset_email'] ?? '';
+
     if (empty($email)) {
         $_SESSION['reset_error'] = 'Session expired. Please start over.';
         $_SESSION['reset_step'] = 'request';
-        unset($_SESSION['reset_email']);
+        unset($_SESSION['pending_reset_email']);
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
+
     if (empty($code) || strlen($code) !== 6) {
         $_SESSION['reset_error'] = 'Please enter the complete 6-digit verification code.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
+
     $result = verifyResetCode($pdo, $email, $code);
-    
+
     if ($result['valid']) {
         markCodeAsUsed($pdo, $email);
         $_SESSION['reset_step'] = 'reset';
@@ -255,7 +272,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $_SESSION['reset_error'] = $result['message'];
     }
-    
+
     header('Location: forgot_password.php?source=' . $source);
     exit;
 }
@@ -264,40 +281,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reset_password') {
     $new_password = $_POST['new_password'] ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
-    $email = $_SESSION['reset_email'] ?? '';
-    
-    if (empty($email) || $_SESSION['reset_step'] !== 'reset') {
+    $email = $_SESSION['pending_reset_email'] ?? '';
+
+    if (empty($email) || ($_SESSION['reset_step'] ?? '') !== 'reset') {
         $_SESSION['reset_error'] = 'Session expired. Please start over.';
         $_SESSION['reset_step'] = 'request';
-        unset($_SESSION['reset_email']);
+        unset($_SESSION['pending_reset_email']);
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
+
     if (empty($new_password) || strlen($new_password) < 4) {
         $_SESSION['reset_error'] = 'Password must be at least 4 characters long.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
+
     if ($new_password !== $confirm_password) {
         $_SESSION['reset_error'] = 'Passwords do not match.';
         header('Location: forgot_password.php?source=' . $source);
         exit;
     }
-    
+
     if (updatePassword($pdo, $email, $new_password)) {
-        // Clear reset session
-        unset($_SESSION['reset_email']);
+        unset($_SESSION['pending_reset_email']);
         unset($_SESSION['reset_step']);
         unset($_SESSION['reset_success']);
         $_SESSION['reset_error'] = '';
-        
-        // Set success flag for the modal
+
         $_SESSION['reset_complete'] = true;
         $_SESSION['reset_complete_email'] = $email;
-        
-        header('Location: forgot_password.php?source=' . $source . '&reset_complete=1');
+        $_SESSION['reset_step'] = 'success';
+
+        header('Location: forgot_password.php?source=' . $source);
         exit;
     } else {
         $_SESSION['reset_error'] = 'Failed to update password. Please try again.';
@@ -308,1071 +324,623 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
 // ==================== HANDLE RESEND CODE ====================
 if (isset($_GET['resend']) && $_GET['resend'] === '1') {
-    $email = $_SESSION['reset_email'] ?? '';
-    
+    $email = $_SESSION['pending_reset_email'] ?? '';
+
     if (!empty($email)) {
         $code = generateResetCode();
-        
+        $maskedEmail = maskEmail($email);
+
         if (storeResetCode($pdo, $email, $code)) {
-            if (sendResetEmail($email, $code, $mailer_email, $mailer_password)) {
-                $_SESSION['reset_success'] = 'A new verification code has been sent to your email.';
+            if (sendResetEmail($email, $code, $mailer_email, $brevo_api_key)) {
+                $_SESSION['reset_success'] = "A new verification code has been sent to {$maskedEmail}.";
+                unset($_SESSION['reset_error']);
             } else {
-                $_SESSION['reset_error'] = 'Failed to send email. Please try again.';
+                if (empty($_SESSION['reset_error'])) {
+                    $_SESSION['reset_error'] = 'Failed to send email. Please try again.';
+                }
             }
         } else {
             $_SESSION['reset_error'] = 'Failed to generate new code. Please try again.';
         }
     }
-    
+
     header('Location: forgot_password.php?source=' . $source);
     exit;
 }
 
 // ==================== HANDLE CANCEL ====================
 if (isset($_GET['cancel'])) {
-    // Determine where to redirect based on source
-    $redirect_url = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
-    unset($_SESSION['reset_email']);
+    unset($_SESSION['pending_reset_email']);
     unset($_SESSION['reset_step']);
     unset($_SESSION['reset_success']);
     unset($_SESSION['reset_error']);
-    header('Location: ' . $redirect_url);
+    unset($_SESSION['reset_complete']);
+    unset($_SESSION['reset_complete_email']);
+    unset($_SESSION['return_after_reset']);
+    unset($_SESSION['reset_source']);
+
+    if (!$isLoggedIn) {
+        $is_approved = $_SESSION['is_approved_user'] ?? false;
+        if (!$is_approved) {
+            unset($_SESSION['user_email']);
+            session_destroy();
+        }
+    }
+
+    $cancelTarget = ($source === 'dev_login') ? 'dev_login.php' : 'investorapp.php';
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Returning…</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0;background:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#8a9aa8;font-size:0.9rem;font-weight:600;">
+            Returning…
+        </div>
+        <script>
+            (function () {
+                var target = <?= json_encode($cancelTarget) ?>;
+                try {
+                    if (window.top && window.top !== window) {
+                        window.top.location.href = target;
+                        return;
+                    }
+                } catch (e) {}
+                window.location.href = target;
+            })();
+        </script>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+// ==================== HANDLE CONTINUE ====================
+if (isset($_GET['continue'])) {
+    if (isset($_SESSION['reset_complete']) && $_SESSION['reset_complete'] === true) {
+        $return_to = $_SESSION['return_after_reset'] ?? $return_url;
+
+        unset($_SESSION['pending_reset_email']);
+        unset($_SESSION['reset_step']);
+        unset($_SESSION['reset_success']);
+        unset($_SESSION['reset_error']);
+        unset($_SESSION['reset_complete']);
+        unset($_SESSION['reset_complete_email']);
+        unset($_SESSION['return_after_reset']);
+        unset($_SESSION['reset_source']);
+        ?>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Returning…</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin:0;background:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+            <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#8a9aa8;font-size:0.9rem;font-weight:600;">
+                Returning…
+            </div>
+            <script>
+                (function () {
+                    var target = <?= json_encode($return_to) ?>;
+                    try {
+                        if (window.top && window.top !== window) {
+                            window.top.location.href = target;
+                            return;
+                        }
+                    } catch (e) {}
+                    window.location.href = target;
+                })();
+            </script>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
+    header('Location: forgot_password.php?source=' . $source);
     exit;
 }
 
 // ==================== GET CURRENT STATE ====================
-$email = $_SESSION['reset_email'] ?? $prefill_email;
+$email = $_SESSION['pending_reset_email'] ?? '';
 $step = $_SESSION['reset_step'] ?? 'request';
 $error = $_SESSION['reset_error'] ?? '';
 $success = $_SESSION['reset_success'] ?? '';
-$reset_complete = isset($_GET['reset_complete']) || isset($_SESSION['reset_complete']);
-$complete_email = $_SESSION['reset_complete_email'] ?? '';
-
-if ($reset_complete) {
-    unset($_SESSION['reset_complete']);
-    unset($_SESSION['reset_complete_email']);
-}
-
 $maskedEmail = !empty($email) ? maskEmail($email) : '';
 
-// Determine back link based on source
-$back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
+if ($step === 'success' && !empty($_SESSION['reset_complete_email'])) {
+    $email = $_SESSION['reset_complete_email'];
+}
+
+$back_link = $return_url;
+
+unset($_SESSION['reset_error']);
+unset($_SESSION['reset_success']);
+
+// ==================== DARK MODE ====================
+$darkModeClass = '';
+
+if (!empty($email)) {
+    try {
+        $stmtDark = $pdo->prepare("SELECT dark_mode FROM harvhub WHERE email = ? LIMIT 1");
+        $stmtDark->execute([$email]);
+        $darkRow = $stmtDark->fetch(PDO::FETCH_ASSOC);
+        if ($darkRow && (int)$darkRow['dark_mode'] === 1) $darkModeClass = 'dark-mode';
+    } catch (Exception $e) {}
+}
+
+if ($darkModeClass === '' && isset($_SESSION['user_email'])) {
+    try {
+        $stmtDark = $pdo->prepare("SELECT dark_mode FROM harvhub WHERE email = ? LIMIT 1");
+        $stmtDark->execute([strtolower($_SESSION['user_email'])]);
+        $darkRow = $stmtDark->fetch(PDO::FETCH_ASSOC);
+        if ($darkRow && (int)$darkRow['dark_mode'] === 1) $darkModeClass = 'dark-mode';
+    } catch (Exception $e) {}
+}
+
+$showEmailInput = !$isLoggedIn;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
 <title>Forgot Password - HarvHub</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    /* ==================== CSS VARIABLES ==================== */
-    :root {
-        --bg-primary: #000;
-        --bg-secondary: rgba(20, 20, 30, 0.95);
-        --bg-input: #1a1a2e;
-        --bg-modal: #1a1a2e;
-        --bg-overlay-start: #1a0033;
-        --bg-overlay-end: #000033;
-        --text-primary: #e4e6eb;
-        --text-secondary: #aaa;
-        --text-muted: #888;
-        --text-dark: #555;
-        --border-color: #333;
-        --border-light: rgba(255,255,255,0.05);
-        --shadow-color: rgba(0,0,0,0.8);
-        --input-focus: #2e8b57;
-        --success-color: #90ee90;
-        --error-color: #ff6b6b;
-        --error-bg: rgba(255, 107, 107, 0.1);
-        --success-bg: rgba(46, 139, 87, 0.1);
-        --source-badge-bg: rgba(46, 139, 87, 0.2);
-        --modal-overlay: rgba(0,0,0,0.7);
-        --btn-text: #000;
-        --scrollbar-track: #1a1a2e;
-        --scrollbar-thumb: #2e8b57;
-        --scrollbar-thumb-hover: #3a9b67;
-    }
+    html, body { margin: 0; padding: 0; }
 
-    /* ==================== LIGHT MODE OVERRIDES ==================== */
-    @media (prefers-color-scheme: light) {
-        :root {
-            --bg-primary: #f0f2f5;
-            --bg-secondary: rgba(255, 255, 255, 0.95);
-            --bg-input: #ffffff;
-            --bg-modal: #ffffff;
-            --bg-overlay-start: #e8f0e8;
-            --bg-overlay-end: #d4e8d4;
-            --text-primary: #1a1a2e;
-            --text-secondary: #555;
-            --text-muted: #777;
-            --text-dark: #333;
-            --border-color: #ddd;
-            --border-light: rgba(0,0,0,0.08);
-            --shadow-color: rgba(0,0,0,0.15);
-            --input-focus: #2e8b57;
-            --success-color: #2e8b57;
-            --error-color: #dc3545;
-            --error-bg: rgba(220, 53, 69, 0.08);
-            --success-bg: rgba(46, 139, 87, 0.08);
-            --source-badge-bg: rgba(46, 139, 87, 0.15);
-            --modal-overlay: rgba(0,0,0,0.4);
-            --btn-text: #fff;
-            --scrollbar-track: #e8e8e8;
-            --scrollbar-thumb: #2e8b57;
-            --scrollbar-thumb-hover: #3a9b67;
-        }
-        
-        /* Light mode specific overrides for better contrast */
-        .container {
-            border: 1px solid rgba(0,0,0,0.08);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
-        }
-        
-        input[type="email"],
-        input[type="password"] {
-            border: 1px solid #ddd;
-            background: #ffffff;
-            color: #1a1a2e;
-        }
-        
-        input[type="email"]::placeholder,
-        input[type="password"]::placeholder {
-            color: #999;
-        }
-        
-        input[type="email"]:focus,
-        input[type="password"]:focus {
-            border-color: #2e8b57;
-            box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.1);
-        }
-        
-        .btn {
-            color: #fff;
-            background: #2e8b57;
-        }
-        
-        .btn:hover {
-            background: #3a9b67;
-        }
-        
-        .btn-secondary {
-            color: #555;
-            border: 1px solid #ddd;
-            background: transparent;
-        }
-        
-        .btn-secondary:hover {
-            background: rgba(0,0,0,0.03);
-        }
-        
-        .error-message {
-            color: #dc3545;
-            background: rgba(220, 53, 69, 0.08);
-            border-left: 3px solid #dc3545;
-        }
-        
-        .success-message {
-            color: #2e8b57;
-            background: rgba(46, 139, 87, 0.08);
-            border-left: 3px solid #2e8b57;
-        }
-        
-        .code-input-container input {
-            border: 1px solid #ddd;
-            background: #ffffff;
-            color: #1a1a2e;
-        }
-        
-        .code-input-container input:focus {
-            border-color: #2e8b57;
-            box-shadow: 0 0 15px rgba(46, 139, 87, 0.15);
-        }
-        
-        .password-toggle {
-            color: #999;
-        }
-        
-        .password-toggle:hover {
-            color: #2e8b57;
-        }
-        
-        .modal-content {
-            background: #ffffff;
-            border: 1px solid rgba(46, 139, 87, 0.2);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-        }
-        
-        .modal-content h2 {
-            color: #2e8b57;
-        }
-        
-        .modal-content p {
-            color: #555;
-        }
-        
-        .source-badge {
-            background: rgba(46, 139, 87, 0.15);
-            color: #2e8b57;
-        }
-        
-        .email-display {
-            background: rgba(46, 139, 87, 0.05);
-            color: #2e8b57;
-        }
-        
-        .back-link a {
-            color: #2e8b57;
-        }
-        
-        .resend-link a {
-            color: #2e8b57;
-        }
-        
-        .footer {
-            color: #999;
-        }
-        
-        .info-text {
-            color: #777;
-        }
-        
-        label {
-            color: #555;
-        }
-        
-        .subtitle {
-            color: #777;
-        }
-        
-        .description {
-            color: #555;
-        }
-        
-        .email-prefill-hint {
-            color: #777;
-        }
-        
-        .modal-overlay {
-            background: rgba(0,0,0,0.4);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-        }
-        
-        /* Light mode scrollbar */
-        ::-webkit-scrollbar-track {
-            background: #f0f0f0;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #2e8b57;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #3a9b67;
-        }
-    }
-
-    /* ==================== DARK MODE OVERRIDES (Default) ==================== */
-    @media (prefers-color-scheme: dark) {
-        input[type="email"],
-        input[type="password"] {
-            border: 1px solid #333;
-            background: #1a1a2e;
-            color: #fff;
-        }
-        
-        input[type="email"]::placeholder,
-        input[type="password"]::placeholder {
-            color: #666;
-        }
-        
-        input[type="email"]:focus,
-        input[type="password"]:focus {
-            border-color: #2e8b57;
-            box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.15);
-        }
-        
-        .btn {
-            color: #000;
-            background: #2e8b57;
-        }
-        
-        .btn:hover {
-            background: #3a9b67;
-        }
-        
-        .btn-secondary {
-            color: #888;
-            border: 1px solid #333;
-            background: transparent;
-        }
-        
-        .btn-secondary:hover {
-            background: rgba(255,255,255,0.05);
-        }
-        
-        .code-input-container input {
-            border: 1px solid #333;
-            background: #1a1a2e;
-            color: #fff;
-        }
-        
-        .code-input-container input:focus {
-            border-color: #2e8b57;
-            box-shadow: 0 0 15px rgba(46, 139, 87, 0.2);
-        }
-        
-        .modal-content {
-            background: #1a1a2e;
-            border: 1px solid rgba(46, 139, 87, 0.3);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.9);
-        }
-        
-        .modal-overlay {
-            background: rgba(0,0,0,0.7);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-        }
-    }
-    /* ============================================================
-    GLOBAL iOS ZOOM FIX
-    iOS Safari auto-zooms any input with font-size < 16px.
-    Force 16px on all form controls at mobile widths.
-    ============================================================ */
-    @media (max-width: 768px) {
-        input,
-        select,
-        textarea,
-        .dd-input,
-        .dd-select,
-        .dd-am-input,
-        .dd-inline-input,
-        .dd-req-input,
-        .dd-json-edit-textarea,
-        .pt-modal-input {
-            font-size: 16px !important;
-        }
-    }
-    /* ==================== BASE STYLES ==================== */
-    * { 
-        margin: 0; 
-        padding: 0; 
-        box-sizing: border-box; 
-    }
-    
-    html, body {
-        height: 100%;
-        overflow: hidden;
-        position: fixed;
-        width: 100%;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background: var(--bg-primary);
-        color: var(--text-primary);
+    body.fp-body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        background: var(--bg);
+        color: var(--text);
         min-height: 100vh;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 20px;
-        position: relative;
-        -webkit-overflow-scrolling: none;
-        overscroll-behavior: none;
+        box-sizing: border-box;
         transition: background 0.3s ease, color 0.3s ease;
     }
-    
-    body::before {
+
+    body.fp-body::before {
         content: "";
-        position: absolute;
+        position: fixed;
         inset: 0;
-        background: 
-            radial-gradient(circle at 20% 80%, var(--bg-overlay-start) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, var(--bg-overlay-end) 0%, transparent 50%),
-            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23666"/><circle cx="30" cy="70" r="1.5" fill="%23666"/><circle cx="70" cy="30" r="1" fill="%23666"/><circle cx="90" cy="80" r="1.2" fill="%23666"/><circle cx="50" cy="50" r="1.8" fill="%23666"/></svg>') repeat;
-        background-size: cover, cover, 120px 120px;
+        background:
+            radial-gradient(circle at 20% 80%, var(--accent-light) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, var(--accent-light) 0%, transparent 50%);
         opacity: 0.5;
         pointer-events: none;
         z-index: 0;
         transition: opacity 0.3s ease;
     }
-    
-    @media (prefers-color-scheme: light) {
-        body::before {
-            opacity: 0.3;
-            background: 
-                radial-gradient(circle at 20% 80%, #d4e8d4 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, #e8f0e8 0%, transparent 50%),
-                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="%23999"/><circle cx="30" cy="70" r="1.5" fill="%23999"/><circle cx="70" cy="30" r="1" fill="%23999"/><circle cx="90" cy="80" r="1.2" fill="%23999"/><circle cx="50" cy="50" r="1.8" fill="%23999"/></svg>') repeat;
-            background-size: cover, cover, 120px 120px;
-        }
-    }
-    
-    /* ==================== SCROLLBAR ==================== */
-    ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-    }
-    ::-webkit-scrollbar-track {
-        background: var(--scrollbar-track);
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb {
-        background: var(--scrollbar-thumb);
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: var(--scrollbar-thumb-hover);
-    }
-    
-    /* ==================== CONTAINER ==================== */
-    .container {
-        background: var(--bg-secondary);
-        border-radius: 20px;
+
+    body.fp-body.dark-mode::before { opacity: 0.25; }
+
+    .fp-container {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius, 16px);
         padding: 30px 25px;
         max-width: 500px;
         width: 100%;
         position: relative;
         z-index: 1;
-        box-shadow: 0 20px 60px var(--shadow-color);
-        border: 1px solid var(--border-light);
-        backdrop-filter: blur(10px);
+        box-shadow: var(--shadow-lg);
         max-height: 95vh;
         overflow-y: auto;
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: thin;
-        scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+        scrollbar-color: var(--accent) transparent;
         transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
     }
-    
-    .subtitle {
-        text-align: center;
-        color: var(--text-muted);
-        margin-bottom: 20px;
-        font-size: 0.9rem;
-        transition: color 0.3s ease;
-    }
-    
-    h2 {
-        color: #2e8b57;
-        margin-bottom: 8px;
-        text-align: center;
-        font-size: 1.2rem;
-    }
-    
-    .description {
-        text-align: center;
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-        margin-bottom: 20px;
-        line-height: 1.5;
-        transition: color 0.3s ease;
-    }
-    
-    label {
-        display: block;
-        font-weight: 600;
-        margin-bottom: 5px;
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-        transition: color 0.3s ease;
-    }
-    
-    input[type="email"],
-    input[type="password"] {
-        width: 100%;
-        padding: 12px 14px;
-        border-radius: 10px;
-        font-size: 0.95rem;
+
+    .fp-container::-webkit-scrollbar { width: 6px; }
+    .fp-container::-webkit-scrollbar-track { background: transparent; }
+    .fp-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 10px; }
+    .fp-container::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    .fp-container h2 { color: var(--accent); margin: 0 0 8px 0; text-align: center; font-size: 1.2rem; font-weight: 700; }
+
+    .fp-description { text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 20px; line-height: 1.5; }
+
+    .fp-container label { display: block; font-weight: 600; margin-bottom: 5px; color: var(--text-secondary); font-size: 0.85rem; }
+
+    .fp-input {
+        width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--input-border);
+        background: var(--input-bg); color: var(--input-text); font-size: 16px !important; font-family: inherit;
+        box-sizing: border-box;
         transition: border-color 0.3s ease, background 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
-        -webkit-appearance: none;
-        appearance: none;
+        -webkit-appearance: none; appearance: none;
     }
-    
-    input[type="email"]:focus,
-    input[type="password"]:focus {
-        outline: none;
-        border-color: var(--input-focus);
-        box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.1);
-    }
-    
-    .btn {
-        width: 100%;
-        padding: 12px;
-        font-weight: bold;
-        font-size: 0.95rem;
-        border: none;
-        border-radius: 10px;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        margin-top: 5px;
+
+    .fp-input::placeholder { color: var(--input-placeholder); }
+    .fp-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.15); }
+    .fp-input[readonly] { background: var(--bg); color: var(--text-secondary); cursor: default; }
+
+    .fp-btn {
+        width: 100%; padding: 12px; font-weight: 700; font-size: 0.95rem; font-family: inherit;
+        border: none; border-radius: 10px; cursor: pointer; transition: all 0.3s ease; margin-top: 5px;
         -webkit-tap-highlight-color: transparent;
     }
-    
-    .btn:hover {
-        transform: scale(1.01);
-        opacity: 0.9;
+
+    body.dark-mode .fp-btn { background: var(--accent); color: #000; }
+    body:not(.dark-mode) .fp-btn { background: var(--accent); color: #fff; }
+    .fp-btn:hover { opacity: 0.9; transform: scale(1.01); }
+    .fp-btn:active { transform: scale(0.98); }
+    .fp-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .fp-btn-secondary {
+        width: 100%; padding: 12px; font-weight: 600; font-size: 0.9rem; font-family: inherit;
+        border-radius: 10px; cursor: pointer; background: transparent; color: var(--text-secondary);
+        border: 1px solid var(--border-color); transition: all 0.2s ease; -webkit-tap-highlight-color: transparent;
     }
-    
-    .btn:active {
-        transform: scale(0.98);
+
+    .fp-btn-secondary:hover { background: var(--bg); color: var(--text); }
+
+    .fp-error {
+        text-align: center; margin: 10px 0; font-size: 0.85rem; padding: 8px 12px; border-radius: 8px;
+        word-break: break-word; background: var(--danger-bg); color: var(--danger); 
     }
-    
-    .btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-        transform: none;
+
+    .fp-success {
+        text-align: center; margin: 10px 0; font-size: 0.85rem; padding: 8px 12px; border-radius: 8px;
+        word-break: break-word; background: var(--success-bg); color: var(--success); 
     }
-    
-    .btn-secondary {
-        padding: 10px;
-        transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+
+    .fp-info-box {
+        text-align: center; margin: 10px 0 15px 0; font-size: 0.88rem; padding: 10px 14px; border-radius: 8px;
+        word-break: break-word; background: var(--bg); color: var(--text-secondary);
+        border: 1px solid var(--border-color); line-height: 1.5;
     }
-    
-    .btn-secondary:hover {
-        transform: none;
-    }
-    
-    .error-message {
-        text-align: center;
-        margin: 10px 0;
-        font-size: 0.85rem;
-        padding: 8px 12px;
-        border-radius: 8px;
-        border-left: 3px solid var(--error-color);
-        word-break: break-word;
-        transition: color 0.3s ease, background 0.3s ease;
-    }
-    
-    .success-message {
-        text-align: center;
-        margin: 10px 0;
-        font-size: 0.85rem;
-        padding: 8px 12px;
-        border-radius: 8px;
-        border-left: 3px solid var(--input-focus);
-        word-break: break-word;
-        transition: color 0.3s ease, background 0.3s ease;
-    }
-    
-    .info-text {
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        text-align: center;
-        margin: 12px 0;
-        transition: color 0.3s ease;
-    }
-    
-    .back-link {
-        text-align: center;
-        margin-top: 15px;
-    }
-    
-    .back-link a {
-        color: #2e8b57;
-        text-decoration: none;
-        font-size: 0.85rem;
-        transition: opacity 0.3s ease;
-    }
-    
-    .back-link a:hover {
-        text-decoration: underline;
-        opacity: 0.8;
-    }
-    
-    .code-input-container {
-        display: flex;
-        gap: 8px;
-        justify-content: center;
-        margin: 15px 0 10px;
-        flex-wrap: nowrap;
-    }
-    
-    .code-input-container input {
-        width: 45px;
-        height: 50px;
-        text-align: center;
-        font-size: 1.4rem;
-        font-weight: bold;
-        border-radius: 10px;
+
+    .fp-info-box strong { color: var(--accent); }
+
+    .fp-code-container { display: flex; gap: 8px; justify-content: center; margin: 15px 0 10px; flex-wrap: nowrap; }
+
+    .fp-code-container input {
+        width: 45px; height: 50px; text-align: center; font-size: 1.4rem; font-weight: bold;
+        border-radius: 10px; padding: 0;
+        border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-text);
         transition: border-color 0.3s ease, background 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
-        padding: 0;
-        -webkit-appearance: none;
-        appearance: none;
-        -moz-appearance: textfield;
-        flex-shrink: 0;
+        -webkit-appearance: none; appearance: none; -moz-appearance: textfield; flex-shrink: 0;
+        font-family: inherit; box-sizing: border-box;
     }
-    
-    .code-input-container input::-webkit-outer-spin-button,
-    .code-input-container input::-webkit-inner-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
+
+    .fp-code-container input::-webkit-outer-spin-button,
+    .fp-code-container input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+    .fp-code-container input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 15px rgba(46, 139, 87, 0.2); }
+    .fp-code-container input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .fp-password-wrapper { position: relative; margin-bottom: 10px; }
+    .fp-password-wrapper .fp-input { padding-right: 55px; }
+
+    .fp-password-toggle {
+        position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+        cursor: pointer; font-size: 0.8rem; font-family: inherit; user-select: none;
+        background: transparent; border: none; padding: 4px 8px; border-radius: 5px;
+        color: var(--text-muted); transition: color 0.2s ease; -webkit-tap-highlight-color: transparent;
     }
-    
-    .code-input-container input:focus {
-        outline: none;
-        border-color: var(--input-focus);
-        box-shadow: 0 0 15px rgba(46, 139, 87, 0.15);
+
+    .fp-password-toggle:hover { color: var(--accent); }
+
+    .fp-resend-link { text-align: center; margin: 12px 0 5px; font-size: 0.85rem; }
+    .fp-resend-link a { color: var(--accent); text-decoration: none; transition: opacity 0.3s ease; }
+    .fp-resend-link a:hover { text-decoration: underline; opacity: 0.8; }
+
+    .fp-back-link { text-align: center; margin-top: 15px; }
+    .fp-back-link a { color: var(--accent); text-decoration: none; font-size: 0.85rem; transition: opacity 0.3s ease; }
+    .fp-back-link a:hover { text-decoration: underline; opacity: 0.8; }
+
+    .fp-success-icon { font-size: 4rem; text-align: center; margin: 10px 0; }
+
+    .fp-success-details {
+        border-radius: 12px; padding: 15px; margin: 15px 0;
+        background: var(--success-bg); border: 1px solid var(--border-color); color: var(--text);
     }
-    
-    .code-input-container input:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-    
-    .code-input-container input.expired {
-        border-color: var(--error-color);
-        opacity: 0.5;
-    }
-    
-    .resend-link {
-        text-align: center;
-        margin: 12px 0 5px;
-    }
-    
-    .resend-link a {
-        color: #2e8b57;
-        text-decoration: none;
-        font-size: 0.85rem;
-        transition: opacity 0.3s ease;
-    }
-    
-    .resend-link a:hover {
-        text-decoration: underline;
-        opacity: 0.8;
-    }
-    
-    .email-display {
-        text-align: center;
-        font-weight: bold;
-        font-size: 0.95rem;
-        margin: 3px 0 12px;
-        padding: 6px 12px;
-        border-radius: 8px;
-        word-break: break-all;
-        transition: background 0.3s ease, color 0.3s ease;
-    }
-    
-    .footer {
-        text-align: center;
-        margin-top: 15px;
-        font-size: 0.7rem;
-        transition: color 0.3s ease;
-    }
-    
-    .password-wrapper {
-        position: relative;
-        margin-bottom: 10px;
-    }
-    
-    .password-wrapper input {
-        padding-right: 55px;
-    }
-    
-    .password-toggle {
-        position: absolute;
-        right: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        cursor: pointer;
-        font-size: 0.8rem;
-        user-select: none;
-        background: transparent;
-        border: none;
-        padding: 4px 8px;
-        border-radius: 5px;
-        transition: color 0.2s ease;
-        -webkit-tap-highlight-color: transparent;
-    }
-    
-    .password-toggle:active {
-        color: var(--input-focus);
-    }
-    
-    .source-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        margin-bottom: 15px;
-        text-align: center;
-        width: 100%;
-        transition: background 0.3s ease, color 0.3s ease;
-    }
-    
-    .email-prefill-hint {
-        text-align: center;
-        font-size: 0.8rem;
-        margin-bottom: 15px;
-        transition: color 0.3s ease;
-    }
-    
-    .modal-overlay {
-        display: none;
-        position: fixed;
-        inset: 0;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-        padding: 20px;
-        overflow: hidden;
-        transition: background 0.3s ease, backdrop-filter 0.3s ease;
-    }
-    
-    .modal-overlay.active {
-        display: flex;
-    }
-    
-    .modal-content {
-        border-radius: 20px;
-        padding: 30px 25px;
-        max-width: 450px;
-        width: 100%;
-        text-align: center;
-        max-height: 90vh;
-        overflow-y: auto;
-        transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
-    }
-    
-    .modal-content .icon {
-        font-size: 3.5rem;
-        margin-bottom: 12px;
-    }
-    
-    .modal-content p {
-        margin-bottom: 20px;
-        line-height: 1.5;
-        font-size: 0.95rem;
-        transition: color 0.3s ease;
-    }
-    
-    /* ==================== RESPONSIVE ==================== */
+
+    .fp-success-details p { margin: 5px 0; }
+    .fp-success-details strong { color: var(--accent); }
+
+    .fp-footer { text-align: center; margin-top: 15px; font-size: 0.7rem; color: var(--text-muted); }
+
     @media (max-width: 480px) {
-        .container {
-            padding: 20px 15px;
-            max-height: 90vh;
-        }
-        .code-input-container input {
-            width: 38px;
-            height: 44px;
-            font-size: 1.2rem;
-        }
-        .code-input-container {
-            gap: 5px;
-        }
-        h2 {
-            font-size: 1.1rem;
-        }
-        input[type="email"],
-        input[type="password"] {
-            padding: 10px 12px;
-            font-size: 0.9rem;
-        }
-        .btn {
-            padding: 10px;
-            font-size: 0.9rem;
-        }
-        .modal-content {
-            padding: 25px 20px;
-        }
-        .modal-content .icon {
-            font-size: 3rem;
-        }
+        .fp-container { padding: 20px 15px; max-height: 90vh; }
+        .fp-code-container input { width: 38px; height: 44px; font-size: 1.2rem; }
+        .fp-code-container { gap: 5px; }
+        .fp-container h2 { font-size: 1.1rem; }
+        .fp-input { padding: 10px 12px; font-size: 0.9rem; }
+        .fp-btn { padding: 10px; font-size: 0.9rem; }
+        .fp-success-icon { font-size: 3rem; }
     }
-    
+
     @media (max-width: 380px) {
-        .code-input-container input {
-            width: 32px;
-            height: 38px;
-            font-size: 1rem;
-        }
-        .code-input-container {
-            gap: 4px;
-        }
-        .container {
-            padding: 15px 12px;
-        }
-        .email-display {
-            font-size: 0.8rem;
-            padding: 4px 8px;
-        }
-        .description {
-            font-size: 0.8rem;
-        }
+        .fp-code-container input { width: 32px; height: 38px; font-size: 1rem; }
+        .fp-code-container { gap: 4px; }
+        .fp-container { padding: 15px 12px; }
+        .fp-description { font-size: 0.8rem; }
     }
-    
+
     @media (min-width: 768px) {
-        .container {
-            padding: 40px 35px;
-        }
-        .code-input-container input {
-            width: 55px;
-            height: 60px;
-            font-size: 1.6rem;
-        }
-        .code-input-container {
-            gap: 12px;
-        }
-    }
-    
-    /* Prevent zoom on input focus */
-    input {
-        font-size: 16px !important;
-    }
-    
-    /* Disable text selection */
-    .no-select {
-        user-select: none;
-        -webkit-user-select: none;
+        .fp-container { padding: 40px 35px; }
+        .fp-code-container input { width: 55px; height: 60px; font-size: 1.6rem; }
+        .fp-code-container { gap: 12px; }
     }
 </style>
+<?php include 'style.php'; ?>
 </head>
-<body>
+<body class="fp-body <?= htmlspecialchars($darkModeClass) ?>">
 
-<div class="container">
+<div class="fp-container">
     <?php if ($step === 'request'): ?>
-        <!-- STEP 1: Request Reset Code -->
-        <h2>Forgot Password?</h2>
-        
-        <?php if ($source === 'dashboard'): ?>
-            <p class="description">We'll send a verification code to <strong><?= htmlspecialchars($prefill_email) ?></strong> to reset your password.</p>
-        <?php else: ?>
-            <p class="description">Enter the email address associated with your account. We'll send a verification code to reset your password.</p>
-        <?php endif; ?>
-        
-        <?php if (!empty($error)): ?>
-            <div class="error-message"><?= htmlspecialchars($error) ?></div>
-        <?php endif; ?>
-        
-        <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="requestForm">
-            <input type="hidden" name="action" value="request_reset">
-            
-            <?php if ($source === 'dashboard'): ?>
-                <input type="hidden" name="reset_email" value="<?= htmlspecialchars($prefill_email) ?>">
-            <?php else: ?>
-                <label for="reset_email">Email Address</label>
-                <input type="email" name="reset_email" id="reset_email" placeholder="youremail@gmail.com" value="<?= htmlspecialchars($email) ?>" required>
+
+        <?php if ($isLoggedIn): ?>
+            <h2>Change Password</h2>
+            <p class="fp-description">To change your password, we'll send a verification code to the email address on your account.</p>
+
+            <?php if (!empty($error)): ?>
+                <div class="fp-error"><?= htmlspecialchars($error) ?></div>
             <?php endif; ?>
-            
-            <button type="submit" class="btn">Send Verification Code</button>
-        </form>
-        
-        <div class="back-link">
-            <a href="<?= $back_link ?>">Back to <?= ($source === 'dashboard') ? 'Dashboard' : 'Login' ?></a>
-        </div>
+
+            <div class="fp-info-box">
+                Sending code to <strong><?= htmlspecialchars($loggedInEmail) ?></strong>
+            </div>
+
+            <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>">
+                <input type="hidden" name="action" value="request_reset">
+                <button type="submit" class="fp-btn">Send Verification Code</button>
+            </form>
+
+            <div class="fp-back-link">
+                <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel &amp; Return</a>
+            </div>
+
+        <?php else: ?>
+            <h2>Forgot Password?</h2>
+            <p class="fp-description">Enter the email address associated with your account. We'll send a verification code to reset your password.</p>
+
+            <?php if (!empty($error)): ?>
+                <div class="fp-error"><?= htmlspecialchars($error) ?></div>
+            <?php endif; ?>
+
+            <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>">
+                <input type="hidden" name="action" value="request_reset">
+                <label for="email">Email Address</label>
+                <input type="email" name="email" id="email" class="fp-input" placeholder="youremail@gmail.com" value="<?= htmlspecialchars($email) ?>" required>
+                <button type="submit" class="fp-btn">Send Reset Code</button>
+            </form>
+
+            <div class="fp-back-link">
+                <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel &amp; Return</a>
+            </div>
+        <?php endif; ?>
 
     <?php elseif ($step === 'verify'): ?>
-        <!-- STEP 2: Verify Code -->
-        <h2>Reset Password</h2>
-        <p class="success-message">We sent a 6-digit verification code to <?= htmlspecialchars($maskedEmail) ?></p>
-        
+        <h2>Enter Reset Code</h2>
+        <p class="fp-success">We sent a 6-digit verification code to <?= htmlspecialchars($maskedEmail) ?></p>
         <?php if (!empty($error)): ?>
-            <div class="error-message"><?= htmlspecialchars($error) ?></div>
+            <div class="fp-error"><?= htmlspecialchars($error) ?></div>
         <?php endif; ?>
-        
+
         <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="verifyForm">
             <input type="hidden" name="action" value="verify_code">
             <label>Enter 6-Digit Code</label>
-            <div class="code-input-container" id="codeContainer">
-                <input type="text" maxlength="1" class="code-input" data-index="0" autofocus required inputmode="numeric" pattern="[0-9]">
-                <input type="text" maxlength="1" class="code-input" data-index="1" required inputmode="numeric" pattern="[0-9]">
-                <input type="text" maxlength="1" class="code-input" data-index="2" required inputmode="numeric" pattern="[0-9]">
-                <input type="text" maxlength="1" class="code-input" data-index="3" required inputmode="numeric" pattern="[0-9]">
-                <input type="text" maxlength="1" class="code-input" data-index="4" required inputmode="numeric" pattern="[0-9]">
-                <input type="text" maxlength="1" class="code-input" data-index="5" required inputmode="numeric" pattern="[0-9]">
+            <div class="fp-code-container" id="codeContainer">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="0" autofocus required inputmode="numeric" pattern="[0-9]">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="1" required inputmode="numeric" pattern="[0-9]">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="2" required inputmode="numeric" pattern="[0-9]">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="3" required inputmode="numeric" pattern="[0-9]">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="4" required inputmode="numeric" pattern="[0-9]">
+                <input type="text" maxlength="1" class="fp-code-input" data-index="5" required inputmode="numeric" pattern="[0-9]">
             </div>
             <input type="hidden" name="reset_code" id="resetCodeHidden" value="">
-            
-            <button type="submit" class="btn" id="verifyBtn">Verify Code</button>
+            <button type="submit" class="fp-btn" id="verifyBtn">Confirm</button>
         </form>
-        
-        <div class="resend-link">
+
+        <div class="fp-resend-link">
             <a href="forgot_password.php?resend=1&source=<?= htmlspecialchars($source) ?>" id="resendLink">Resend Code</a> &nbsp;|&nbsp;
             <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel</a>
         </div>
 
     <?php elseif ($step === 'reset'): ?>
-        <!-- STEP 3: Set New Password -->
         <h2>Set New Password</h2>
-        <p class="description">Create a new password for your account. Make sure it's something you'll remember.</p>
-        
+        <p class="fp-description">Create a new password for your account. Make sure it's something you'll remember.</p>
         <?php if (!empty($error)): ?>
-            <div class="error-message"><?= htmlspecialchars($error) ?></div>
+            <div class="fp-error"><?= htmlspecialchars($error) ?></div>
         <?php endif; ?>
-        
         <?php if (!empty($success)): ?>
-            <div class="success-message"><?= htmlspecialchars($success) ?></div>
+            <div class="fp-success"><?= htmlspecialchars($success) ?></div>
         <?php endif; ?>
-        
+
         <form method="POST" action="forgot_password.php?source=<?= htmlspecialchars($source) ?>" id="resetForm">
             <input type="hidden" name="action" value="reset_password">
-            
+
             <label for="new_password">New Password</label>
-            <div class="password-wrapper">
-                <input type="password" name="new_password" id="new_password" placeholder="Min 4 characters" required>
-                <button type="button" class="password-toggle" onclick="togglePassword('new_password', this)">Show</button>
+            <div class="fp-password-wrapper">
+                <input type="password" name="new_password" id="new_password" class="fp-input" placeholder="Min 4 characters" required>
+                <button type="button" class="fp-password-toggle" onclick="togglePassword('new_password', this)">Show</button>
             </div>
-            
+
             <label for="confirm_password">Confirm Password</label>
-            <div class="password-wrapper">
-                <input type="password" name="confirm_password" id="confirm_password" placeholder="Confirm your new password" required>
-                <button type="button" class="password-toggle" onclick="togglePassword('confirm_password', this)">Show</button>
+            <div class="fp-password-wrapper">
+                <input type="password" name="confirm_password" id="confirm_password" class="fp-input" placeholder="Confirm your new password" required>
+                <button type="button" class="fp-password-toggle" onclick="togglePassword('confirm_password', this)">Show</button>
             </div>
-            
-            <button type="submit" class="btn">Update Password</button>
+
+            <button type="submit" class="fp-btn">Update Password</button>
         </form>
-        
-        <div class="back-link">
+
+        <div class="fp-back-link">
             <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel</a>
         </div>
 
+    <?php elseif ($step === 'success'): ?>
+        <div class="fp-success-icon">✅</div>
+        <h2>Password Updated!</h2>
+        <p class="fp-description">Your password has been successfully reset. You can now log in to your account with your new password.</p>
+
+        <div class="fp-success-details">
+            <p><strong>Email:</strong> <?= htmlspecialchars($email) ?></p>
+            <p><strong>Status:</strong> <span style="color: var(--accent);">Password Reset ✓</span></p>
+        </div>
+
+        <button class="fp-btn" onclick="window.location.href='forgot_password.php?continue=1&source=<?= htmlspecialchars($source) ?>'">Continue</button>
+
+        <div class="fp-back-link">
+            <a href="forgot_password.php?cancel=1&source=<?= htmlspecialchars($source) ?>">Cancel &amp; Return</a>
+        </div>
     <?php endif; ?>
 
-    <div class="footer">Secure your account</div>
-</div>
-
-<!-- Success Modal -->
-<div class="modal-overlay <?= $reset_complete ? 'active' : '' ?>" id="successModal">
-    <div class="modal-content">
-        <div class="icon">✅</div>
-        <h2>Password Updated!</h2>
-        <p>Your password has been successfully reset. You can now log in to your account with your new password.</p>
-        <button class="btn" onclick="closeSuccessModal()">Return to <?= ($source === 'dashboard') ? 'Dashboard' : 'Login' ?></button>
-    </div>
+    <div class="fp-footer">Secure your account</div>
 </div>
 
 <script>
-    // ==================== PREVENT SCROLLING AND PULL-TO-REFRESH ====================
+    // =====================================================================
+    // SHELL BRIDGE — hide header + bottom nav in the investor shell.
+    // =====================================================================
+    (function () {
+        document.body.classList.add('page-forgot_password');
+
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+
+        var WATCHED = [
+            'page-connect_investor_broker',
+            'profile-page-open',
+            'page-revenue_history',
+            'page-profit_split',
+            'page-vps',
+            'page-disconnect_broker',
+            'page-programmes',
+            'page-verify_code',
+            'page-forgot_password'
+        ];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
+
     document.addEventListener('DOMContentLoaded', function() {
-        // Prevent touchmove on body
         document.body.addEventListener('touchmove', function(e) {
-            if (!e.target.closest('.container')) {
+            if (!e.target.closest('.fp-container')) {
                 e.preventDefault();
-            }
-        }, { passive: false });
-        
-        // Prevent pull-to-refresh
-        document.addEventListener('touchstart', function(e) {
-            const scrollable = e.target.closest('.container');
-            if (!scrollable) {
-                // Allow only if touching the container
-            }
-        }, { passive: true });
-        
-        // Disable back gesture on iOS
-        document.addEventListener('touchstart', function(e) {
-            if (e.touches.length === 1) {
-                const touchX = e.touches[0].clientX;
-                if (touchX < 20) {
-                    e.preventDefault();
-                }
             }
         }, { passive: false });
     });
 
-    // ==================== CODE INPUT AUTO-ADVANCE ====================
     document.addEventListener('DOMContentLoaded', function() {
-        const codeInputs = document.querySelectorAll('.code-input');
+        const codeInputs = document.querySelectorAll('.fp-code-input');
         const hiddenInput = document.getElementById('resetCodeHidden');
         const verifyBtn = document.getElementById('verifyBtn');
-        
+        const verifyForm = document.getElementById('verifyForm');
+        let isSubmitting = false;
+
         if (codeInputs.length > 0) {
-            // Focus first input on load
             setTimeout(function() {
-                if (codeInputs[0] && !codeInputs[0].disabled) {
-                    codeInputs[0].focus();
-                }
+                if (codeInputs[0] && !codeInputs[0].disabled) codeInputs[0].focus();
             }, 100);
-            
+
             codeInputs.forEach((input, index) => {
-                // Force numeric keyboard
                 input.setAttribute('inputmode', 'numeric');
                 input.setAttribute('pattern', '[0-9]');
-                
-                input.addEventListener('input', function(e) {
-                    // Allow only digits
+
+                input.addEventListener('input', function() {
                     this.value = this.value.replace(/\D/g, '');
-                    
-                    // Auto-advance to next input
                     if (this.value.length === 1 && index < codeInputs.length - 1) {
                         codeInputs[index + 1].focus();
                     }
-                    
-                    // Update hidden input with complete code
                     updateHiddenCode();
+
+                    if (!isSubmitting && isCodeComplete()) {
+                        isSubmitting = true;
+                        setTimeout(function() {
+                            if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = 'Verifying...'; }
+                            verifyForm.submit();
+                        }, 120);
+                    }
                 });
-                
+
                 input.addEventListener('keydown', function(e) {
-                    // Backspace goes to previous
                     if (e.key === 'Backspace' && this.value === '' && index > 0) {
                         codeInputs[index - 1].focus();
                         codeInputs[index - 1].value = '';
                         updateHiddenCode();
                     }
-                    
-                    // Left arrow goes to previous
-                    if (e.key === 'ArrowLeft' && index > 0) {
-                        e.preventDefault();
-                        codeInputs[index - 1].focus();
-                    }
-                    
-                    // Right arrow goes to next
-                    if (e.key === 'ArrowRight' && index < codeInputs.length - 1) {
-                        e.preventDefault();
-                        codeInputs[index + 1].focus();
-                    }
-                    
-                    // Enter key submits the form
+                    if (e.key === 'ArrowLeft' && index > 0) { e.preventDefault(); codeInputs[index - 1].focus(); }
+                    if (e.key === 'ArrowRight' && index < codeInputs.length - 1) { e.preventDefault(); codeInputs[index + 1].focus(); }
                     if (e.key === 'Enter') {
                         e.preventDefault();
-                        let allFilled = true;
-                        codeInputs.forEach(inp => {
-                            if (inp.value === '') allFilled = false;
-                        });
-                        if (allFilled && verifyBtn && !verifyBtn.disabled) {
-                            document.getElementById('verifyForm').submit();
+                        if (isCodeComplete() && !isSubmitting) {
+                            isSubmitting = true;
+                            verifyForm.submit();
                         }
                     }
                 });
-                
-                // Allow paste
+
                 input.addEventListener('paste', function(e) {
                     e.preventDefault();
                     const paste = (e.clipboardData || window.clipboardData).getData('text');
                     const digits = paste.replace(/\D/g, '').slice(0, 6);
                     const digitArray = digits.split('');
-                    
+
                     digitArray.forEach((digit, i) => {
-                        if (i < codeInputs.length) {
-                            codeInputs[i].value = digit;
-                        }
+                        if (i < codeInputs.length) codeInputs[i].value = digit;
                     });
-                    
-                    // Focus on the next empty input or the last one
+
                     let nextIndex = Math.min(digitArray.length, codeInputs.length - 1);
-                    if (nextIndex < codeInputs.length) {
-                        codeInputs[nextIndex].focus();
-                    }
-                    
+                    if (nextIndex < codeInputs.length) codeInputs[nextIndex].focus();
+
                     updateHiddenCode();
+
+                    if (!isSubmitting && isCodeComplete()) {
+                        isSubmitting = true;
+                        setTimeout(function() {
+                            if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = 'Verifying...'; }
+                            verifyForm.submit();
+                        }, 120);
+                    }
                 });
-                
-                // Handle focus to select all text
-                input.addEventListener('focus', function() {
-                    this.select();
-                });
+
+                input.addEventListener('focus', function() { this.select(); });
             });
         }
-        
+
+        function isCodeComplete() {
+            for (let i = 0; i < codeInputs.length; i++) {
+                if (codeInputs[i].value === '' || !/^\d$/.test(codeInputs[i].value)) return false;
+            }
+            return true;
+        }
+
         function updateHiddenCode() {
             if (hiddenInput) {
                 let code = '';
-                codeInputs.forEach(input => {
-                    code += input.value;
-                });
+                codeInputs.forEach(input => { code += input.value; });
                 hiddenInput.value = code;
             }
         }
     });
 
-    // ==================== PASSWORD TOGGLE ====================
     function togglePassword(inputId, button) {
         const input = document.getElementById(inputId);
         if (input.type === 'password') {
@@ -1384,37 +952,11 @@ $back_link = ($source === 'dashboard') ? 'mydashboard.php' : 'index.php';
         }
     }
 
-    // ==================== SUCCESS MODAL ====================
-    function closeSuccessModal() {
-        document.getElementById('successModal').classList.remove('active');
-        <?php if ($source === 'dashboard'): ?>
-            window.location.href = 'mydashboard.php';
-        <?php else: ?>
-            window.location.href = 'index.php';
-        <?php endif; ?>
-    }
-
-    // Auto-close modal after 5 seconds
-    document.addEventListener('DOMContentLoaded', function() {
-        const modal = document.getElementById('successModal');
-        if (modal.classList.contains('active')) {
-            setTimeout(function() {
-                closeSuccessModal();
-            }, 5000);
-        }
-    });
-
-    // Close modal on overlay click
-    document.addEventListener('DOMContentLoaded', function() {
-        const modal = document.getElementById('successModal');
-        if (modal) {
-            modal.addEventListener('click', function(e) {
-                if (e.target === this) {
-                    closeSuccessModal();
-                }
-            });
-        }
-    });
+    <?php if ($step === 'success'): ?>
+    setTimeout(function() {
+        window.location.href = 'forgot_password.php?continue=1&source=<?= htmlspecialchars($source) ?>';
+    }, 5000);
+    <?php endif; ?>
 </script>
 
 </body>

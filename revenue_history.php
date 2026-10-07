@@ -1,5 +1,5 @@
 <?php
-// revenue_history.php
+// revenue_history.php — sub-account scoped
 session_start();
 
 if (!isset($_SESSION['user_email'])) {
@@ -30,20 +30,59 @@ try {
     die("Database connection failed.");
 }
 
-// Dark mode
-$stmt = $pdo->prepare("SELECT dark_mode FROM $tableName WHERE email = ?");
-$stmt->execute([$email]);
-$userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+// ==================== RESOLVE ACTIVE SUB ACCOUNT ====================
+$activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
 
-$darkMode = isset($userRow['dark_mode']) ? (int)$userRow['dark_mode'] : 0;
+// Fetch the active row (sub-account scoped)
+if ($activeSubAccountId > 0) {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+    $stmt->execute([$activeSubAccountId, $email]);
+    $activeRow = $stmt->fetch(PDO::FETCH_ASSOC);
+} else {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+    $stmt->execute([$email]);
+    $activeRow = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+if (!$activeRow) {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
+    $stmt->execute([$email]);
+    $activeRow = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+if (!$activeRow) {
+    header("Location: index.php");
+    exit;
+}
+
+$activeSubAccountId = (int)($activeRow['sub_account_id'] ?? $activeRow['id']);
+$_SESSION['active_sub_account_id'] = $activeSubAccountId;
+
+$darkMode = isset($activeRow['dark_mode']) ? (int)$activeRow['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
-// =====================================================================
-// STATUS GROUPS
-// =====================================================================
 $paymentMadeStatuses = ['payment-made', 'contract-cancelled-payment-made'];
 $failedStatuses      = ['payment-failed', 'failed-payment', 'contract-cancelled-failed-payment', 'contract-cancelled-payment-failed'];
 $unpaidStatuses      = ['unpaid-payment', 'unpaid', 'contract-cancelled-unpaid', 'contract-cancelled-unpaid-payment', 'contract-cancelled-payment-required'];
+
+// ==================== DEVELOPER NAME RESOLVER ====================
+if (!function_exists('resolveDeveloperDisplayName')) {
+    function resolveDeveloperDisplayName(array $devRow) {
+        $username = trim((string)($devRow['username']   ?? ''));
+        if ($username !== '') return $username;
+
+        $firstName = trim((string)($devRow['first_name'] ?? ''));
+        if ($firstName !== '') return $firstName;
+
+        $lastName = trim((string)($devRow['last_name'] ?? ''));
+        if ($lastName !== '') return $lastName;
+
+        $fullName = trim((string)($devRow['fullname'] ?? ''));
+        if ($fullName !== '') return $fullName;
+
+        return 'N/A';
+    }
+}
 
 function resolveMergedStatus($latestStatus, $oldStatus, $paymentMadeStatuses, $failedStatuses, $unpaidStatuses) {
     if ($latestStatus === null || $oldStatus === null) return null;
@@ -77,16 +116,23 @@ function resolveMergedStatus($latestStatus, $oldStatus, $paymentMadeStatuses, $f
     return null;
 }
 
-// =====================================================================
-// REUSABLE: FETCH + DEDUPE + RESOLVE DEVELOPER/PROGRAMME
-// =====================================================================
-function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable, $paymentMadeStatuses, $failedStatuses, $unpaidStatuses) {
-    // ---- Fetch ----
-    $stmt = $pdo->prepare("SELECT * FROM $revenueHistoryTable WHERE user_email = ? ORDER BY created_at DESC");
-    $stmt->execute([$email]);
+/**
+ * SUB-ACCOUNT SCOPED — filters by sub_account_id.
+ */
+function buildRevenueHistoryPayload($pdo, $email, $activeSubAccountId, $tableName, $revenueHistoryTable, $programmeInvestorsTable, $programmeTable, $paymentMadeStatuses, $failedStatuses, $unpaidStatuses) {
+
+    // ---- Sub-account-scoped revenue history ----
+    // Prefer strict match on sub_account_id, but fall back to legacy NULL rows
+    // for old records that predate the sub_account_id column.
+    $stmt = $pdo->prepare("
+        SELECT * FROM $revenueHistoryTable
+        WHERE user_email = ?
+          AND (sub_account_id = ? OR sub_account_id IS NULL)
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$email, $activeSubAccountId]);
     $revenueHistory = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ---- Dedupe / merge ----
     if (!empty($revenueHistory)) {
         $latestRecord     = $revenueHistory[0];
         $latestId         = $latestRecord['id'] ?? null;
@@ -136,17 +182,35 @@ function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTab
         }
     }
 
-    // ---- Resolve developer + programme ----
     $resolvedProgrammeInfo = [];
 
     if (!empty($revenueHistory)) {
         $developerNameCache = [];
         $programmeNameCache = [];
 
+        // Sub-account-scoped programme investor lookup
+        $programmeBySubAccount = [];
+        try {
+            $piStmt = $pdo->prepare("
+                SELECT investorid, developerid, programme_id, sub_account_id
+                FROM $programmeInvestorsTable
+                WHERE investorid = (SELECT id FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1)
+                  AND (sub_account_id = ? OR sub_account_id IS NULL)
+                ORDER BY invested_at DESC, id DESC
+            ");
+            $piStmt->execute([$activeSubAccountId, $email, $activeSubAccountId]);
+            foreach ($piStmt->fetchAll(PDO::FETCH_ASSOC) as $piRow) {
+                $programmeBySubAccount[] = $piRow;
+            }
+        } catch (PDOException $e) {
+            $programmeBySubAccount = [];
+        }
+
+        // Resolve the user row id for this sub account
         $currentUserId = 0;
         try {
-            $uStmt = $pdo->prepare("SELECT id FROM $tableName WHERE email = ? LIMIT 1");
-            $uStmt->execute([$email]);
+            $uStmt = $pdo->prepare("SELECT id FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+            $uStmt->execute([$activeSubAccountId, $email]);
             $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
             if ($uRow) $currentUserId = (int)$uRow['id'];
         } catch (PDOException $e) {}
@@ -165,10 +229,11 @@ function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTab
                         SELECT developerid, programme_id
                         FROM $programmeInvestorsTable
                         WHERE investorid = ?
+                          AND (sub_account_id = ? OR sub_account_id IS NULL)
                         ORDER BY invested_at DESC, id DESC
                         LIMIT 1
                     ");
-                    $piStmt->execute([$currentUserId]);
+                    $piStmt->execute([$currentUserId, $activeSubAccountId]);
                     $piRow = $piStmt->fetch(PDO::FETCH_ASSOC);
                     if ($piRow) {
                         $developerId = (int)$piRow['developerid'];
@@ -184,11 +249,12 @@ function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTab
                         FROM $programmeInvestorsTable
                         WHERE investorid = ?
                           AND developerid = ?
+                          AND (sub_account_id = ? OR sub_account_id IS NULL)
                           AND programme_id IS NOT NULL
                         ORDER BY invested_at DESC, id DESC
                         LIMIT 1
                     ");
-                    $contractLookup->execute([$currentUserId, $developerId]);
+                    $contractLookup->execute([$currentUserId, $developerId, $activeSubAccountId]);
                     $row = $contractLookup->fetch(PDO::FETCH_ASSOC);
                     if ($row) {
                         $programmeId = (int)$row['programme_id'];
@@ -202,10 +268,10 @@ function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTab
                     $developerName = $developerNameCache[$developerId];
                 } else {
                     try {
-                        $dStmt = $pdo->prepare("SELECT fullname FROM $tableName WHERE id = ? LIMIT 1");
+                        $dStmt = $pdo->prepare("SELECT fullname, first_name, last_name, username FROM $tableName WHERE id = ? LIMIT 1");
                         $dStmt->execute([$developerId]);
                         $dRow = $dStmt->fetch(PDO::FETCH_ASSOC);
-                        $developerName = $dRow && !empty($dRow['fullname']) ? $dRow['fullname'] : 'N/A';
+                        $developerName = $dRow ? resolveDeveloperDisplayName($dRow) : 'N/A';
                     } catch (PDOException $e) {
                         $developerName = 'N/A';
                     }
@@ -242,9 +308,6 @@ function buildRevenueHistoryPayload($pdo, $email, $tableName, $revenueHistoryTab
     return [$revenueHistory, $resolvedProgrammeInfo];
 }
 
-// =====================================================================
-// AJAX: LIVE REVENUE HISTORY (JSON)
-// =====================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST'
     && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
     && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
@@ -262,7 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
 
     try {
         list($revenueHistory, $resolvedProgrammeInfo) = buildRevenueHistoryPayload(
-            $pdo, $email, $tableName, $revenueHistoryTable,
+            $pdo, $email, $activeSubAccountId, $tableName, $revenueHistoryTable,
             $programmeInvestorsTable, $programmeTable,
             $paymentMadeStatuses, $failedStatuses, $unpaidStatuses
         );
@@ -335,7 +398,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
                 $programmeDisplay = 'N/A';
             }
 
-            // Compact date-range string for the folded header
             $foldedDateRange = $startDisplay . ' – ' . $endDisplay;
 
             $rows[] = [
@@ -380,11 +442,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
     }
 }
 
-// =====================================================================
-// INITIAL PAGE RENDER (non-AJAX)
-// =====================================================================
 list($revenueHistory, $resolvedProgrammeInfo) = buildRevenueHistoryPayload(
-    $pdo, $email, $tableName, $revenueHistoryTable,
+    $pdo, $email, $activeSubAccountId, $tableName, $revenueHistoryTable,
     $programmeInvestorsTable, $programmeTable,
     $paymentMadeStatuses, $failedStatuses, $unpaidStatuses
 );
@@ -395,169 +454,228 @@ list($revenueHistory, $resolvedProgrammeInfo) = buildRevenueHistoryPayload(
     <meta charset="UTF-8">
     <title>Revenue History - Harvhub</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <?php include 'style.php'; ?>
+    <?php include 'revenue_history_style.php'; ?>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
 
-<div class="revenue-wrapper" id="revenueWrapper">
-    <?php if (empty($revenueHistory)): ?>
-        <div class="empty-revenue" id="emptyRevenueState">
-            <span class="empty-icon">📭</span>
-            <h3>No Revenue History</h3>
-            <p>You haven't completed any contracts yet. Start your first contract to see your revenue history here.</p>
+    <!-- ==================== FIXED TOP HEADER (title only) ==================== -->
+    <header class="rev-header" id="revHeader">
+        <div class="rev-header-inner">
+            <h1 class="rev-header-title">Revenue History</h1>
         </div>
-    <?php else: ?>
-        <div id="revenueListContainer">
-        <?php foreach ($revenueHistory as $index => $record):
-            $userShare       = (float)($record['user_share'] ?? 0);
-            $serverShare     = (float)($record['server_share'] ?? 0);
-            $profit          = (float)($record['profit'] ?? 0);
-            $startingBalance = (float)($record['starting_balance'] ?? 0);
-            $currentBalance  = (float)($record['current_balance'] ?? 0);
-            $status          = $record['loyalties'] ?? 'unknown';
+    </header>
 
-            $isActive = ($status === 'active');
+    <!-- ==================== SCROLLABLE CONTENT ==================== -->
+    <div class="rev-content">
 
-            $labelInvested       = $isActive ? 'Starting Balance' : 'INVESTED';
-            $labelCurrentBalance = $isActive ? 'Current Balance'  : 'HARVEST VALUE';
-            $labelTotalProfit    = $isActive ? 'Total Profit'     : 'Total Gain';
-            $labelYourShare      = $isActive ? 'Your Share'       : 'Harvested';
-            $labelServerShare    = $isActive ? 'Server Share'     : 'Trades Provider Share';
-
-            $statusClass = 'status-default';
-            $statusLabel = ucwords(str_replace('-', ' ', str_replace('_', ' ', $status)));
-
-            switch ($status) {
-                case 'active': $statusClass = 'status-active'; $statusLabel = 'Active'; break;
-                case 'payment-confirmed': $statusClass = 'status-payment-confirmed'; $statusLabel = 'Confirmed'; break;
-                case 'payment-made': $statusClass = 'status-payment-made'; $statusLabel = 'Pending'; break;
-                case 'unpaid-payment': $statusClass = 'status-unpaid-payment'; $statusLabel = 'Payment Required'; break;
-                case 'payment-failed': $statusClass = 'status-payment-failed'; $statusLabel = 'Payment Failed'; break;
-                case 'failed-payment': $statusClass = 'status-failed-payment'; $statusLabel = 'Payment Failed'; break;
-                case 'loss_completed': $statusClass = 'status-loss_completed'; $statusLabel = 'Loss'; break;
-                case 'below_threshold': $statusClass = 'status-below_threshold'; $statusLabel = 'Below Threshold'; break;
-                case 'completed': $statusClass = 'status-completed'; $statusLabel = 'Completed'; break;
-                case 'contract-cancelled-payment-made': $statusClass = 'status-payment-made'; $statusLabel = 'Cancelled (Payment Made)'; break;
-                case 'contract-cancelled-failed-payment': $statusClass = 'status-failed-payment'; $statusLabel = 'Cancelled (Payment Failed)'; break;
-                case 'contract-cancelled-unpaid': $statusClass = 'status-unpaid-payment'; $statusLabel = 'Cancelled (Unpaid)'; break;
-                default: $statusLabel = ucwords(str_replace('_', ' ', $status));
-            }
-
-            $profitClass = $profit > 0 ? 'profit-positive' : ($profit < 0 ? 'profit-negative' : 'profit-neutral');
-            $profitDisplay = '$' . number_format($profit, 2);
-
-            $startDisplay = $record['execution_start_date'] && $record['execution_start_date'] !== '0000-00-00'
-                ? date('M d, Y', strtotime($record['execution_start_date']))
-                : 'Not started';
-            $endDisplay = $record['execution_end_date'] && $record['execution_end_date'] !== '0000-00-00'
-                ? date('M d, Y', strtotime($record['execution_end_date']))
-                : 'Not started';
-
-            $contractId  = $record['contract_id'] ?? 'N/A';
-
-            $info            = $resolvedProgrammeInfo[$index] ?? [
-                'developer_id'   => 0,
-                'developer_name' => 'N/A',
-                'programme_id'   => 0,
-                'programme_name' => 'N/A',
-            ];
-            $developerName   = $info['developer_name'];
-            $programmeName   = $info['programme_name'];
-
-            if ($developerName !== 'N/A' && $programmeName !== 'N/A') {
-                $programmeDisplay = $developerName . "'s Programme • " . $programmeName;
-            } elseif ($developerName !== 'N/A') {
-                $programmeDisplay = $developerName . "'s Programme";
-            } elseif ($programmeName !== 'N/A') {
-                $programmeDisplay = $programmeName;
-            } else {
-                $programmeDisplay = 'N/A';
-            }
-        ?>
-            <div class="revenue-item" data-index="<?= $index ?>" onclick="toggleRevenue(this)">
-                <div class="revenue-header-folded">
-                    <div class="revenue-icon-wrap">
-                        <span class="revenue-icon">💰</span>
-                    </div>
-                    <div class="revenue-folded-text">
-                        <span class="revenue-user-share">
-                            <?php if ($isActive): ?>
-                                Next Revenue
-                            <?php else: ?>
-                                $<?= number_format($userShare, 2) ?>
-                            <?php endif; ?>
-                        </span>
-                        <span class="revenue-date-range">
-                            <?= htmlspecialchars($startDisplay) ?> – <?= htmlspecialchars($endDisplay) ?>
-                        </span>
-                    </div>
-                    <div class="revenue-right">
-                        <span class="revenue-status-badge <?= $statusClass ?>"><?= $statusLabel ?></span>
-                        <span class="revenue-toggle">▼</span>
-                    </div>
+        <div class="revenue-wrapper" id="revenueWrapper">
+            <?php if (empty($revenueHistory)): ?>
+                <div class="empty-revenue" id="emptyRevenueState">
+                    <span class="empty-icon">📭</span>
+                    <h3>No Revenue History</h3>
+                    <p>This account hasn't completed any contracts yet. Start your first contract to see your revenue history here.</p>
                 </div>
+            <?php else: ?>
+                <div id="revenueListContainer">
+                <?php foreach ($revenueHistory as $index => $record):
+                    $userShare       = (float)($record['user_share'] ?? 0);
+                    $serverShare     = (float)($record['server_share'] ?? 0);
+                    $profit          = (float)($record['profit'] ?? 0);
+                    $startingBalance = (float)($record['starting_balance'] ?? 0);
+                    $currentBalance  = (float)($record['current_balance'] ?? 0);
+                    $status          = $record['loyalties'] ?? 'unknown';
 
-                <div class="revenue-details">
-                    <div class="revenue-details-inner">
-                        <div class="revenue-detail-row full-width">
-                            <span class="revenue-detail-label">Contract ID</span>
-                            <span class="revenue-detail-value mono"><?= htmlspecialchars($contractId) ?></span>
+                    $isActive = ($status === 'active');
+
+                    $labelInvested       = $isActive ? 'Starting Balance' : 'INVESTED';
+                    $labelCurrentBalance = $isActive ? 'Current Balance'  : 'HARVEST VALUE';
+                    $labelTotalProfit    = $isActive ? 'Total Profit'     : 'Total Gain';
+                    $labelYourShare      = $isActive ? 'Your Share'       : 'Harvested';
+                    $labelServerShare    = $isActive ? 'Server Share'     : 'Trades Provider Share';
+
+                    $statusClass = 'status-default';
+                    $statusLabel = ucwords(str_replace('-', ' ', str_replace('_', ' ', $status)));
+
+                    switch ($status) {
+                        case 'active': $statusClass = 'status-active'; $statusLabel = 'Active'; break;
+                        case 'payment-confirmed': $statusClass = 'status-payment-confirmed'; $statusLabel = 'Confirmed'; break;
+                        case 'payment-made': $statusClass = 'status-payment-made'; $statusLabel = 'Pending'; break;
+                        case 'unpaid-payment': $statusClass = 'status-unpaid-payment'; $statusLabel = 'Payment Required'; break;
+                        case 'payment-failed': $statusClass = 'status-payment-failed'; $statusLabel = 'Payment Failed'; break;
+                        case 'failed-payment': $statusClass = 'status-failed-payment'; $statusLabel = 'Payment Failed'; break;
+                        case 'loss_completed': $statusClass = 'status-loss_completed'; $statusLabel = 'Loss'; break;
+                        case 'below_threshold': $statusClass = 'status-below_threshold'; $statusLabel = 'Below Threshold'; break;
+                        case 'completed': $statusClass = 'status-completed'; $statusLabel = 'Completed'; break;
+                        case 'contract-cancelled-payment-made': $statusClass = 'status-payment-made'; $statusLabel = 'Cancelled (Payment Made)'; break;
+                        case 'contract-cancelled-failed-payment': $statusClass = 'status-failed-payment'; $statusLabel = 'Cancelled (Payment Failed)'; break;
+                        case 'contract-cancelled-unpaid': $statusClass = 'status-unpaid-payment'; $statusLabel = 'Cancelled (Unpaid)'; break;
+                        default: $statusLabel = ucwords(str_replace('_', ' ', $status));
+                    }
+
+                    $profitClass = $profit > 0 ? 'profit-positive' : ($profit < 0 ? 'profit-negative' : 'profit-neutral');
+                    $profitDisplay = '$' . number_format($profit, 2);
+
+                    $startDisplay = $record['execution_start_date'] && $record['execution_start_date'] !== '0000-00-00'
+                        ? date('M d, Y', strtotime($record['execution_start_date']))
+                        : 'Not started';
+                    $endDisplay = $record['execution_end_date'] && $record['execution_end_date'] !== '0000-00-00'
+                        ? date('M d, Y', strtotime($record['execution_end_date']))
+                        : 'Not started';
+
+                    $contractId  = $record['contract_id'] ?? 'N/A';
+
+                    $info            = $resolvedProgrammeInfo[$index] ?? [
+                        'developer_id'   => 0,
+                        'developer_name' => 'N/A',
+                        'programme_id'   => 0,
+                        'programme_name' => 'N/A',
+                    ];
+                    $developerName   = $info['developer_name'];
+                    $programmeName   = $info['programme_name'];
+
+                    if ($developerName !== 'N/A' && $programmeName !== 'N/A') {
+                        $programmeDisplay = $developerName . "'s Programme • " . $programmeName;
+                    } elseif ($developerName !== 'N/A') {
+                        $programmeDisplay = $developerName . "'s Programme";
+                    } elseif ($programmeName !== 'N/A') {
+                        $programmeDisplay = $programmeName;
+                    } else {
+                        $programmeDisplay = 'N/A';
+                    }
+                ?>
+                    <div class="revenue-item" data-index="<?= $index ?>" onclick="toggleRevenue(this)">
+                        <div class="revenue-header-folded">
+                            <div class="revenue-icon-wrap">
+                                <span class="revenue-icon">💰</span>
+                            </div>
+                            <div class="revenue-folded-text">
+                                <span class="revenue-user-share">
+                                    <?php if ($isActive): ?>
+                                        Next Revenue
+                                    <?php else: ?>
+                                        $<?= number_format($userShare, 2) ?>
+                                    <?php endif; ?>
+                                </span>
+                                <span class="revenue-date-range">
+                                    <?= htmlspecialchars($startDisplay) ?> – <?= htmlspecialchars($endDisplay) ?>
+                                </span>
+                            </div>
+                            <div class="revenue-right">
+                                <span class="revenue-status-badge <?= $statusClass ?>"><?= $statusLabel ?></span>
+                                <span class="revenue-toggle">▼</span>
+                            </div>
                         </div>
 
-                        <div class="revenue-detail-row">
-                            <span class="revenue-detail-label">Start Date</span>
-                            <span class="revenue-detail-value"><?= htmlspecialchars($startDisplay) ?></span>
-                        </div>
-                        <div class="revenue-detail-row">
-                            <span class="revenue-detail-label">End Date</span>
-                            <span class="revenue-detail-value"><?= htmlspecialchars($endDisplay) ?></span>
-                        </div>
+                        <div class="revenue-details">
+                            <div class="revenue-details-inner">
+                                <div class="revenue-detail-row full-width">
+                                    <span class="revenue-detail-label">Contract ID</span>
+                                    <span class="revenue-detail-value mono"><?= htmlspecialchars($contractId) ?></span>
+                                </div>
 
-                        <div class="revenue-detail-row">
-                            <span class="revenue-detail-label"><?= $labelInvested ?></span>
-                            <span class="revenue-detail-value">$<?= number_format($startingBalance, 2) ?></span>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">Start Date</span>
+                                    <span class="revenue-detail-value"><?= htmlspecialchars($startDisplay) ?></span>
+                                </div>
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label">End Date</span>
+                                    <span class="revenue-detail-value"><?= htmlspecialchars($endDisplay) ?></span>
+                                </div>
+
+                                <div class="revenue-detail-row">
+                                    <span class="revenue-detail-label"><?= $labelInvested ?></span>
+                                    <span class="revenue-detail-value">$<?= number_format($startingBalance, 2) ?></span>
+                                </div>
+
+                                <?php if (!$isActive): ?>
+                                    <div class="revenue-detail-row">
+                                        <span class="revenue-detail-label"><?= $labelCurrentBalance ?></span>
+                                        <span class="revenue-detail-value">$<?= number_format($currentBalance, 2) ?></span>
+                                    </div>
+                                    <div class="revenue-detail-row">
+                                        <span class="revenue-detail-label"><?= $labelTotalProfit ?></span>
+                                        <span class="revenue-detail-value <?= $profitClass ?>"><?= $profitDisplay ?></span>
+                                    </div>
+                                    <div class="revenue-detail-row">
+                                        <span class="revenue-detail-label"><?= $labelYourShare ?></span>
+                                        <span class="revenue-detail-value" style="color: var(--info, #17a2b8);">$<?= number_format($userShare, 2) ?></span>
+                                    </div>
+                                    <div class="revenue-detail-row">
+                                        <span class="revenue-detail-label"><?= $labelServerShare ?></span>
+                                        <span class="revenue-detail-value" style="color: #9b59b6;">$<?= number_format($serverShare, 2) ?></span>
+                                    </div>
+
+                                    <div class="revenue-detail-row full-width">
+                                        <span class="revenue-detail-label">Programme</span>
+                                        <span class="revenue-detail-value"><?= htmlspecialchars($programmeDisplay) ?></span>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
                         </div>
-
-                        <?php if (!$isActive): ?>
-                            <div class="revenue-detail-row">
-                                <span class="revenue-detail-label"><?= $labelCurrentBalance ?></span>
-                                <span class="revenue-detail-value">$<?= number_format($currentBalance, 2) ?></span>
-                            </div>
-                            <div class="revenue-detail-row">
-                                <span class="revenue-detail-label"><?= $labelTotalProfit ?></span>
-                                <span class="revenue-detail-value <?= $profitClass ?>"><?= $profitDisplay ?></span>
-                            </div>
-                            <div class="revenue-detail-row">
-                                <span class="revenue-detail-label"><?= $labelYourShare ?></span>
-                                <span class="revenue-detail-value" style="color: var(--info, #17a2b8);">$<?= number_format($userShare, 2) ?></span>
-                            </div>
-                            <div class="revenue-detail-row">
-                                <span class="revenue-detail-label"><?= $labelServerShare ?></span>
-                                <span class="revenue-detail-value" style="color: #9b59b6;">$<?= number_format($serverShare, 2) ?></span>
-                            </div>
-
-                            <div class="revenue-detail-row full-width">
-                                <span class="revenue-detail-label">Programme</span>
-                                <span class="revenue-detail-value"><?= htmlspecialchars($programmeDisplay) ?></span>
-                            </div>
-                        <?php endif; ?>
                     </div>
+                <?php endforeach; ?>
                 </div>
-            </div>
-        <?php endforeach; ?>
+            <?php endif; ?>
         </div>
-    <?php endif; ?>
-</div>
 
-<a href="app.php#mydashboard" class="floating-close-btn">
-    ✕ Close &amp; Go Back
-</a>
+    </div>
+
+    <!-- ==================== FLOATING CLOSE & GO BACK ==================== -->
+    <button type="button" class="floating-close-btn" id="revenueCloseBtn" onclick="closeRevenueHistory()">
+        ✕ Close &amp; Go Back
+    </button>
 
 <script>
     // =====================================================================
-    // CLICK-TO-EXPAND
+    // SHELL BRIDGE
     // =====================================================================
+    (function () {
+        document.body.classList.add('page-revenue_history');
+
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+
+        var WATCHED = [
+            'page-connect_investor_broker',
+            'profile-page-open',
+            'page-revenue_history',
+            'page-profit_split',
+            'page-vps',
+            'page-disconnect_broker',
+            'page-programmes'
+        ];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
+
+    function closeRevenueHistory() {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchTab', tab: 'mydashboard' }, '*');
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'investorapp.php?tab=mydashboard';
+    }
+    window.closeRevenueHistory = closeRevenueHistory;
+
     function toggleRevenue(element) {
         if (event && event.target.closest('a, button')) return;
 
@@ -580,9 +698,6 @@ list($revenueHistory, $resolvedProgrammeInfo) = buildRevenueHistoryPayload(
         }
     });
 
-    // =====================================================================
-    // LIVE POLL — same approach as mydashboard.php
-    // =====================================================================
     var REVENUE_POLL_URL = (function() {
         try {
             var base = document.baseURI || window.location.href;
@@ -705,7 +820,7 @@ list($revenueHistory, $resolvedProgrammeInfo) = buildRevenueHistoryPayload(
                 '<div class="empty-revenue" id="emptyRevenueState">' +
                 '  <span class="empty-icon">📭</span>' +
                 '  <h3>No Revenue History</h3>' +
-                '  <p>You haven\'t completed any contracts yet. Start your first contract to see your revenue history here.</p>' +
+                '  <p>This account hasn\'t completed any contracts yet. Start your first contract to see your revenue history here.</p>' +
                 '</div>';
             return;
         }

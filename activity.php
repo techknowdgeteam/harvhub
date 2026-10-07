@@ -1,208 +1,200 @@
 <?php
-    // activity.php
-    session_start();
+// activity.php — sub-account scoped
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (!isset($_SESSION['user_email'])) { header("Location: index.php"); exit; }
+$email = strtolower($_SESSION['user_email']);
+require_once 'usersdb.php';
 
-    // Check for logged-in user
-    if (!isset($_SESSION['user_email'])) {
-        header("Location: index.php");
-        exit;
-    }
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (Exception $e) { die("Database connection failed."); }
 
-    $email = strtolower($_SESSION['user_email']);
+// ---- Resolve active sub-account ----
+$activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
 
-    // Database credentials
-    require_once 'usersdb.php';
+if ($activeSubAccountId > 0) {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+    $stmt->execute([$activeSubAccountId, $email]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+} else {
+    $user = null;
+}
 
-    try {
-        $pdo = new PDO(
-            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-            $user,
-            $pass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-    } catch (Exception $e) {
-        die("Database connection failed.");
-    }
+if (!$user) {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+    $stmt->execute([$email]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+if (!$user) {
+    $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
+    $stmt->execute([$email]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+}
 
-    // =====================================================================
-    // Helper: parse a date string that may be 'YYYY-MM-DD' OR 'dd-mm-yyyy'
-    // =====================================================================
-    function parseAnyDate($value) {
-        if (empty($value)) return null;
-        $value = trim($value);
+if (!$user) { header("Location: index.php"); exit; }
 
-        // Try ISO first
-        $dt = DateTime::createFromFormat('Y-m-d', $value);
-        if ($dt && $dt->format('Y-m-d') === $value) return $dt;
+$activeSubAccountId = (int)($user['sub_account_id'] ?? $user['id']);
+$_SESSION['active_sub_account_id'] = $activeSubAccountId;
 
-        // Try dd-mm-yyyy
-        $dt = DateTime::createFromFormat('d-m-Y', $value);
-        if ($dt && $dt->format('d-m-Y') === $value) return $dt;
+$darkMode = !empty($user['dark_mode']);
+$darkModeClass = $darkMode ? 'dark-mode' : '';
 
-        // Fallback to strtotime
-        $ts = strtotime($value);
-        return $ts ? new DateTime(date('Y-m-d', $ts)) : null;
-    }
+function parseAnyDate($value) {
+    if (empty($value)) return null;
+    $value = trim($value);
+    $dt = DateTime::createFromFormat('Y-m-d', $value);
+    if ($dt && $dt->format('Y-m-d') === $value) return $dt;
+    $dt = DateTime::createFromFormat('d-m-Y', $value);
+    if ($dt && $dt->format('d-m-Y') === $value) return $dt;
+    $ts = strtotime($value);
+    return $ts ? new DateTime(date('Y-m-d', $ts)) : null;
+}
 
-    // =====================================================================
-    // REUSABLE PAYLOAD BUILDER — used by both the initial render and AJAX
-    // =====================================================================
-    function buildActivityPayload($pdo, $email, $tableName) {
-        // Fetch user
-        $stmt = $pdo->prepare("SELECT id, fullname FROM $tableName WHERE email = ?");
+/**
+ * SUB-ACCOUNT SCOPED — filters balance_log by sub_account_id.
+ */
+function buildActivityPayload($pdo, $tableName, $email, $activeSubAccountId) {
+    // Resolve the user row id for this specific sub-account
+    $stmt = $pdo->prepare("SELECT id, sub_account_id FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+    $stmt->execute([$activeSubAccountId, $email]);
+    $u = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$u) {
+        // Fallback to lowest-id sub
+        $stmt = $pdo->prepare("SELECT id, sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
         $stmt->execute([$email]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $u = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    if (!$u) return null;
 
-        if (!$user) {
-            return null;
+    $userid       = (int)$u['id'];
+    $subAccountId = (int)($u['sub_account_id'] ?? $userid);
+
+    $daily = [];
+    try {
+        // Scoped by userid AND sub_account_id (with NULL fallback for legacy rows)
+        $stmt = $pdo->prepare("
+            SELECT date, day_starting_balance, day_authorized_trades_pnl,
+                   day_unauthorized_trades_pnl, day_unauthorized_withdrawals,
+                   day_closing_balance, unusual_activity,
+                   authorized_trades_count, unauthorized_trades_count
+            FROM balance_log
+            WHERE userid = ?
+              AND (sub_account_id = ? OR sub_account_id IS NULL)
+        ");
+        $stmt->execute([$userid, $subAccountId]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $dt = parseAnyDate($r['date']);
+            if (!$dt) continue;
+            $daily[$dt->format('d-m-Y')] = $r;
         }
+    } catch (PDOException $e) { $daily = []; }
 
-        $userid = (int)$user['id'];
+    $keys = array_keys($daily);
+    usort($keys, function ($a, $b) {
+        $A = DateTime::createFromFormat('d-m-Y', $a);
+        $B = DateTime::createFromFormat('d-m-Y', $b);
+        return ($A && $B) ? $B <=> $A : strcmp($b, $a);
+    });
 
-        // Fetch daily balance log rows
-        $dailyBalanceLog = [];
-
-        try {
-            $stmt = $pdo->prepare("
-                SELECT date, day_starting_balance, day_authorized_trades_pnl,
-                       day_unauthorized_trades_pnl, day_unauthorized_withdrawals,
-                       day_closing_balance, unusual_activity,
-                       authorized_trades_count, unauthorized_trades_count
-                FROM balance_log
-                WHERE userid = ?
-            ");
-            $stmt->execute([$userid]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            foreach ($rows as $r) {
-                $dt = parseAnyDate($r['date']);
-                if (!$dt) continue;
-
-                $key = $dt->format('d-m-Y');
-
-                $dailyBalanceLog[$key] = [
-                    'day_starting_balance'          => $r['day_starting_balance'],
-                    'day_authorized_trades_pnl'     => $r['day_authorized_trades_pnl'],
-                    'day_unauthorized_trades_pnl'   => $r['day_unauthorized_trades_pnl'],
-                    'day_unauthorized_withdrawals'  => $r['day_unauthorized_withdrawals'],
-                    'day_closing_balance'           => $r['day_closing_balance'],
-                    'unusual_activity'              => (bool)$r['unusual_activity'],
-                    'authorized_trades_count'       => $r['authorized_trades_count'],
-                    'unauthorized_trades_count'     => $r['unauthorized_trades_count'],
-                ];
-            }
-        } catch (PDOException $e) {
-            $dailyBalanceLog = [];
-        }
-
-        // Sort dates descending
-        $logDates = array_keys($dailyBalanceLog);
-        usort($logDates, function($a, $b) {
-            $dateA = DateTime::createFromFormat('d-m-Y', $a);
-            $dateB = DateTime::createFromFormat('d-m-Y', $b);
-            if ($dateA && $dateB) {
-                return $dateB <=> $dateA;
-            }
-            return strcmp($b, $a);
-        });
-
-        // Build ordered rows for the client
-        $orderedRows = [];
-        foreach ($logDates as $key) {
-            $dayData = $dailyBalanceLog[$key];
-            if (!is_array($dayData)) continue;
-
-            $dateObj = DateTime::createFromFormat('d-m-Y', $key);
-            if (!$dateObj) continue;
-
-            $orderedRows[] = [
-                'key'                           => $key,
-                'formatted_date'                => $dateObj->format('M d, Y'),
-                'day_name'                      => $dateObj->format('l'),
-                'day_starting_balance'          => (float)($dayData['day_starting_balance'] ?? 0),
-                'day_authorized_trades_pnl'     => (float)($dayData['day_authorized_trades_pnl'] ?? 0),
-                'day_unauthorized_trades_pnl'   => (float)($dayData['day_unauthorized_trades_pnl'] ?? 0),
-                'day_unauthorized_withdrawals'  => (float)($dayData['day_unauthorized_withdrawals'] ?? 0),
-                'day_closing_balance'           => (float)($dayData['day_closing_balance'] ?? 0),
-                'unusual_activity'              => !empty($dayData['unusual_activity']),
-                'authorized_trades_count'       => (int)($dayData['authorized_trades_count'] ?? 0),
-                'unauthorized_trades_count'     => (int)($dayData['unauthorized_trades_count'] ?? 0),
-            ];
-        }
-
-        return [
-            'user'      => $user,
-            'userid'    => $userid,
-            'fullName'  => $user['fullname'] ?? 'User',
-            'rows'      => $orderedRows,
-            'has_rows'  => !empty($orderedRows),
+    $rows = [];
+    foreach ($keys as $k) {
+        $d = $daily[$k];
+        $o = DateTime::createFromFormat('d-m-Y', $k);
+        if (!$o) continue;
+        $rows[] = [
+            'key' => $k,
+            'formatted_date' => $o->format('M d, Y'),
+            'day_name' => $o->format('l'),
+            'day_starting_balance' => (float)($d['day_starting_balance'] ?? 0),
+            'day_authorized_trades_pnl' => (float)($d['day_authorized_trades_pnl'] ?? 0),
+            'day_unauthorized_trades_pnl' => (float)($d['day_unauthorized_trades_pnl'] ?? 0),
+            'day_unauthorized_withdrawals' => (float)($d['day_unauthorized_withdrawals'] ?? 0),
+            'day_closing_balance' => (float)($d['day_closing_balance'] ?? 0),
+            'unusual_activity' => !empty($d['unusual_activity']),
+            'authorized_trades_count' => (int)($d['authorized_trades_count'] ?? 0),
+            'unauthorized_trades_count' => (int)($d['unauthorized_trades_count'] ?? 0),
         ];
     }
+    return ['rows' => $rows, 'has_rows' => !empty($rows)];
+}
 
-    // =====================================================================
-    // AJAX: LIVE ACTIVITY (JSON)
-    // =====================================================================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST'
-        && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
-        && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+// =====================================================================
+// AJAX: LIVE ACTIVITY (JSON)
+// =====================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST'
+    && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
+    && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
 
-        while (ob_get_level() > 0) { ob_end_clean(); }
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
 
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-
-        if (!isset($_SESSION['user_email'])) {
-            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
-            exit;
-        }
-
-        try {
-            $payload = buildActivityPayload($pdo, $email, $tableName);
-
-            if (!$payload) {
-                echo json_encode(['success' => false, 'error' => 'User not found']);
-                exit;
-            }
-
-            echo json_encode([
-                'success'   => true,
-                'has_rows'  => $payload['has_rows'],
-                'rows'      => $payload['rows'],
-                'count'     => count($payload['rows']),
-            ]);
-            exit;
-
-        } catch (Exception $e) {
-            echo json_encode([
-                'success' => false,
-                'error'   => 'Failed to build activity payload.'
-            ]);
-            exit;
-        }
-    }
-
-    // =====================================================================
-    // INITIAL PAGE RENDER (non-AJAX)
-    // =====================================================================
-    $payload = buildActivityPayload($pdo, $email, $tableName);
-
-    if (!$payload) {
-        header("Location: index.php");
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success'=>false,'error'=>'Unauthorized']);
         exit;
     }
 
-    $fullName = $payload['fullName'];
-    $rows     = $payload['rows'];
-    $hasRows  = $payload['has_rows'];
-?>
-<div class="activi-container">
-    <div class="activity-header">
-        <h1>Activities</h1>
-        <p>Your Daily Balance Log</p>
-    </div>
+    // Re-resolve sub-account on each poll
+    $liveSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
+    if ($liveSubId <= 0) {
+        $stmt = $pdo->prepare("SELECT sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+        $stmt->execute([$email]);
+        $lr = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($lr) $liveSubId = (int)($lr['sub_account_id'] ?? 0);
+    }
 
-    <!-- LIVE STATE BLOCK — replaced wholesale on every poll -->
+    $p = buildActivityPayload($pdo, $tableName, $email, $liveSubId);
+    if (!$p) {
+        echo json_encode(['success'=>false,'error'=>'User not found']);
+        exit;
+    }
+    echo json_encode([
+        'success' => true,
+        'has_rows' => $p['has_rows'],
+        'rows' => $p['rows'],
+        'count' => count($p['rows'])
+    ]);
+    exit;
+}
+
+$payload = buildActivityPayload($pdo, $tableName, $email, $activeSubAccountId);
+if (!$payload) { header("Location: index.php"); exit; }
+$rows = $payload['rows'];
+$hasRows = $payload['has_rows'];
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+<link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
+<title>HarvHub</title>
+<?php include 'style.php'; ?>
+<style>
+    body {
+        padding-top: calc(56px + env(safe-area-inset-top, 0px)) !important;
+        padding-bottom: 60px;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        transition: background 0.3s, color 0.3s;
+    }
+    @media (max-width: 480px) {
+        body {
+            padding-top: calc(52px + env(safe-area-inset-top, 0px)) !important;
+        }
+    }
+</style>
+</head>
+<body class="<?= htmlspecialchars($darkModeClass) ?>">
+
+<div class="activi-container">
+
     <div id="activityStateBlock">
         <?php if ($hasRows): ?>
             <div class="balance-log-list">
@@ -256,22 +248,18 @@
         <?php else: ?>
             <div class="empty-state">
                 <div class="empty-text">No Activity Data</div>
-                <div class="empty-sub">Your activity log will appear here once trading begins.</div>
+                <div class="empty-sub">This account's activity log will appear here once trading begins.</div>
             </div>
         <?php endif; ?>
     </div>
 
-    <div style="margin-bottom:120px"></div>
+    
 </div>
 
 <script>
-    // =====================================================================
-    // CLICK-TO-EXPAND (delegated so it survives innerHTML swaps)
-    // =====================================================================
     function toggleLogDetails(headerElement) {
         var details = headerElement.nextElementSibling;
         var toggle = headerElement.querySelector('.log-toggle');
-
         if (!details) return;
         if (details.classList.contains('open')) {
             details.classList.remove('open');
@@ -282,9 +270,6 @@
         }
     }
 
-    // =====================================================================
-    // LIVE POLL — same pattern as mydashboard.php / revenue_history.php
-    // =====================================================================
     var ACTIVITY_POLL_URL = (function() {
         try {
             var base = document.baseURI || window.location.href;
@@ -294,14 +279,12 @@
         }
     })();
 
-    var isUpdating      = false;
-    var updateInterval  = null;
-    var retryCount      = 0;
-    var MAX_RETRIES     = 5;
+    var isUpdating = false;
+    var updateInterval = null;
+    var retryCount = 0;
+    var MAX_RETRIES = 5;
     var currentInterval = 1000;
-    var pollRunning     = true;
-
-    // Track which rows the user has collapsed (by key)
+    var pollRunning = true;
     var collapsedKeys = {};
 
     function captureExpandedState() {
@@ -327,16 +310,15 @@
         return n.toFixed(2);
     }
 
-    // ---- Build a single log item ----
     function buildLogItemHtml(row) {
         var isUnusual = !!row.unusual_activity;
-        var authPnl   = parseFloat(row.day_authorized_trades_pnl) || 0;
+        var authPnl = parseFloat(row.day_authorized_trades_pnl) || 0;
         var unauthPnl = parseFloat(row.day_unauthorized_trades_pnl) || 0;
         var withdrawals = parseFloat(row.day_unauthorized_withdrawals) || 0;
 
         var collapsed = !!collapsedKeys[row.key];
         var detailsClass = collapsed ? 'log-details' : 'log-details open';
-        var toggleArrow  = collapsed ? '▼' : '▲';
+        var toggleArrow = collapsed ? '▼' : '▲';
 
         var html = '';
         html += '<div class="balance-log-item ' + (isUnusual ? 'unusual' : '') + '" data-key="' + escapeHtml(row.key) + '">';
@@ -344,9 +326,7 @@
         html += '    <div class="log-left">';
         html += '      <span class="log-date-main">' + escapeHtml(row.formatted_date) + '</span>';
         html += '      <span class="log-day">' + escapeHtml(row.day_name) + '</span>';
-        if (isUnusual) {
-            html += '      <span class="status-badge status-unusual">Unusual</span>';
-        }
+        if (isUnusual) html += '      <span class="status-badge status-unusual">Unusual</span>';
         html += '    </div>';
         html += '    <span class="log-toggle">' + toggleArrow + '</span>';
         html += '  </div>';
@@ -367,33 +347,25 @@
             return '' +
                 '<div class="empty-state">' +
                 '  <div class="empty-text">No Activity Data</div>' +
-                '  <div class="empty-sub">Your activity log will appear here once trading begins.</div>' +
+                '  <div class="empty-sub">This account\'s activity log will appear here once trading begins.</div>' +
                 '</div>';
         }
-
         var html = '<div class="balance-log-list">';
-        for (var i = 0; i < data.rows.length; i++) {
-            html += buildLogItemHtml(data.rows[i]);
-        }
+        for (var i = 0; i < data.rows.length; i++) html += buildLogItemHtml(data.rows[i]);
         html += '</div>';
         return html;
     }
 
     function refreshActivityUI(data) {
         if (!data || !data.success) return;
-
         captureExpandedState();
-
         var block = document.getElementById('activityStateBlock');
-        if (block) {
-            block.innerHTML = buildActivityHtml(data);
-        }
+        if (block) block.innerHTML = buildActivityHtml(data);
     }
 
     async function fetchActivity() {
         if (isUpdating) return;
         isUpdating = true;
-
         try {
             var response = await fetch(ACTIVITY_POLL_URL, {
                 method: 'POST',
@@ -405,17 +377,10 @@
                 credentials: 'same-origin',
                 cache: 'no-store'
             });
-
             if (!response.ok) throw new Error('HTTP ' + response.status);
-
             var raw = await response.text();
             var data;
-            try {
-                data = JSON.parse(raw);
-            } catch (parseErr) {
-                throw new Error('Non-JSON response');
-            }
-
+            try { data = JSON.parse(raw); } catch (e) { throw new Error('Non-JSON'); }
             if (data && data.success) {
                 retryCount = 0;
                 currentInterval = 1000;
@@ -428,12 +393,10 @@
         } finally {
             isUpdating = false;
         }
-
-        if (retryCount === 0)      currentInterval = 1000;
+        if (retryCount === 0) currentInterval = 1000;
         else if (retryCount === 1) currentInterval = 3000;
         else if (retryCount === 2) currentInterval = 5000;
         else if (retryCount >= MAX_RETRIES) currentInterval = 15000;
-
         scheduleNextPoll();
     }
 
@@ -455,11 +418,8 @@
     }
 
     document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopLiveUpdates();
-        } else {
-            startLiveUpdates();
-        }
+        if (document.hidden) stopLiveUpdates();
+        else startLiveUpdates();
     });
 
     window.addEventListener('focus', function() {
@@ -468,4 +428,29 @@
 
     startLiveUpdates();
     window.addEventListener('beforeunload', function() { stopLiveUpdates(); });
+
+    (function () {
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+        var WATCHED = ['page-connect_investor_broker', 'profile-page-open', 'page-revenue_history'];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
 </script>
+</body>
+</html>

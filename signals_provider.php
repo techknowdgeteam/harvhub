@@ -279,7 +279,7 @@ footer{padding:36px 0;text-align:center;color:var(--soft);font-size:.85rem;borde
 .field input,.field select{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:inherit}
 .field input:focus,.field select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .hint{font-size:.74rem;color:var(--soft);margin-top:4px}
-.err{background:rgba(224,75,75,.1);border-left:3px solid var(--danger);color:var(--danger);padding:10px 12px;border-radius:10px;font-size:.85rem;margin-bottom:12px;display:none}
+.err{background:rgba(224,75,75,.1);color:var(--danger);padding:10px 12px;border-radius:10px;font-size:.85rem;margin-bottom:12px;display:none}
 .stack{display:flex;flex-direction:column;gap:10px}
 .summary{background:var(--accent-soft);border-radius:12px;padding:12px 14px;font-size:.85rem;color:var(--text);margin-bottom:16px}
 .summary b{color:var(--accent)}

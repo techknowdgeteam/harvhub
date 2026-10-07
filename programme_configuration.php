@@ -4,6 +4,7 @@
 // Multi-root with heir inheritance, authority selection, one-ref-per-root.
 // Per-tree global timeframe (dictator).
 // ANCHOR REMOVED ENTIRELY.
+// Object & Text annotation rules live in `programme_annotations`.
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -67,6 +68,8 @@ $pcDrawingTools = ['trendline'];
 $pcDrawingColors = ['green','blue','red','purple','custom'];
 $pcTargetTypes = ['risk_reward','set_target'];
 $pcRiskRewardModes = ['fixed_risk_reward','minimum_risk_reward'];
+$pcObjectKinds = ['arrow_right','arrow_left','arrow_up','arrow_down','filled_square','filled_star'];
+$pcPositions   = ['above','below','left','right'];
 
 // ==================== CANDLE NAMES ====================
 $pcCandleNames = [];
@@ -110,12 +113,13 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
             $tid = (int)$r['tree_id'];
             if (!isset($byTree[$tid])) {
                 $byTree[$tid] = [
-                    'tree_id'   => $tid,
-                    'timeframe' => '',
-                    'collapsed' => true,
-                    'roots'     => [],
-                    'drawings'  => [],
-                    'trades'    => [],
+                    'tree_id'     => $tid,
+                    'timeframe'   => '',
+                    'collapsed'   => true,
+                    'roots'       => [],
+                    'drawings'    => [],
+                    'trades'      => [],
+                    'annotations' => [],
                 ];
             }
             $row = [
@@ -167,6 +171,43 @@ if ($pcUserId > 0 && $pcProgrammeId > 0) {
                 $byTree[$tid]['_orphan_rows'][] = $row;
             }
         }
+
+        // ---- Load annotation rules from the dedicated table ----
+        try {
+            $aq = $pdo->prepare("
+                SELECT id, tree_id, rule_kind,
+                       object_kind, object_anchor, object_position,
+                       text_anchor, text_position, text_content
+                FROM programme_annotations
+                WHERE userid = ? AND programmeid = ?
+                ORDER BY tree_id ASC, id ASC
+            ");
+            $aq->execute([$pcUserId, $pcProgrammeId]);
+            while ($ar = $aq->fetch(PDO::FETCH_ASSOC)) {
+                $tid = (int)$ar['tree_id'];
+                if (!isset($byTree[$tid])) {
+                    $byTree[$tid] = [
+                        'tree_id'     => $tid,
+                        'timeframe'   => '',
+                        'collapsed'   => true,
+                        'roots'       => [],
+                        'drawings'    => [],
+                        'trades'      => [],
+                        'annotations' => [],
+                    ];
+                }
+                $byTree[$tid]['annotations'][] = [
+                    'id'              => (int)$ar['id'],
+                    'rule_kind'       => $ar['rule_kind'],
+                    'object_kind'     => $ar['object_kind'],
+                    'object_anchor'   => $ar['object_anchor'],
+                    'object_position' => $ar['object_position'],
+                    'text_anchor'     => $ar['text_anchor'],
+                    'text_position'   => $ar['text_position'],
+                    'text_content'    => $ar['text_content'],
+                ];
+            }
+        } catch (PDOException $e) { /* annotation table may not exist yet */ }
 
         foreach ($byTree as $tid => &$tree) {
             $roots = &$tree['roots'];
@@ -260,15 +301,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         $pdo->beginTransaction();
 
         if ($singleTreeId > 0) {
+            // Update an existing tree – delete only that tree
             $del = $pdo->prepare("DELETE FROM programme_configuration WHERE userid = ? AND programmeid = ? AND tree_id = ?");
             $del->execute([$uId, $programmeId, $singleTreeId]);
+            $delAn = $pdo->prepare("DELETE FROM programme_annotations WHERE userid = ? AND programmeid = ? AND tree_id = ?");
+            $delAn->execute([$uId, $programmeId, $singleTreeId]);
             $nextTreeId = $singleTreeId;
             $insertTrees = $trees;
         } else {
-            $del = $pdo->prepare("DELETE FROM programme_configuration WHERE userid = ? AND programmeid = ?");
-            $del->execute([$uId, $programmeId]);
-            $nextTreeId = 1;
+            // Brand-new tree – do NOT wipe other trees; append with next free id
+            $maxq = $pdo->prepare("SELECT COALESCE(MAX(tree_id), 0) FROM programme_configuration WHERE userid = ? AND programmeid = ?");
+            $maxq->execute([$uId, $programmeId]);
+            $nextTreeId = ((int)$maxq->fetchColumn()) + 1;
             $insertTrees = $trees;
+            // no DELETE
         }
 
         $ins = $pdo->prepare("
@@ -285,6 +331,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                  root_order, evaluation_priority, is_foundation_root,
                  root_ref_count, resolved_root_id, triggered_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+
+        $insAn = $pdo->prepare("
+            INSERT INTO programme_annotations
+                (userid, programmeid, tree_id, rule_kind,
+                 object_kind, object_anchor, object_position,
+                 text_anchor, text_position, text_content)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         foreach ($insertTrees as $tree) {
@@ -527,9 +581,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     1, 1, 0, 0, null, null
                 ]);
             }
+
+            // ---- 7) ANNOTATION RULES ----
+            $annotations = is_array($tree['annotations'] ?? null) ? $tree['annotations'] : [];
+            foreach ($annotations as $rule) {
+                $objKind   = self_obj_kind($rule['object_kind']     ?? null);
+                $objAnchor = self_anchor_name($rule['object_anchor'] ?? null);
+                $objPos    = self_pos($rule['object_position']      ?? null);
+                $txtAnchor = self_anchor_name($rule['text_anchor']  ?? null);
+                $txtPos    = self_pos($rule['text_position']        ?? null);
+                $txtBody   = self_text_body($rule['text_content']   ?? null);
+
+                $hasObj  = ($objKind !== null && $objAnchor !== null && $objPos !== null);
+                $hasText = ($txtAnchor !== null && $txtPos !== null && $txtBody !== null);
+
+                if ($hasObj && !$hasText) {
+                    $insAn->execute([
+                        $uId, $programmeId, $treeId, 'object',
+                        $objKind, $objAnchor, $objPos,
+                        null, null, null
+                    ]);
+                } elseif ($hasText && !$hasObj) {
+                    $insAn->execute([
+                        $uId, $programmeId, $treeId, 'text',
+                        null, null, null,
+                        $txtAnchor, $txtPos, $txtBody
+                    ]);
+                } elseif ($hasObj && $hasText) {
+                    $insAn->execute([
+                        $uId, $programmeId, $treeId, 'object',
+                        $objKind, $objAnchor, $objPos,
+                        null, null, null
+                    ]);
+                    $insAn->execute([
+                        $uId, $programmeId, $treeId, 'text',
+                        null, null, null,
+                        $txtAnchor, $txtPos, $txtBody
+                    ]);
+                }
+            }
         }
 
-        // ---- 6.5) PERSIST R:R OVERRIDES ----
+        // ---- 8) PERSIST R:R OVERRIDES ----
         $amFixed   = null;
         $amMin     = null;
         if (array_key_exists('fixed_risk_reward', $rrOverrides)) {
@@ -677,6 +770,25 @@ function self_tf($tf) { $tf = trim((string)$tf); return $tf === '' ? null : $tf;
 function self_ct($ct) { $ct = trim((string)$ct); return in_array($ct, ['bullish','bearish','any'], true) ? $ct : null; }
 function self_op($op) { $op = trim((string)$op); return in_array($op, ['<','>','<=','>=','='], true) ? $op : null; }
 function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','random','all'], true) ? $s : null; }
+function self_obj_kind($k) {
+    $k = trim((string)$k);
+    if ($k === '' || $k === 'none') return null;
+    return in_array($k, ['arrow_right','arrow_left','arrow_up','arrow_down','filled_square','filled_star'], true)
+        ? $k : null;
+}
+function self_anchor_name($a) {
+    $a = trim((string)$a);
+    return $a === '' ? null : $a;
+}
+function self_pos($p) {
+    $p = trim((string)$p);
+    return in_array($p, ['above','below','left','right'], true) ? $p : null;
+}
+function self_text_body($t) {
+    if ($t === null) return null;
+    $t = (string)$t;
+    return $t === '' ? null : $t;
+}
 ?>
 
 <!-- ============================================================
@@ -783,6 +895,8 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
 <script type="application/json" id="pcTargetTypesJson"><?= json_encode(array_values($pcTargetTypes)) ?></script>
 <script type="application/json" id="pcRiskRewardModesJson"><?= json_encode(array_values($pcRiskRewardModes)) ?></script>
 <script type="application/json" id="pcAccountManagementJson"><?= json_encode($pcAccountManagement) ?></script>
+<script type="application/json" id="pcObjectKindsJson"><?= json_encode(array_values($pcObjectKinds)) ?></script>
+<script type="application/json" id="pcPositionsJson"><?= json_encode(array_values($pcPositions)) ?></script>
 
 <!-- ============================================================ TEMPLATES ============================================================ -->
 
@@ -803,7 +917,6 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
             </button>
         </div>
         <div class="pc-tree-body">
-            <!-- TREE-LEVEL GLOBAL TIMEFRAME (the dictator) -->
             <div class="pc-tree-timeframe-bar">
                 <div class="pc-tree-timeframe-field">
                     <label class="pc-label">
@@ -833,6 +946,13 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
                 <button type="button" class="pc-add-btn pc-add-drawing-btn" data-action="add-drawing">
                     <i class="fa-solid fa-pen-ruler"></i> Add drawing
                 </button>
+            </div>
+            <div class="pc-tree-section">
+                <div class="pc-tree-section-title">
+                    Add Objects and Texts
+                    <span class="pc-section-hint">(annotations attached to defined candles)</span>
+                </div>
+                <div data-role="annotationList" class="pc-annotation-list"></div>
             </div>
             <div class="pc-tree-section">
                 <div class="pc-tree-section-title">
@@ -1066,6 +1186,120 @@ function self_search($s) { $s = trim((string)$s); return in_array($s, ['fixed','
         </div>
     </div>
 </template>
+<template id="pcAnnotationBlockTpl">
+    <div class="pc-block pc-annotation-block" data-block-kind="annotation">
+        <div class="pc-block-head">
+            <div class="pc-block-title">
+                <i class="fa-solid fa-icons pc-block-icon"></i>
+                <span>Object &amp; Text</span>
+            </div>
+            <button type="button" class="pc-block-remove" title="Remove all" data-action="remove">
+                <i class="fa-solid fa-trash-can"></i>
+            </button>
+        </div>
+
+        <div class="pc-block-subsection">
+            <div class="pc-block-subtitle">
+                <i class="fa-solid fa-list-check"></i> Saved
+            </div>
+            <div data-role="existingRows" class="pc-annotation-existing-list"></div>
+        </div>
+
+        <div class="pc-block-subsection">
+            <div class="pc-block-subtitle">
+                <i class="fa-solid fa-shapes"></i> Add Object
+            </div>
+            <div data-role="objectRows" class="pc-annotation-rows"></div>
+            <button type="button" class="pc-add-btn pc-add-annotation-sub-btn" data-action="add-object-row">
+                <i class="fa-solid fa-plus"></i> Add object
+            </button>
+        </div>
+
+        <div class="pc-block-subsection">
+            <div class="pc-block-subtitle">
+                <i class="fa-solid fa-font"></i> Add Text
+            </div>
+            <div data-role="textRows" class="pc-annotation-rows"></div>
+            <button type="button" class="pc-add-btn pc-add-annotation-sub-btn" data-action="add-text-row">
+                <i class="fa-solid fa-plus"></i> Add text
+            </button>
+        </div>
+    </div>
+</template>
+<template id="pcAnnotationObjectRowTpl">
+    <div class="pc-annotation-row" data-row-kind="object">
+        <div class="pc-block-grid pc-grid-3">
+            <div class="pc-field">
+                <label class="pc-label">Object</label>
+                <select class="pc-input pc-select pc-object-kind" data-field="object_kind">
+                    <option value="none">— none —</option>
+                    <option value="arrow_right">Arrow facing right</option>
+                    <option value="arrow_left">Arrow facing left</option>
+                    <option value="arrow_up">Arrow facing up</option>
+                    <option value="arrow_down">Arrow facing down</option>
+                    <option value="filled_square">Filled square</option>
+                    <option value="filled_star">Filled star</option>
+                </select>
+            </div>
+            <div class="pc-field">
+                <label class="pc-label">Add object to</label>
+                <select class="pc-input pc-select pc-object-anchor" data-field="object_anchor"></select>
+            </div>
+            <div class="pc-field">
+                <label class="pc-label">Object position</label>
+                <select class="pc-input pc-select pc-object-position" data-field="object_position">
+                    <option value="">— none —</option>
+                    <option value="above">above</option>
+                    <option value="below">below</option>
+                    <option value="left">left</option>
+                    <option value="right">right</option>
+                </select>
+            </div>
+        </div>
+        <div class="pc-annotation-row-actions">
+            <button type="button" class="pc-btn pc-btn-primary pc-btn-xs" data-action="commit-object-row">
+                <i class="fa-solid fa-check"></i> Add object
+            </button>
+            <button type="button" class="pc-annotation-row-remove" data-action="remove-object-row" title="Cancel">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+</template>
+
+<template id="pcAnnotationTextRowTpl">
+    <div class="pc-annotation-row" data-row-kind="text">
+        <div class="pc-block-grid pc-grid-4">
+            <div class="pc-field">
+                <label class="pc-label">Add text to</label>
+                <select class="pc-input pc-select pc-text-anchor" data-field="text_anchor"></select>
+            </div>
+            <div class="pc-field">
+                <label class="pc-label">Text position</label>
+                <select class="pc-input pc-select pc-text-position" data-field="text_position">
+                    <option value="">— none —</option>
+                    <option value="above">above</option>
+                    <option value="below">below</option>
+                    <option value="left">left</option>
+                    <option value="right">right</option>
+                </select>
+            </div>
+            <div class="pc-field pc-annotation-text-field">
+                <label class="pc-label">Enter text</label>
+                <input type="text" class="pc-input pc-text-content" data-field="text_content"
+                       placeholder="e.g. Buyside liquidity" autocomplete="off">
+            </div>
+        </div>
+        <div class="pc-annotation-row-actions">
+            <button type="button" class="pc-btn pc-btn-primary pc-btn-xs" data-action="commit-text-row">
+                <i class="fa-solid fa-check"></i> Add text
+            </button>
+            <button type="button" class="pc-annotation-row-remove" data-action="remove-text-row" title="Cancel">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+</template>
 
 <style>
 /* ============================================================
@@ -1167,7 +1401,7 @@ body.dark-mode .pc-tree-timeframe-bar {
 .pc-reref-pair-title { font-size: 0.72rem; font-weight: 800; text-transform: uppercase;
     letter-spacing: 0.4px; color: #8e44ad; display: inline-flex; align-items: center; gap: 6px; }
 .pc-reref-author { margin-bottom: 6px; }
-.pc-drawing-list, .pc-trade-list { display: flex; flex-direction: column; gap: 10px; }
+.pc-drawing-list, .pc-trade-list, .pc-annotation-list { display: flex; flex-direction: column; gap: 10px; }
 
 .pc-add-btn { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 12px; border-radius: 8px; background: rgba(74,123,216,0.10);
@@ -1178,9 +1412,12 @@ body.dark-mode .pc-tree-timeframe-bar {
 .pc-add-trade-btn:hover { background: rgba(39,174,96,0.18); }
 .pc-add-root-btn { background: rgba(155,89,182,0.10); color: #8e44ad; border-color: rgba(155,89,182,0.55); }
 .pc-add-root-btn:hover { background: rgba(155,89,182,0.18); }
+.pc-add-annotation-btn { background: rgba(227,179,65,0.10); color: #b8860b; border-color: rgba(227,179,65,0.55); }
+.pc-add-annotation-btn:hover { background: rgba(227,179,65,0.18); }
 body.dark-mode .pc-add-btn { color: #9bbcf0; border-color: rgba(155,188,240,0.5); }
 body.dark-mode .pc-add-trade-btn { color: #7ee2a8; border-color: rgba(126,226,168,0.5); }
 body.dark-mode .pc-add-root-btn { color: #c39bd3; border-color: rgba(195,155,211,0.5); }
+body.dark-mode .pc-add-annotation-btn { color: #f0c95a; border-color: rgba(240,201,90,0.5); }
 .pc-reref-btn { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 11px; border-radius: 8px; background: rgba(155,89,182,0.10);
     color: #8e44ad; border: 1px dashed rgba(155,89,182,0.55);
@@ -1197,6 +1434,8 @@ body.dark-mode .pc-reref-btn { color: #c39bd3; border-color: rgba(195,155,211,0.
 .pc-drawing-block { border-left: 4px solid #4a7bd8; background: rgba(74,123,216,0.03); }
 .pc-trade-block { border-left: 4px solid #27ae60; background: rgba(39,174,96,0.03); }
 .pc-trade-block .pc-block-icon { color: #27ae60; }
+.pc-annotation-block { border-left: 4px solid #e3b341; background: rgba(227,179,65,0.04); }
+.pc-annotation-block .pc-block-icon { color: #e3b341; }
 .pc-block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .pc-block-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700;
     font-size: 0.85rem; color: var(--text, #222); flex-wrap: wrap; }
@@ -1209,12 +1448,14 @@ body.dark-mode .pc-reref-btn { color: #c39bd3; border-color: rgba(195,155,211,0.
     cursor: pointer; padding: 4px 6px; border-radius: 6px; font-size: 0.85rem; }
 .pc-block-remove:hover { background: rgba(192,57,43,0.1); }
 .pc-block-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.pc-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pc-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pc-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .pc-grid-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .pc-grid-7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-@media (max-width: 900px) { .pc-block-grid, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 600px) { .pc-block-grid, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 420px) { .pc-block-grid, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .pc-block-grid, .pc-grid-3, .pc-grid-4, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .pc-block-grid, .pc-grid-3, .pc-grid-4, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 420px) { .pc-block-grid, .pc-grid-3, .pc-grid-4, .pc-grid-5, .pc-grid-6, .pc-grid-7 { grid-template-columns: 1fr; } }
 
 .pc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pc-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.4px;
@@ -1230,6 +1471,16 @@ body.dark-mode .pc-reref-btn { color: #c39bd3; border-color: rgba(195,155,211,0.
 .pc-select { cursor: pointer; }
 .pc-input[readonly], .pc-input:disabled { cursor: not-allowed; }
 .pc-rr-value-hint { font-size: 0.7rem; color: var(--text-muted, #888); margin-top: 3px; }
+
+.pc-block-subsection { margin-bottom: 10px; }
+.pc-block-subsection:last-child { margin-bottom: 0; }
+.pc-block-subtitle {
+    font-size: 0.72rem; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.4px; color: #b8860b; margin-bottom: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+body.dark-mode .pc-block-subtitle { color: #f0c95a; }
+body.dark-mode .pc-annotation-block { background: rgba(227,179,65,0.08); }
 
 .pc-author-badge { font-size: 0.62rem; background: rgba(46,139,87,0.18); color: var(--accent, #2e8b57);
     padding: 2px 7px; border-radius: 10px; font-weight: 800; margin-left: 6px;
@@ -1291,9 +1542,144 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     .pc-modal-body   { padding: 12px 14px 14px; max-height: 72vh; }
     .pc-modal-footer { padding: 10px 14px 12px; }
 }
+
+/* Annotation rows (per-tree block) */
+.pc-annotation-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.pc-annotation-row {
+    position: relative;
+    padding: 8px 30px 8px 8px;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 8px;
+    background: rgba(227,179,65,0.02);
+}
+body.dark-mode .pc-annotation-row {
+    border-color: var(--border-color, #333);
+    background: rgba(227,179,65,0.04);
+}
+.pc-annotation-row-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    border: none;
+    background: transparent;
+    color: #c0392b;
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+}
+.pc-annotation-row-remove:hover { background: rgba(192,57,43,0.12); }
+.pc-add-annotation-sub-btn {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    padding: 5px 10px;
+}
+/* Existing (read-only) annotation display */
+.pc-annotation-existing-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.pc-annotation-existing {
+    position: relative;
+    padding: 10px 40px 10px 12px;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-left: 3px solid #27ae60;
+    border-radius: 8px;
+    background: rgba(39,174,96,0.04);
+}
+body.dark-mode .pc-annotation-existing {
+    border-color: var(--border-color, #333);
+    border-left-color: #2ecc71;
+    background: rgba(39,174,96,0.08);
+}
+.pc-annotation-existing-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.pc-annotation-existing-line {
+    display: flex;
+    gap: 8px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+.pc-annotation-existing-key {
+    flex: 0 0 130px;
+    color: var(--text-muted, #888);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    letter-spacing: 0.3px;
+    padding-top: 2px;
+}
+.pc-annotation-existing-val {
+    flex: 1;
+    color: var(--text, #222);
+    font-weight: 600;
+    word-break: break-word;
+}
+body.dark-mode .pc-annotation-existing-val { color: var(--text, #eee); }
+.pc-annotation-existing-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    border: none;
+    background: transparent;
+    color: #c0392b;
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+}
+.pc-annotation-existing-remove:hover { background: rgba(192,57,43,0.12); }
+
+.pc-annotation-empty {
+    padding: 12px 14px;
+    border: 1px dashed var(--border-color, #ddd);
+    border-radius: 8px;
+    font-size: 0.78rem;
+    color: var(--text-muted, #888);
+    text-align: center;
+    background: rgba(0,0,0,0.015);
+}
+body.dark-mode .pc-annotation-empty {
+    border-color: var(--border-color, #333);
+    background: rgba(255,255,255,0.02);
+}
+
+.pc-annotation-row-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+}
+.pc-btn-xs {
+    padding: 5px 10px;
+    font-size: 0.72rem;
+    border-radius: 6px;
+}
+.pc-annotation-row .pc-annotation-row-remove {
+    position: static;
+    width: 26px;
+    height: 26px;
+}
 </style>
 
 <script>
+    // build:<?= time() ?>
 (function () {
     'use strict';
 
@@ -1310,6 +1696,8 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     var PC_TARGET_TYPES    = JSON.parse(document.getElementById('pcTargetTypesJson').textContent      || '[]');
     var PC_RR_MODES        = JSON.parse(document.getElementById('pcRiskRewardModesJson').textContent  || '[]');
     var PC_ACCOUNT_MGMT    = JSON.parse(document.getElementById('pcAccountManagementJson').textContent|| '{}');
+    var PC_OBJECT_KINDS    = JSON.parse(document.getElementById('pcObjectKindsJson').textContent      || '[]');
+    var PC_POSITIONS       = JSON.parse(document.getElementById('pcPositionsJson').textContent        || '[]');
 
     var PC = {
         programmeId:   <?= (int)$pcProgrammeId ?>,
@@ -1407,6 +1795,60 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     }
 
     // ============================================================
+    // ANNOTATION ANCHOR OPTIONS
+    // ============================================================
+    // ============================================================
+    // ANNOTATION ANCHOR OPTIONS
+    // ============================================================
+    var PC_APPRENTICE_ANCHORS = [
+        { value: 'Entry',              label: 'Entry' },
+        { value: 'Exit',               label: 'Exit / Stoploss reference' },
+        { value: 'Target',             label: 'Target' },
+        { value: 'Entry Trigger',      label: 'Entry Trigger candle' },
+        { value: 'Stoploss Candle',    label: 'Stoploss candle' },
+        { value: 'Take Profit Candle', label: 'Take Profit candle' }
+    ];
+
+    function buildAnnotationAnchorOptions(tree) {
+        var opts = [];
+        var seen = {};
+
+        function pushOpt(name) {
+            if (!name) return;
+            var key = String(name).trim();
+            if (!key) return;
+            if (seen[key]) return;
+            seen[key] = true;
+            opts.push({ value: key, label: key });
+        }
+
+        // 1) Candle names from current tree structure
+        (tree.roots || []).forEach(function (root) {
+            pushOpt(root.fields.candle_name);
+            (root.refs || []).forEach(function (ref) {
+                pushOpt(ref.fields.candle_name);
+                (ref.reRefPairs || []).forEach(function (pair) {
+                    if (pair.author)  pushOpt(pair.author.fields.candle_name);
+                    if (pair.servant) pushOpt(pair.servant.fields.candle_name);
+                });
+            });
+        });
+
+        // 2) Predefined apprentice anchors
+        PC_APPRENTICE_ANCHORS.forEach(function (a) { pushOpt(a.value); });
+
+        // 3) Include anchors already saved on this tree's annotations so
+        //    previously-saved values always render even if the referenced
+        //    candle was renamed or removed from the tree structure.
+        (tree.annotations || []).forEach(function (rule) {
+            if (rule && rule.object_anchor) pushOpt(rule.object_anchor);
+            if (rule && rule.text_anchor)   pushOpt(rule.text_anchor);
+        });
+
+        return opts;
+    }
+
+    // ============================================================
     // ERROR / SUCCESS MODALS
     // ============================================================
     function pcShowError(message) {
@@ -1453,22 +1895,23 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             }
 
             var tree = {
-                localId:  uid(),
-                dbTreeId: t.tree_id,
-                collapsed: true,
-                timeframe: treeTf,
-                roots:    [],
-                drawings: [],
-                trades:   []
+                localId:           uid(),
+                dbTreeId:          t.tree_id,
+                collapsed:         true,
+                timeframe:         treeTf,
+                roots:             [],
+                drawings:          [],
+                trades:            [],
+                annotations:       [],
+                _draftAnnotations: []
             };
 
             (t.roots || []).forEach(function (rootRow, rIdx) {
-                var rootLocal = uid();
                 var root = {
-                    localId: rootLocal,
-                    dbId: rootRow.id,
-                    rootOrder: rIdx + 1,
-                    isFoundation: rIdx === 0,
+                    localId:           uid(),
+                    dbId:              rootRow.id,
+                    rootOrder:         rIdx + 1,
+                    isFoundation:      rIdx === 0,
                     authorityLocalKey: null,
                     fields: {
                         candle_name:     rootRow.candle_name || '',
@@ -1485,7 +1928,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 (rootRow.root_refs || []).forEach(function (rf) {
                     var refBlock = {
                         localId: uid(),
-                        dbId: rf.id,
+                        dbId:    rf.id,
                         fields: {
                             candle_name:     rf.candle_name || '',
                             price_level:     rf.price_level || '',
@@ -1534,7 +1977,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             (t.drawings || []).forEach(function (dr) {
                 tree.drawings.push({
                     localId: uid(),
-                    dbId: dr.id,
+                    dbId:    dr.id,
                     fields: {
                         drawing_id:               parseInt(dr.drawing_id, 10) || 0,
                         drawing_tools:            dr.drawing_tools || '',
@@ -1560,14 +2003,14 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
 
                 tree.trades.push({
                     localId: uid(),
-                    dbId: tr.id,
+                    dbId:    tr.id,
                     fields: {
                         order_type:             tr.order_type || '',
                         entry_from:             tr.entry_from || '',
                         entry_from_price_level: tr.entry_from_price_level || '',
                         exit_at:                tr.exit_at || '',
                         exit_at_price_level:    tr.exit_at_price_level || '',
-                        target_type:            isRR ? 'risk_reward' : (targetRaw ? 'set_target' : 'set_target'),
+                        target_type:            isRR ? 'risk_reward' : 'set_target',
                         target_rr_mode:         rrMode,
                         rr_value:               rrValue,
                         target:                 isRR ? '' : targetRaw,
@@ -1575,6 +2018,50 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                     }
                 });
             });
+
+            // ---- Restore annotation rules (read-only, edit-free) ----
+            if (Array.isArray(t.annotations) && t.annotations.length) {
+                t.annotations.forEach(function (rule) {
+                    var kind = String(rule.rule_kind || '').toLowerCase();
+
+                    if (kind === 'text') {
+                        tree.annotations.push({
+                            localId:       uid(),
+                            rule_kind:     'text',
+                            text_anchor:   rule.text_anchor   || '',
+                            text_position: rule.text_position || '',
+                            text_content:  rule.text_content  || ''
+                        });
+                    } else if (kind === 'object') {
+                        tree.annotations.push({
+                            localId:         uid(),
+                            rule_kind:       'object',
+                            object_kind:     rule.object_kind     || 'none',
+                            object_anchor:   rule.object_anchor   || '',
+                            object_position: rule.object_position || ''
+                        });
+                    } else {
+                        var isText = !!(rule.text_anchor || rule.text_position || rule.text_content);
+                        if (isText) {
+                            tree.annotations.push({
+                                localId:       uid(),
+                                rule_kind:     'text',
+                                text_anchor:   rule.text_anchor   || '',
+                                text_position: rule.text_position || '',
+                                text_content:  rule.text_content  || ''
+                            });
+                        } else {
+                            tree.annotations.push({
+                                localId:         uid(),
+                                rule_kind:       'object',
+                                object_kind:     rule.object_kind     || 'none',
+                                object_anchor:   rule.object_anchor   || '',
+                                object_position: rule.object_position || ''
+                            });
+                        }
+                    }
+                });
+            }
 
             PC.trees.push(tree);
         });
@@ -1995,6 +2482,318 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     }
 
     // ============================================================
+    // ANNOTATION BLOCK
+    // ============================================================
+    // ============================================================
+    // ANNOTATION BLOCK
+    // ============================================================
+    function buildAnnotationBlock(host, tree, rootLocalId) {
+        var tpl = $('pcAnnotationBlockTpl');
+        var node = tpl.content.firstElementChild.cloneNode(true);
+
+        var existingRowsHost = node.querySelector('[data-role="existingRows"]');
+        var objectRowsHost   = node.querySelector('[data-role="objectRows"]');
+        var textRowsHost     = node.querySelector('[data-role="textRows"]');
+
+        if (!Array.isArray(tree.annotations)) tree.annotations = [];
+
+        function makeDraftObjectRule() {
+            return {
+                localId:         uid(),
+                rule_kind:       'object',
+                object_kind:     'none',
+                object_anchor:   '',
+                object_position: ''
+            };
+        }
+        function makeDraftTextRule() {
+            return {
+                localId:       uid(),
+                rule_kind:     'text',
+                text_anchor:   '',
+                text_position: '',
+                text_content:  ''
+            };
+        }
+
+        // Drafts are rows the user is currently editing (not yet committed).
+        // They live in tree._draftAnnotations so they survive re-renders but
+        // do NOT get sent to the server until "Add object"/"Add text" commits them.
+        if (!Array.isArray(tree._draftAnnotations)) tree._draftAnnotations = [];
+
+        // ------------------------------------------------------------
+        // EXISTING (read-only, deletable)
+        // ------------------------------------------------------------
+        function buildExistingRow(rule) {
+            var kind = (rule.rule_kind === 'text') ? 'text' : 'object';
+
+            var rowEl = document.createElement('div');
+            rowEl.className = 'pc-annotation-existing';
+            rowEl.setAttribute('data-rule-local-id', rule.localId);
+            rowEl.setAttribute('data-row-kind', kind);
+
+            var body = document.createElement('div');
+            body.className = 'pc-annotation-existing-body';
+
+            if (kind === 'object') {
+                var labelObj = document.createElement('div');
+                labelObj.className = 'pc-annotation-existing-line';
+                labelObj.innerHTML =
+                    '<span class="pc-annotation-existing-key">Object</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.object_kind || 'none') +
+                    '</span>';
+                body.appendChild(labelObj);
+
+                var labelAnchor = document.createElement('div');
+                labelAnchor.className = 'pc-annotation-existing-line';
+                labelAnchor.innerHTML =
+                    '<span class="pc-annotation-existing-key">Add object to</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.object_anchor || '—') +
+                    '</span>';
+                body.appendChild(labelAnchor);
+
+                var labelPos = document.createElement('div');
+                labelPos.className = 'pc-annotation-existing-line';
+                labelPos.innerHTML =
+                    '<span class="pc-annotation-existing-key">Object position</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.object_position || '—') +
+                    '</span>';
+                body.appendChild(labelPos);
+            } else {
+                var labelTxtAnchor = document.createElement('div');
+                labelTxtAnchor.className = 'pc-annotation-existing-line';
+                labelTxtAnchor.innerHTML =
+                    '<span class="pc-annotation-existing-key">Add text to</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.text_anchor || '—') +
+                    '</span>';
+                body.appendChild(labelTxtAnchor);
+
+                var labelTxtPos = document.createElement('div');
+                labelTxtPos.className = 'pc-annotation-existing-line';
+                labelTxtPos.innerHTML =
+                    '<span class="pc-annotation-existing-key">Text position</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.text_position || '—') +
+                    '</span>';
+                body.appendChild(labelTxtPos);
+
+                var labelTxtBody = document.createElement('div');
+                labelTxtBody.className = 'pc-annotation-existing-line';
+                labelTxtBody.innerHTML =
+                    '<span class="pc-annotation-existing-key">Enter text</span>' +
+                    '<span class="pc-annotation-existing-val">' +
+                        escapeHtml(rule.text_content || '—') +
+                    '</span>';
+                body.appendChild(labelTxtBody);
+            }
+
+            rowEl.appendChild(body);
+
+            var delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'pc-annotation-existing-remove';
+            delBtn.title = 'Delete';
+            delBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+            delBtn.addEventListener('click', function () {
+                tree.annotations = tree.annotations.filter(function (a) {
+                    return a.localId !== rule.localId;
+                });
+                renderTrees();
+            });
+            rowEl.appendChild(delBtn);
+
+            existingRowsHost.appendChild(rowEl);
+        }
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // ------------------------------------------------------------
+        // DRAFT EDITORS (the form the user fills to add a new rule)
+        // ------------------------------------------------------------
+        function buildDraftObjectRow(rule) {
+            var rowTpl = $('pcAnnotationObjectRowTpl');
+            var rowEl  = rowTpl.content.firstElementChild.cloneNode(true);
+            rowEl.setAttribute('data-draft-local-id', rule.localId);
+
+            var objKind   = rowEl.querySelector('[data-field="object_kind"]');
+            var objAnchor = rowEl.querySelector('[data-field="object_anchor"]');
+            var objPos    = rowEl.querySelector('[data-field="object_position"]');
+
+            var anchorOpts = buildAnnotationAnchorOptions(tree);
+            fillSelect(objAnchor, anchorOpts, { placeholder: '— select candle —' });
+
+            objKind.value = (rule.object_kind && rule.object_kind !== '') ? rule.object_kind : 'none';
+
+            var savedAnchor = (rule.object_anchor || '').trim();
+            if (savedAnchor) {
+                var exists = Array.prototype.some.call(objAnchor.options, function (o) {
+                    return o.value === savedAnchor;
+                });
+                if (!exists) {
+                    var extra = document.createElement('option');
+                    extra.value = savedAnchor;
+                    extra.textContent = savedAnchor;
+                    objAnchor.appendChild(extra);
+                }
+                objAnchor.value = savedAnchor;
+            } else {
+                objAnchor.value = '';
+            }
+
+            objPos.value = rule.object_position || '';
+
+            objKind.addEventListener('change',   function () { rule.object_kind     = objKind.value; });
+            objAnchor.addEventListener('change', function () { rule.object_anchor   = objAnchor.value; });
+            objPos.addEventListener('change',    function () { rule.object_position = objPos.value; });
+
+            rowEl.querySelector('[data-action="remove-object-row"]').addEventListener('click', function () {
+                tree._draftAnnotations = tree._draftAnnotations.filter(function (a) {
+                    return a.localId !== rule.localId;
+                });
+                renderTrees();
+            });
+
+            rowEl.querySelector('[data-action="commit-object-row"]').addEventListener('click', function () {
+                var kind   = objKind.value;
+                var anchor = (objAnchor.value || '').trim();
+                var pos    = objPos.value;
+
+                if (!kind || kind === 'none' || !anchor || !pos) {
+                    pcShowError('Please select an object, a candle to attach it to, and a position before adding.');
+                    return;
+                }
+
+                tree.annotations.push({
+                    localId:         uid(),
+                    rule_kind:       'object',
+                    object_kind:     kind,
+                    object_anchor:   anchor,
+                    object_position: pos
+                });
+                tree._draftAnnotations = tree._draftAnnotations.filter(function (a) {
+                    return a.localId !== rule.localId;
+                });
+                renderTrees();
+            });
+
+            objectRowsHost.appendChild(rowEl);
+        }
+
+        function buildDraftTextRow(rule) {
+            var rowTpl = $('pcAnnotationTextRowTpl');
+            var rowEl  = rowTpl.content.firstElementChild.cloneNode(true);
+            rowEl.setAttribute('data-draft-local-id', rule.localId);
+
+            var txtAnchor = rowEl.querySelector('[data-field="text_anchor"]');
+            var txtPos    = rowEl.querySelector('[data-field="text_position"]');
+            var txtBody   = rowEl.querySelector('[data-field="text_content"]');
+
+            var anchorOpts = buildAnnotationAnchorOptions(tree);
+            fillSelect(txtAnchor, anchorOpts, { placeholder: '— select candle —' });
+
+            var savedAnchor = (rule.text_anchor || '').trim();
+            if (savedAnchor) {
+                var exists = Array.prototype.some.call(txtAnchor.options, function (o) {
+                    return o.value === savedAnchor;
+                });
+                if (!exists) {
+                    var extra = document.createElement('option');
+                    extra.value = savedAnchor;
+                    extra.textContent = savedAnchor;
+                    txtAnchor.appendChild(extra);
+                }
+                txtAnchor.value = savedAnchor;
+            } else {
+                txtAnchor.value = '';
+            }
+
+            txtPos.value  = rule.text_position || '';
+            txtBody.value = rule.text_content  || '';
+
+            txtAnchor.addEventListener('change', function () { rule.text_anchor   = txtAnchor.value; });
+            txtPos.addEventListener('change',    function () { rule.text_position = txtPos.value; });
+            txtBody.addEventListener('input',    function () { rule.text_content  = txtBody.value; });
+
+            rowEl.querySelector('[data-action="remove-text-row"]').addEventListener('click', function () {
+                tree._draftAnnotations = tree._draftAnnotations.filter(function (a) {
+                    return a.localId !== rule.localId;
+                });
+                renderTrees();
+            });
+
+            rowEl.querySelector('[data-action="commit-text-row"]').addEventListener('click', function () {
+                var anchor = (txtAnchor.value || '').trim();
+                var pos    = txtPos.value;
+                var body   = (txtBody.value || '').trim();
+
+                if (!anchor || !pos || !body) {
+                    pcShowError('Please select a candle, a position, and enter the text before adding.');
+                    return;
+                }
+
+                tree.annotations.push({
+                    localId:       uid(),
+                    rule_kind:     'text',
+                    text_anchor:   anchor,
+                    text_position: pos,
+                    text_content:  body
+                });
+                tree._draftAnnotations = tree._draftAnnotations.filter(function (a) {
+                    return a.localId !== rule.localId;
+                });
+                renderTrees();
+            });
+
+            textRowsHost.appendChild(rowEl);
+        }
+
+        // ------------------------------------------------------------
+        // RENDER EXISTING
+        // ------------------------------------------------------------
+        if (tree.annotations.length) {
+            tree.annotations.forEach(function (rule) {
+                buildExistingRow(rule);
+            });
+        } else {
+            var empty = document.createElement('div');
+            empty.className = 'pc-annotation-empty';
+            empty.textContent = 'No objects or texts saved yet. Use the forms below to add one.';
+            existingRowsHost.appendChild(empty);
+        }
+
+        // ------------------------------------------------------------
+        // RENDER DRAFTS
+        // ------------------------------------------------------------
+        tree._draftAnnotations.forEach(function (rule) {
+            if (rule.rule_kind === 'text') buildDraftTextRow(rule);
+            else                            buildDraftObjectRow(rule);
+        });
+
+        node.querySelector('[data-action="add-object-row"]').addEventListener('click', function () {
+            tree._draftAnnotations.push(makeDraftObjectRule());
+            renderTrees();
+        });
+
+        node.querySelector('[data-action="add-text-row"]').addEventListener('click', function () {
+            tree._draftAnnotations.push(makeDraftTextRule());
+            renderTrees();
+        });
+
+        host.appendChild(node);
+    }
+
+    // ============================================================
     // RENDER
     // ============================================================
     function renderTrees() {
@@ -2025,13 +2824,15 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 titleEl.textContent = (firstRoot && firstRoot.fields.candle_name && firstRoot.fields.candle_name.trim())
                     ? firstRoot.fields.candle_name : 'Tree';
             }
+
             var sub = group.querySelector('[data-role="treeSub"]');
             if (sub) {
                 var bits = [];
                 if (tree.timeframe) bits.push(tree.timeframe);
                 bits.push(tree.roots.length + ' root' + (tree.roots.length > 1 ? 's' : ''));
-                if (tree.drawings.length) bits.push(tree.drawings.length + ' draw');
-                if (tree.trades.length)   bits.push(tree.trades.length + ' trade');
+                if (tree.drawings.length)                      bits.push(tree.drawings.length + ' draw');
+                if ((tree.annotations || []).length)           bits.push(tree.annotations.length + ' note');
+                if (tree.trades.length)                        bits.push(tree.trades.length + ' trade');
                 sub.textContent = bits.length ? '· ' + bits.join(' · ') : '';
             }
 
@@ -2044,7 +2845,6 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 pcSaveTree(tree, this);
             });
 
-            // ── GLOBAL TIMEFRAME SELECT ──
             var treeTfSel = group.querySelector('[data-field="tree_timeframe"]');
             if (treeTfSel) {
                 fillSelect(treeTfSel, PC_TIMEFRAMES, { placeholder: '— select timeframe —' });
@@ -2074,6 +2874,13 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             group.querySelector('[data-action="add-drawing"]').addEventListener('click', function () {
                 addDrawing(tree.localId);
             });
+
+            // ── SINGLE ANNOTATION BLOCK PER TREE ──
+            var annotationList = group.querySelector('[data-role="annotationList"]');
+            if (annotationList) {
+                annotationList.innerHTML = '';
+                buildAnnotationBlock(annotationList, tree, tree.roots[0].localId);
+            }
 
             var tradeList = group.querySelector('[data-role="tradeList"]');
             tree.trades.forEach(function (tr) {
@@ -2225,6 +3032,7 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
             if (tree.timeframe) bits.push(tree.timeframe);
             bits.push(tree.roots.length + ' root' + (tree.roots.length > 1 ? 's' : ''));
             if (tree.drawings.length) bits.push(tree.drawings.length + ' draw');
+            if (tree.annotations.length) bits.push(tree.annotations.length + ' note');
             if (tree.trades.length)   bits.push(tree.trades.length + ' trade');
             sub.textContent = bits.length ? '· ' + bits.join(' · ') : '';
         }
@@ -2343,21 +3151,28 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
 
     function addTree() {
         var tree = {
-            localId: uid(),
-            dbTreeId: null,
-            collapsed: false,
-            timeframe: PC_CURRENT_TF || (PC_TIMEFRAMES[0] || ''),
-            roots: [],
-            drawings: [],
-            trades: []
+            localId:           uid(),
+            dbTreeId:          null,
+            collapsed:         false,
+            timeframe:         PC_CURRENT_TF || (PC_TIMEFRAMES[0] || ''),
+            roots:             [],
+            drawings:          [],
+            trades:            [],
+            annotations:       [],
+            _draftAnnotations: []
         };
         tree.roots.push({
-            localId: uid(), dbId: null, rootOrder: 1, isFoundation: true,
+            localId:           uid(),
+            dbId:              null,
+            rootOrder:         1,
+            isFoundation:      true,
             authorityLocalKey: null,
-            fields: blankFields(tree.timeframe),
-            refs: []
+            fields:            blankFields(tree.timeframe),
+            refs:              []
         });
-        PC.trees.push(tree); renderTrees(); return tree;
+        PC.trees.push(tree);
+        renderTrees();
+        return tree;
     }
 
     function addHeirRoot(treeLocalId) {
@@ -2485,13 +3300,14 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
     // ============================================================
     function pcBuildTreeSnapshot(tree) {
         var t = {
-            timeframe: tree.timeframe || '',
-            roots:     [],
-            drawings:  [],
-            trades:    []
+            timeframe:   tree.timeframe || '',
+            roots:       [],
+            drawings:    [],
+            trades:      [],
+            annotations: []
         };
 
-        (tree.roots || []).forEach(function (root, rIdx) {
+        (tree.roots || []).forEach(function (root) {
             var rootSnap = {
                 local_key:           root.localId,
                 candle_name:         root.fields.candle_name || '',
@@ -2516,12 +3332,12 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 };
                 (ref.reRefPairs || []).forEach(function (p) {
                     refSnap.re_ref_pairs.push({
-                        author:     {
-                            price_level: p.author.fields.price_level || '',
-                            operator:    p.author.fields.operator || ''
+                        author: {
+                            price_level:     p.author.fields.price_level || '',
+                            operator:        p.author.fields.operator || ''
                         },
                         referenced: {
-                            price_level: p.servant.fields.price_level || ''
+                            price_level:     p.servant.fields.price_level || ''
                         }
                     });
                 });
@@ -2564,6 +3380,32 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 snap.target_price_level = f.target_price_level || '';
             }
             t.trades.push(snap);
+        });
+
+        (tree.annotations || []).forEach(function (rule) {
+            var isText = (rule.rule_kind === 'text');
+
+            if (isText) {
+                t.annotations.push({
+                    rule_kind:       'text',
+                    object_kind:     '',
+                    object_anchor:   '',
+                    object_position: '',
+                    text_anchor:     rule.text_anchor   || '',
+                    text_position:   rule.text_position || '',
+                    text_content:    rule.text_content  || ''
+                });
+            } else {
+                t.annotations.push({
+                    rule_kind:       'object',
+                    object_kind:     rule.object_kind     || '',
+                    object_anchor:   rule.object_anchor   || '',
+                    object_position: rule.object_position || '',
+                    text_anchor:     '',
+                    text_position:   '',
+                    text_content:    ''
+                });
+            }
         });
 
         return t;
@@ -2641,18 +3483,24 @@ body.dark-mode .pc-authority-select { background: rgba(155,89,182,0.08); }
                 pcShowError((data && data.message) ? data.message : 'Unknown error while saving tree.');
                 return;
             }
-            PC_TREES_SERVER = data.rows || [];
-            if (data.accountManagement) PC_ACCOUNT_MGMT = data.accountManagement;
-            var oldTrees = PC.trees.slice();
-            hydrateFromServer();
-            PC.trees.forEach(function (nt) {
-                oldTrees.forEach(function (ot) { if (ot.dbTreeId && ot.dbTreeId === nt.dbTreeId) nt.collapsed = ot.collapsed; });
-            });
+
+            // Keep the live local tree state (it is exactly what was just saved).
+            // Do NOT overwrite PC_TREES_SERVER with the flat "rows" array and do NOT
+            // call hydrateFromServer() – that destroys the nested structure and clears
+            // annotations / drawings / trades from the UI.
+            if (data.accountManagement) {
+                PC_ACCOUNT_MGMT = data.accountManagement;
+            }
+            // If the server assigned a new tree_id (new tree case) surface it
+            if (data.tree_id && !tree.dbTreeId) {
+                tree.dbTreeId = data.tree_id;
+            }
+
             renderTrees();
             pcShowSuccess('Tree saved successfully.', 'The selected tree has been saved and will be applied to the chart.');
             dispatchCustom('pc:save', {
                 programmeId: PC.programmeId,
-                trees: PC_TREES_SERVER,
+                trees: PC.trees.map(function (t) { return pcBuildTreeSnapshot(t); }),
                 accountManagement: PC_ACCOUNT_MGMT
             });
         })

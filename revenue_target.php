@@ -1,70 +1,74 @@
 <?php
-    // revenue_target.php
-    session_start();
+// revenue_target.php — sub-account scoped (Daily Revenue Target)
 
-    // Check for logged-in user
-    if (!isset($_SESSION['user_email'])) {
-        header("Location: index.php");
-        exit;
-    }
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (!isset($_SESSION['user_email'])) { header("Location: index.php"); exit; }
+$email = strtolower($_SESSION['user_email']);
+require_once 'usersdb.php';
 
-    $email = strtolower($_SESSION['user_email']);
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (Exception $e) { die("Database connection failed."); }
 
-    // Database credentials
-    require_once 'usersdb.php';
+// ---- Resolve active sub account ----
+$activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
 
-    try {
-        $pdo = new PDO(
-            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-            $user,
-            $pass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-    } catch (Exception $e) {
-        die("Database connection failed.");
-    }
+if ($activeSubAccountId > 0) {
+    $stmt = $pdo->prepare("SELECT id, fullname, dark_mode, sub_account_id FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+    $stmt->execute([$activeSubAccountId, $email]);
+    $rt_userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+} else {
+    $rt_userRow = null;
+}
 
-    // Fetch user (only need id now for the join)
-    $stmt = $pdo->prepare("SELECT id, fullname FROM $tableName WHERE email = ?");
+if (!$rt_userRow) {
+    $stmt = $pdo->prepare("SELECT id, fullname, dark_mode, sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
     $stmt->execute([$email]);
-    $userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    $rt_userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+}
 
-    if (!$userRow) {
-        header("Location: index.php");
-        exit;
-    }
+if (!$rt_userRow) {
+    $stmt = $pdo->prepare("SELECT id, fullname, dark_mode, sub_account_id FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
+    $stmt->execute([$email]);
+    $rt_userRow = $stmt->fetch(PDO::FETCH_ASSOC);
+}
 
-    $userid   = (int)$userRow['id'];
-    $fullName = $userRow['fullname'] ?? 'User';
+if (!$rt_userRow) { header("Location: index.php"); exit; }
 
-    // =====================================================================
-    // REUSABLE PAYLOAD BUILDER — used by both the initial render and AJAX
-    // =====================================================================
-    function buildRevenueTargetPayload($pdo, $userid) {
-        $dailyTargetMet = [];
+$rt_userid = (int)$rt_userRow['id'];
+$rt_subAccountId = (int)($rt_userRow['sub_account_id'] ?? $rt_userid);
+$_SESSION['active_sub_account_id'] = $rt_subAccountId;
 
+$rt_fullName = $rt_userRow['fullname'] ?? 'User';
+$rt_darkMode = !empty($rt_userRow['dark_mode']);
+$rt_darkModeClass = $rt_darkMode ? 'dark-mode' : '';
+
+// =====================================================================
+// PAYLOAD BUILDER — SCOPED to sub-account
+// =====================================================================
+if (!function_exists('rt_buildRevenueTargetPayload')) {
+    function rt_buildRevenueTargetPayload($pdo, $subAccountId, $userId) {
+        $out = [];
         try {
+            // daily_target_revenue is scoped by userid AND sub_account_id
+            // (falls back to NULL for legacy rows)
             $stmt = $pdo->prepare("
                 SELECT week, day, date, daily_target, status,
                        profit_allocated, remaining_needed
                 FROM daily_target_revenue
                 WHERE userid = ?
+                  AND (sub_account_id = ? OR sub_account_id IS NULL)
                 ORDER BY
                     CAST(REPLACE(week, 'week_', '') AS UNSIGNED) ASC,
                     FIELD(day, 'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday') ASC
             ");
-            $stmt->execute([$userid]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            foreach ($rows as $r) {
-                $wk  = $r['week'];
+            $stmt->execute([$userId, $subAccountId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $wk = $r['week'];
                 $day = $r['day'];
-
-                if (!isset($dailyTargetMet[$wk])) {
-                    $dailyTargetMet[$wk] = [];
-                }
-
-                $dailyTargetMet[$wk][$day] = [
+                if (!isset($out[$wk])) $out[$wk] = [];
+                $out[$wk][$day] = [
                     'date'             => $r['date'],
                     'daily_target'     => $r['daily_target'],
                     'status'           => $r['status'],
@@ -73,141 +77,156 @@
                     'is_listed'        => true,
                 ];
             }
-        } catch (PDOException $e) {
-            $dailyTargetMet = [];
-        }
+        } catch (PDOException $e) { $out = []; }
+        return $out;
+    }
+}
 
-        return $dailyTargetMet;
+// =====================================================================
+// AJAX: LIVE DAILY REVENUE TARGET (JSON)
+// =====================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST'
+    && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
+    && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+
+    if (!isset($_SESSION['user_email'])) {
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        exit;
     }
 
-    // =====================================================================
-    // AJAX: LIVE DAILY REVENUE TARGET (JSON)
-    //
-    // Runs BEFORE any HTML is emitted, discards any buffer app.php started,
-    // and returns pure JSON. This is what the 1-second poll hits.
-    // =====================================================================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST'
-        && isset($_SERVER['HTTP_X_REQUESTED_WITH'])
-        && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+    try {
+        // Re-resolve the active sub-account on each request
+        $liveSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
+        $liveUserRow = null;
 
-        while (ob_get_level() > 0) { ob_end_clean(); }
-
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-
-        if (!isset($_SESSION['user_email'])) {
-            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        if ($liveSubId > 0) {
+            $stmt = $pdo->prepare("SELECT id, sub_account_id FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+            $stmt->execute([$liveSubId, $email]);
+            $liveUserRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$liveUserRow) {
+            $stmt = $pdo->prepare("SELECT id, sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+            $stmt->execute([$email]);
+            $liveUserRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$liveUserRow) {
+            echo json_encode(['success' => false, 'error' => 'User not found']);
             exit;
         }
 
-        try {
-            // Re-fetch the user id (it can't change, but keeps the pattern consistent)
-            $stmt = $pdo->prepare("SELECT id FROM $tableName WHERE email = ?");
-            $stmt->execute([$email]);
-            $liveRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $liveUserId       = (int)$liveUserRow['id'];
+        $liveSubAccountId = (int)($liveUserRow['sub_account_id'] ?? $liveUserId);
 
-            if (!$liveRow) {
-                echo json_encode(['success' => false, 'error' => 'User not found']);
-                exit;
-            }
+        $dailyTargetMet = rt_buildRevenueTargetPayload($pdo, $liveSubAccountId, $liveUserId);
 
-            $liveUserId = (int)$liveRow['id'];
+        $weekKeys = array_keys($dailyTargetMet);
+        usort($weekKeys, function ($a, $b) {
+            return (int)str_replace('week_', '', $a) - (int)str_replace('week_', '', $b);
+        });
 
-            $dailyTargetMet = buildRevenueTargetPayload($pdo, $liveUserId);
-
-            // Sort week keys numerically for deterministic rendering
-            $weekKeys = array_keys($dailyTargetMet);
-            usort($weekKeys, function($a, $b) {
-                $numA = (int)str_replace('week_', '', $a);
-                $numB = (int)str_replace('week_', '', $b);
-                return $numA - $numB;
-            });
-
-            // Build a clean rows array (in sorted week order) to send to the client
-            $orderedWeeks = [];
-            foreach ($weekKeys as $wk) {
-                $weekData = $dailyTargetMet[$wk];
-                if (!is_array($weekData)) continue;
-
-                $days = [];
-                foreach ($weekData as $day => $dayData) {
-                    $days[] = [
-                        'day'              => $day,
-                        'date'             => $dayData['date'] ?? '',
-                        'daily_target'     => (float)($dayData['daily_target'] ?? 0),
-                        'status'           => $dayData['status'] ?? '',
-                        'profit_allocated' => (float)($dayData['profit_allocated'] ?? 0),
-                        'remaining_needed' => (float)($dayData['remaining_needed'] ?? 0),
-                        'is_listed'        => !empty($dayData['is_listed']),
-                    ];
-                }
-
-                $orderedWeeks[] = [
-                    'week_key'   => $wk,
-                    'week_label' => str_replace('_', ' ', $wk),
-                    'days'       => $days,
+        $orderedWeeks = [];
+        foreach ($weekKeys as $wk) {
+            $weekData = $dailyTargetMet[$wk];
+            if (!is_array($weekData)) continue;
+            $days = [];
+            foreach ($weekData as $day => $dayData) {
+                $days[] = [
+                    'day'              => $day,
+                    'date'             => $dayData['date'] ?? '',
+                    'daily_target'     => (float)($dayData['daily_target'] ?? 0),
+                    'status'           => $dayData['status'] ?? '',
+                    'profit_allocated' => (float)($dayData['profit_allocated'] ?? 0),
+                    'remaining_needed' => (float)($dayData['remaining_needed'] ?? 0),
+                    'is_listed'        => !empty($dayData['is_listed']),
                 ];
             }
+            $orderedWeeks[] = [
+                'week_key'   => $wk,
+                'week_label' => str_replace('_', ' ', $wk),
+                'days'       => $days,
+            ];
+        }
 
-            echo json_encode([
-                'success'   => true,
-                'has_rows'  => !empty($orderedWeeks),
-                'weeks'     => $orderedWeeks,
-                'count'     => count($orderedWeeks),
-            ]);
-            exit;
+        echo json_encode([
+            'success'  => true,
+            'has_rows' => !empty($orderedWeeks),
+            'weeks'    => $orderedWeeks,
+            'count'    => count($orderedWeeks),
+        ]);
+        exit;
 
-        } catch (Exception $e) {
-            echo json_encode([
-                'success' => false,
-                'error'   => 'Failed to build revenue target payload.'
-            ]);
-            exit;
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => 'Failed to build revenue target payload.']);
+        exit;
+    }
+}
+
+// =====================================================================
+// INITIAL PAGE RENDER
+// =====================================================================
+$rt_dailyTargetMet = rt_buildRevenueTargetPayload($pdo, $rt_subAccountId, $rt_userid);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+<link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
+<title>HarvHub — Daily Revenue</title>
+<?php include 'style.php'; ?>
+<style>
+    body {
+        padding-top: calc(56px + env(safe-area-inset-top, 0px)) !important;
+        padding-bottom: 60px;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        transition: background 0.3s, color 0.3s;
+    }
+    @media (max-width: 480px) {
+        body {
+            padding-top: calc(52px + env(safe-area-inset-top, 0px)) !important;
         }
     }
+</style>
+</head>
+<body class="<?= htmlspecialchars($rt_darkModeClass) ?>">
 
-    // =====================================================================
-    // INITIAL PAGE RENDER (non-AJAX)
-    // =====================================================================
-    $dailyTargetMet = buildRevenueTargetPayload($pdo, $userid);
-?>
 <div class="trade-container">
-    <!-- Daily Target Tab -->
     <div id="tab-daily-target" class="tab-content active">
-        <div class="trades-header">
-            <h1 style="margin-left: 10px">Daily Revenue</h1>
-        </div>
 
-        <!-- LIVE STATE BLOCK — replaced wholesale on every poll -->
         <div id="dailyRevenueStateBlock">
-            <?php if (!empty($dailyTargetMet) && is_array($dailyTargetMet)): ?>
+            <?php if (!empty($rt_dailyTargetMet) && is_array($rt_dailyTargetMet)): ?>
                 <div class="daily-target-grid">
                     <?php
-                    $weekKeys = array_keys($dailyTargetMet);
-                    usort($weekKeys, function($a, $b) {
-                        $numA = (int)str_replace('week_', '', $a);
-                        $numB = (int)str_replace('week_', '', $b);
-                        return $numA - $numB;
+                    $rt_weekKeys = array_keys($rt_dailyTargetMet);
+                    usort($rt_weekKeys, function ($a, $b) {
+                        return (int)str_replace('week_', '', $a) - (int)str_replace('week_', '', $b);
                     });
-
-                    foreach ($weekKeys as $weekKey):
-                        $weekData = $dailyTargetMet[$weekKey];
-                        if (!is_array($weekData)) continue;
+                    foreach ($rt_weekKeys as $rt_weekKey):
+                        $rt_weekData = $rt_dailyTargetMet[$rt_weekKey];
+                        if (!is_array($rt_weekData)) continue;
                     ?>
                         <div class="week-section">
                             <div class="week-header">
-                                <span class="week-label"><?= htmlspecialchars(str_replace('_', ' ', $weekKey)) ?></span>
+                                <span class="week-label"><?= htmlspecialchars(str_replace('_', ' ', $rt_weekKey)) ?></span>
                             </div>
                             <div class="daily-target-items">
-                                <?php foreach ($weekData as $day => $dayData): ?>
-                                    <div class="daily-target-item <?= htmlspecialchars($dayData['status'] ?? '') ?> <?= isset($dayData['is_listed']) && !$dayData['is_listed'] ? 'not-listed' : '' ?>">
-                                        <div class="day-label"><?= htmlspecialchars($day) ?></div>
-                                        <?php if (!empty($dayData['date'])): ?>
-                                            <div class="day-date"><?= htmlspecialchars($dayData['date']) ?></div>
+                                <?php foreach ($rt_weekData as $rt_day => $rt_dayData): ?>
+                                    <div class="daily-target-item <?= htmlspecialchars($rt_dayData['status'] ?? '') ?> <?= isset($rt_dayData['is_listed']) && !$rt_dayData['is_listed'] ? 'not-listed' : '' ?>">
+                                        <div class="day-label"><?= htmlspecialchars($rt_day) ?></div>
+                                        <?php if (!empty($rt_dayData['date'])): ?>
+                                            <div class="day-date"><?= htmlspecialchars($rt_dayData['date']) ?></div>
                                         <?php endif; ?>
                                         <div class="target-amounts">
-                                            <div><span class="allocated">Allocated:</span> $<?= number_format((float)($dayData['profit_allocated'] ?? 0), 2) ?></div>
+                                            <div><span class="allocated">Allocated:</span> $<?= number_format((float)($rt_dayData['profit_allocated'] ?? 0), 2) ?></div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -218,19 +237,15 @@
             <?php else: ?>
                 <div class="empty-state">
                     <div class="empty-text">No Daily Target Data</div>
-                    <div class="empty-sub">Your daily target data will appear here once available.</div>
+                    <div class="empty-sub">This account's daily target data will appear here once available.</div>
                 </div>
             <?php endif; ?>
         </div>
     </div>
-    <div style="margin-bottom:120px"></div>
+    
 </div>
 
 <script>
-    // =====================================================================
-    // LIVE POLL — same pattern as mydashboard.php / revenue_history.php
-    // Target is always revenue_target.php, even when embedded in app.php.
-    // =====================================================================
     var REVENUE_TARGET_POLL_URL = (function() {
         try {
             var base = document.baseURI || window.location.href;
@@ -247,7 +262,6 @@
     var currentInterval = 1000;
     var pollRunning     = true;
 
-    // ---- helpers ----
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text == null ? '' : String(text);
@@ -260,7 +274,6 @@
         return n.toFixed(2);
     }
 
-    // ---- Build a single day cell ----
     function buildDayCellHtml(day) {
         var cls = '';
         if (day.status) cls += ' ' + escapeHtml(day.status);
@@ -279,18 +292,16 @@
         return html;
     }
 
-    // ---- Build the full grid from the JSON payload ----
     function buildDailyTargetHtml(data) {
         if (!data.has_rows || !data.weeks || data.weeks.length === 0) {
             return '' +
                 '<div class="empty-state">' +
                 '  <div class="empty-text">No Daily Target Data</div>' +
-                '  <div class="empty-sub">Your daily target data will appear here once available.</div>' +
+                '  <div class="empty-sub">This account\'s daily target data will appear here once available.</div>' +
                 '</div>';
         }
 
         var html = '<div class="daily-target-grid">';
-
         for (var i = 0; i < data.weeks.length; i++) {
             var wk = data.weeks[i];
             html += '<div class="week-section">';
@@ -298,34 +309,25 @@
             html += '    <span class="week-label">' + escapeHtml(wk.week_label) + '</span>';
             html += '  </div>';
             html += '  <div class="daily-target-items">';
-
             for (var j = 0; j < wk.days.length; j++) {
                 html += buildDayCellHtml(wk.days[j]);
             }
-
             html += '  </div>';
             html += '</div>';
         }
-
         html += '</div>';
         return html;
     }
 
-    // ---- Apply the payload to the DOM ----
     function refreshDailyRevenueUI(data) {
         if (!data || !data.success) return;
-
         var block = document.getElementById('dailyRevenueStateBlock');
-        if (block) {
-            block.innerHTML = buildDailyTargetHtml(data);
-        }
+        if (block) block.innerHTML = buildDailyTargetHtml(data);
     }
 
-    // ---- Poll the server ----
     async function fetchRevenueTarget() {
         if (isUpdating) return;
         isUpdating = true;
-
         try {
             var response = await fetch(REVENUE_TARGET_POLL_URL, {
                 method: 'POST',
@@ -337,17 +339,10 @@
                 credentials: 'same-origin',
                 cache: 'no-store'
             });
-
             if (!response.ok) throw new Error('HTTP ' + response.status);
-
             var raw = await response.text();
             var data;
-            try {
-                data = JSON.parse(raw);
-            } catch (parseErr) {
-                throw new Error('Non-JSON response');
-            }
-
+            try { data = JSON.parse(raw); } catch (e) { throw new Error('Non-JSON'); }
             if (data && data.success) {
                 retryCount = 0;
                 currentInterval = 1000;
@@ -360,12 +355,10 @@
         } finally {
             isUpdating = false;
         }
-
         if (retryCount === 0)      currentInterval = 1000;
         else if (retryCount === 1) currentInterval = 3000;
         else if (retryCount === 2) currentInterval = 5000;
         else if (retryCount >= MAX_RETRIES) currentInterval = 15000;
-
         scheduleNextPoll();
     }
 
@@ -387,11 +380,8 @@
     }
 
     document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopLiveUpdates();
-        } else {
-            startLiveUpdates();
-        }
+        if (document.hidden) stopLiveUpdates();
+        else startLiveUpdates();
     });
 
     window.addEventListener('focus', function() {
@@ -400,4 +390,30 @@
 
     startLiveUpdates();
     window.addEventListener('beforeunload', function() { stopLiveUpdates(); });
+
+    // ---- Theme + body-class bridge ----
+    (function () {
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                document.body.classList.toggle('dark-mode', !!e.data.dark);
+            }
+        });
+        var WATCHED = ['page-connect_investor_broker', 'profile-page-open', 'page-revenue_history', 'page-profit_split'];
+        function broadcast() {
+            var add = WATCHED.filter(function (c) { return document.body.classList.contains(c); });
+            try {
+                window.parent.postMessage({
+                    type: 'bodyClass',
+                    add: add,
+                    remove: WATCHED.filter(function (c) { return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
+        }
+        new MutationObserver(broadcast).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        broadcast();
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
 </script>
+</body>
+</html>

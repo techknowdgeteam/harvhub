@@ -119,7 +119,9 @@ try {
                    target, target_price_level,
                    authority_source_id, authority_source_role,
                    root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at
+                   root_ref_count, resolved_root_id, triggered_at,
+                   object_kind, object_anchor, object_position,
+                   text_anchor, text_position, text_content
             FROM programme_configuration
             WHERE userid = ? AND programmeid = ?
             ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
@@ -173,6 +175,12 @@ try {
                 'root_ref_count'           => (int)$r['root_ref_count'],
                 'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
                 'triggered_at'             => $r['triggered_at'],
+                'object_kind'              => $r['object_kind'],
+                'object_anchor'            => $r['object_anchor'],
+                'object_position'          => $r['object_position'],
+                'text_anchor'              => $r['text_anchor'],
+                'text_position'            => $r['text_position'],
+                'text_content'             => $r['text_content'],
             ];
 
             if ($row['row_role'] === 'root') {
@@ -359,6 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_recent'
 }
 
 // ==================== AJAX: PERSIST MATCHES ====================
+// ==================== AJAX: PERSIST MATCHES ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
     header('Content-Type: application/json');
 
@@ -428,6 +437,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                      target, target_price_level,
                      entry_price, exit_price, target_price,
                      resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
+                     entry_trigger_idx, entry_trigger_candle_time,
+                     entry_trigger_candle_open_time, entry_trigger_candle_close_time,
+                     tp_hit_idx, tp_hit_candle_time,
+                     tp_candle_open_time, tp_candle_close_time,
+                     sl_hit_idx, sl_hit_candle_time,
+                     sl_candle_open_time, sl_candle_close_time,
                      outcome_status, outcome_candle_time, outcome_price,
                      is_foundation, evaluation_priority, status,
                      triggered_at)
@@ -443,6 +458,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                         ?, ?, 
                         ?, ?, ?, 
                         ?, ?, ?, ?, ?, 
+                        ?, ?, 
+                        ?, ?, 
+                        ?, ?, 
+                        ?, ?, 
+                        ?, ?, 
                         ?, ?, ?, 
                         ?, ?, ?, 
                         ?, ?, ?)
@@ -519,6 +539,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
                         $m['resolved_reward']    ?? null,
                         $m['resolved_ratio']     ?? null,
 
+                        isset($m['entry_trigger_idx']) ? (int)$m['entry_trigger_idx'] : null,
+                        $m['entry_trigger_candle_time'] ?? null,
+                        $m['entry_trigger_candle_open_time']  ?? null,
+                        $m['entry_trigger_candle_close_time'] ?? null,
+
+                        isset($m['tp_hit_idx']) ? (int)$m['tp_hit_idx'] : null,
+                        $m['tp_hit_candle_time'] ?? null,
+                        $m['tp_candle_open_time']  ?? null,
+                        $m['tp_candle_close_time'] ?? null,
+
+                        isset($m['sl_hit_idx']) ? (int)$m['sl_hit_idx'] : null,
+                        $m['sl_hit_candle_time'] ?? null,
+                        $m['sl_candle_open_time']  ?? null,
+                        $m['sl_candle_close_time'] ?? null,
+
                         $m['outcome_status']      ?? null,
                         $m['outcome_candle_time'] ?? null,
                         $m['outcome_price']       ?? null,
@@ -551,6 +586,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
 }
 
 // ==================== AJAX: FETCH PERSISTED MATCHES ====================
+// ==================== AJAX: FETCH PERSISTED MATCHES ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_matches'])) {
     header('Content-Type: application/json');
 
@@ -580,6 +616,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                    target, target_price_level,
                    entry_price, exit_price, target_price,
                    resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
+                   entry_trigger_idx, entry_trigger_candle_time,
+                   entry_trigger_candle_open_time, entry_trigger_candle_close_time,
+                   tp_hit_idx, tp_hit_candle_time,
+                   tp_candle_open_time, tp_candle_close_time,
+                   sl_hit_idx, sl_hit_candle_time,
+                   sl_candle_open_time, sl_candle_close_time,
                    outcome_status, outcome_candle_time, outcome_price,
                    is_foundation, evaluation_priority, status,
                    triggered_at, created_at
@@ -647,6 +689,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_match
                 'resolved_risk'         => $r['resolved_risk']    !== null ? (float)$r['resolved_risk']    : null,
                 'resolved_reward'       => $r['resolved_reward']  !== null ? (float)$r['resolved_reward']  : null,
                 'resolved_ratio'        => $r['resolved_ratio']   !== null ? (float)$r['resolved_ratio']   : null,
+
+                'entry_trigger_idx'                    => $r['entry_trigger_idx'] !== null ? (int)$r['entry_trigger_idx'] : null,
+                'entry_trigger_candle_time'            => $r['entry_trigger_candle_time'],
+                'entry_trigger_candle_open_time'       => $r['entry_trigger_candle_open_time'],
+                'entry_trigger_candle_close_time'      => $r['entry_trigger_candle_close_time'],
+
+                'tp_hit_idx'                           => $r['tp_hit_idx'] !== null ? (int)$r['tp_hit_idx'] : null,
+                'tp_hit_candle_time'                   => $r['tp_hit_candle_time'],
+                'tp_candle_open_time'                  => $r['tp_candle_open_time'],
+                'tp_candle_close_time'                 => $r['tp_candle_close_time'],
+
+                'sl_hit_idx'                           => $r['sl_hit_idx'] !== null ? (int)$r['sl_hit_idx'] : null,
+                'sl_hit_candle_time'                   => $r['sl_hit_candle_time'],
+                'sl_candle_open_time'                  => $r['sl_candle_open_time'],
+                'sl_candle_close_time'                 => $r['sl_candle_close_time'],
+
                 'outcome_status'        => $r['outcome_status'],
                 'outcome_candle_time'   => $r['outcome_candle_time'],
                 'outcome_price'         => $r['outcome_price'] !== null ? (float)$r['outcome_price'] : null,
@@ -1361,6 +1419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     <?php include 'programme_configuration.php'; ?>
 
 <script>
+    // build:<?= time() ?>
     // ==================== SERVER DATA ====================
     var PT_ALL_SYMBOLS       = <?= json_encode(array_values($selectedSymbols)) ?>;
     var PT_ALL_TIMEFRAMES    = <?= json_encode(array_values($selectedTimeframes)) ?>;
@@ -2413,10 +2472,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     r._entry_triggered            = false;
                     r._entry_trigger_idx          = null;
                     r._entry_trigger_candle_time  = null;
+                    r._entry_trigger_candle_open_time  = null;
+                    r._entry_trigger_candle_close_time = null;
                     r._tp_hit_idx                 = null;
                     r._tp_hit_candle_time         = null;
+                    r._tp_candle_open_time        = null;
+                    r._tp_candle_close_time       = null;
                     r._sl_hit_idx                 = null;
                     r._sl_hit_candle_time         = null;
+                    r._sl_candle_open_time        = null;
+                    r._sl_candle_close_time       = null;
                     return;
                 }
 
@@ -2433,7 +2498,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     if (!c) continue;
 
                     if (!entryTriggered) {
-                        // Target before entry fill → missed
                         if (targetPrice != null) {
                             var tgtPre = (direction > 0) ? (c.high >= targetPrice) : (c.low <= targetPrice);
                             if (tgtPre) {
@@ -2446,7 +2510,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         if (entryPrice != null && ptEntryIsTriggeredOnCandle(orderType, c, entryPrice)) {
                             entryTriggered = true;
                             entryTriggerIdx = i;
-                            // same bar may also resolve TP/SL
                         } else {
                             continue;
                         }
@@ -2471,7 +2534,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 r.outcome_price        = hitPrice;
                 r._entry_triggered     = entryTriggered;
 
-                // Resolve trigger / hit candle indices on the projected TF.
                 var trigIdx = null;
                 if (!needsFill) {
                     trigIdx = entryIdx;
@@ -2496,10 +2558,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
                 r._entry_trigger_idx          = trigIdx;
                 r._entry_trigger_candle_time  = trigCandle ? trigCandle.time : null;
+                r._entry_trigger_candle_open_time  = trigCandle ? trigCandle.open_time  : null;
+                r._entry_trigger_candle_close_time = trigCandle ? trigCandle.close_time : null;
+
                 r._tp_hit_idx                 = tpIdx;
                 r._tp_hit_candle_time         = tpCandle ? tpCandle.time : null;
+                r._tp_candle_open_time        = tpCandle ? tpCandle.open_time  : null;
+                r._tp_candle_close_time       = tpCandle ? tpCandle.close_time : null;
+
                 r._sl_hit_idx                 = slIdx;
                 r._sl_hit_candle_time         = slCandle ? slCandle.time : null;
+                r._sl_candle_open_time        = slCandle ? slCandle.open_time  : null;
+                r._sl_candle_close_time       = slCandle ? slCandle.close_time : null;
 
                 r._projected_outcome   = true;
             });
@@ -3370,6 +3440,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     // SCAN — records trigger / TP / SL candle indices on every
     // matched_trade row so downstream draw code never re-derives them.
     // ============================================================
+    // ============================================================
+    // SCAN
+    // ============================================================
+    // ============================================================
+    // SCAN — records trigger / TP / SL candle indices on every
+    // matched_trade row so downstream draw code never re-derives them.
+    // Also records the annotation rule fields on every matched row so
+    // the annotation renderer can resolve them later.
+    // ============================================================
     function ptScanTrades() {
         var out = [];
         if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
@@ -3428,6 +3507,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         operator:          root.operator,
                         is_foundation:     mi === 0 ? 1 : 0,
                         evaluation_priority: mi + 1,
+                        object_kind:       root.object_kind     || null,
+                        object_anchor:     root.object_anchor   || null,
+                        object_position:   root.object_position || null,
+                        text_anchor:       root.text_anchor     || null,
+                        text_position:     root.text_position   || null,
+                        text_content:      root.text_content    || null,
                         status:            'matched'
                     });
 
@@ -3463,6 +3548,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             candle_search:     ref.candle_search,
                             operator:          root.operator,
                             evaluation_priority: mi + 1,
+                            object_kind:       ref.object_kind     || null,
+                            object_anchor:     ref.object_anchor   || null,
+                            object_position:   ref.object_position || null,
+                            text_anchor:       ref.text_anchor     || null,
+                            text_position:     ref.text_position   || null,
+                            text_content:      ref.text_content    || null,
                             status:            'matched'
                         });
 
@@ -3494,6 +3585,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     a.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
+                                object_kind:       a.object_kind     || null,
+                                object_anchor:     a.object_anchor   || null,
+                                object_position:   a.object_position || null,
+                                text_anchor:       a.text_anchor     || null,
+                                text_position:     a.text_position   || null,
+                                text_content:      a.text_content    || null,
                                 status:            'matched'
                             });
                             matchedFlat.push({
@@ -3520,6 +3617,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                 candle_search:     b.candle_search,
                                 operator:          a.operator,
                                 evaluation_priority: mi + 1,
+                                object_kind:       b.object_kind     || null,
+                                object_anchor:     b.object_anchor   || null,
+                                object_position:   b.object_position || null,
+                                text_anchor:       b.text_anchor     || null,
+                                text_position:     b.text_position   || null,
+                                text_content:      b.text_content    || null,
                                 status:            'matched'
                             });
                         });
@@ -3557,6 +3660,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         draw_to_price_level:   dr.draw_to_price_level,
                         drawing_color:         dr.drawing_color,
                         evaluation_priority:   1,
+                        object_kind:           dr.object_kind     || null,
+                        object_anchor:         dr.object_anchor   || null,
+                        object_position:       dr.object_position || null,
+                        text_anchor:           dr.text_anchor     || null,
+                        text_position:         dr.text_position   || null,
+                        text_content:          dr.text_content    || null,
                         status:                'matched'
                     });
                 });
@@ -3635,7 +3744,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                         ? targetRR.price
                                         : (target && target.price != null ? target.price : null);
 
-                    // Recorded trigger / hit candle indices for this trade.
                     var entryTriggerIdx = (outcome && outcome.entryTriggerIdx != null)
                         ? outcome.entryTriggerIdx
                         : entry.idx;
@@ -3655,6 +3763,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                             slHitCandle = PT_CANDLES[slHitIdx] || null;
                         }
                     }
+
+                    var exitCandle = exit && exit.candle ? exit.candle : null;
 
                     var matchedTradeRow = {
                         row_role:          'matched_trade',
@@ -3699,13 +3809,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                         resolved_reward:   targetRR ? targetRR.reward : null,
                         resolved_ratio:    targetRR ? targetRR.ratio  : null,
 
-                        // Persisted trigger / hit markers.
                         entry_trigger_idx:          entryTriggerIdx,
                         entry_trigger_candle_time:  entryTriggerCandle ? entryTriggerCandle.time : null,
+                        entry_trigger_candle_open_time:  entryTriggerCandle ? entryTriggerCandle.open_time  : null,
+                        entry_trigger_candle_close_time: entryTriggerCandle ? entryTriggerCandle.close_time : null,
+
                         tp_hit_idx:                 tpHitIdx,
                         tp_hit_candle_time:         tpHitCandle ? tpHitCandle.time : null,
+                        tp_candle_open_time:        tpHitCandle ? tpHitCandle.open_time  : null,
+                        tp_candle_close_time:       tpHitCandle ? tpHitCandle.close_time : null,
+
                         sl_hit_idx:                 slHitIdx,
                         sl_hit_candle_time:         slHitCandle ? slHitCandle.time : null,
+                        sl_candle_open_time:        slHitCandle ? slHitCandle.open_time  : null,
+                        sl_candle_close_time:       slHitCandle ? slHitCandle.close_time : null,
+
+                        object_kind:       trade.object_kind     || null,
+                        object_anchor:     trade.object_anchor   || null,
+                        object_position:   trade.object_position || null,
+                        text_anchor:       trade.text_anchor     || null,
+                        text_position:     trade.text_position   || null,
+                        text_content:      trade.text_content    || null,
 
                         outcome_status:    outcome.status,
                         outcome_candle_time: outcome.candle ? outcome.candle.time : null,
@@ -3716,6 +3840,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                                             : outcome.status === 'missed' ? 'missed_entry'
                                             : 'pending'
                     };
+
+                    if (exitCandle) {
+                        matchedTradeRow.exit_candle_open_time  = exitCandle.open_time  || null;
+                        matchedTradeRow.exit_candle_close_time = exitCandle.close_time || null;
+                    }
+
+                    if (target && target.candle) {
+                        matchedTradeRow.target_candle_open_time  = target.candle.open_time  || null;
+                        matchedTradeRow.target_candle_close_time = target.candle.close_time || null;
+                    }
+
                     matchedFlat.push(matchedTradeRow);
 
                     hits.push({
@@ -3769,6 +3904,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var exitPrice   = hit.exit ? ptResolvedPrice(hit.exit) : null;
         var targetPrice = hit.target ? ptResolvedPrice(hit.target) : null;
 
+        var row = hit.matchedTradeRow || {};
+
+        // Resolve the trigger, TP and SL candles for open/close time display.
+        var entryTriggerCandle = null;
+        if (row.entry_trigger_idx != null && PT_CANDLES[row.entry_trigger_idx]) {
+            entryTriggerCandle = PT_CANDLES[row.entry_trigger_idx];
+        } else if (hit.outcome && hit.outcome.entryTriggerIdx != null && PT_CANDLES[hit.outcome.entryTriggerIdx]) {
+            entryTriggerCandle = PT_CANDLES[hit.outcome.entryTriggerIdx];
+        } else {
+            entryTriggerCandle = hit.entry ? hit.entry.candle : null;
+        }
+
+        var tpHitCandle = null;
+        if (row.tp_hit_idx != null && PT_CANDLES[row.tp_hit_idx]) {
+            tpHitCandle = PT_CANDLES[row.tp_hit_idx];
+        } else if (hit.outcome && hit.outcome.status === 'profit' &&
+                   hit.outcome.candleIdx != null && PT_CANDLES[hit.outcome.candleIdx]) {
+            tpHitCandle = PT_CANDLES[hit.outcome.candleIdx];
+        }
+
+        var slHitCandle = null;
+        if (row.sl_hit_idx != null && PT_CANDLES[row.sl_hit_idx]) {
+            slHitCandle = PT_CANDLES[row.sl_hit_idx];
+        } else if (hit.outcome && hit.outcome.status === 'stop' &&
+                   hit.outcome.candleIdx != null && PT_CANDLES[hit.outcome.candleIdx]) {
+            slHitCandle = PT_CANDLES[hit.outcome.candleIdx];
+        }
+
+        var exitCandle   = (hit.exit && hit.exit.candle) ? hit.exit.candle : null;
+        var targetCandle = (hit.target && hit.target.candle) ? hit.target.candle : null;
+
         var html = '';
         html += '<div class="pt-trade-card">';
         html += '  <div class="pt-trade-card-head">';
@@ -3782,9 +3948,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         html += '    <div><span class="k">Entry Lvl ' + ptEscapeHtml(entryLvl || '—') + ':</span> '
              +        '<span class="v">' + ptFormatPrice(entryPrice) + '</span></div>';
 
+        if (entryTriggerCandle) {
+            html += '    <div><span class="k">Entry Trigger candle open time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(entryTriggerCandle.open_time || '—')) + '</span></div>';
+            html += '    <div><span class="k">Entry Trigger candle close time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(entryTriggerCandle.close_time || '—')) + '</span></div>';
+        }
+
         html += '    <div><span class="k">Exit</span> <span class="v">' + ptEscapeHtml(hit.exit ? hit.exit.name : '—') + '</span></div>';
         html += '    <div><span class="k">Exit Lvl ' + ptEscapeHtml(exitLvl || '—') + ':</span> '
              +        '<span class="v">' + (exitPrice == null ? '—' : ptFormatPrice(exitPrice)) + '</span></div>';
+
+        if (exitCandle) {
+            html += '    <div><span class="k">Exit candle Open time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(exitCandle.open_time || '—')) + '</span></div>';
+            html += '    <div><span class="k">Exit candle close time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(exitCandle.close_time || '—')) + '</span></div>';
+        }
 
         var targetLabel;
         var isRR = (trade.target_rr_mode === 'fixed_risk_reward' ||
@@ -3838,6 +4018,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                          +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
                 }
             }
+        }
+
+        // Take profit candle open/close times.
+        if (tpHitCandle) {
+            html += '    <div><span class="k">Take profit candle open time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(tpHitCandle.open_time || '—')) + '</span></div>';
+            html += '    <div><span class="k">Take profit candle close time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(tpHitCandle.close_time || '—')) + '</span></div>';
+        } else if (targetCandle && hit.outcome && hit.outcome.status === 'profit') {
+            html += '    <div><span class="k">Take profit candle open time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(targetCandle.open_time || '—')) + '</span></div>';
+            html += '    <div><span class="k">Take profit candle close time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(targetCandle.close_time || '—')) + '</span></div>';
+        }
+
+        // Stoploss candle open/close times.
+        if (slHitCandle) {
+            html += '    <div><span class="k">Stoploss candle open time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(slHitCandle.open_time || '—')) + '</span></div>';
+            html += '    <div><span class="k">Stoploss candle close time:</span> '
+                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(slHitCandle.close_time || '—')) + '</span></div>';
         }
 
         if (hit.outcome) {
@@ -4942,6 +5143,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             });
         }
 
+        // ---- Annotations (object & text) ----
+        ptDrawAnnotations(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
+
         if (PT_LONG_SHORT_ON) {
             ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
             if (PT_PROJECTION_MODES.length) {
@@ -5932,7 +6136,286 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         bar.addEventListener('dblclick', function () { PT_VIEW.priceScale = 1.0; ptScheduleDraw(); });
     }
 
-    // ==================== EXPORTS ====================
+    // ============================================================
+    // ANNOTATION OVERLAY — renders program-configured objects and
+    // texts on the chart, anchored to a specific candle by name.
+    //
+    // Anchor vocabulary (values stored in programme_configuration):
+    //   - any candle name defined in the tree (root / ref / reref)
+    //   - hardcoded apprentice names:
+    //       Entry, Exit, Target,
+    //       Entry Trigger, Stoploss Candle, Take Profit Candle
+    //
+    // The apprentice anchors resolve to whichever candle the matched
+    // trade row recorded for that role on the current chart.
+    // ============================================================
+    function ptCollectAnnotationRules(tree) {
+        var rules = [];
+        if (!tree) return rules;
+
+        function pushRule(ownerRow, ownerName) {
+            if (!ownerRow) return;
+            var hasObject = ownerRow.object_kind && ownerRow.object_kind !== 'none' && ownerRow.object_anchor && ownerRow.object_position;
+            var hasText   = ownerRow.text_anchor && ownerRow.text_position && ownerRow.text_content;
+            if (!hasObject && !hasText) return;
+            rules.push({
+                ownerName:      ownerName || ownerRow.candle_name || '',
+                object_kind:    hasObject ? ownerRow.object_kind     : null,
+                object_anchor:  hasObject ? ownerRow.object_anchor   : null,
+                object_position:hasObject ? ownerRow.object_position : null,
+                text_anchor:    hasText   ? ownerRow.text_anchor     : null,
+                text_position:  hasText   ? ownerRow.text_position   : null,
+                text_content:   hasText   ? ownerRow.text_content    : null
+            });
+        }
+
+        (tree.roots || []).forEach(function (root) {
+            pushRule(root, root.candle_name);
+            (root.root_refs || []).forEach(function (ref) {
+                if (ref.row_role !== 'root_ref') return;
+                pushRule(ref, ref.candle_name);
+                (ref.re_ref_pairs || []).forEach(function (pair) {
+                    if (pair.author)  pushRule(pair.author,  pair.author.candle_name || ref.candle_name);
+                    if (pair.referenced) pushRule(pair.referenced, pair.referenced.candle_name || root.candle_name);
+                });
+            });
+        });
+
+        (tree.drawings || []).forEach(function (dr) {
+            pushRule(dr, dr.candle_name || '');
+        });
+
+        (tree.trades || []).forEach(function (tr) {
+            pushRule(tr, tr.candle_name || '');
+        });
+
+        return rules;
+    }
+
+    function ptResolveAnnotationAnchorTime(anchorName, tradeRow) {
+        if (!anchorName || !tradeRow) return null;
+        switch (anchorName) {
+            case 'Entry':              return tradeRow.open_time || tradeRow.candle_time || null;
+            case 'Exit':               return tradeRow.exit_candle_open_time || null;
+            case 'Target':             return tradeRow.target_candle_open_time || null;
+            case 'Entry Trigger':      return tradeRow.entry_trigger_candle_open_time || tradeRow.entry_trigger_candle_time || null;
+            case 'Stoploss Candle':    return tradeRow.sl_candle_open_time || tradeRow.sl_hit_candle_time || null;
+            case 'Take Profit Candle': return tradeRow.tp_candle_open_time || tradeRow.tp_hit_candle_time || null;
+            default:                   return null;
+        }
+    }
+
+    function ptResolveAnnotationAnchorIndex(anchorName, tradeRow, idxByTime) {
+        if (!idxByTime) return null;
+
+        var direct = ptResolveAnnotationAnchorTime(anchorName, tradeRow);
+        if (direct && idxByTime[direct] != null) return idxByTime[direct];
+
+        return null;
+    }
+
+    function ptDrawObjectShape(kind, cx, cy, size, color) {
+        if (!PT_DRAW_CTX) return;
+        PT_DRAW_CTX.save();
+        PT_DRAW_CTX.fillStyle   = color;
+        PT_DRAW_CTX.strokeStyle = color;
+        PT_DRAW_CTX.lineWidth   = 1.4;
+        PT_DRAW_CTX.setLineDash([]);
+
+        var s = size || 6;
+        switch (kind) {
+            case 'arrow_right':
+                PT_DRAW_CTX.beginPath();
+                PT_DRAW_CTX.moveTo(cx - s, cy);
+                PT_DRAW_CTX.lineTo(cx,     cy);
+                PT_DRAW_CTX.lineTo(cx - s * 0.55, cy - s * 0.6);
+                PT_DRAW_CTX.moveTo(cx,     cy);
+                PT_DRAW_CTX.lineTo(cx - s * 0.55, cy + s * 0.6);
+                PT_DRAW_CTX.stroke();
+                break;
+            case 'arrow_left':
+                PT_DRAW_CTX.beginPath();
+                PT_DRAW_CTX.moveTo(cx + s, cy);
+                PT_DRAW_CTX.lineTo(cx,     cy);
+                PT_DRAW_CTX.lineTo(cx + s * 0.55, cy - s * 0.6);
+                PT_DRAW_CTX.moveTo(cx,     cy);
+                PT_DRAW_CTX.lineTo(cx + s * 0.55, cy + s * 0.6);
+                PT_DRAW_CTX.stroke();
+                break;
+            case 'arrow_up':
+                PT_DRAW_CTX.beginPath();
+                PT_DRAW_CTX.moveTo(cx, cy + s);
+                PT_DRAW_CTX.lineTo(cx, cy);
+                PT_DRAW_CTX.lineTo(cx - s * 0.6, cy + s * 0.55);
+                PT_DRAW_CTX.moveTo(cx, cy);
+                PT_DRAW_CTX.lineTo(cx + s * 0.6, cy + s * 0.55);
+                PT_DRAW_CTX.stroke();
+                break;
+            case 'arrow_down':
+                PT_DRAW_CTX.beginPath();
+                PT_DRAW_CTX.moveTo(cx, cy - s);
+                PT_DRAW_CTX.lineTo(cx, cy);
+                PT_DRAW_CTX.lineTo(cx - s * 0.6, cy - s * 0.55);
+                PT_DRAW_CTX.moveTo(cx, cy);
+                PT_DRAW_CTX.lineTo(cx + s * 0.6, cy - s * 0.55);
+                PT_DRAW_CTX.stroke();
+                break;
+            case 'filled_square':
+                PT_DRAW_CTX.fillRect(cx - s * 0.7, cy - s * 0.7, s * 1.4, s * 1.4);
+                break;
+            case 'filled_star':
+                PT_DRAW_CTX.beginPath();
+                var spikes = 5;
+                var outer  = s * 1.1;
+                var inner  = s * 0.45;
+                var rot    = -Math.PI / 2;
+                for (var i = 0; i < spikes * 2; i++) {
+                    var r = (i % 2 === 0) ? outer : inner;
+                    var a = rot + (Math.PI / spikes) * i;
+                    var px = cx + Math.cos(a) * r;
+                    var py = cy + Math.sin(a) * r;
+                    if (i === 0) PT_DRAW_CTX.moveTo(px, py);
+                    else PT_DRAW_CTX.lineTo(px, py);
+                }
+                PT_DRAW_CTX.closePath();
+                PT_DRAW_CTX.fill();
+                break;
+        }
+
+        PT_DRAW_CTX.restore();
+    }
+
+    function ptComputeAnnotationXY(anchorCandle, position, step, baseX, anchorIdx, pToY, pad) {
+        if (!anchorCandle) return null;
+        var padPx = (pad != null) ? pad : 2;
+        var cx    = baseX + anchorIdx * step + step / 2;
+
+        switch (position) {
+            case 'above':
+                return { x: cx, y: pToY(anchorCandle.high) - padPx };
+            case 'below':
+                return { x: cx, y: pToY(anchorCandle.low)  + padPx };
+            case 'left':
+                return { x: cx - (PT_VIEW.candleWidth / 2) - padPx, y: pToY(anchorCandle.close) };
+            case 'right':
+                return { x: cx + (PT_VIEW.candleWidth / 2) + padPx, y: pToY(anchorCandle.close) };
+            default:
+                return { x: cx, y: pToY(anchorCandle.close) };
+        }
+    }
+
+    function ptDrawAnnotations(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
+        if (!PT_DRAW_CTX) return;
+        if (!PT_CANDLES.length) return;
+        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return;
+
+        var idxByTime = {};
+        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
+
+        var computedMatches = ptScanTrades();
+
+        PT_DRAW_CTX.save();
+        PT_DRAW_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+        PT_DRAW_CTX.textBaseline = 'middle';
+        PT_DRAW_CTX.setLineDash([]);
+
+        var accent = '#e3b341';
+        var textColor = document.body.classList.contains('dark-mode') ? '#f0c95a' : '#b8860b';
+
+        computedMatches.forEach(function (result) {
+            var tree  = result.tree;
+            var rules = ptCollectAnnotationRules(tree);
+            if (!rules.length) return;
+
+            var tradeRow = null;
+            (result._matchedFlat || []).forEach(function (m) {
+                if (m.row_role === 'matched_trade') tradeRow = m;
+            });
+
+            rules.forEach(function (rule) {
+                // ------ Resolve the owner candle index ------
+                var ownerIdx = null;
+                if (rule.ownerName) {
+                    var candidate = null;
+                    (result._matchedFlat || []).forEach(function (m) {
+                        if (m.candle_name === rule.ownerName) {
+                            if (candidate == null) candidate = m;
+                        }
+                    });
+                    if (candidate && candidate.candle_time && idxByTime[candidate.candle_time] != null) {
+                        ownerIdx = idxByTime[candidate.candle_time];
+                    }
+                }
+
+                // Owner not on chart → skip
+                if (ownerIdx == null) return;
+                var ownerCandle = PT_CANDLES[ownerIdx];
+                if (!ownerCandle) return;
+
+                // ------ Object ------
+                if (rule.object_kind && rule.object_anchor && rule.object_position) {
+                    var objAnchorIdx = null;
+                    var objAnchorCandle = null;
+
+                    if (idxByTime[rule.object_anchor] != null) {
+                        // Anchor is a literal candle_time
+                        objAnchorIdx = idxByTime[rule.object_anchor];
+                        objAnchorCandle = PT_CANDLES[objAnchorIdx];
+                    } else if (tradeRow) {
+                        // Anchor is an apprentice name
+                        objAnchorIdx = ptResolveAnnotationAnchorIndex(rule.object_anchor, tradeRow, idxByTime);
+                        if (objAnchorIdx != null) objAnchorCandle = PT_CANDLES[objAnchorIdx];
+                    }
+
+                    if (objAnchorCandle && objAnchorIdx != null) {
+                        var posObj = ptComputeAnnotationXY(
+                            objAnchorCandle, rule.object_position,
+                            step, baseX, objAnchorIdx, pToY, 2
+                        );
+                        if (posObj &&
+                            posObj.y >= chartTop - 40 && posObj.y <= chartBottom + 40) {
+                            ptDrawObjectShape(rule.object_kind, posObj.x, posObj.y, 6, accent);
+                        }
+                    }
+                }
+
+                // ------ Text ------
+                if (rule.text_anchor && rule.text_position && rule.text_content) {
+                    var txtAnchorIdx = null;
+                    var txtAnchorCandle = null;
+
+                    if (idxByTime[rule.text_anchor] != null) {
+                        txtAnchorIdx = idxByTime[rule.text_anchor];
+                        txtAnchorCandle = PT_CANDLES[txtAnchorIdx];
+                    } else if (tradeRow) {
+                        txtAnchorIdx = ptResolveAnnotationAnchorIndex(rule.text_anchor, tradeRow, idxByTime);
+                        if (txtAnchorIdx != null) txtAnchorCandle = PT_CANDLES[txtAnchorIdx];
+                    }
+
+                    if (txtAnchorCandle && txtAnchorIdx != null) {
+                        var posTxt = ptComputeAnnotationXY(
+                            txtAnchorCandle, rule.text_position,
+                            step, baseX, txtAnchorIdx, pToY, 2
+                        );
+                        if (posTxt &&
+                            posTxt.y >= chartTop - 40 && posTxt.y <= chartBottom + 40) {
+
+                            PT_DRAW_CTX.fillStyle = textColor;
+                            PT_DRAW_CTX.textAlign = (rule.text_position === 'left') ? 'right'
+                                                  : (rule.text_position === 'right') ? 'left'
+                                                  : 'center';
+                            PT_DRAW_CTX.fillText(
+                                rule.text_content,
+                                posTxt.x, posTxt.y
+                            );
+                        }
+                    }
+                }
+            });
+        });
+
+        PT_DRAW_CTX.restore();
+    }
     window.ptOpenSymbolModal    = ptOpenSymbolModal;
     window.ptCloseSymbolModal   = ptCloseSymbolModal;
     window.ptFilterSymbolModal  = ptFilterSymbolModal;

@@ -748,7 +748,7 @@ function showSpinner() {
         <!-- Header -->
         <div class="dd-page-header">
             <h1>Developer Dashboard</h1>
-            <p>Configure broker symbols, timeframes and manage your programmes</p>
+            <p>Configure broker symbols, timeframes, manage your programmes and open programme overviews.</p>
         </div>
 
         <!-- Broker status -->
@@ -811,6 +811,11 @@ function showSpinner() {
                                     </button>
                                 <?php endif; ?>
 
+                                <button type="button"
+                                        class="dd-btn-switch"
+                                        onclick="goToProgrammeOverview(<?= $pid ?>)">
+                                    Overview
+                                </button>
                                 <button type="button"
                                         class="dd-btn-switch"
                                         onclick="goToProgrammeTraining(<?= $pid ?>)">
@@ -1722,6 +1727,7 @@ function showSpinner() {
         div.innerHTML =
             '<span class="dd-programme-name">' + escapeHtml(p.program_name) + '</span>' +
             '<button type="button" class="dd-btn-delete" id="deleteBtn-' + pid + '" onclick="deleteProgramme(' + pid + ')">Delete</button>' +
+            '<button type="button" class="dd-btn-switch" onclick="goToProgrammeOverview(' + pid + ')">Overview</button>' +
             '<button type="button" class="dd-btn-switch" onclick="goToProgrammeTraining(' + pid + ')">Switch</button>';
         list.insertBefore(div, list.firstChild);
     }
@@ -2076,9 +2082,15 @@ function showSpinner() {
     }
 
     // ==================== NAVIGATION ====================
-    function goToProgrammeTraining(programmeId) {
-        window.location.href = 'programme_training.php?id=' + encodeURIComponent(programmeId);
-    }
+function goToProgrammeOverview(programmeId) {
+    window.location.href = 'signals_dashboard.php?programme_id=' + encodeURIComponent(programmeId)
+                         + '&v=' + Date.now();
+}
+
+function goToProgrammeTraining(programmeId) {
+    window.location.href = 'programme_training.php?id=' + encodeURIComponent(programmeId)
+                         + '&v=' + Date.now();
+}
 
     // ==================== ESC KEY HANDLERS ====================
     document.addEventListener('keydown', function (e) {
