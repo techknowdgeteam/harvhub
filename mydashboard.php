@@ -1885,6 +1885,24 @@
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <?php include 'style.php'; ?>
+<style>
+    /* Dashboard lives inside the app shell, which already offsets the
+       fixed header. So we override style.php's MENU PAGE STYLES body
+       padding the same way useranalytics.php does — just with 0. */
+    body {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+        padding-bottom: 70px !important;
+        background: var(--bg);
+        color: var(--text);
+        transition: background 0.3s, color 0.3s;
+    }
+    @media (max-width: 480px) {
+        body {
+            padding-top: 0 !important;
+        }
+    }
+</style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
 

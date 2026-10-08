@@ -40,14 +40,14 @@
         --danger-bg: #fdedec;
         --warning: #f39c12;
         --warning-bg: #fef9e7;
-        --info: #3498db;
-        --info-bg: #ebf5fb;
+        --info: #1fb6a6;              /* was #3498db — teal-green, distinct from success */
+        --info-bg: #e6f7f4;           /* was #ebf5fb — pale teal-green */
         --border-color: #e2e8f0;
         --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
         --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.08);
         --radius: 16px;
         --radius-sm: 10px;
-        
+
         --modal-overlay: rgba(0, 0, 0, 0.5);
         --modal-bg: #ffffff;
         --modal-text: #1a2332;
@@ -76,8 +76,8 @@
         --danger-bg: #2a1a1a;
         --warning: #d29922;
         --warning-bg: #2a241a;
-        --info: #58a6ff;
-        --info-bg: #1a2430;
+        --info: #2fd4bf;              /* was #58a6ff — bright teal-green for dark bg */
+        --info-bg: #102a28;           /* was #1a2430 — deep teal-green background */
         --border-color: #0c1311;
         --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
         --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -6468,30 +6468,6 @@
 </style>
 
 
-<style>
-    /* ============================================================
-    GET VPS BUTTON
-    ============================================================ */
-    .btn-get-vps {
-        background: linear-gradient(135deg, #f39c12, #e67e22);
-        color: #fff;
-    }
-
-    .btn-get-vps:hover {
-        background: linear-gradient(135deg, #e67e22, #d35400);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(243, 156, 18, 0.3);
-    }
-
-    .btn-account-action.btn-get-vps {
-        background: linear-gradient(135deg, #f39c12, #e67e22);
-        color: #fff;
-    }
-
-    .btn-account-action.btn-get-vps:hover {
-        background: linear-gradient(135deg, #e67e22, #d35400);
-    }
-</style>
 
 <style>
     /* ============================================================
@@ -6516,6 +6492,57 @@
         body.vps-page-body textarea {
             font-size: 16px !important;
         }
+    }
+    /* ============================================================
+       HIDE HORIZONTAL SCROLLBAR ON PROGRAMME VPS TABS
+       (mirrors the .sd-inv-tabs behaviour on the signals dashboard)
+       ============================================================ */
+
+    /* Firefox */
+    .vps-tabs {
+        scrollbar-width: none;
+        -ms-overflow-style: none;      /* IE / legacy Edge */
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Chrome / Safari / new Edge */
+    .vps-tabs::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
+    }
+
+    /* Extra safety: hide any scrollbar rendered by the inner tabs */
+    .vps-tabs::-webkit-scrollbar-track,
+    .vps-tabs::-webkit-scrollbar-thumb,
+    .vps-tabs::-webkit-scrollbar-corner {
+        display: none;
+        background: transparent;
+    }
+    /* ============================================================
+    GET VPS BUTTON
+    ============================================================ */
+    .btn-get-vps {
+        background: linear-gradient(135deg, #f39c12, #e67e22);
+        color: #fff;
+    }
+
+
+    .btn-get-vps:hover {
+        background: linear-gradient(135deg, #e67e22, #d35400);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(243, 156, 18, 0.3);
+    }
+
+    .btn-account-action.btn-get-vps {
+        background: linear-gradient(135deg, #f39c12, #e67e22);
+        color: #fff;
+    }
+
+    .btn-account-action.btn-get-vps:hover {
+        background: linear-gradient(135deg, #e67e22, #d35400);
     }
 
     .vps-page-wrapper {
@@ -8409,10 +8436,6 @@
 </style>
 
 <style>
-    /* ============================================================
-       PROGRAMMES PAGE — SCOPED LAYOUT
-       ============================================================ */
-
     body.prog-page-body {
         padding: 0 !important;
         margin: 0 !important;

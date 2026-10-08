@@ -106,13 +106,144 @@ $darkMode           = !empty($user['dark_mode']);
 $_SESSION['selected_programme_id'] = $activeProgrammeId;
 $_SESSION['user_email'] = strtolower($user['email']);
 
-if (!function_exists('normalizeProgrammeName')) {
-    function normalizeProgrammeName($name) {
-        $name = preg_replace('/[^A-Za-z0-9 ]+/', '', (string)$name);
-        $name = preg_replace('/\s+/', ' ', $name);
-        $name = strtolower(trim($name));
-        return substr($name, 0, 255);
+function normalizeProgrammeKey($name) {
+    $name = preg_replace('/[^A-Za-z0-9]+/', '', (string)$name);
+    return strtolower($name);
+}
+
+function normalizeProgrammeName($name) {
+    $name = preg_replace('/[^A-Za-z0-9 ]+/', '', (string)$name);
+    $name = preg_replace('/\s+/', ' ', $name);
+    $name = strtolower(trim($name));
+    return substr($name, 0, 25);
+}
+
+function programmeNameExistsForUser($pdo, $userId, $normalizedKey, $excludeProgrammeId = 0) {
+    try {
+        $q = $pdo->prepare("SELECT id, program_name FROM programme WHERE userid = ?");
+        $q->execute([$userId]);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            if ((int)$row['id'] === (int)$excludeProgrammeId) continue;
+            if (normalizeProgrammeKey($row['program_name'] ?? '') === $normalizedKey) {
+                return true;
+            }
+        }
+    } catch (Throwable $e) {}
+    return false;
+}
+
+/**
+ * Build the hierarchical status description for a programme.
+ */
+function buildProgrammeStatusDescription($pdo, $userId, $programme) {
+    $programmeId = (int)$programme['id'];
+
+    // --- Investment requests ---
+    $invCount = 0;
+    try {
+        $rq = $pdo->prepare("SELECT COUNT(*) FROM programme_investment_requestors WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'");
+        $rq->execute([$userId, $programmeId]);
+        $invCount = (int)$rq->fetchColumn();
+    } catch (Throwable $e) {}
+
+    // --- VPS requests ---
+    $vpsCount = 0;
+    try {
+        $vq = $pdo->prepare("SELECT COUNT(*) FROM programme_vps_hosts_requestors WHERE owner_programme_id = ? AND request_status = 'pending'");
+        $vq->execute([$programmeId]);
+        $vpsCount = (int)$vq->fetchColumn();
+    } catch (Throwable $e) {}
+
+    if ($invCount > 0 && $vpsCount > 0) {
+        return $invCount . ' investment request' . ($invCount === 1 ? '' : 's')
+             . ', ' . $vpsCount . ' vps request' . ($vpsCount === 1 ? '' : 's');
     }
+    if ($invCount > 0) {
+        return $invCount . ' investment request' . ($invCount === 1 ? '' : 's');
+    }
+    if ($vpsCount > 0) {
+        return $vpsCount . ' vps request' . ($vpsCount === 1 ? '' : 's');
+    }
+
+    // --- VPS / Broker existence ---
+    $hasVps = false;
+    try {
+        $s = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
+        $s->execute([$programmeId]);
+        $hasVps = (bool)$s->fetchColumn();
+    } catch (Throwable $e) {}
+    if (!$hasVps) {
+        try {
+            $s = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND host_status = 'active' LIMIT 1");
+            $s->execute([$programmeId]);
+            $hasVps = (bool)$s->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+
+    $hasBroker = (!empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']));
+
+    if (!$hasVps && !$hasBroker) {
+        return 'Connect vps, connect broker';
+    }
+    if (!$hasVps && $hasBroker) {
+        return 'Connect vps';
+    }
+    if ($hasVps && !$hasBroker) {
+        return 'Connect your broker';
+    }
+
+    if ((int)$programme['advertisement'] === 1) {
+        return 'Programme is advertised';
+    }
+
+    $interest = null;
+    try {
+        $iq = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
+        $iq->execute([$userId, $programmeId]);
+        $interest = $iq->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+
+    if ($interest) {
+        $interestStatus = (string)($interest['interest_status'] ?? '');
+        $beginTest = (int)($interest['begin_test'] ?? 0);
+        $signalTestingStartedAt = $interest['signal_testing_started_at'] ?? null;
+
+        if ($interestStatus === 'ongoing') {
+            $daysLeft = 0;
+            if (!empty($signalTestingStartedAt)) {
+                try {
+                    $start = new DateTime($signalTestingStartedAt);
+                    $challengeDuration = 30;
+                    try {
+                        $srv = $pdo->query("SELECT contract_duration FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                        if ($srv && (int)$srv['contract_duration'] > 0) {
+                            $challengeDuration = (int)$srv['contract_duration'];
+                        }
+                    } catch (Throwable $e) {}
+                    $end = clone $start;
+                    $end->modify('+' . $challengeDuration . ' days');
+                    $today = new DateTime();
+                    $today->setTime(0, 0, 0);
+                    $endClone = clone $end;
+                    $endClone->setTime(0, 0, 0);
+                    $diff = (int)$today->diff($endClone)->format('%r%a');
+                    $daysLeft = max(0, $diff);
+                } catch (Exception $e) {}
+            }
+            return 'In a challenge, ' . $daysLeft . ' day' . ($daysLeft === 1 ? '' : 's') . ' left';
+        }
+
+        if ($interestStatus === 'passed') {
+            return 'Challenge passed';
+        }
+
+        if ($interestStatus === 'interested' && $beginTest === 0) {
+            return 'In a challenge, begin test after proper training';
+        }
+    }
+
+    return 'Join challenge';
 }
 
 // ---- AJAX ----
@@ -136,7 +267,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $name = (string)($r['program_name'] ?? '');
                 $initial = strtoupper(substr($name !== '' ? $name : 'U', 0, 1));
 
-                // Per-programme counts
                 $notifCount = 0;
                 $reqCount = 0;
                 try {
@@ -158,6 +288,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $reqCount = (int)$rq->fetchColumn();
                 } catch (Throwable $e) {}
 
+                $programmeRow = $r;
+                $desc = buildProgrammeStatusDescription($pdo, $userId, $programmeRow);
+
                 $list[] = [
                     'id'             => $pid,
                     'name'           => $name,
@@ -166,10 +299,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'advertised'     => ((int)$r['advertisement'] === 1),
                     'notification_count' => $notifCount,
                     'request_count'  => $reqCount,
+                    'status_desc'    => $desc,
                 ];
             }
 
-            // Sort: active first, then by id ascending
             usort($list, function($a, $b) {
                 if ($a['is_active'] && !$b['is_active']) return -1;
                 if (!$a['is_active'] && $b['is_active']) return 1;
@@ -188,11 +321,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // -------- LIVE SHELL STATE POLL --------
-    // Returns everything the shell needs to stay in sync without a reload:
-    //  - the current programme's unread notification count (bell badge)
-    //  - per-programme unread counts + request counts (switcher list)
-    //  - global pending investment requests count (for cross-programme badge)
     if (isset($_POST['poll_shell_state'])) {
         header('Content-Type: application/json; charset=utf-8');
 
@@ -212,7 +340,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $globalIncoming = (int)$g->fetchColumn();
         } catch (Throwable $e) {}
 
-        // Per-programme maps
         $notifMap = [];
         $reqMap = [];
         try {
@@ -265,10 +392,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         $rawName = (string)($_POST['programme_name'] ?? '');
         $normalized = normalizeProgrammeName($rawName);
+
         if ($normalized === '') {
             echo json_encode(['success' => false, 'errors' => ['Programme name is required.']]);
             exit;
         }
+        if (strlen($normalized) > 25) {
+            echo json_encode(['success' => false, 'errors' => ['Programme name cannot exceed 25 characters.']]);
+            exit;
+        }
+
+        $key = normalizeProgrammeKey($normalized);
+        if (programmeNameExistsForUser($pdo, $userId, $key, 0)) {
+            echo json_encode([
+                'success' => false,
+                'errors'  => ["You've already used this name. Please choose a different programme name."]
+            ]);
+            exit;
+        }
+
         try {
             $ins = $pdo->prepare("INSERT INTO programme (userid, program_name, visibility, advertisement) VALUES (?, ?, 0, 0)");
             $ins->execute([$userId, $normalized]);
@@ -391,33 +533,37 @@ $navTabs = ['signals', 'training', 'analytics', 'menu'];
 $defaultTab = $_GET['tab'] ?? 'signals';
 
 $tabSrc = [
-    'signals'                  => 'signals_dashboard.php',
-    'training'                 => 'programme_training.php',
-    'analytics'                => 'programme_analytics.php',
-    'vps'                      => 'programme_vps.php',
-    'menu'                     => 'trader_menu.php',
-    'connect_trader_broker'    => 'connect_trader_broker.php',
-    'disconnect_trader_broker' => 'disconnect_trader_broker.php',
+    'signals'                    => 'signals_dashboard.php',
+    'training'                   => 'programme_training.php',
+    'analytics'                  => 'programme_analytics.php',
+    'vps'                        => 'programme_vps.php',
+    'menu'                       => 'programme_menu.php',
+    'connect_trader_broker'      => 'connect_programme_broker.php',
+    'disconnect_trader_broker'   => 'disconnect_programme_broker.php',
+    'signals_provision_request'  => 'signals_provision_request.php',
+    'account_management'         => 'programme_accountmanagement.php',
 ];
 
 if (!array_key_exists($defaultTab, $tabSrc)) $defaultTab = 'signals';
 
-$hiddenTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker'];
+$hiddenTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
 $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
 
 $tabsWithBrandHeader = ['signals'];
 $tabsWithNav         = ['signals', 'training', 'analytics', 'menu'];
 $tabsWithPageHeader  = ['training', 'analytics', 'menu'];
-$tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker'];
+$tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
 
 $tabTitles = [
-    'signals'                  => 'Signals Dashboard',
-    'training'                 => 'Programme Training',
-    'analytics'                => 'Programme Analytics',
-    'vps'                      => 'Trader VPS',
-    'menu'                     => 'Menu',
-    'connect_trader_broker'    => 'Connect Broker',
-    'disconnect_trader_broker' => 'Disconnect Broker',
+    'signals'                    => 'Signals Dashboard',
+    'training'                   => 'Programme Training',
+    'analytics'                  => 'Programme Analytics',
+    'vps'                        => 'Trader VPS',
+    'menu'                       => 'Menu',
+    'connect_trader_broker'      => 'Connect Broker',
+    'disconnect_trader_broker'   => 'Disconnect Broker',
+    'signals_provision_request'  => 'Signals Provision Request',
+    'account_management'         => 'Account Management',
 ];
 
 $showBrandHeader = in_array($defaultTab, $tabsWithBrandHeader, true);
@@ -430,7 +576,7 @@ if (in_array($defaultTab, $tabsWithNoChrome, true)) {
     $showPageHeader  = false;
 }
 
-$takeoverTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker'];
+$takeoverTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
 $bodyExtraClass = in_array($defaultTab, $takeoverTabs, true) ? 'page-' . $defaultTab : '';
 
 $chromeClasses = [];
@@ -540,7 +686,13 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     body.page-connect_trader_broker .bottom-nav,
     body.page-disconnect_trader_broker .harvhub-header-top,
     body.page-disconnect_trader_broker .shell-page-header,
-    body.page-disconnect_trader_broker .bottom-nav { display: none !important; }
+    body.page-disconnect_trader_broker .bottom-nav,
+    body.page-signals_provision_request .harvhub-header-top,
+    body.page-signals_provision_request .shell-page-header,
+    body.page-signals_provision_request .bottom-nav,
+    body.page-account_management .harvhub-header-top,
+    body.page-account_management .shell-page-header,
+    body.page-account_management .bottom-nav { display: none !important; }
 
     .harvhub-header-top {
         position: relative;
@@ -632,14 +784,23 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 
     .header-sheet-backdrop {
         position: fixed;
-        inset: 0;
+        top: var(--safe-top);
+        left: 0;
+        right: 0;
+        bottom: 0;
         background: rgba(0,0,0,0.45);
         opacity: 0;
         pointer-events: none;
-        transition: opacity 0.28s ease;
+        visibility: hidden;
+        transition: opacity 0.28s ease, visibility 0s linear 0.28s;
         z-index: 1100;
     }
-    .header-sheet-backdrop.active { opacity: 1; pointer-events: auto; }
+    .header-sheet-backdrop.active {
+        opacity: 1;
+        pointer-events: auto;
+        visibility: visible;
+        transition: opacity 0.28s ease, visibility 0s linear 0s;
+    }
 
     .header-sheet {
         position: fixed;
@@ -741,7 +902,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
     .header-sheet-row.current-account-row:hover { background: rgba(46,204,143,0.08); }
 
-    /* Investor's Hub avatar — gold */
     .header-sheet-avatar.is-investor-hub {
         background: var(--gold);
         color: #fff;
@@ -783,7 +943,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         .header-sheet.active { transform: translateY(0); }
     }
 
-    /* Programme list rows */
     .header-sheet-sub-item {
         display: flex;
         align-items: center;
@@ -823,7 +982,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         text-transform: uppercase;
         overflow: hidden;
     }
-    /* Active programme avatar stays green */
     .header-sheet-sub-item.is-active .header-sheet-sub-avatar {
         background: var(--accent);
         box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
@@ -839,6 +997,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     .header-sheet-sub-text .sub-desc {
         font-size: 0.72rem;
         color: var(--text-muted);
+        line-height: 1.4;
+        word-break: break-word;
     }
     .header-sheet-sub-item .sub-check { color: var(--accent); font-size: 0.85rem; flex-shrink: 0; }
 
@@ -846,7 +1006,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     body.header-sheet-open .shell-page-header  { visibility: hidden; }
     body.header-sheet-open .bottom-nav         { visibility: hidden; }
 
-    /* ---------- FIXED SHELL PAGE HEADER ---------- */
     .shell-page-header {
         position: fixed;
         top: 0;
@@ -960,7 +1119,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     .notification-panel .notification-item:hover { background: var(--surface-2); }
     .notification-panel .notification-item.unread {
         background: rgba(46,204,143,0.07);
-        box-shadow: inset 3px 0 0 var(--accent);
     }
     .notification-panel .notification-item.unread::after {
         content: "";
@@ -1095,7 +1253,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     .notification-permission-allow { background:var(--accent); color:#fff; }
     .notification-permission-later { background:var(--surface-2); color:var(--text); }
 
-    /* ---------- VIEWPORT ---------- */
     .viewport {
         flex: 1;
         position: relative;
@@ -1324,11 +1481,11 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         <div class="header-sheet-title">Create new programme</div>
         <div style="padding:4px 10px 0;">
             <label for="createProgrammeInput" style="font-size:0.82rem;color:var(--text-muted);display:block;margin-bottom:6px;">Programme name</label>
-            <input id="createProgrammeInput" type="text" maxlength="255" autocomplete="off"
+            <input id="createProgrammeInput" type="text" maxlength="25" autocomplete="off"
                    placeholder="e.g. My Alpha Strategy"
                    style="width:100%;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);font-size:0.95rem;">
             <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;line-height:1.4;">
-                Letters, numbers and spaces only. Special characters removed. Max 255 characters.
+                Letters and numbers only. Max 25 characters.
             </div>
             <div id="createProgrammeError" style="display:none;background:rgba(239,68,68,0.12);color:#ef4444;padding:10px;margin-top:12px;border-radius:6px;font-size:0.85rem;"></div>
         </div>
@@ -1440,12 +1597,14 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     var TABS_WITH_BRAND_HEADER = ['signals'];
     var TABS_WITH_NAV          = ['signals', 'training', 'analytics', 'menu'];
     var TABS_WITH_PAGE_HEADER  = ['training', 'analytics', 'menu'];
-    var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker'];
+    var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
 
     var TAB_TITLES = {
         'signals':'Signals Dashboard','training':'Programme Training','analytics':'Programme Analytics',
         'vps':'Trader VPS','menu':'Menu',
-        'connect_trader_broker':'Connect Broker','disconnect_trader_broker':'Disconnect Broker'
+        'connect_trader_broker':'Connect Broker','disconnect_trader_broker':'Disconnect Broker',
+        'signals_provision_request':'Signals Provision Request',
+        'account_management':'Account Management'
     };
 
     window.__harvhubModalOpen = false;
@@ -1493,13 +1652,15 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
 
     var frames = {
-        signals:                  document.getElementById('frame-signals'),
-        training:                 document.getElementById('frame-training'),
-        analytics:                document.getElementById('frame-analytics'),
-        vps:                      document.getElementById('frame-vps'),
-        menu:                     document.getElementById('frame-menu'),
-        connect_trader_broker:    document.getElementById('frame-connect_trader_broker'),
-        disconnect_trader_broker: document.getElementById('frame-disconnect_trader_broker')
+        signals:                    document.getElementById('frame-signals'),
+        training:                   document.getElementById('frame-training'),
+        analytics:                  document.getElementById('frame-analytics'),
+        vps:                        document.getElementById('frame-vps'),
+        menu:                       document.getElementById('frame-menu'),
+        connect_trader_broker:      document.getElementById('frame-connect_trader_broker'),
+        disconnect_trader_broker:   document.getElementById('frame-disconnect_trader_broker'),
+        signals_provision_request:  document.getElementById('frame-signals_provision_request'),
+        account_management:         document.getElementById('frame-account_management')
     };
     var names = Object.keys(frames);
     var navTabNames = ['signals', 'training', 'analytics', 'menu'];
@@ -1509,9 +1670,11 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         'programme_training.php':'training',
         'programme_analytics.php':'analytics',
         'programme_vps.php':'vps',
-        'trader_menu.php':'menu',
-        'connect_trader_broker.php':'connect_trader_broker',
-        'disconnect_trader_broker.php':'disconnect_trader_broker'
+        'programme_menu.php':'menu',
+        'connect_programme_broker.php':'connect_trader_broker',
+        'disconnect_programme_broker.php':'disconnect_trader_broker',
+        'signals_provision_request.php':'signals_provision_request',
+        'programme_accountmanagement.php':'account_management'
     };
 
     var loader = document.getElementById('loader');
@@ -1657,7 +1820,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         }
         if (e.data.type === 'saveLastApp') {
             try {
-                fetch('trader_menu.php', {
+                fetch('programme_menu.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',
@@ -1669,19 +1832,12 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         if (e.data.type === 'openHeaderSheet') openHeaderSheet();
         if (e.data.type === 'showSpinner') showBlockingLoader('Loading…');
         if (e.data.type === 'harvhubRefreshShell') {
-            // Child iframes can ask the shell to refresh its live badges
-            // (e.g. after accepting a request in signals_dashboard.php).
             if (typeof window.harvhubRefreshShellState === 'function') {
                 window.harvhubRefreshShellState();
             }
         }
-
-        if (e.data.type === 'harvhubModalOpen') {
-            setModalOpen(true);
-        }
-        if (e.data.type === 'harvhubModalClose') {
-            setModalOpen(false);
-        }
+        if (e.data.type === 'harvhubModalOpen') setModalOpen(true);
+        if (e.data.type === 'harvhubModalClose') setModalOpen(false);
     });
 
     new MutationObserver(function (muts) {
@@ -1780,9 +1936,12 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             var activeCls = prog.is_active ? ' is-active' : '';
             var check = prog.is_active ? '<i class="fa-solid fa-check sub-check"></i>' : '';
 
-            var nCount = parseInt(prog.notification_count, 10) || 0;
-            var rCount = parseInt(prog.request_count, 10) || 0;
-            var desc =   rCount + ' investment request' + (rCount === 1 ? '' : 's');
+            var desc = prog.status_desc || '';
+            if (desc === '') {
+                var nCount = parseInt(prog.notification_count, 10) || 0;
+                var rCount = parseInt(prog.request_count, 10) || 0;
+                desc = rCount + ' investment request' + (rCount === 1 ? '' : 's');
+            }
 
             html += '<button type="button" class="header-sheet-sub-item' + activeCls + '" data-programme-id="' + prog.id + '" data-programme-name="' + escapeAttr(label) + '">';
             html +=   '<span class="header-sheet-sub-avatar">' + escapeHtml(initial) + '</span>';
@@ -1912,7 +2071,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 .replace(/[^A-Za-z0-9 ]+/g, '')
                 .replace(/\s+/g, ' ')
                 .trim()
-                .substring(0, 255);
+                .toLowerCase()
+                .substring(0, 25);
 
             if (createError) { createError.style.display = 'none'; createError.textContent = ''; }
 
@@ -1989,7 +2149,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     if (confirmYes) {
         confirmYes.addEventListener('click', function () {
             try {
-                fetch('trader_menu.php', {
+                fetch('programme_menu.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',
@@ -2395,14 +2555,12 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     })();
 
     // ---------- Live shell state (badges, request counts) ----------
-    // Lightweight poller that keeps the header bell and the switcher list
-    // in sync without a full page reload. Runs on all shell pages.
     (function () {
         var interval = null;
         var running = false;
         var failCount = 0;
-        var BASE_INTERVAL = 4000;   // 4s
-        var MAX_INTERVAL  = 20000;  // 20s on error backoff
+        var BASE_INTERVAL = 4000;
+        var MAX_INTERVAL  = 20000;
         var lastState = null;
 
         function post(body) {
@@ -2420,7 +2578,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         function applyState(data) {
             if (!data || !data.success) return;
 
-            // Update header bell badge count
             var badge = document.getElementById('headerNotificationBadge');
             if (badge) {
                 var count = parseInt(data.unread_count, 10) || 0;
@@ -2439,25 +2596,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 }
             }
 
-            // If the switcher sheet is open, refresh the list with new counts
             if (sheetOpen && sheetProgrammesList && data.notif_by_programme && data.request_by_programme) {
-                var notifMap = data.notif_by_programme || {};
-                var reqMap   = data.request_by_programme || {};
-
-                // Only patch existing rows — do NOT trigger a full fetch.
-                sheetProgrammesList.querySelectorAll('.header-sheet-sub-item').forEach(function (el) {
-                    var pid = parseInt(el.getAttribute('data-programme-id'), 10) || 0;
-                    if (!pid) return;
-
-                    var nCount = parseInt(notifMap[pid], 10) || 0;
-                    var rCount = parseInt(reqMap[pid], 10) || 0;
-                    var desc =  rCount + ' investment request' + (rCount === 1 ? '' : 's');
-
-                    var descEl = el.querySelector('.sub-desc');
-                    if (descEl && descEl.textContent !== desc) {
-                        descEl.textContent = desc;
-                    }
-                });
+                loadProgrammesIntoSheet();
             }
 
             lastState = data;
@@ -2512,7 +2652,6 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         });
         window.addEventListener('beforeunload', function () { stop(); });
 
-        // Public hook so child iframes can request an immediate refresh
         window.harvhubRefreshShellState = function () {
             fetchState();
         };
@@ -2703,7 +2842,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 (function () {
     var WATCHED = [
         'page-connect_trader_broker','page-disconnect_trader_broker','page-vps',
-        'profile-page-open','prog-detail-view-open'
+        'profile-page-open','prog-detail-view-open','page-signals_provision_request',
+        'page-account_management'
     ];
     setInterval(function () {
         var active = document.querySelector('.app-frame.active');

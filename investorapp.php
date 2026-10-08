@@ -741,16 +741,22 @@
 
     .header-sheet-backdrop {
         position: fixed;
-        inset: 0;
+        top: var(--safe-top);               /* ← skip the notch/status-bar strip */
+        left: 0;
+        right: 0;
+        bottom: 0;
         background: rgba(0,0,0,0.45);
         opacity: 0;
         pointer-events: none;
-        transition: opacity 0.28s ease;
+        visibility: hidden;
+        transition: opacity 0.28s ease, visibility 0s linear 0.28s;
         z-index: 1100;
     }
     .header-sheet-backdrop.active {
         opacity: 1;
         pointer-events: auto;
+        visibility: visible;
+        transition: opacity 0.28s ease, visibility 0s linear 0s;
     }
 
     .header-sheet {
@@ -1083,7 +1089,6 @@
     .notification-panel .notification-item:hover { background: var(--surface-2); }
     .notification-panel .notification-item.unread {
         background: rgba(46,204,143,0.07);
-        box-shadow: inset 3px 0 0 var(--accent);
     }
     .notification-panel .notification-item.unread::after {
         content: "";

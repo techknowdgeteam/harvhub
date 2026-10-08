@@ -24,14 +24,6 @@ if (!function_exists('harvhubNotificationStripTechWords')) {
     /**
      * Remove technical / code / database / script related words
      * so emails never contain developer-facing language.
-     *
-     * Examples of stripped words:
-     *  php, sql, mysql, pdo, database, db, query, script,
-     *  array, json, html, css, js, javascript, code, function,
-     *  class, method, variable, loop, if, else, echo, print,
-     *  var, const, let, table, column, row, insert, update,
-     *  delete, select, where, join, schema, api, endpoint,
-     *  http, https, url, www, com, net, org, io
      */
     function harvhubNotificationStripTechWords(string $text): string
     {
@@ -55,6 +47,53 @@ if (!function_exists('harvhubNotificationStripTechWords')) {
     }
 }
 
+if (!function_exists('harvhubNotificationStripAccountId')) {
+    /**
+     * Remove any "Account ID: 123" / "Account Id: 123" /
+     * "account_id=123" / "sub_account_id=123" style fragments
+     * from a notification message so the account id never leaks
+     * into the in-app notification or the email body.
+     */
+    function harvhubNotificationStripAccountId(string $text): string
+    {
+        if ($text === '') return '';
+
+        // "Account ID: 123"  |  "Account Id : 123"  |  "AccountID: 123"
+        $text = preg_replace(
+            '/\baccount\s*_?\s*id\s*[:\-]?\s*\d+\b/i',
+            '',
+            $text
+        );
+
+        // "sub_account_id: 123"  |  "sub account id 123"
+        $text = preg_replace(
+            '/\bsub\s*_?\s*account\s*_?\s*id\s*[:\-]?\s*\d+\b/i',
+            '',
+            $text
+        );
+
+        // "main_account_id: 123"
+        $text = preg_replace(
+            '/\bmain\s*_?\s*account\s*_?\s*id\s*[:\-]?\s*\d+\b/i',
+            '',
+            $text
+        );
+
+        // Trailing "Account ID: 123" without leading word boundary
+        $text = preg_replace(
+            '/account\s*_?\s*id\s*[:\-]?\s*\d+/i',
+            '',
+            $text
+        );
+
+        // Collapse multiple spaces and blank lines left behind
+        $text = preg_replace('/[ \t]{2,}/', ' ', $text);
+        $text = preg_replace('/\n{3,}/', "\n\n", $text);
+
+        return trim($text);
+    }
+}
+
 if (!function_exists('harvhubNotificationCleanText')) {
     function harvhubNotificationCleanText($value): string
     {
@@ -69,6 +108,9 @@ if (!function_exists('harvhubNotificationCleanText')) {
 
         // Remove technical / code / database / script words
         $value = harvhubNotificationStripTechWords($value);
+
+        // Remove any account id fragments
+        $value = harvhubNotificationStripAccountId($value);
 
         return trim($value);
     }
@@ -488,24 +530,6 @@ if (!function_exists('markContractNotificationsRead')) {
 
 if (!function_exists('recordContractNotification')) {
 
-    /**
-     * Record a notification.
-     *
-     * For state/required notifications:
-     *   $force = false
-     *
-     * The notification is inserted only when the latest notification
-     * for that account has a different notification_key.
-     *
-     * For actions/events:
-     *   $force = true
-     *
-     * Every action is recorded immediately.
-     *
-     * IMPORTANT:
-     * Email is sent AFTER the DB transaction commits.
-     * A mail failure must never remove the in-app notification.
-     */
     function recordContractNotification(
         PDO $pdo,
         array $payload
@@ -719,20 +743,6 @@ if (!function_exists('recordContractNotification')) {
 
             /* =================================================
              * EMAIL NOTIFICATION
-             *
-             * IMPORTANT:
-             * This uses notification_email.php.
-             *
-             * notification_email.php MUST use:
-             *
-             * server_account.mailer_email
-             * server_account.mailer_password
-             *
-             * and:
-             *
-             * https://api.brevo.com/v3/smtp/email
-             *
-             * with mailer_password as the Brevo API key.
              * ================================================= */
 
             try {
@@ -799,6 +809,10 @@ if (!function_exists('recordContractNotification')) {
 
                 /* ---------------------------------------------
                  * SEND EMAIL
+                 *
+                 * Note: only $title and $message are passed.
+                 * sub_account_id is NOT passed into the email
+                 * adapter's meta for body usage.
                  * --------------------------------------------- */
 
                 $mailResult = sendNotificationEmail(
@@ -811,9 +825,6 @@ if (!function_exists('recordContractNotification')) {
 
                         'section' =>
                             $section,
-
-                        'sub_account_id' =>
-                            $subId,
 
                         'notification_id' =>
                             $id,
@@ -863,14 +874,6 @@ if (!function_exists('recordContractNotification')) {
 
             } catch (Throwable $mailError) {
 
-                /*
-                 * DO NOT roll back the notification.
-                 *
-                 * The notification was already committed.
-                 *
-                 * email_sent intentionally remains 0.
-                 */
-
                 error_log(
                     '[HarvHub Notification Service] Notification email exception'
                     . ' | notification_id=' . $id
@@ -919,12 +922,6 @@ if (!function_exists('recordContractNotification')) {
 
 if (!function_exists('recordContractNotificationOnce')) {
 
-    /**
-     * Insert an event only once for the same exact notification key.
-     *
-     * Useful for payment status events whose status can remain unchanged
-     * across many dashboard refreshes.
-     */
     function recordContractNotificationOnce(
         PDO $pdo,
         array $payload
@@ -1006,15 +1003,6 @@ if (!function_exists('recordContractNotificationOnce')) {
 
 if (!function_exists('syncDashboardContractNotifications')) {
 
-    /**
-     * Record the current actionable dashboard/session state.
-     *
-     * Only the highest-priority current state is recorded.
-     *
-     * This mirrors the existing dashboard/session-modal priority tree
-     * and prevents one page refresh from creating several competing
-     * notifications.
-     */
     function syncDashboardContractNotifications(
         PDO $pdo,
         array $user,
@@ -1757,5 +1745,144 @@ if (!function_exists('syncDashboardContractNotifications')) {
             $pdo,
             $payload
         );
+    }
+}
+
+
+/* ============================================================
+ * SYNC SIGNALS DASHBOARD NOTIFICATIONS
+ * ============================================================ */
+
+if (!function_exists('syncSignalsDashboardNotifications')) {
+
+    function syncSignalsDashboardNotifications(
+        PDO $pdo,
+        array $user,
+        ?array $programme,
+        ?array $interest,
+        bool $hasVps,
+        bool $hasBroker,
+        int $mainAccountId,
+        int $subAccountId
+    ): ?int {
+
+        $email = strtolower(trim((string)($user['email'] ?? '')));
+
+        if ($email === '' || $subAccountId <= 0 || !$programme) {
+            return null;
+        }
+
+        $programmeId = (int)$programme['id'];
+        $advertisement = (int)($programme['advertisement'] ?? 0);
+        $interestStatus = $interest ? (string)($interest['interest_status'] ?? '') : '';
+        $beginTest = $interest ? (int)($interest['begin_test'] ?? 0) : 0;
+
+        // Build a unique session key based on programme + date
+        // This ensures once-per-session delivery
+        $sessionKey = 'signals-' . $programmeId . '-' . date('Ymd');
+
+        /* ------------------------------------------------
+         * DETERMINE SIGNALS STATE
+         * ------------------------------------------------ */
+
+        $payload = null;
+
+        // 1. BEGIN TEST REMINDER — interested but hasn't begun test
+        if (
+            $advertisement === 0 &&
+            $interestStatus === 'interested' &&
+            $beginTest === 0 &&
+            $hasVps &&
+            $hasBroker
+        ) {
+            $payload = [
+                'notification_key' => 'signals-begin-test-reminder-' . $sessionKey,
+                'title' => 'Begin Your Challenge Test',
+                'message' => 'You have shown interest in a challenge. Ensure you begin test after training your programme to perfectly deliver your challenge request.',
+                'type' => 'info',
+                'section' => 'Signals',
+                'action_tab' => 'signals'
+            ];
+        }
+
+        // 2. CHALLENGE BREACHED — advertised = 1 and breached
+        elseif ($advertisement === 1 && $interestStatus === 'breached') {
+            $payload = [
+                'notification_key' => 'signals-challenge-breached-' . $sessionKey,
+                'title' => 'Challenge Breached',
+                'message' => 'Your programme has breached the challenge request. You need to train your programme or join a new challenge.',
+                'type' => 'danger',
+                'section' => 'Signals',
+                'action_tab' => 'signals'
+            ];
+        }
+
+        // 3. CHALLENGE FAILED — advertised = 0 and failed
+        elseif ($advertisement === 0 && $interestStatus === 'failed') {
+            $payload = [
+                'notification_key' => 'signals-challenge-failed-' . $sessionKey,
+                'title' => 'Challenge Failed',
+                'message' => 'Your programme failed to meet up the challenge. Train your programme or join a new challenge.',
+                'type' => 'warning',
+                'section' => 'Signals',
+                'action_tab' => 'signals'
+            ];
+        }
+
+        // 4. EMPTY INTEREST — no interest, but VPS + broker exist
+        elseif (
+            (empty($interest) || $interestStatus === '') &&
+            $hasVps &&
+            $hasBroker &&
+            $advertisement === 0
+        ) {
+            $payload = [
+                'notification_key' => 'signals-join-challenge-reminder-' . $sessionKey,
+                'title' => 'Join a Challenge',
+                'message' => 'Your programme training is set up. Explore challenges to start your signal provision journey and begin earning.',
+                'type' => 'info',
+                'section' => 'Signals',
+                'action_tab' => 'signals_provision_request'
+            ];
+        }
+
+        // 5. CHALLENGE PASSED — interest passed
+        elseif ($interestStatus === 'passed') {
+            $payload = [
+                'notification_key' => 'signals-challenge-passed-' . $sessionKey,
+                'title' => 'Challenge Passed!',
+                'message' => 'Congratulations! Your programme has passed the challenge. It will now be advertised to investors.',
+                'type' => 'success',
+                'section' => 'Signals',
+                'action_tab' => 'signals'
+            ];
+        }
+
+        // 6. PROGRAMME ADVERTISED — advertisement = 1 and passed
+        elseif ($advertisement === 1 && $interestStatus === 'passed') {
+            $payload = [
+                'notification_key' => 'signals-programme-advertised-' . $sessionKey,
+                'title' => 'Programme Advertised',
+                'message' => 'Your programme is now advertised to investors. You will earn from investor\'s profit once they invest in this programme.',
+                'type' => 'success',
+                'section' => 'Signals',
+                'action_tab' => 'signals'
+            ];
+        }
+
+        if (!$payload) {
+            return null;
+        }
+
+        /* ------------------------------------------------
+         * RECORD NOTIFICATION (once per session)
+         * ------------------------------------------------ */
+
+        $payload['user_email'] = $email;
+        $payload['sub_account_id'] = $subAccountId;
+        $payload['main_account_id'] = $mainAccountId;
+        $payload['force'] = false;
+
+        return recordContractNotificationOnce($pdo, $payload);
     }
 }

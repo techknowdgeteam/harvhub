@@ -179,24 +179,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
     // Determine if this is a first-time connection or an update
     $isUpdate = $broker_connected;
 
-    // Store old values for comparison (to detect actual changes)
-    $oldBroker = $current_broker;
-    $oldServer = $current_server;
-    $oldLogin  = $current_login;
-
     try {
         $u = $pdo->prepare("UPDATE harvhub SET broker = ?, server = ?, login = ?, broker_password = ? WHERE id = ?");
         $u->execute([$broker, $server, $login, $broker_password, $userId]);
-
-        // Check if values actually changed (for update notifications)
-        $valuesChanged = ($oldBroker !== $broker || $oldServer !== $server || $oldLogin !== $login);
 
         if (!$isUpdate) {
             // ============================================
             // FIRST-TIME CONNECTION
             // ============================================
-            // Use notification_key WITHOUT timestamp so it's a one-time notification.
-            // The service checks the latest notification key; if it matches, it skips.
+            // Deduplicated by notification_key (no timestamp).
             recordContractNotification($pdo, [
                 'user_email'       => $email,
                 'sub_account_id'   => $activeSubAccountId,
@@ -207,13 +198,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 'type'             => 'success',
                 'section'          => 'Broker',
                 'action_tab'       => 'connect_investor_broker',
-                'force'            => false // Deduplicate based on latest key
+                'force'            => false
             ]);
-        } elseif ($valuesChanged) {
+        } else {
             // ============================================
-            // UPDATE (only if values actually changed)
+            // UPDATE — always notify on the update form
             // ============================================
-            // Use timestamped key so each update creates a new notification.
+            // Timestamped key so every update produces a fresh notification + email.
             recordContractNotification($pdo, [
                 'user_email'       => $email,
                 'sub_account_id'   => $activeSubAccountId,
@@ -224,10 +215,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 'type'             => 'info',
                 'section'          => 'Broker',
                 'action_tab'       => 'connect_investor_broker',
-                'force'            => true // Always create a new notification
+                'force'            => true
             ]);
         }
-        // If values didn't change, no notification is created.
 
         echo json_encode([
             'success' => true,
@@ -677,7 +667,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                  + '&login='           + encodeURIComponent(login)
                  + '&broker_password=' + encodeURIComponent(pass);
 
-        // The AJAX handler now lives in this file (connect_investor_broker.php)
         fetch('connect_investor_broker.php', {
             method: 'POST',
             headers: {
