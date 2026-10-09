@@ -20,10 +20,6 @@ $userId   = (int)$user['id'];
 $fullName = $user['fullname'] ?? 'User';
 $darkMode = !empty($user['dark_mode']);
 
-/* ---- Account ids used for notifications ---- */
-$userSubAccountId  = (int)($user['sub_account_id']  ?? $userId);
-$userMainAccountId = (int)($user['main_account_id'] ?? $userId);
-
 $selectedProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
 if ($selectedProgrammeId <= 0) {
     $q = $pdo->prepare("SELECT id FROM programme WHERE userid = ? ORDER BY id DESC LIMIT 1");
@@ -151,34 +147,6 @@ function getServerAccountConfig($pdo) {
     }
 }
 
-function getProgrammeVpsRequests($pdo, $userId, $programmeId) {
-    $requests = [];
-    try {
-        $q = $pdo->prepare("
-            SELECT r.id,
-                   r.owner_programme_id,
-                   r.requestor_programme_id,
-                   r.request_status,
-                   r.created_at,
-                   p.program_name AS requestor_programme_name,
-                   p.userid       AS requestor_user_id,
-                   h.username, h.first_name, h.last_name, h.fullname, h.email AS requestor_email,
-                   h.sub_account_id AS requestor_sub_account_id,
-                   h.main_account_id AS requestor_main_account_id
-            FROM programme_vps_hosts_requestors r
-            LEFT JOIN programme p ON p.id = r.requestor_programme_id
-            LEFT JOIN harvhub   h ON h.id = p.userid
-            WHERE r.owner_programme_id = ?
-              AND r.request_status = 'pending'
-            ORDER BY r.created_at DESC
-            LIMIT 50
-        ");
-        $q->execute([$programmeId]);
-        $requests = $q->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {}
-    return $requests;
-}
-
 function countProgrammeVpsRequests($pdo, $programmeId) {
     try {
         $q = $pdo->prepare("
@@ -192,6 +160,17 @@ function countProgrammeVpsRequests($pdo, $programmeId) {
     }
 }
 
+/**
+ * Build the greeting state for the signals dashboard.
+ *
+ * Returned keys:
+ *  - greeting_sub: plain-text subtitle (or '' if a chevron row is used)
+ *  - greeting_sub_html: HTML subtitle (may include the challenge chevron row)
+ *  - show_explore_challenges: bool
+ *  - show_begin_test: bool
+ *  - show_session_modal / title / message / class / key
+ *  - vps_request_count: int
+ */
 function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) {
     $state = [
         'advertisement' => 0,
@@ -206,8 +185,8 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         'session_modal_class' => 'info',
         'session_modal_key' => '',
         'greeting_sub' => '',
+        'greeting_sub_html' => '',
         'greeting_banners_html' => '',
-        'vps_requests' => [],
         'vps_request_count' => 0,
     ];
 
@@ -233,11 +212,29 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
     } catch (Throwable $e) {}
 
     if ($ownsVps) {
-        $state['vps_requests'] = getProgrammeVpsRequests($pdo, $userId, $programmeId);
-        $state['vps_request_count'] = count($state['vps_requests']);
+        $state['vps_request_count'] = countProgrammeVpsRequests($pdo, $programmeId);
     }
 
     $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed';
+
+    // ---- helper to build the "In a X challenge" chevron row ----
+    $buildChallengeChevron = function ($periodLabel) {
+        $label = trim((string)$periodLabel);
+        if ($label === '') $label = 'Signals';
+        $safe = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+        return '<button type="button" class="sd-challenge-chevron" onclick="sdGoToChallenges()">'
+             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals challenge</span>'
+             .   '<span class="sd-challenge-chevron-right"><i class="fa-solid fa-chevron-right"></i></span>'
+             . '</button>';
+    };
+
+    $periodLabel = '';
+    if ($interest) {
+        $period = strtolower((string)($interest['trades_provision'] ?? ''));
+        if ($period === 'daily')   $periodLabel = 'Daily';
+        elseif ($period === 'weekly')  $periodLabel = 'Weekly';
+        elseif ($period === 'monthly') $periodLabel = 'Monthly';
+    }
 
     if ($advertisement === 0 && $noInterest) {
         if (!$hasVps) {
@@ -295,10 +292,10 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
             $state['session_modal_title'] = 'Begin Your Challenge Test';
             $state['session_modal_message'] = 'You have shown interest in a challenge. Ensure you begin test after training your programme to perfectly deliver your challenge request.';
             $state['session_modal_class'] = 'info';
-            /* Stable key: same interest id → same key → only shown once per session */
             $interestId = $interest ? (int)($interest['id'] ?? 0) : 0;
             $state['session_modal_key']   = 'begin_test:' . $programmeId . ':' . $interestId;
-            $state['greeting_sub'] = "Challenge interest exists. Begin test to compare your trades analytics with the challenge interest.";
+            $state['greeting_sub'] = '';
+            $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
         } else {
             $missing = !$hasVps ? 'VPS' : 'broker';
             $state['greeting_sub'] = "Connect your {$missing} to begin testing your programme.";
@@ -306,10 +303,16 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
     }
 
     if ($advertisement === 0 && $interestStatus === 'ongoing') {
-        $progName = $programme['program_name'] ?: 'Programme';
-        $state['greeting_sub'] = "{$progName} is currently in a challenge. Once met and passed, it will be advertised for investors.";
+        $state['greeting_sub'] = '';
+        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
     }
 
+    // If HTML wasn't set, fall back to plain text
+    if ($state['greeting_sub_html'] === '') {
+        $state['greeting_sub_html'] = $state['greeting_sub'];
+    }
+
+    // ---- Greeting banners (VPS request is only a button + count) ----
     $bannersHtml = '';
 
     if (!$hasVps && $advertisement === 0) {
@@ -368,7 +371,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if ($state['vps_request_count'] > 0) {
         $bannersHtml .= '<div class="sd-greeting-divider"></div>';
-        $bannersHtml .= '<button type="button" class="sd-incoming-banner sd-vps-requests" onclick="sdOpenVpsRequestsView()">';
+        $bannersHtml .= '<button type="button" class="sd-incoming-banner sd-vps-requests" onclick="harvhubGoToTab(\'vps\')">';
         $bannersHtml .=   '<span class="sd-incoming-left">';
         $bannersHtml .=     '<span class="sd-incoming-icon"><i class="fa-solid fa-server"></i></span>';
         $bannersHtml .=     '<span class="sd-incoming-label">';
@@ -419,7 +422,6 @@ function buildLiveState($pdo, $userId, $programme, $email) {
         'greeting_banners_html' => '',
         'signals_state' => [],
         'vps_request_count' => 0,
-        'vps_requests_html' => '',
     ];
 
     $globalIncoming = 0;
@@ -548,34 +550,9 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $signalsState = determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker);
 
     $state['signals_state'] = $signalsState;
-    $state['greeting_sub_html'] = $signalsState['greeting_sub'];
+    $state['greeting_sub_html'] = $signalsState['greeting_sub_html'];
     $state['greeting_banners_html'] = $signalsState['greeting_banners_html'];
     $state['vps_request_count'] = $signalsState['vps_request_count'];
-
-    $vpsRequestsHtml = '';
-    if (!empty($signalsState['vps_requests'])) {
-        $vpsRequestsHtml .= '<div class="sd-vps-requests-list">';
-        foreach ($signalsState['vps_requests'] as $req) {
-            $name = trim((string)($req['username'] ?? '')) ?: trim((string)($req['first_name'] ?? '')) ?: trim((string)($req['fullname'] ?? '')) ?: trim((string)($req['requestor_programme_name'] ?? '')) ?: ('Programme #' . (int)$req['requestor_programme_id']);
-            $initial = strtoupper(substr($name ?: 'T', 0, 1));
-            $vpsRequestsHtml .= '<div class="sd-vps-req-card">';
-            $vpsRequestsHtml .=   '<div class="sd-vps-req-avatar">' . esc_h($initial) . '</div>';
-            $vpsRequestsHtml .=   '<div class="sd-vps-req-info">';
-            $vpsRequestsHtml .=     '<div class="sd-vps-req-name">' . esc_h($name) . '</div>';
-            $vpsRequestsHtml .=     '<div class="sd-vps-req-meta">Requested ' . esc_h($req['created_at'] ?? '') . '</div>';
-            $vpsRequestsHtml .=   '</div>';
-            $vpsRequestsHtml .=   '<select class="sd-vps-req-select" data-request-id="' . (int)$req['id'] . '" onchange="sdHandleVpsRequestAction(this)">';
-            $vpsRequestsHtml .=     '<option value="">Action</option>';
-            $vpsRequestsHtml .=     '<option value="accept">Accept</option>';
-            $vpsRequestsHtml .=     '<option value="reject">Reject</option>';
-            $vpsRequestsHtml .=   '</select>';
-            $vpsRequestsHtml .= '</div>';
-        }
-        $vpsRequestsHtml .= '</div>';
-    } else {
-        $vpsRequestsHtml = '<div class="sd-empty"><i class="fa-solid fa-server"></i><strong>No VPS requests</strong><p>VPS space requests for this programme will appear here.</p></div>';
-    }
-    $state['vps_requests_html'] = $vpsRequestsHtml;
 
     $statusHtml = '';
     $statusHtml .= '<div class="sd-status-grid">';
@@ -765,144 +742,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $upd = $pdo->prepare("UPDATE signals_provider_interest SET begin_test = 1, interest_status = 'ongoing', signal_testing_started_at = NOW() WHERE id = ?");
             $upd->execute([$interestId]);
 
-            /* ---- Send email notification (stable key + correct account ids) ---- */
             try {
-                recordContractNotification($pdo, [
-                    'user_email'       => $email,
-                    'sub_account_id'   => $userSubAccountId,
-                    'main_account_id'  => $userMainAccountId,
-                    'notification_key' => 'signals-test-started-' . (int)$programme['id'] . '-' . $interestId,
+                recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
+                    'notification_key' => 'signals-test-started-' . (int)$programme['id'] . '-' . $interestId . '-' . date('YmdHis'),
                     'title'            => 'Challenge Test Started',
-                    'message'          => 'Your challenge test has begun. We will compare your trades analytics with the challenge requirements.',
+                    'message'          => 'Your challenge test has begun.',
                     'type'             => 'success',
                     'section'          => 'Signals',
                     'action_tab'       => 'signals',
                     'force'            => true
                 ]);
-            } catch (Throwable $e) {
-                /* swallow — the update already succeeded */
-            }
+            } catch (Throwable $e) {}
 
             jres(['success' => true, 'message' => 'Test started.']);
         } catch (Throwable $e) {
             jres(['success' => false, 'message' => 'Failed to start test.']);
-        }
-    }
-
-    if ($action === 'get_vps_requests') {
-        if (!$programme) jres(['success' => false, 'message' => 'No programme']);
-        try {
-            $requests = getProgrammeVpsRequests($pdo, $userId, (int)$programme['id']);
-            $list = [];
-            foreach ($requests as $req) {
-                $name = trim((string)($req['username'] ?? ''))
-                     ?: trim((string)($req['first_name'] ?? ''))
-                     ?: trim((string)($req['fullname'] ?? ''))
-                     ?: trim((string)($req['requestor_programme_name'] ?? ''))
-                     ?: ('Programme #' . (int)$req['requestor_programme_id']);
-
-                $list[] = [
-                    'request_id'                => (int)$req['id'],
-                    'requestor_programme_id'    => (int)$req['requestor_programme_id'],
-                    'requestor_programme_name'  => (string)($req['requestor_programme_name'] ?? ''),
-                    'name'                      => $name,
-                    'created_at'                => (string)($req['created_at'] ?? ''),
-                    'request_status'            => (string)($req['request_status'] ?? 'pending'),
-                ];
-            }
-            jres(['success' => true, 'requests' => $list]);
-        } catch (Throwable $e) {
-            jres(['success' => false, 'message' => 'Failed to load VPS requests.']);
-        }
-    }
-
-    if ($action === 'update_vps_request_status') {
-        if (!$programme) jres(['success' => false, 'message' => 'No programme']);
-        $requestId = (int)($_POST['request_id'] ?? 0);
-        $newStatus = trim($_POST['new_status'] ?? '');
-
-        $allowed = ['accept', 'reject'];
-        if ($requestId <= 0 || !in_array($newStatus, $allowed, true)) {
-            jres(['success' => false, 'message' => 'Invalid request.']);
-        }
-
-        try {
-            $programmeId = (int)$programme['id'];
-
-            $s = $pdo->prepare("SELECT * FROM programme_vps_hosts_requestors WHERE id = ? LIMIT 1");
-            $s->execute([$requestId]);
-            $row = $s->fetch(PDO::FETCH_ASSOC);
-
-            if (!$row) jres(['success' => false, 'message' => 'Request not found.']);
-            if ((int)$row['owner_programme_id'] !== $programmeId) jres(['success' => false, 'message' => 'Not authorized.']);
-            if ($row['request_status'] !== 'pending') jres(['success' => false, 'message' => 'Request already processed.']);
-
-            $requestorProgrammeId = (int)$row['requestor_programme_id'];
-
-            $upd = $pdo->prepare("UPDATE programme_vps_hosts_requestors SET request_status = ? WHERE id = ? AND request_status = 'pending'");
-            $upd->execute([$newStatus, $requestId]);
-
-            if ($newStatus === 'accept') {
-                try {
-                    $chk = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE owner_programme_id = ? AND follower_programme_id = ? LIMIT 1");
-                    $chk->execute([$programmeId, $requestorProgrammeId]);
-                    if (!$chk->fetch(PDO::FETCH_ASSOC)) {
-                        $ins = $pdo->prepare("INSERT INTO programme_vps_hosts_followers (owner_programme_id, follower_programme_id, host_status) VALUES (?, ?, 'active')");
-                        $ins->execute([$programmeId, $requestorProgrammeId]);
-                    }
-                } catch (Throwable $e) {}
-
-                try {
-                    $del = $pdo->prepare("DELETE FROM programme_vps_hosts_requestors WHERE owner_programme_id = ? AND requestor_programme_id = ?");
-                    $del->execute([$programmeId, $requestorProgrammeId]);
-                } catch (Throwable $e) {}
-            }
-
-            $requestorEmail = '';
-            $requestorUserId = 0;
-            $requestorSubId = 0;
-            $requestorMainId = 0;
-            $requestorProgrammeName = '';
-            try {
-                $q = $pdo->prepare("SELECT userid, program_name FROM programme WHERE id = ? LIMIT 1");
-                $q->execute([$requestorProgrammeId]);
-                $pr = $q->fetch(PDO::FETCH_ASSOC);
-                $requestorUserId = (int)($pr['userid'] ?? 0);
-                $requestorProgrammeName = (string)($pr['program_name'] ?? '');
-                if ($requestorUserId > 0) {
-                    $eq = $pdo->prepare("SELECT email, sub_account_id, main_account_id FROM harvhub WHERE id = ? LIMIT 1");
-                    $eq->execute([$requestorUserId]);
-                    $er = $eq->fetch(PDO::FETCH_ASSOC);
-                    if ($er) {
-                        $requestorEmail = strtolower(trim((string)($er['email'] ?? '')));
-                        $requestorSubId = (int)($er['sub_account_id'] ?? $requestorUserId);
-                        $requestorMainId = (int)($er['main_account_id'] ?? 0);
-                    }
-                }
-            } catch (Throwable $e) {}
-
-            $ownerDisplay = trim((string)($programme['program_name'] ?? '')) ?: ('Programme #' . $programmeId);
-
-            if ($requestorEmail !== '' && !empty($requestorSubId)) {
-                recordContractNotification($pdo, [
-                    'user_email'       => $requestorEmail,
-                    'sub_account_id'   => $requestorSubId,
-                    'main_account_id'  => $requestorMainId,
-                    'notification_key' => 'pvps-' . $newStatus . '-' . $programmeId . '-' . $requestId,
-                    'title'            => $newStatus === 'accept' ? 'VPS Request Accepted' : 'VPS Request Declined',
-                    'message'          => $newStatus === 'accept'
-                                            ? $ownerDisplay . ' has accepted your VPS space request.'
-                                            : $ownerDisplay . ' has declined your VPS space request.',
-                    'type'             => $newStatus === 'accept' ? 'success' : 'warning',
-                    'section'          => 'VPS',
-                    'action_tab'       => 'vps',
-                    'force'            => true
-                ]);
-            }
-
-            jres(['success' => true, 'message' => 'Request ' . $newStatus . 'ed successfully.', 'new_status' => $newStatus]);
-        } catch (Throwable $e) {
-            jres(['success' => false, 'message' => 'Failed to update request: ' . $e->getMessage()]);
         }
     }
 
@@ -1466,7 +1320,8 @@ $interest = $programme ? getSignalProviderInterest($pdo, $userId, (int)$programm
 $serverConfig = getServerAccountConfig($pdo);
 $signalsState = $programme ? determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) : [];
 
-$greetingSub = $signalsState['greeting_sub'] ?? ($hasVps ? ($hasBroker ? "Programme is set up. Publish when you're ready." : "Your programme won't generate revenue — no broker details to analyze your programme training.") : "Your programme won't generate revenue while you have no VPS.");
+$greetingSub = $signalsState['greeting_sub'] ?? '';
+$greetingSubHtml = $signalsState['greeting_sub_html'] ?? ($greetingSub);
 $greetingBanners = $signalsState['greeting_banners_html'] ?? '';
 $showSessionModal = $signalsState['show_session_modal'] ?? false;
 $sessionModalTitle = $signalsState['session_modal_title'] ?? '';
@@ -1474,21 +1329,27 @@ $sessionModalMessage = $signalsState['session_modal_message'] ?? '';
 $sessionModalClass = $signalsState['session_modal_class'] ?? 'info';
 $sessionModalKey   = $signalsState['session_modal_key'] ?? '';
 $vpsRequestCount = $signalsState['vps_request_count'] ?? 0;
-$vpsRequests = $signalsState['vps_requests'] ?? [];
 
 // ============================================================
-// SYNC NOTIFICATIONS FOR SIGNALS DASHBOARD
+// SYNC NOTIFICATIONS FOR SIGNALS DASHBOARD (programme side)
 // ============================================================
-syncSignalsDashboardNotifications(
-    $pdo,
-    $user,
-    $programme,
-    $interest,
-    $hasVps,
-    $hasBroker,
-    $userMainAccountId,
-    $userSubAccountId
-);
+if ($programme && !empty($email)) {
+    try {
+        $signalsEmail = strtolower((string)($user['email'] ?? $email));
+        syncSignalsDashboardNotifications(
+            $pdo,
+            $user,
+            $programme,
+            $interest,
+            $hasVps,
+            $hasBroker,
+            0,
+            0
+        );
+    } catch (Throwable $e) {
+        error_log('[signals_dashboard] sync signals notification failed: ' . $e->getMessage());
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1531,6 +1392,44 @@ syncSignalsDashboardNotifications(
     .sd-greeting-text .sd-greet-title { font-size: 1.02rem; font-weight: 700; margin: 0 0 2px 0; word-break: break-word; }
     .sd-greeting-text .sd-greet-sub { font-size: 0.82rem; color: var(--sd-muted); margin: 0; line-height: 1.45; }
     .sd-greeting-divider { height: 1px; background: var(--sd-border); margin: 0 -18px; opacity: 0.6; }
+
+    /* --- Challenge chevron row --- */
+    .sd-challenge-chevron {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        padding: 6px 0;
+        background: transparent;
+        border: none;
+        color: var(--sd-text);
+        font-family: inherit;
+        font-size: 0.77rem;
+        cursor: pointer;
+        text-align: left;
+        transition: color .18s, transform .15s;
+    }
+
+    .sd-challenge-chevron:hover {
+        transform: translateX(2px);
+    }
+
+    .sd-challenge-chevron-text {
+        min-width: 0;
+        word-break: break-word;
+    }
+
+    .sd-challenge-chevron-right {
+        flex-shrink: 0;
+        color: var(--sd-muted);
+        font-size: 0.70rem;
+        transition: color .18s;
+    }
+
+    .sd-challenge-chevron:hover .sd-challenge-chevron-right {
+        color: var(--sd-accent);
+    }
 
     .sd-incoming-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; background: var(--sd-card); border: 1px solid var(--sd-border); border-radius: 12px; color: var(--sd-text); font-family: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-align: left; transition: transform .15s, border-color .2s; }
     .sd-incoming-banner:hover { border-color: var(--sd-accent); transform: translateX(2px); }
@@ -1705,7 +1604,6 @@ syncSignalsDashboardNotifications(
     .sd-session-card.warning h3 { color: var(--sd-warning); }
     .sd-session-card.danger h3 { color: var(--sd-danger); }
 
-    /* Custom alert modal (replaces window.alert) */
     .sd-alert-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 9999999; }
     .sd-alert-modal.open { display: flex; }
     .sd-alert-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); text-align: center; }
@@ -1716,23 +1614,6 @@ syncSignalsDashboardNotifications(
     body.dark-mode .sd-alert-icon.error { background: #3a1c1c; color: #ff9c9c; }
     .sd-alert-title { font-size: 1.05rem; font-weight: 800; margin-bottom: 8px; }
     .sd-alert-text { color: var(--sd-muted); font-size: .88rem; margin-bottom: 18px; line-height: 1.5; }
-
-    /* VPS Requests View */
-    .sd-vps-requests-view { position: fixed; inset: 0; background: var(--sd-bg); z-index: 99998; display: none; flex-direction: column; overflow: hidden; overscroll-behavior: contain; }
-    .sd-vps-requests-view.open { display: flex; }
-    .sd-vps-requests-view-header { display:flex; align-items:center; justify-content:center; position:relative; padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px 14px; background: var(--sd-bg); min-height:56px; flex: 0 0 auto; }
-    .sd-vps-requests-view-back { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--sd-text); font-size: 1.2rem; cursor: pointer; padding: 8px; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-    .sd-vps-requests-view-title { font-size: 1.15rem; font-weight: 800; }
-    .sd-vps-requests-view-body { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 20px; max-width: 720px; margin: 0 auto; width: 100%; }
-
-    .sd-vps-requests-list { display: flex; flex-direction: column; gap: 12px; }
-    .sd-vps-req-card { display: flex; gap: 14px; border-radius: 14px; padding: 16px 0px; margin-bottom: 12px; box-shadow: var(--sd-shadow); align-items: center; }
-    .sd-vps-req-avatar { width: 54px; height: 54px; flex-shrink: 0; border-radius: 50%; background: #9b59b6; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    .sd-vps-req-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-    .sd-vps-req-name { font-size: 1rem; font-weight: 800; color: var(--sd-text); word-break: break-word; }
-    .sd-vps-req-meta { font-size: .8rem; color: var(--sd-muted); }
-    .sd-vps-req-select { padding: 8px 12px; border: 1px solid var(--sd-border); border-radius: 9px; background: var(--sd-bg); color: var(--sd-text); font-family: inherit; font-size: .82rem; font-weight: 600; cursor: pointer; min-width: 100px; flex-shrink: 0; }
-    .sd-vps-req-select:focus { outline: none; border-color: var(--sd-accent); }
 
     @keyframes sdLivePulse {
         0% { background: rgba(46,204,143,0.0); }
@@ -1754,7 +1635,7 @@ syncSignalsDashboardNotifications(
             <div class="sd-greeting-text">
                 <p class="sd-greet-account">Programme &nbsp;•&nbsp; <?= esc_h($programme['program_name'] ?: 'Unnamed Programme') ?></p>
                 <p class="sd-greet-title">Hi there <?= esc_h($fullName) ?></p>
-                <p class="sd-greet-sub" id="sdGreetSub"><?= esc_h($greetingSub) ?></p>
+                <p class="sd-greet-sub" id="sdGreetSub"><?= $greetingSubHtml /* already escaped/HTML-controlled */ ?></p>
             </div>
         </div>
 
@@ -1879,21 +1760,6 @@ syncSignalsDashboardNotifications(
                 </div>
             </div>
         </div>
-
-        <?php if ($vpsRequestCount > 0): ?>
-        <div class="sd-card">
-            <div class="sd-card-head">
-                <div>
-                    <div class="sd-card-title">VPS Space Requests</div>
-                    <div class="sd-card-desc"><?= (int)$vpsRequestCount ?> pending request<?= $vpsRequestCount === 1 ? '' : 's' ?> for this programme.</div>
-                </div>
-                <button class="sd-btn ghost" onclick="sdOpenVpsRequestsView()"><i class="fa-solid fa-server"></i> View All</button>
-            </div>
-            <div id="sdVpsRequestsContainer">
-                <?= $signalsState['vps_requests_html'] ?? '' ?>
-            </div>
-        </div>
-        <?php endif; ?>
     </div>
 
 <?php else: ?>
@@ -2015,7 +1881,7 @@ syncSignalsDashboardNotifications(
     </div>
 </div>
 
-<!-- SESSION INFO MODAL (titles/messages populated by JS at runtime) -->
+<!-- SESSION INFO MODAL -->
 <div class="sd-session-modal" id="sdSessionModal">
     <div class="sd-session-card info" id="sdSessionCard">
         <h3 id="sdSessionTitle">Notice</h3>
@@ -2024,7 +1890,7 @@ syncSignalsDashboardNotifications(
     </div>
 </div>
 
-<!-- CUSTOM ALERT MODAL (replaces window.alert everywhere) -->
+<!-- CUSTOM ALERT MODAL -->
 <div class="sd-alert-modal" id="sdAlertModal">
     <div class="sd-alert-card">
         <div class="sd-alert-icon info" id="sdAlertIcon"><i class="fa-solid fa-circle-info"></i></div>
@@ -2062,19 +1928,6 @@ syncSignalsDashboardNotifications(
     </div>
 </div>
 
-<!-- VPS REQUESTS VIEW -->
-<div class="sd-vps-requests-view" id="sdVpsRequestsView">
-    <div class="sd-vps-requests-view-header">
-        <button class="sd-vps-requests-view-back" onclick="sdCloseVpsRequestsView()" aria-label="Close"><i class="fa-solid fa-arrow-left"></i></button>
-        <div class="sd-vps-requests-view-title">VPS Space Requests</div>
-    </div>
-    <div class="sd-vps-requests-view-body" id="sdVpsRequestsViewBody">
-        <div id="sdVpsRequestsListContainer">
-            <div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading VPS requests…</p></div>
-        </div>
-    </div>
-</div>
-
 <!-- CONFIRM MODAL -->
 <div class="sd-confirm-modal" id="sdConfirmModal">
     <div class="sd-confirm-card">
@@ -2102,7 +1955,7 @@ syncSignalsDashboardNotifications(
     }
 
     function anyOverlayOpen() {
-        return !!document.querySelector('.sd-modal.open, .sd-investors-view.open, .sd-vps-requests-view.open, .sd-confirm-modal.open, .sd-session-modal.open, .sd-alert-modal.open');
+        return !!document.querySelector('.sd-modal.open, .sd-investors-view.open, .sd-confirm-modal.open, .sd-session-modal.open, .sd-alert-modal.open');
     }
     function lockBodyScroll() { document.body.classList.add('sd-scroll-locked'); }
     function unlockBodyScroll() { if (!anyOverlayOpen()) document.body.classList.remove('sd-scroll-locked'); }
@@ -2169,7 +2022,6 @@ syncSignalsDashboardNotifications(
     function escapeHtml(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
     function fmtMoney(v) { var n = parseFloat(v) || 0; return '$' + n.toFixed(2); }
 
-    // ---------- CUSTOM ALERT (replaces window.alert everywhere) ----------
     window.sdAlert = function (message, kind, title) {
         kind = kind || 'info';
         var iconEl  = document.getElementById('sdAlertIcon');
@@ -2199,8 +2051,7 @@ syncSignalsDashboardNotifications(
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
     });
 
-    // ---------- SESSION MODAL (dynamic title/message; shown ONCE per key) ----------
-    var SESSION_SEEN = {};   // key -> true (persists for this page load)
+    var SESSION_SEEN = {};
 
     window.sdShowSessionModal = function (title, message, cls, key) {
         if (!title || !message) return;
@@ -2227,7 +2078,6 @@ syncSignalsDashboardNotifications(
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
     };
 
-    // Show at page load if PHP says so
     var INITIAL_SESSION = {
         show: <?= $showSessionModal ? 'true' : 'false' ?>,
         title: <?= json_encode($sessionModalTitle) ?>,
@@ -2241,7 +2091,6 @@ syncSignalsDashboardNotifications(
         }, 800);
     }
 
-    // ---------- BEGIN TEST MODAL ----------
     window.sdOpenBeginTestModal = function () { sdOpenModal('sdBeginTestModal'); };
 
     var confirmBeginTestBtn = document.getElementById('sdConfirmBeginTest');
@@ -2262,82 +2111,10 @@ syncSignalsDashboardNotifications(
         });
     }
 
-    // ---------- VPS REQUESTS VIEW ----------
-    window.sdOpenVpsRequestsView = function () {
-        var view = document.getElementById('sdVpsRequestsView');
-        if (!view) return;
-        view.classList.add('open');
-        lockBodyScroll();
-        notifyParentModal(true);
-
-        var container = document.getElementById('sdVpsRequestsListContainer');
-        container.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading VPS requests…</p></div>';
-
-        post({ action: 'get_vps_requests' }, function (d) {
-            if (!d || !d.success) {
-                container.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-exclamation-triangle"></i><strong>Error</strong><p>' + escapeHtml(d.message || 'Failed to load VPS requests.') + '</p></div>';
-                return;
-            }
-            if (!d.requests || !d.requests.length) {
-                container.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-server"></i><strong>No VPS requests</strong><p>VPS space requests for this programme will appear here.</p></div>';
-                return;
-            }
-            var html = '<div class="sd-vps-requests-list">';
-            d.requests.forEach(function (req) {
-                var initial = req.name ? req.name.charAt(0).toUpperCase() : 'T';
-                html += '<div class="sd-vps-req-card">';
-                html +=   '<div class="sd-vps-req-avatar">' + escapeHtml(initial) + '</div>';
-                html +=   '<div class="sd-vps-req-info">';
-                html +=     '<div class="sd-vps-req-name">' + escapeHtml(req.name || 'Trader') + '</div>';
-                html +=     '<div class="sd-vps-req-meta">Requested ' + escapeHtml(req.created_at || '') + '</div>';
-                html +=   '</div>';
-                html +=   '<select class="sd-vps-req-select" data-request-id="' + req.request_id + '" onchange="sdHandleVpsRequestAction(this)">';
-                html +=     '<option value="">Action</option>';
-                html +=     '<option value="accept">Accept</option>';
-                html +=     '<option value="reject">Reject</option>';
-                html +=   '</select>';
-                html += '</div>';
-            });
-            html += '</div>';
-            container.innerHTML = html;
-        });
-    };
-
-    window.sdCloseVpsRequestsView = function () {
-        var view = document.getElementById('sdVpsRequestsView');
-        if (!view) return;
-        view.classList.remove('open');
-        if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
-    };
-
     // ---------- Confirm modal state ----------
     var _pendingRequestId = null;
     var _pendingRequestAction = null;
     var _pendingSelectEl = null;
-    var _pendingVpsRequestId = null;
-    var _pendingVpsRequestAction = null;
-    var _pendingVpsSelectEl = null;
-
-    window.sdHandleVpsRequestAction = function (selectEl) {
-        var requestId = selectEl.getAttribute('data-request-id');
-        var action = selectEl.value;
-        if (!requestId || !action) return;
-
-        _pendingVpsRequestId = requestId;
-        _pendingVpsRequestAction = action;
-        _pendingVpsSelectEl = selectEl;
-
-        var title = action === 'accept' ? 'Accept VPS Request' : 'Reject VPS Request';
-        var msg = action === 'accept'
-            ? 'Are you sure you want to accept this VPS space request? The trader will be granted access to your VPS.'
-            : 'Are you sure you want to reject this VPS space request?';
-
-        document.getElementById('sdConfirmTitle').textContent = title;
-        document.getElementById('sdConfirmMessage').textContent = msg;
-        document.getElementById('sdConfirmYes').textContent = action === 'accept' ? 'Yes, Accept' : 'Yes, Reject';
-        document.getElementById('sdConfirmModal').classList.add('open');
-        lockBodyScroll();
-    };
 
     window.sdHandleRequestAction = function (selectEl) {
         var requestId = selectEl.getAttribute('data-request-id');
@@ -2383,36 +2160,12 @@ syncSignalsDashboardNotifications(
                 _pendingSelectEl = null;
             });
         }
-        else if (_pendingVpsRequestId && _pendingVpsRequestAction) {
-            var vpsRequestId = _pendingVpsRequestId;
-            var vpsAction = _pendingVpsRequestAction;
-            var vpsSelectEl = _pendingVpsSelectEl;
-
-            document.getElementById('sdConfirmModal').classList.remove('open');
-            if (vpsSelectEl) vpsSelectEl.disabled = true;
-
-            post({ action: 'update_vps_request_status', request_id: vpsRequestId, new_status: vpsAction }, function (d) {
-                if (d.success) {
-                    window.sdOpenVpsRequestsView();
-                    if (liveStateRunning) fetchLiveState();
-                } else {
-                    sdAlert(d.message || 'Failed to update VPS request.', 'error', 'Request failed');
-                    if (vpsSelectEl) { vpsSelectEl.value = ''; vpsSelectEl.disabled = false; }
-                    if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
-                }
-                _pendingVpsRequestId = null;
-                _pendingVpsRequestAction = null;
-                _pendingVpsSelectEl = null;
-            });
-        }
     });
 
     window.sdCloseConfirm = function () {
         document.getElementById('sdConfirmModal').classList.remove('open');
         if (_pendingSelectEl) { _pendingSelectEl.value = ''; _pendingSelectEl.disabled = false; }
-        if (_pendingVpsSelectEl) { _pendingVpsSelectEl.value = ''; _pendingVpsSelectEl.disabled = false; }
         _pendingRequestId = null; _pendingRequestAction = null; _pendingSelectEl = null;
-        _pendingVpsRequestId = null; _pendingVpsRequestAction = null; _pendingVpsSelectEl = null;
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
     };
 
@@ -2466,7 +2219,7 @@ syncSignalsDashboardNotifications(
         if (serverEl) updateText(serverEl, data.has_broker ? (data.broker_server || '') : 'N/A', false);
 
         var greetSub = document.getElementById('sdGreetSub');
-        if (greetSub && data.greeting_sub_html !== undefined) updateText(greetSub, data.greeting_sub_html, false);
+        if (greetSub && data.greeting_sub_html !== undefined) updateHtml(greetSub, data.greeting_sub_html, false);
 
         var bannersEl = document.getElementById('sdGreetingBanners');
         if (bannersEl && data.greeting_banners_html !== undefined) updateHtml(bannersEl, data.greeting_banners_html, false);
@@ -2487,11 +2240,6 @@ syncSignalsDashboardNotifications(
             }
         }
 
-        var vpsContainer = document.getElementById('sdVpsRequestsContainer');
-        if (vpsContainer && data.vps_requests_html !== undefined) updateHtml(vpsContainer, data.vps_requests_html, true);
-
-        // Session modal — dynamically set title & message from live state.
-        // Will only fire ONCE per unique key (guaranteed by sdShowSessionModal).
         if (data.signals_state) {
             var ss = data.signals_state;
             if (ss.show_session_modal && ss.session_modal_title && ss.session_modal_message) {

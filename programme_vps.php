@@ -97,25 +97,6 @@ if (!function_exists('countActiveProgrammeFollowers')) {
         } catch (PDOException $e) { return 0; }
     }
 }
-if (!function_exists('recordProgrammeNotification')) {
-    function recordProgrammeNotification($pdo, $programmeId, $userEmail, array $opts) {
-        try {
-            $key = (string)($opts['notification_key'] ?? ('pn-' . $programmeId . '-' . date('YmdHis') . '-' . mt_rand()));
-            $stmt = $pdo->prepare("INSERT INTO programme_notifications (programme_id, user_email, notification_key, title, message, type, section, action_tab, seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)");
-            $stmt->execute([
-                (int)$programmeId,
-                strtolower((string)$userEmail),
-                $key,
-                (string)($opts['title'] ?? 'Notification'),
-                (string)($opts['message'] ?? ''),
-                (string)($opts['type'] ?? 'info'),
-                (string)($opts['section'] ?? 'General'),
-                isset($opts['action_tab']) ? (string)$opts['action_tab'] : null
-            ]);
-            return true;
-        } catch (Throwable $e) { return false; }
-    }
-}
 if (!function_exists('programmeOwnsAnyVps')) {
     function programmeOwnsAnyVps($pdo, $userId) {
         try {
@@ -304,33 +285,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['link_subaccount_vps']
         $programmeDisplayName = resolveProgrammeDisplayName($programme);
         $subAccountDisplay    = resolveSubAccountName($subVps);
 
-        $ownerEmail    = resolveUserEmailById($pdo, $userId);
-        $ownerMainAcc  = resolveOwnerMainAccountId($pdo, $userId);
-        $ownerSubAcc   = resolveUserSubAccountIdById($pdo, $userId);
-        if ($ownerSubAcc <= 0) $ownerSubAcc = $activeSubAccountId;
-
-        if ($ownerEmail !== '') {
-            recordContractNotification($pdo, [
-                'user_email'       => $ownerEmail,
-                'sub_account_id'   => $ownerSubAcc,
-                'main_account_id'  => $ownerMainAcc,
-                'notification_key' => 'pvps-linked-' . $activeProgrammeId . '-' . date('YmdHis'),
-                'title'            => 'VPS Linked to Programme',
-                'message'          => 'Your VPS from ' . $subAccountDisplay . ' has been linked to ' . $programmeDisplayName . '.',
-                'type'             => 'success',
-                'section'          => 'VPS',
-                'action_tab'       => 'vps',
-                'force'            => true
-            ]);
-        }
-
+        // Programme-side in-app notification
         recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
             'notification_key' => 'pvps-linked-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'VPS Linked',
-            'message'          => 'Your VPS has been linked to this programme successfully.',
+            'message'          => 'Your VPS from ' . $subAccountDisplay . ' has been linked to ' . $programmeDisplayName . ' successfully.',
             'type'             => 'success',
             'section'          => 'VPS',
             'action_tab'       => 'vps',
+            'force'            => true
         ]);
 
         echo json_encode(['success' => true, 'message' => 'VPS linked to this programme successfully!']);
@@ -387,34 +350,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
         ");
         $ins->execute([$ownerProgId, $activeProgrammeId]);
 
-        $ownerEmail     = resolveUserEmailById($pdo, $ownerId);
-        $ownerMainAccId = resolveOwnerMainAccountId($pdo, $ownerId);
-        $ownerSubAccId  = resolveUserSubAccountIdById($pdo, $ownerId);
-        if ($ownerSubAccId <= 0) $ownerSubAccId = $activeSubAccountId;
+        // Notify the OWNER's programme about the new request
+        recordProgrammeNotification($pdo, $ownerProgId, resolveUserEmailById($pdo, $ownerId), [
+            'notification_key' => 'pvps-req-received-' . $activeProgrammeId . '-' . date('YmdHis'),
+            'title'            => 'New VPS Space Request',
+            'message'          => $requestorDisplayName . ' has requested space on your programme VPS.',
+            'type'             => 'info',
+            'section'          => 'VPS',
+            'action_tab'       => 'vps',
+            'force'            => true
+        ]);
 
-        if ($ownerEmail !== '') {
-            recordContractNotification($pdo, [
-                'user_email'       => $ownerEmail,
-                'sub_account_id'   => $ownerSubAccId,
-                'main_account_id'  => $ownerMainAccId,
-                'notification_key' => 'pvps-req-received-' . $activeProgrammeId . '-' . date('YmdHis'),
-                'title'            => 'New VPS Space Request',
-                'message'          => $requestorDisplayName . ' has requested space on your programme VPS.',
-                'type'             => 'info',
-                'section'          => 'VPS',
-                'action_tab'       => 'vps',
-                'force'            => true
-            ]);
+        // Notify the REQUESTOR's programme that the request was sent
+        recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
+            'notification_key' => 'pvps-sent-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
+            'title'            => 'VPS Request Sent',
+            'message'          => 'Your request to ' . $requestorDisplayName . ' has been submitted.',
+            'type'             => 'info',
+            'section'          => 'VPS',
+            'action_tab'       => 'vps',
+            'force'            => true
+        ]);
 
-            recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
-                'notification_key' => 'pvps-sent-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
-                'title'            => 'VPS Request Sent',
-                'message'          => 'Your request to ' . $requestorDisplayName . ' has been submitted.',
-                'type'             => 'info',
-                'section'          => 'VPS',
-                'action_tab'       => 'vps',
-            ]);
-        }
         echo json_encode(['success'=>true,'message'=>'Request submitted successfully!']);
     } catch (PDOException $e) {
         echo json_encode(['success'=>false,'message'=>'Failed to submit request.']);
@@ -678,25 +635,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
         $ownerDisplay = resolveProgrammeDisplayName($programme);
 
         if ($requestorEmail !== '') {
-            $requestorMainAccId = resolveOwnerMainAccountId($pdo, $requestorUserId);
-            $requestorSubAccId  = resolveUserSubAccountIdById($pdo, $requestorUserId);
-            if ($requestorSubAccId <= 0) $requestorSubAccId = $activeSubAccountId;
-
-            recordContractNotification($pdo, [
-                'user_email'       => $requestorEmail,
-                'sub_account_id'   => $requestorSubAccId,
-                'main_account_id'  => $requestorMainAccId,
-                'notification_key' => 'pvps-' . $newStatus . '-' . $activeProgrammeId . '-' . date('YmdHis'),
-                'title'            => $newStatus === 'accept' ? 'VPS Request Accepted' : 'VPS Request Declined',
-                'message'          => $newStatus === 'accept'
-                                        ? $ownerDisplay . ' has accepted your request.'
-                                        : $ownerDisplay . ' has declined your VPS space request.',
-                'type'             => $newStatus === 'accept' ? 'success' : 'warning',
-                'section'          => 'VPS',
-                'action_tab'       => 'vps',
-                'force'            => true
-            ]);
-
             recordProgrammeNotification($pdo, $requestorProgrammeId, $requestorEmail, [
                 'notification_key' => 'pvps-' . $newStatus . '-' . $activeProgrammeId . '-' . date('YmdHis'),
                 'title'            => $newStatus === 'accept' ? 'VPS Request Accepted' : 'VPS Request Declined',
@@ -706,6 +644,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                 'type'             => $newStatus === 'accept' ? 'success' : 'warning',
                 'section'          => 'VPS',
                 'action_tab'       => 'vps',
+                'force'            => true
             ]);
         }
 
@@ -825,24 +764,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
         purgeRequestorRowsForPair($pdo, $activeProgrammeId, $removedFollowerProgId);
 
         if ($followerEmail !== '' && $followerUserId > 0) {
-            $ownerDisplay       = resolveProgrammeDisplayName($programme);
-            $followerMainAccId  = resolveOwnerMainAccountId($pdo, $followerUserId);
-            $followerSubAccId   = resolveUserSubAccountIdById($pdo, $followerUserId);
-            if ($followerSubAccId <= 0) $followerSubAccId = $activeSubAccountId;
-
-            recordContractNotification($pdo, [
-                'user_email'       => $followerEmail,
-                'sub_account_id'   => $followerSubAccId,
-                'main_account_id'  => $followerMainAccId,
-                'notification_key' => 'pvps-follower-removed-' . $activeProgrammeId . '-' . date('YmdHis'),
-                'title'            => 'Removed from VPS',
-                'message'          => $ownerDisplay . ' has removed you from their VPS. You may now request space from another host.',
-                'type'             => 'warning',
-                'section'          => 'VPS',
-                'action_tab'       => 'vps',
-                'force'            => true
-            ]);
-
+            $ownerDisplay = resolveProgrammeDisplayName($programme);
             recordProgrammeNotification($pdo, $removedFollowerProgId, $followerEmail, [
                 'notification_key' => 'pvps-follower-removed-' . $activeProgrammeId . '-' . date('YmdHis'),
                 'title'            => 'Removed from VPS',
@@ -850,6 +772,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
                 'type'             => 'warning',
                 'section'          => 'VPS',
                 'action_tab'       => 'vps',
+                'force'            => true
             ]);
         }
 

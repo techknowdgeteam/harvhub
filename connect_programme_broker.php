@@ -80,30 +80,6 @@ foreach ($allowed_brokers as $b) {
 }
 
 // ==================== HELPERS ====================
-if (!function_exists('recordProgrammeNotification')) {
-    function recordProgrammeNotification($pdo, $programmeId, $userEmail, array $opts) {
-        try {
-            $key = (string)($opts['notification_key'] ?? ('pn-' . $programmeId . '-' . date('YmdHis') . '-' . mt_rand()));
-            $stmt = $pdo->prepare("
-                INSERT INTO programme_notifications
-                    (programme_id, user_email, notification_key, title, message, type, section, action_tab, seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ");
-            $stmt->execute([
-                (int)$programmeId,
-                strtolower((string)$userEmail),
-                $key,
-                (string)($opts['title']   ?? 'Notification'),
-                (string)($opts['message'] ?? ''),
-                (string)($opts['type']    ?? 'info'),
-                (string)($opts['section'] ?? 'General'),
-                isset($opts['action_tab']) ? (string)$opts['action_tab'] : null,
-            ]);
-            return true;
-        } catch (Throwable $e) { return false; }
-    }
-}
-
 if (!function_exists('resolveProgrammeDisplayNameLocal')) {
     function resolveProgrammeDisplayNameLocal(array $p) {
         $n = trim((string)($p['program_name'] ?? ''));
@@ -154,9 +130,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
 
         if (!$isUpdate) {
             // ============================================
-            // FIRST-TIME CONNECTION
+            // FIRST-TIME CONNECTION — programme notification only
             // ============================================
-            // 1) In-app programme notification
             recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
                 'notification_key' => 'prog-broker-connected-' . $activeProgrammeId,
                 'title'   => 'Broker Connected',
@@ -164,20 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 'type'    => 'success',
                 'section' => 'Broker',
                 'action_tab' => 'broker',
-            ]);
-
-            // 2) Email notification (same pattern as connect_investor_broker.php)
-            recordContractNotification($pdo, [
-                'user_email'       => $email,
-                'sub_account_id'   => $activeSubAccountId,
-                'main_account_id'  => $mainAccountId,
-                'notification_key' => 'prog-broker-connected-' . $activeProgrammeId,
-                'title'            => 'Broker Connected',
-                'message'          => 'Your programme broker (' . $broker . ' - ' . $login . ') has been connected successfully.',
-                'type'             => 'success',
-                'section'          => 'Broker',
-                'action_tab'       => 'broker',
-                'force'            => false
+                'force'   => false
             ]);
 
         } else {
@@ -186,7 +148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             // ============================================
             $tsKey = 'prog-broker-updated-' . $activeProgrammeId . '-' . date('YmdHis');
 
-            // 1) In-app programme notification
             recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
                 'notification_key' => $tsKey,
                 'title'   => 'Broker Details Updated',
@@ -194,20 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 'type'    => 'info',
                 'section' => 'Broker',
                 'action_tab' => 'broker',
-            ]);
-
-            // 2) Email notification
-            recordContractNotification($pdo, [
-                'user_email'       => $email,
-                'sub_account_id'   => $activeSubAccountId,
-                'main_account_id'  => $mainAccountId,
-                'notification_key' => $tsKey,
-                'title'            => 'Broker Details Updated',
-                'message'          => 'Your programme broker details have been updated to ' . $broker . ' - ' . $login . '.',
-                'type'             => 'info',
-                'section'          => 'Broker',
-                'action_tab'       => 'broker',
-                'force'            => true
+                'force'   => true
             ]);
         }
 

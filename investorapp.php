@@ -23,7 +23,7 @@
                 $subId  = (int)($_SESSION['active_sub_account_id'] ?? 0);
 
                 if ($subId > 0) {
-                    $lastAccount = 's' . $subId;
+                    $lastAccount = 'SA' . $subId;
                     $upd = $pdo->prepare("UPDATE $tableName SET last_account = ? WHERE sub_account_id = ? AND LOWER(email) = ?");
                     $upd->execute([$lastAccount, $subId, $logoutEmail]);
                 }
@@ -64,7 +64,9 @@
         $lastAccount = trim((string)($lastRow['last_account'] ?? ''));
 
         $resolved = null;
-        if (preg_match('/^s(\d+)$/', $lastAccount, $m)) {
+
+        // New format: SA<sub_id>  (matches programme_menu.php and the updated logout handler)
+        if (preg_match('/^SA(\d+)$/', $lastAccount, $m)) {
             $subId = (int)$m[1];
             if ($subId > 0) {
                 $q = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
@@ -72,6 +74,16 @@
                 $resolved = $q->fetch(PDO::FETCH_ASSOC);
             }
         }
+        // Legacy lowercase format: s<sub_id>
+        if (!$resolved && preg_match('/^s(\d+)$/', $lastAccount, $m)) {
+            $subId = (int)$m[1];
+            if ($subId > 0) {
+                $q = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
+                $q->execute([$subId, $email]);
+                $resolved = $q->fetch(PDO::FETCH_ASSOC);
+            }
+        }
+        // Main-account format: m<main_id>
         if (!$resolved && preg_match('/^m(\d+)$/', $lastAccount, $m)) {
             $mainId = (int)$m[1];
             if ($mainId > 0) {

@@ -60,55 +60,43 @@ $monthlyDuration = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
 $existingInterest = null;
 if ($programme) {
     try {
-        $q = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
+        $q = $pdo->prepare("
+            SELECT *
+            FROM signals_provider_interest
+            WHERE user_id = ? AND programme_id = ?
+              AND interest_status IN ('interested','pending','active')
+            ORDER BY id DESC
+            LIMIT 1
+        ");
         $q->execute([$userId, (int)$programme['id']]);
         $existingInterest = $q->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Throwable $e) {}
 }
 
-// ==================== HELPERS ====================
-if (!function_exists('recordProgrammeNotification')) {
-    /**
-     * Insert a programme-scoped in-app notification.
-     * Mirrors the helper used by programme_vps.php and connect_programme_broker.php
-     */
-    function recordProgrammeNotification($pdo, $programmeId, $userEmail, array $opts) {
-        try {
-            $key = (string)($opts['notification_key'] ?? ('pn-' . $programmeId . '-' . date('YmdHis') . '-' . mt_rand()));
-            $stmt = $pdo->prepare("
-                INSERT INTO programme_notifications
-                    (programme_id, user_email, notification_key, title, message, type, section, action_tab, seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ");
-            $stmt->execute([
-                (int)$programmeId,
-                strtolower((string)$userEmail),
-                $key,
-                (string)($opts['title']   ?? 'Notification'),
-                (string)($opts['message'] ?? ''),
-                (string)($opts['type']    ?? 'info'),
-                (string)($opts['section'] ?? 'General'),
-                isset($opts['action_tab']) ? (string)$opts['action_tab'] : null,
-            ]);
-            return true;
-        } catch (Throwable $e) {
-            error_log('recordProgrammeNotification failed: ' . $e->getMessage());
-            return false;
-        }
+function spiHasPartialUniqueKey(PDO $pdo): bool {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    try {
+        $q = $pdo->prepare("
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'signals_provider_interest'
+              AND COLUMN_NAME = 'live_uniq_user_id'
+        ");
+        $q->execute();
+        $cached = ((int)$q->fetchColumn() > 0);
+    } catch (Throwable $e) {
+        $cached = false;
     }
+    return $cached;
 }
 
-/**
- * Profitability / breakeven rule.
- */
+// ==================== HELPERS ====================
 function isProfitableOrBreakeven(int $expectedWin, int $consecutiveLoss, float $rr): bool {
     if ($rr <= 0) return false;
     return ($expectedWin * $rr) >= $consecutiveLoss;
 }
 
-/**
- * Build all valid three-type cards for the entire pre-generated list.
- */
 function generateRealisticSystemChallenges($period) {
     $rows = [];
     $now  = date('Y-m-d H:i:s');
@@ -294,114 +282,178 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $period    = trim($_POST['period'] ?? 'daily');
         if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) $period = 'daily';
 
-        try {
-            $request = [
-                'risk_reward_type' => $_POST['risk_reward_type'] ?? 'fixed_risk_reward',
-                'risk_reward'      => (float)($_POST['risk_reward'] ?? 2),
-                'trades_provision' => $period,
-                'consecutive_loss' => (int)($_POST['consecutive_loss'] ?? 2),
-                'trades_count'     => (int)($_POST['trades_count'] ?? 1),
-                'expected_win'     => (int)($_POST['expected_win'] ?? 1),
-            ];
+        $request = [
+            'risk_reward_type' => $_POST['risk_reward_type'] ?? 'fixed_risk_reward',
+            'risk_reward'      => (float)($_POST['risk_reward'] ?? 2),
+            'trades_provision' => $period,
+            'consecutive_loss' => (int)($_POST['consecutive_loss'] ?? 2),
+            'trades_count'     => (int)($_POST['trades_count'] ?? 1),
+            'expected_win'     => (int)($_POST['expected_win'] ?? 1),
+        ];
 
-            $existing = null;
-            try {
-                $eq = $pdo->prepare("SELECT id FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? LIMIT 1");
-                $eq->execute([$userId, (int)$programme['id']]);
-                $existing = $eq->fetch(PDO::FETCH_ASSOC);
-            } catch (Throwable $e) {}
+        $programmeId = (int)$programme['id'];
+        $interestId  = 0;
+        $actionTaken = 'interested';
+        $wasInserted = false;
+
+        try {
+            $pdo->beginTransaction();
+
+            $eq = $pdo->prepare("
+                SELECT *
+                FROM signals_provider_interest
+                WHERE user_id = ? AND programme_id = ?
+                  AND interest_status IN ('interested','pending','active')
+                ORDER BY id DESC
+                LIMIT 1
+                FOR UPDATE
+            ");
+            $eq->execute([$userId, $programmeId]);
+            $existing = $eq->fetch(PDO::FETCH_ASSOC) ?: null;
 
             if ($existing) {
-                jres(['success' => false, 'message' => 'You already have an active challenge interest for this programme.']);
+                $sameShape =
+                    ((float)$existing['risk_reward']             === (float)$request['risk_reward']) &&
+                    ((string)$existing['risk_reward_type']       === (string)$request['risk_reward_type']) &&
+                    ((int)$existing['consecutive_expected_loss'] === (int)$request['consecutive_loss']) &&
+                    ((int)$existing['trades_count']              === (int)$request['trades_count']) &&
+                    ((int)$existing['expected_win_count']        === (int)$request['expected_win']) &&
+                    ((string)$existing['trades_provision']       === (string)$request['trades_provision']);
+
+                if ($sameShape) {
+                    $interestId  = (int)$existing['id'];
+                    $actionTaken = 'interested';
+                    $wasInserted = false;
+                } else {
+                    $pdo->rollBack();
+                    jres([
+                        'success' => false,
+                        'message' => 'You already have an active challenge interest for this programme. Cancel it first to choose a different challenge.'
+                    ]);
+                }
+            } else {
+                if (!spiHasPartialUniqueKey($pdo)) {
+                    try {
+                        $del = $pdo->prepare("
+                            DELETE FROM signals_provider_interest
+                            WHERE user_id = ?
+                              AND programme_id = ?
+                              AND request_id = ?
+                              AND accountmanagement_id = 0
+                              AND interest_status NOT IN ('interested','pending','active')
+                        ");
+                        $del->execute([$userId, $programmeId, $requestId]);
+                    } catch (Throwable $delErr) {
+                        error_log('[signals_provision_request] stale-row cleanup failed: ' . $delErr->getMessage());
+                    }
+                }
+
+                $ins = $pdo->prepare("
+                    INSERT INTO signals_provider_interest
+                        (user_id, programme_id, accountmanagement_id, request_id,
+                         risk_reward, risk_reward_type,
+                         consecutive_expected_loss, trades_count, expected_win_count,
+                         trades_provision, interest_status, begin_test, signal_testing_started_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'interested', 0, NULL)
+                ");
+                $ins->execute([
+                    $userId,
+                    $programmeId,
+                    0,
+                    $requestId,
+                    $request['risk_reward'],
+                    $request['risk_reward_type'],
+                    $request['consecutive_loss'],
+                    $request['trades_count'],
+                    $request['expected_win'],
+                    $request['trades_provision'],
+                ]);
+
+                $interestId  = (int)$pdo->lastInsertId();
+                $actionTaken = 'interested';
+                $wasInserted = true;
             }
-
-            $ins = $pdo->prepare("
-                INSERT INTO signals_provider_interest
-                    (user_id, programme_id, accountmanagement_id, request_id,
-                     risk_reward, risk_reward_type,
-                     consecutive_expected_loss, trades_count, expected_win_count,
-                     trades_provision, interest_status, begin_test, signal_testing_started_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'interested', 0, NULL)
-            ");
-            $ins->execute([
-                $userId,
-                (int)$programme['id'],
-                0,
-                $requestId,
-                $request['risk_reward'],
-                $request['risk_reward_type'],
-                $request['consecutive_loss'],
-                $request['trades_count'],
-                $request['expected_win'],
-                $request['trades_provision'],
-            ]);
-
-            $interestId = (int)$pdo->lastInsertId();
 
             try {
                 $logIns = $pdo->prepare("
                     INSERT INTO signals_request_file (user_id, programme_id, request_id, action, snapshot_data)
-                    VALUES (?, ?, ?, 'interested', ?)
+                    VALUES (?, ?, ?, ?, ?)
                 ");
-                $logIns->execute([$userId, (int)$programme['id'], $requestId, json_encode($request)]);
-            } catch (Throwable $e) {}
+                $logIns->execute([
+                    $userId,
+                    $programmeId,
+                    $requestId,
+                    $actionTaken,
+                    json_encode($request)
+                ]);
+            } catch (Throwable $logErr) {
+                error_log('[signals_provision_request] audit log failed: ' . $logErr->getMessage());
+            }
 
-            // ==================================================
-            // PROGRAMME-SCOPED NOTIFICATION (programme_notifications)
-            // ==================================================
+            $pdo->commit();
+
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Throwable $ignored) {}
+            }
+
+            $msg = $e->getMessage();
+            if (strpos($msg, 'uq_spi') !== false || strpos($msg, 'Duplicate entry') !== false) {
+                jres([
+                    'success' => false,
+                    'message' => 'A challenge interest for this programme already exists. Cancel it first if you want to choose a different challenge.'
+                ]);
+            }
+
+            jres(['success' => false, 'message' => 'Failed to save interest: ' . $msg]);
+        }
+
+        /* ------------------------------------------------
+         * 4) Notification — outside the transaction.
+         *    Uses a timestamped key so every join attempt
+         *    produces a fresh in-app row + email, even on
+         *    idempotent re-clicks of the same challenge.
+         * ------------------------------------------------ */
+
+        try {
             $programmeName = trim((string)($programme['program_name'] ?? ''));
-            if ($programmeName === '') $programmeName = 'Programme #' . (int)$programme['id'];
-
-            $rrTypeLabel = 'Fixed Risk Reward';
-            if ($request['risk_reward_type'] === 'custom_and_minimum_risk_reward') $rrTypeLabel = 'Custom & Minimum Risk Reward';
-            elseif ($request['risk_reward_type'] === 'custom_and_fixed_risk_reward') $rrTypeLabel = 'Custom & Fixed Risk Reward';
+            if ($programmeName === '') $programmeName = 'Programme #' . $programmeId;
 
             $periodLabel = ucfirst($period);
 
-            $challengeSummary = 'Risk Reward Type: ' . $rrTypeLabel . '. '
-                              . 'Risk Reward: 1:' . $request['risk_reward'] . '. '
-                              . 'Trades Count: ' . $request['trades_count'] . '. '
-                              . 'Expected Win: ' . $request['expected_win'] . '. '
-                              . 'Consecutive Expected Loss: ' . $request['consecutive_loss'] . '.';
+            $joinMessage = 'Your programme ' . $programmeName . ' has joined a ' . $periodLabel . ' signals challenge.';
 
-            // 1) Programme-scoped in-app notification
-            recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
-                'notification_key' => 'prog-signals-interest-' . (int)$programme['id'] . '-' . $interestId,
-                'title'            => 'Challenge Interest Registered',
-                'message'          => 'You have shown interest in a ' . $periodLabel . ' challenge for ' . $programmeName . '. '
-                                    . $challengeSummary . ' '
-                                    . 'Ensure you begin test after training your programme to perfectly deliver your challenge request.',
-                'type'             => 'success',
-                'section'          => 'Signals',
-                'action_tab'       => 'signals_provision_request',
-            ]);
-
-            // 2) Contract-level notification (email + user-level bell)
-            recordContractNotification($pdo, [
-                'user_email'       => $email,
-                'sub_account_id'   => $activeSubAccountId,
-                'main_account_id'  => $mainAccountId,
-                'notification_key' => 'signals-interest-saved-' . $interestId . '-' . date('YmdHis'),
-                'title'            => 'Challenge Interest Registered',
-                'message'          => 'You have shown interest in a ' . $periodLabel . ' challenge for ' . $programmeName . '. '
-                                    . $challengeSummary . ' '
-                                    . 'Ensure you begin test after training your programme to perfectly deliver your challenge request.',
+            recordProgrammeNotification($pdo, $programmeId, $email, [
+                'notification_key' => 'prog-signals-interest-' . $programmeId . '-' . $interestId . '-' . date('YmdHis'),
+                'title'            => 'Challenge Joined',
+                'message'          => $joinMessage,
                 'type'             => 'success',
                 'section'          => 'Signals',
                 'action_tab'       => 'signals_provision_request',
                 'force'            => true
             ]);
-
-            jres(['success' => true, 'message' => 'Challenge interest saved.', 'interest_id' => $interestId]);
-        } catch (Throwable $e) {
-            jres(['success' => false, 'message' => 'Failed to save interest: ' . $e->getMessage()]);
+        } catch (Throwable $notifErr) {
+            error_log('[signals_provision_request] join notification failed: ' . $notifErr->getMessage());
         }
+
+        jres([
+            'success'     => true,
+            'message'     => 'Challenge interest saved.',
+            'interest_id' => $interestId
+        ]);
     }
 
     if ($action === 'check_my_interest') {
         if (!$programme) jres(['success' => false, 'message' => 'No programme.']);
         try {
-            $q = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
+            $q = $pdo->prepare("
+                SELECT *
+                FROM signals_provider_interest
+                WHERE user_id = ? AND programme_id = ?
+                  AND interest_status IN ('interested','pending','active')
+                ORDER BY id DESC
+                LIMIT 1
+            ");
             $q->execute([$userId, (int)$programme['id']]);
             $interest = $q->fetch(PDO::FETCH_ASSOC) ?: null;
             jres(['success' => true, 'interest' => $interest]);
@@ -474,7 +526,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 jres(['success' => false, 'message' => 'This challenge interest can no longer be cancelled.']);
             }
 
-            // Mark as cancelled
             $upd = $pdo->prepare("
                 UPDATE signals_provider_interest
                 SET interest_status = 'cancelled',
@@ -483,7 +534,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ");
             $upd->execute([$interestId, $userId, (int)$programme['id']]);
 
-            // Audit log
             try {
                 $logIns = $pdo->prepare("
                     INSERT INTO signals_request_file (user_id, programme_id, request_id, action, snapshot_data)
@@ -500,9 +550,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ]);
             } catch (Throwable $e) {}
 
-            // ==================================================
-            // NOTIFICATION: Challenge cancelled
-            // ==================================================
             $programmeName = trim((string)($programme['program_name'] ?? ''));
             if ($programmeName === '') $programmeName = 'Programme #' . (int)$programme['id'];
 
@@ -510,41 +557,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) $period = 'daily';
             $periodLabel = ucfirst($period);
 
-            $rrTypeLabel = 'Fixed Risk Reward';
-            if (($interest['risk_reward_type'] ?? '') === 'custom_and_minimum_risk_reward') $rrTypeLabel = 'Custom & Minimum Risk Reward';
-            elseif (($interest['risk_reward_type'] ?? '') === 'custom_and_fixed_risk_reward') $rrTypeLabel = 'Custom & Fixed Risk Reward';
+            $cancelMessage = 'Your programme ' . $programmeName . ' has cancelled its ' . $periodLabel . ' signals challenge.';
 
-            $cancelMessage = 'Your interest in the ' . $periodLabel . ' challenge for ' . $programmeName . ' has been cancelled. '
-                           . 'Your programme will need to embark on a new challenge duration to participate again. '
-                           . 'Risk Reward Type: ' . $rrTypeLabel . '. '
-                           . 'Risk Reward: 1:' . (float)($interest['risk_reward'] ?? 0) . '. '
-                           . 'Trades Count: ' . (int)($interest['trades_count'] ?? 0) . '. '
-                           . 'Expected Win: ' . (int)($interest['expected_win_count'] ?? 0) . '. '
-                           . 'Consecutive Expected Loss: ' . (int)($interest['consecutive_expected_loss'] ?? 0) . '.';
-
-            // 1) Programme-scoped in-app notification
-            recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
-                'notification_key' => 'prog-signals-cancelled-' . (int)$programme['id'] . '-' . $interestId . '-' . date('YmdHis'),
-                'title'            => 'Challenge Interest Cancelled',
-                'message'          => $cancelMessage,
-                'type'             => 'warning',
-                'section'          => 'Signals',
-                'action_tab'       => 'signals_provision_request',
-            ]);
-
-            // 2) Contract-level notification (email + user-level bell)
-            recordContractNotification($pdo, [
-                'user_email'       => $email,
-                'sub_account_id'   => $activeSubAccountId,
-                'main_account_id'  => $mainAccountId,
-                'notification_key' => 'signals-interest-cancelled-' . $interestId . '-' . date('YmdHis'),
-                'title'            => 'Challenge Interest Cancelled',
-                'message'          => $cancelMessage,
-                'type'             => 'warning',
-                'section'          => 'Signals',
-                'action_tab'       => 'signals_provision_request',
-                'force'            => true
-            ]);
+            try {
+                recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
+                    'notification_key' => 'prog-signals-cancelled-' . (int)$programme['id'] . '-' . $interestId . '-' . date('YmdHis'),
+                    'title'            => 'Challenge Cancelled',
+                    'message'          => $cancelMessage,
+                    'type'             => 'warning',
+                    'section'          => 'Signals',
+                    'action_tab'       => 'signals_provision_request',
+                    'force'            => true
+                ]);
+            } catch (Throwable $notifErr) {
+                error_log('[signals_provision_request] cancel notification failed: ' . $notifErr->getMessage());
+            }
 
             jres(['success' => true, 'message' => 'Challenge interest cancelled successfully.']);
         } catch (Throwable $e) {
@@ -616,7 +643,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     .spr-header-title { font-size: 1.15rem; font-weight: 800; }
 
-    /* MAIN TABS */
     .spr-main-tabs {
         display: flex; gap: 4px; border-bottom: 1px solid var(--spr-border);
         margin: 0 auto; padding: 0 var(--spr-page-pad);
@@ -632,7 +658,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     .spr-main-tab.active { color: var(--spr-accent); border-bottom-color: var(--spr-accent); }
 
-    /* SUB TABS (periods) */
     .spr-sub-tabs {
         display: flex; gap: 4px;
         margin: 0 auto; padding: 0 var(--spr-page-pad);
@@ -653,7 +678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     .spr-filter-float {
         position: fixed;
-        top: calc(env(safe-area-inset-top, 0px) + 96px);
+        top: calc(env(safe-area-inset-top, 0px) + 139px);
         left: 50%; transform: translateX(-50%);
         z-index: 9999; background: transparent; border: none;
         padding: 0 var(--spr-page-pad); width: 100%; max-width: 1100px;
@@ -723,6 +748,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .spr-interested-btn:disabled { background: var(--spr-muted); cursor: not-allowed; opacity: .7; transform: none; box-shadow: none; }
     .spr-interested-btn.is-mine { background: var(--spr-info); cursor: default; }
     .spr-interested-btn.is-mine:hover { background: var(--spr-info); transform: none; box-shadow: none; }
+    .spr-interested-btn.is-readonly {
+        background: transparent;
+        border: 1.5px dashed var(--spr-border);
+        color: var(--spr-muted);
+        cursor: default;
+        opacity: .8;
+    }
+    .spr-interested-btn.is-readonly:hover {
+        background: transparent;
+        transform: none;
+        box-shadow: none;
+    }
 
     .spr-cancel-btn {
         flex-shrink: 0; align-self: center; padding: 10px 22px;
@@ -741,7 +778,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .spr-item-actions { width: 100%; }
         .spr-meta-row { gap: 6px 14px; }
         .spr-scroll-area { padding: 52px var(--spr-page-pad) 90px; }
-        .spr-filter-float { top: calc(env(safe-area-inset-top, 0px) + 92px); }
+        .spr-filter-float { top: calc(env(safe-area-inset-top, 0px) + 132px); }
     }
 
     .spr-empty { padding: 36px 20px; text-align: center; color: var(--spr-muted); border: 1px dashed var(--spr-border); border-radius: 14px; background: var(--spr-bg); }
@@ -929,6 +966,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     var PENDING_REQUEST = null;
     var PENDING_INTEREST_ID = null;
     var ACTIVE_FILTERS = null;
+    var MY_INTEREST = null;
 
     var cancelFilterBtn = document.getElementById('sprCancelFilterBtn');
     var filterFloat = document.getElementById('sprFilterFloat');
@@ -1028,6 +1066,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     function renderRequest(req, myInterest) {
         var isSystem = (parseInt(req.user_id, 10) || 0) === 0;
         var isMine = !!(myInterest && req.id && parseInt(myInterest.id, 10) === parseInt(req.id, 10));
+        var hasAnyInterest = !!(myInterest && myInterest.id);
 
         var name = isSystem ? 'System Challenge' :
             (req.username || req.first_name || req.fullname || ('Trader #' + req.user_id));
@@ -1061,6 +1100,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         if (isMine) {
             html += '<button class="spr-interested-btn is-mine" disabled>Interested ✓</button>';
+        } else if (hasAnyInterest) {
+            html += '<button class="spr-interested-btn is-readonly" disabled title="You already have an active challenge interest for this programme.">Already In a challenge</button>';
         } else {
             html += '<button class="spr-interested-btn" onclick="sprSelectRequest(' + (req.id || 0) + ')">Interested</button>';
         }
@@ -1125,9 +1166,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         post({ action: 'check_my_interest' }, function (d) {
-            var myInterest = (d && d.success) ? d.interest : null;
+            MY_INTEREST = (d && d.success && d.interest) ? d.interest : null;
             var html = '';
-            REQUESTS.forEach(function (r) { html += renderRequest(r, myInterest); });
+            REQUESTS.forEach(function (r) { html += renderRequest(r, MY_INTEREST); });
             requestListEl.innerHTML = html;
             updateCancelFilterButton();
         });

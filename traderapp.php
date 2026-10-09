@@ -20,9 +20,22 @@ if (isset($_GET['logout'])) {
         try {
             $logoutEmail = strtolower($_SESSION['user_email']);
             $activeProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
+
             if ($activeProgrammeId > 0) {
+                // Keep the existing programme-side bookkeeping
                 $upd = $pdo->prepare("UPDATE programme SET last_programme_id = ? WHERE id = ?");
                 $upd->execute([$activeProgrammeId, $activeProgrammeId]);
+
+                // Record last_account on the harvhub row that owns this programme
+                $ownerQ = $pdo->prepare("SELECT userid FROM programme WHERE id = ? LIMIT 1");
+                $ownerQ->execute([$activeProgrammeId]);
+                $ownerId = (int)($ownerQ->fetchColumn() ?: 0);
+
+                if ($ownerId > 0) {
+                    $lastAccount = 'P' . $activeProgrammeId;
+                    $acc = $pdo->prepare("UPDATE harvhub SET last_account = ? WHERE id = ?");
+                    $acc->execute([$lastAccount, $ownerId]);
+                }
             }
         } catch (Throwable $e) {}
     }
@@ -270,14 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $notifCount = 0;
                 $reqCount = 0;
                 try {
-                    $nq = $pdo->prepare("
-                        SELECT COUNT(*) FROM notifications
-                        WHERE LOWER(user_email) = ?
-                          AND (sub_account_id = ? OR sub_account_id IS NULL)
-                          AND is_read = 0
-                    ");
-                    $nq->execute([$email, $pid]);
-                    $notifCount = (int)$nq->fetchColumn();
+                    $notifCount = getProgrammeNotificationUnreadCount($pdo, $pid, $email);
                 } catch (Throwable $e) {}
                 try {
                     $rq = $pdo->prepare("
@@ -326,7 +332,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $unreadCurrent = 0;
         try {
-            $unreadCurrent = getNotificationUnreadCount($pdo, $email, $activeProgrammeId);
+            $unreadCurrent = getProgrammeNotificationUnreadCount($pdo, $activeProgrammeId, $email);
         } catch (Throwable $e) {}
 
         $globalIncoming = 0;
@@ -358,14 +364,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $notifMap[$pid] = 0;
                 $reqMap[$pid] = 0;
                 try {
-                    $nq = $pdo->prepare("
-                        SELECT COUNT(*) FROM notifications
-                        WHERE LOWER(user_email) = ?
-                          AND (sub_account_id = ? OR sub_account_id IS NULL)
-                          AND is_read = 0
-                    ");
-                    $nq->execute([$email, $pid]);
-                    $notifMap[$pid] = (int)$nq->fetchColumn();
+                    $notifMap[$pid] = getProgrammeNotificationUnreadCount($pdo, $pid, $email);
                 } catch (Throwable $e) {}
                 try {
                     $rq = $pdo->prepare("
@@ -464,10 +463,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (isset($_POST['mark_notifications_read'])) {
         header('Content-Type: application/json; charset=utf-8');
-        $ok = markContractNotificationsRead($pdo, $email, $activeProgrammeId);
+        $ok = markProgrammeNotificationsSeen($pdo, $activeProgrammeId, $email);
         echo json_encode([
             'success' => $ok,
-            'unread_count' => getNotificationUnreadCount($pdo, $email, $activeProgrammeId)
+            'unread_count' => getProgrammeNotificationUnreadCount($pdo, $activeProgrammeId, $email)
         ]);
         exit;
     }
@@ -476,8 +475,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => true,
-            'notifications' => getContractNotifications($pdo, $email, $activeProgrammeId, 100),
-            'unread_count' => getNotificationUnreadCount($pdo, $email, $activeProgrammeId)
+            'notifications' => getProgrammeNotifications($pdo, $activeProgrammeId, $email, 100),
+            'unread_count' => getProgrammeNotificationUnreadCount($pdo, $activeProgrammeId, $email)
         ]);
         exit;
     }
@@ -486,7 +485,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => true,
-            'unread_count' => getNotificationUnreadCount($pdo, $email, $activeProgrammeId)
+            'unread_count' => getProgrammeNotificationUnreadCount($pdo, $activeProgrammeId, $email)
         ]);
         exit;
     }
@@ -523,10 +522,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['success' => true, 'dark_mode' => $v]);
         exit;
     }
+
+    if (isset($_POST['save_last_app'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        $app = trim((string)($_POST['app'] ?? ''));
+        $allowed = ['investorapp', 'trader_app', 'managerapp', 'traderapp'];
+        if ($app === '' || !in_array($app, $allowed, true)) {
+            echo json_encode(['success' => false, 'message' => 'Invalid app value.']);
+            exit;
+        }
+        try {
+            $u = $pdo->prepare("UPDATE harvhub SET last_app = ? WHERE LOWER(email) = ?");
+            $u->execute([$app, $email]);
+            echo json_encode(['success' => true, 'last_app' => $app]);
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'message' => 'Failed to save app.']);
+        }
+        exit;
+    }
 }
 
-$initialUnreadCount = getNotificationUnreadCount($pdo, $email, $activeProgrammeId);
-$allNotifications = getContractNotifications($pdo, $email, $activeProgrammeId, 100);
+$initialUnreadCount = getProgrammeNotificationUnreadCount($pdo, $activeProgrammeId, $email);
+$allNotifications   = getProgrammeNotifications($pdo, $activeProgrammeId, $email, 100);
 
 // ---- Tabs ----
 $navTabs = ['signals', 'training', 'analytics', 'menu'];
@@ -1519,7 +1536,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                     <?php foreach ($allNotifications as $n): ?>
                         <div class="notification-item <?= $n['update'] === 'new' ? 'unread' : '' ?> <?= htmlspecialchars($n['type']) ?>"
                              data-id="<?= htmlspecialchars($n['id']) ?>"
-                             data-update="<?= htmlspecialchars($n['update']) ?>">
+                             data-update="<?= htmlspecialchars($n['update']) ?>"
+                             data-action-tab="<?= htmlspecialchars($n['action_tab'] ?? '') ?>">
                             <div class="notification-section"><?= htmlspecialchars($n['section']) ?></div>
                             <div class="notification-title"><?= htmlspecialchars($n['title'] ?? 'Notification') ?></div>
                             <div class="notification-message"><?= htmlspecialchars($n['message']) ?></div>
@@ -1820,7 +1838,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         }
         if (e.data.type === 'saveLastApp') {
             try {
-                fetch('programme_menu.php', {
+                fetch('traderapp.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',
@@ -2149,7 +2167,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     if (confirmYes) {
         confirmYes.addEventListener('click', function () {
             try {
-                fetch('programme_menu.php', {
+                fetch('traderapp.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',

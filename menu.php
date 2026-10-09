@@ -361,7 +361,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
         $_SESSION['active_main_account_id'] = (int)$fallback['main_account_id'];
 
         try {
-            $lastAccount = 's' . (int)$fallback['sub_account_id'];
+            $lastAccount = 'SA' . (int)$fallback['sub_account_id'];
             $updLast = $pdo->prepare("UPDATE $tableName SET last_account = ? WHERE id = ?");
             $updLast->execute([$lastAccount, (int)$fallback['id']]);
         } catch (Throwable $e) {}
@@ -437,6 +437,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
     }
 
     // ---------- SAVE LAST APP ----------
+    // ---------- SAVE LAST APP ----------
     if (isset($_POST['save_last_app'])) {
         header('Content-Type: application/json; charset=utf-8');
 
@@ -454,6 +455,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
             echo json_encode(['success' => true, 'last_app' => $app]);
         } catch (Throwable $e) {
             echo json_encode(['success' => false, 'message' => 'Failed to save app.']);
+        }
+        exit;
+    }
+
+    // ---------- RECORD LAST ACCOUNT ----------
+    if (isset($_POST['record_last_account_ajax'])) {
+        header('Content-Type: application/json; charset=utf-8');
+
+        // This menu is the investor side, so the active account is always a sub-account.
+        // Record "SA" . sub_account_id  (e.g. sub_account_id 2 -> "SA2").
+        $subId = (int)($user['sub_account_id'] ?? $activeSubAccountId);
+
+        if ($subId <= 0) {
+            echo json_encode(['success' => false, 'message' => 'No sub-account to record.']);
+            exit;
+        }
+
+        $lastAccount = 'SA' . $subId;
+
+        try {
+            $upd = $pdo->prepare("UPDATE $tableName SET last_account = ? WHERE id = ?");
+            $upd->execute([$lastAccount, $userId]);
+            echo json_encode(['success' => true, 'last_account' => $lastAccount]);
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'message' => 'Failed to record last account.']);
         }
         exit;
     }
@@ -1177,27 +1203,52 @@ try {
         var insideShell = false;
         try { insideShell = !!(window.parent && window.parent !== window); } catch (e) {}
 
-        if (insideShell) {
-            try { window.parent.postMessage({ type: 'saveLastApp' }, '*'); } catch (e) {}
-            try { window.parent.postMessage({ type: 'logout' }, '*'); } catch (e) {}
-            return;
-        }
-
+        // 1) Record last_account (SA<sub_id>) before anything else. Fire-and-forget.
+        var recordPromise;
         try {
-            fetch('menu.php', {
+            recordPromise = fetch('menu.php', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'X-Requested-With': 'XMLHttpRequest'
                 },
                 credentials: 'same-origin',
-                body: 'save_last_app=1&app=investorapp'
+                body: 'record_last_account_ajax=1'
             }).catch(function () {});
-        } catch (e) {}
+        } catch (e) {
+            recordPromise = Promise.resolve();
+        }
 
-        setTimeout(function () {
-            window.location.href = 'index.php?logout=1';
-        }, 250);
+        // 2) Then run the normal logout flow.
+        var proceed = function () {
+            if (insideShell) {
+                try { window.parent.postMessage({ type: 'saveLastApp' }, '*'); } catch (e) {}
+                try { window.parent.postMessage({ type: 'logout' }, '*'); } catch (e) {}
+                return;
+            }
+
+            try {
+                fetch('menu.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    credentials: 'same-origin',
+                    body: 'save_last_app=1&app=investorapp'
+                }).catch(function () {});
+            } catch (e) {}
+
+            setTimeout(function () {
+                window.location.href = 'index.php?logout=1';
+            }, 250);
+        };
+
+        // Wait up to ~400ms for the record call, then proceed regardless.
+        var done = false;
+        var finish = function () { if (done) return; done = true; proceed(); };
+        setTimeout(finish, 400);
+        Promise.resolve(recordPromise).then(finish, finish);
     }
 
     document.addEventListener('click', function(event) {

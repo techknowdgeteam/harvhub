@@ -5,14 +5,16 @@
  * Central notification service for HarvHub.
  *
  * Responsibilities:
- *  - Store notifications in contract_notifications.
+ *  - Store notifications in contract_notifications (contract/investor side).
+ *  - Store programme notifications in programme_notifications (programme side).
  *  - Keep harvhub.unread_notifications as a per-sub-account unread flag.
  *  - Send notification emails through notification_email.php.
  *  - Store browser/sound permission preferences globally per user email.
  *
  * Include this file from any PHP action that needs to create a notification:
  *     require_once __DIR__ . '/notification_service.php';
- *     recordContractNotification($pdo, [...]);
+ *     recordContractNotification($pdo, [...]);   // contract side + email
+ *     recordProgrammeNotification($pdo, [...]);  // programme side + email
  */
 
 
@@ -998,6 +1000,486 @@ if (!function_exists('recordContractNotificationOnce')) {
 
 
 /* ============================================================
+ * PROGRAMME NOTIFICATIONS
+ * ------------------------------------------------------------
+ * Programme-side notifications are stored in the
+ * `programme_notifications` table (in-app) AND trigger the
+ * same Brevo email pipeline used by contract notifications.
+ *
+ * Email is keyed on user_email only — programme_id is used
+ * for the in-app row and for deduplication.
+ * ============================================================ */
+
+if (!function_exists('recordProgrammeNotification')) {
+
+    /**
+     * Record a programme-scoped notification AND send an email.
+     *
+     * @param PDO    $pdo
+     * @param int    $programmeId
+     * @param string $userEmail
+     * @param array  $opts  Keys:
+     *                      - notification_key (string, auto if empty)
+     *                      - title            (string)
+     *                      - message          (string)
+     *                      - type             (info|success|warning|danger)
+     *                      - section          (string)
+     *                      - action_tab       (string, optional)
+     *                      - force            (bool, skip dedupe if true)
+     *                      - send_email       (bool, default true)
+     *                      - recipient_name   (string, optional)
+     *
+     * @return int|null  Inserted row id, or null on failure / duplicate.
+     */
+    function recordProgrammeNotification(
+        PDO $pdo,
+        int $programmeId,
+        string $userEmail,
+        array $opts
+    ): ?int {
+
+        $programmeId = (int)$programmeId;
+        $userEmail   = strtolower(trim($userEmail));
+
+        if (
+            $programmeId <= 0 ||
+            $userEmail === '' ||
+            !filter_var($userEmail, FILTER_VALIDATE_EMAIL)
+        ) {
+            error_log(
+                '[HarvHub Notification Service] Invalid programme notification payload.'
+            );
+            return null;
+        }
+
+        $key = trim((string)($opts['notification_key'] ?? ''));
+
+        if ($key === '') {
+            $key = 'pn-' . $programmeId . '-' . date('YmdHis') . '-' . mt_rand();
+        }
+
+        $title = trim((string)($opts['title'] ?? 'Notification'));
+        if ($title === '') {
+            $title = 'Notification';
+        }
+
+        $message = harvhubNotificationCleanText(
+            (string)($opts['message'] ?? '')
+        );
+
+        if ($message === '') {
+            // Nothing to record if there is no message body.
+            return null;
+        }
+
+        $type = trim((string)($opts['type'] ?? 'info'));
+        if (!in_array($type, ['info', 'success', 'warning', 'danger'], true)) {
+            $type = 'info';
+        }
+
+        $section = trim((string)($opts['section'] ?? 'General'));
+        if ($section === '') {
+            $section = 'General';
+        }
+
+        $actionTab = isset($opts['action_tab'])
+            ? trim((string)$opts['action_tab'])
+            : null;
+
+        $force     = !empty($opts['force']);
+        $sendEmail = !array_key_exists('send_email', $opts) || !empty($opts['send_email']);
+
+        try {
+
+            /* ------------------------------------------------
+             * DEDUPLICATION
+             * ------------------------------------------------ */
+
+            if (!$force) {
+
+                $q = $pdo->prepare("
+                    SELECT notification_key
+                    FROM programme_notifications
+                    WHERE programme_id = ?
+                      AND LOWER(user_email) = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ");
+
+                $q->execute([
+                    $programmeId,
+                    $userEmail
+                ]);
+
+                $latestKey = (string)($q->fetchColumn() ?: '');
+
+                if ($latestKey === $key) {
+                    return null;
+                }
+            }
+
+
+            /* ------------------------------------------------
+             * INSERT IN-APP ROW
+             * ------------------------------------------------ */
+
+            $ins = $pdo->prepare("
+                INSERT INTO programme_notifications
+                (
+                    programme_id,
+                    user_email,
+                    notification_key,
+                    title,
+                    message,
+                    type,
+                    section,
+                    action_tab,
+                    seen
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ");
+
+            $ins->execute([
+                $programmeId,
+                $userEmail,
+                substr($key, 0, 190),
+                substr($title, 0, 190),
+                $message,
+                $type,
+                substr($section, 0, 60),
+                ($actionTab !== null && $actionTab !== '')
+                    ? substr($actionTab, 0, 60)
+                    : null
+            ]);
+
+            $id = (int)$pdo->lastInsertId();
+
+
+            /* ------------------------------------------------
+             * SEND EMAIL (best-effort, never blocks the row)
+             * ------------------------------------------------ */
+
+            if ($sendEmail) {
+
+                try {
+
+                    require_once __DIR__ . '/notification_email.php';
+
+                    $recipientName = trim((string)($opts['recipient_name'] ?? ''));
+
+                    $mailResult = sendNotificationEmail(
+                        $userEmail,
+                        $title,
+                        $message,
+                        [
+                            'pdo'             => $pdo,
+                            'section'         => $section,
+                            'notification_id' => $id,
+                            'action_tab'      => $actionTab,
+                            'recipient_name'  => $recipientName,
+                            'source'          => 'programme'
+                        ]
+                    );
+
+                    if ($mailResult === true) {
+                        error_log(
+                            '[HarvHub Notification Service] Programme notification email sent'
+                            . ' | programme_id=' . $programmeId
+                            . ' | notification_id=' . $id
+                            . ' | recipient=' . $userEmail
+                        );
+                    } else {
+                        error_log(
+                            '[HarvHub Notification Service] Programme notification email returned FALSE'
+                            . ' | programme_id=' . $programmeId
+                            . ' | notification_id=' . $id
+                            . ' | recipient=' . $userEmail
+                        );
+                    }
+
+                } catch (Throwable $mailError) {
+
+                    error_log(
+                        '[HarvHub Notification Service] Programme notification email exception'
+                        . ' | programme_id=' . $programmeId
+                        . ' | notification_id=' . $id
+                        . ' | recipient=' . $userEmail
+                        . ' | error=' . $mailError->getMessage()
+                        . ' | file=' . $mailError->getFile()
+                        . ' | line=' . $mailError->getLine()
+                    );
+                }
+            }
+
+            return $id;
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[HarvHub Notification Service] recordProgrammeNotification failed'
+                . ' | programme_id=' . $programmeId
+                . ' | email=' . $userEmail
+                . ' | error=' . $e->getMessage()
+            );
+
+            return null;
+        }
+    }
+}
+
+
+if (!function_exists('recordProgrammeNotificationOnce')) {
+
+    /**
+     * Record a programme notification only if the same key
+     * has not already been used for this programme + email.
+     *
+     * @return int|null  Inserted row id, or null on failure / duplicate.
+     */
+    function recordProgrammeNotificationOnce(
+        PDO $pdo,
+        int $programmeId,
+        string $userEmail,
+        array $opts
+    ): ?int {
+
+        $programmeId = (int)$programmeId;
+        $userEmail   = strtolower(trim($userEmail));
+
+        $key = trim((string)($opts['notification_key'] ?? ''));
+
+        if (
+            $programmeId <= 0 ||
+            $userEmail === '' ||
+            $key === ''
+        ) {
+            return null;
+        }
+
+        try {
+
+            $q = $pdo->prepare("
+                SELECT id
+                FROM programme_notifications
+                WHERE programme_id = ?
+                  AND LOWER(user_email) = ?
+                  AND notification_key = ?
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+
+            $q->execute([
+                $programmeId,
+                $userEmail,
+                substr($key, 0, 190)
+            ]);
+
+            if ($q->fetchColumn()) {
+                return null;
+            }
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[HarvHub Notification Service] Programme notification-once lookup failed: '
+                . $e->getMessage()
+            );
+        }
+
+        $opts['force'] = true;
+
+        return recordProgrammeNotification(
+            $pdo,
+            $programmeId,
+            $userEmail,
+            $opts
+        );
+    }
+}
+
+
+if (!function_exists('getProgrammeNotifications')) {
+
+    /**
+     * Fetch programme notifications for a given programme + email.
+     */
+    function getProgrammeNotifications(
+        PDO $pdo,
+        int $programmeId,
+        string $userEmail,
+        int $limit = 100
+    ): array {
+
+        $programmeId = (int)$programmeId;
+        $userEmail   = strtolower(trim($userEmail));
+        $limit       = max(1, min(200, (int)$limit));
+
+        if ($programmeId <= 0 || $userEmail === '') {
+            return [];
+        }
+
+        try {
+
+            $q = $pdo->prepare("
+                SELECT
+                    id,
+                    notification_key,
+                    title,
+                    message,
+                    type,
+                    section,
+                    action_tab,
+                    seen,
+                    created_at
+                FROM programme_notifications
+                WHERE programme_id = ?
+                  AND LOWER(user_email) = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT {$limit}
+            ");
+
+            $q->execute([
+                $programmeId,
+                $userEmail
+            ]);
+
+            $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+
+            $out = [];
+
+            foreach ($rows as $row) {
+
+                $out[] = [
+                    'id'               => (int)$row['id'],
+                    'notification_key' => (string)$row['notification_key'],
+                    'title'            => (string)$row['title'],
+                    'section'          => (string)($row['section'] ?: 'General'),
+                    'message'          => harvhubNotificationCleanText($row['message']),
+                    'time'             => $row['created_at'],
+                    'type'             => (string)($row['type'] ?: 'info'),
+                    'action_tab'       => $row['action_tab'],
+                    'update'           => ((int)$row['seen'] === 0) ? 'new' : 'read'
+                ];
+            }
+
+            return $out;
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[HarvHub Notification Service] getProgrammeNotifications failed: '
+                . $e->getMessage()
+            );
+
+            return [];
+        }
+    }
+}
+
+
+if (!function_exists('getProgrammeNotificationUnreadCount')) {
+
+    /**
+     * Count unread (seen = 0) programme notifications for a programme + email.
+     *
+     * @param PDO    $pdo
+     * @param int    $programmeId
+     * @param string $userEmail
+     *
+     * @return int  Number of unread rows (0 on failure or invalid input).
+     */
+    function getProgrammeNotificationUnreadCount(
+        PDO $pdo,
+        int $programmeId,
+        string $userEmail
+    ): int {
+
+        $programmeId = (int)$programmeId;
+        $userEmail   = strtolower(trim($userEmail));
+
+        if ($programmeId <= 0 || $userEmail === '') {
+            return 0;
+        }
+
+        try {
+
+            $q = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM programme_notifications
+                WHERE programme_id = ?
+                  AND LOWER(user_email) = ?
+                  AND seen = 0
+            ");
+
+            $q->execute([
+                $programmeId,
+                $userEmail
+            ]);
+
+            return (int)$q->fetchColumn();
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[HarvHub Notification Service] getProgrammeNotificationUnreadCount failed: '
+                . $e->getMessage()
+            );
+
+            return 0;
+        }
+    }
+}
+
+
+if (!function_exists('markProgrammeNotificationsSeen')) {
+
+    /**
+     * Mark all programme notifications as seen for a programme + email.
+     */
+    function markProgrammeNotificationsSeen(
+        PDO $pdo,
+        int $programmeId,
+        string $userEmail
+    ): bool {
+
+        $programmeId = (int)$programmeId;
+        $userEmail   = strtolower(trim($userEmail));
+
+        if ($programmeId <= 0 || $userEmail === '') {
+            return false;
+        }
+
+        try {
+
+            $u = $pdo->prepare("
+                UPDATE programme_notifications
+                SET seen = 1
+                WHERE programme_id = ?
+                  AND LOWER(user_email) = ?
+                  AND seen = 0
+            ");
+
+            $u->execute([
+                $programmeId,
+                $userEmail
+            ]);
+
+            return true;
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[HarvHub Notification Service] markProgrammeNotificationsSeen failed: '
+                . $e->getMessage()
+            );
+
+            return false;
+        }
+    }
+}
+
+
+/* ============================================================
  * SYNC DASHBOARD CONTRACT NOTIFICATIONS
  * ============================================================ */
 
@@ -1878,11 +2360,11 @@ if (!function_exists('syncSignalsDashboardNotifications')) {
          * RECORD NOTIFICATION (once per session)
          * ------------------------------------------------ */
 
-        $payload['user_email'] = $email;
-        $payload['sub_account_id'] = $subAccountId;
-        $payload['main_account_id'] = $mainAccountId;
-        $payload['force'] = false;
-
-        return recordContractNotificationOnce($pdo, $payload);
+        return recordProgrammeNotificationOnce(
+            $pdo,
+            $programmeId,
+            $email,
+            $payload
+        );
     }
 }

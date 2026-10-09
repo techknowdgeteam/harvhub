@@ -47,30 +47,6 @@ $disconnect_success = false;
 $disconnect_error   = '';
 $disconnect_message = '';
 
-if (!function_exists('recordProgrammeNotification')) {
-    function recordProgrammeNotification($pdo, $programmeId, $userEmail, array $opts) {
-        try {
-            $key = (string)($opts['notification_key'] ?? ('pn-' . $programmeId . '-' . date('YmdHis') . '-' . mt_rand()));
-            $stmt = $pdo->prepare("
-                INSERT INTO programme_notifications
-                    (programme_id, user_email, notification_key, title, message, type, section, action_tab, seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ");
-            $stmt->execute([
-                (int)$programmeId,
-                strtolower((string)$userEmail),
-                $key,
-                (string)($opts['title']   ?? 'Notification'),
-                (string)($opts['message'] ?? ''),
-                (string)($opts['type']    ?? 'info'),
-                (string)($opts['section'] ?? 'General'),
-                isset($opts['action_tab']) ? (string)$opts['action_tab'] : null,
-            ]);
-            return true;
-        } catch (Throwable $e) { return false; }
-    }
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker'])) {
     try {
         $upd = $pdo->prepare("UPDATE programme SET broker = NULL, server = NULL, login = NULL, broker_password = NULL WHERE id = ? AND userid = ?");
@@ -79,28 +55,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker']))
         $disconnect_success = true;
         $disconnect_message = 'Broker disconnected successfully.';
 
-        // 1) In-app programme notification
+        // Programme-scoped notification (in-app row + email via notification_service.php)
         recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
-            'notification_key' => 'prog-broker-disconnected-' . $activeProgrammeId . '-' . date('YmdHis'),
-            'title'   => 'Broker Disconnected',
-            'message' => 'Your programme broker (' . $current_broker . ' - ' . $current_login . ') has been disconnected.',
-            'type'    => 'info',
-            'section' => 'Broker',
-            'action_tab' => 'broker',
-        ]);
-
-        // 2) Email notification (same pattern as disconnect_broker.php)
-        recordContractNotification($pdo, [
-            'user_email'       => $email,
-            'sub_account_id'   => $activeSubAccountId,
-            'main_account_id'  => $mainAccountId,
             'notification_key' => 'prog-broker-disconnected-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'Broker Disconnected',
             'message'          => 'Your programme broker (' . $current_broker . ' - ' . $current_login . ') has been disconnected.',
             'type'             => 'info',
             'section'          => 'Broker',
             'action_tab'       => 'broker',
-            'force'            => true
+            'force'            => true,
+            'recipient_name'   => $fullName
         ]);
     } catch (PDOException $e) {
         $disconnect_error = 'Failed to disconnect broker. Please try again.';

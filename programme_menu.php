@@ -119,6 +119,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
         }
         exit;
     }
+
+    if (isset($_POST['record_last_account_ajax'])) {
+        header('Content-Type: application/json; charset=utf-8');
+
+        // Programme account  -> "P" . programme_id
+        // Sub-account        -> "SA" . sub_account_id
+        $lastAccount = '';
+
+        if ($activeProgrammeId > 0) {
+            $lastAccount = 'P' . (int)$activeProgrammeId;
+        } else {
+            $subId = (int)($user['sub_account_id'] ?? 0);
+            if ($subId > 0) {
+                $lastAccount = 'SA' . $subId;
+            }
+        }
+
+        if ($lastAccount === '') {
+            echo json_encode(['success' => false, 'message' => 'No account to record.']);
+            exit;
+        }
+
+        try {
+            $u = $pdo->prepare("UPDATE harvhub SET last_account = ? WHERE id = ?");
+            $u->execute([$lastAccount, $userId]);
+            echo json_encode(['success' => true, 'last_account' => $lastAccount]);
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'message' => 'Failed to record last account.']);
+        }
+        exit;
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -177,7 +208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
                         <span class="item-icon"><i class="fa-solid fa-sliders"></i></span>
                         <div class="item-text">
                             <span class="item-title">Account Management</span>
-                            <span class="item-desc">Risk rules, breakeven, JSON config for your programme.</span>
+                            <span class="item-desc">Risk rules, Trades Breakeven, Restrict trading days, Revenue Target.</span>
                         </div>
                     </div>
                     <span class="item-arrow">›</span>
@@ -186,7 +217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
                 <hr class="menu-divider">
 
                 <div class="menu-item dark-mode-toggle-item">
-                    <div class="item-left">
+                    <div class="item-left"> 
                         <span class="dark-mode-icon" id="darkModeIcon"><?= ($darkMode === 1) ? '🌙' : '☀️' ?></span>
                         <div class="item-text"><span class="item-title">Dark Mode</span></div>
                     </div>
@@ -361,12 +392,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     function openLogoutModal() { var m = document.getElementById('logoutModal'); if (m) { m.classList.add('active'); syncModalOverlayState(); } }
     function closeLogoutModal() { var m = document.getElementById('logoutModal'); if (m) { m.classList.remove('active'); syncModalOverlayState(); } }
     function confirmLogout() {
-        if (window.parent && window.parent !== window) {
-            try { window.parent.postMessage({ type: 'saveLastApp' }, '*'); } catch (e) {}
-            try { window.parent.postMessage({ type: 'logout' }, '*'); } catch (e) {}
-            return;
+        // 1) Record last_account (P<id> or SA<sub_id>) before anything else.
+        //    Fire-and-forget; we don't block logout on it.
+        var recordPromise;
+        try {
+            recordPromise = fetch('programme_menu.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                credentials: 'same-origin',
+                body: 'record_last_account_ajax=1'
+            }).catch(function () {});
+        } catch (e) {
+            recordPromise = Promise.resolve();
         }
-        window.location.href = 'traderapp.php?logout=1';
+
+        // 2) Then do the normal logout flow (give the record call a brief head start).
+        var proceed = function () {
+            if (window.parent && window.parent !== window) {
+                try { window.parent.postMessage({ type: 'saveLastApp' }, '*'); } catch (e) {}
+                try { window.parent.postMessage({ type: 'logout' }, '*'); } catch (e) {}
+                return;
+            }
+            window.location.href = 'traderapp.php?logout=1';
+        };
+
+        // Wait up to ~400ms for the record call, then proceed regardless.
+        var done = false;
+        var finish = function () { if (done) return; done = true; proceed(); };
+        setTimeout(finish, 400);
+        Promise.resolve(recordPromise).then(finish, finish);
     }
 
     // ---- Delete programme ----
