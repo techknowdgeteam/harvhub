@@ -49,22 +49,33 @@ $disconnect_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker'])) {
     try {
-        $upd = $pdo->prepare("UPDATE programme SET broker = NULL, server = NULL, login = NULL, broker_password = NULL WHERE id = ? AND userid = ?");
+        // Wipe credentials, flag the disconnect request so the VPS
+        // worker knows to delete the terminal, and mark demo flag off.
+        $upd = $pdo->prepare("
+            UPDATE programme
+            SET broker = NULL,
+                server = NULL,
+                login = NULL,
+                broker_password = NULL,
+                disconnect_broker_request = 1
+            WHERE id = ? AND userid = ?
+        ");
         $upd->execute([$activeProgrammeId, $userId]);
 
         $disconnect_success = true;
-        $disconnect_message = 'Broker disconnected successfully.';
+        $disconnect_message = 'Broker disconnected. We will let you know once the terminal has been deleted from the VPS.';
 
-        // Programme-scoped notification (in-app row + email via notification_service.php)
+        // Programme-scoped notification (in-app row + email)
         recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
-            'notification_key' => 'prog-broker-disconnected-' . $activeProgrammeId . '-' . date('YmdHis'),
+            'notification_key' => 'prog-broker-disconnect-request-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'Broker Disconnected',
-            'message'          => 'Your programme broker (' . $current_broker . ' - ' . $current_login . ') has been disconnected.',
-            'type'             => 'info',
+            'message'          => 'We have removed your programme broker details. We will let you know once the terminal has been deleted from the VPS. You will be able to connect a new broker after that.',
+            'type'             => 'warning',
             'section'          => 'Broker',
-            'action_tab'       => 'broker',
+            'action_tab'       => 'connect_trader_broker',
             'force'            => true,
-            'recipient_name'   => $fullName
+            'recipient_name'   => $fullName,
+            'send_email'       => true,
         ]);
     } catch (PDOException $e) {
         $disconnect_error = 'Failed to disconnect broker. Please try again.';
@@ -195,7 +206,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker']))
         var WATCHED = ['page-connect_trader_broker','page-disconnect_trader_broker','page-trader_menu'];
         function broadcast() {
             var add = WATCHED.filter(function (c){ return document.body.classList.contains(c); });
-            try { window.parent.postMessage({ type:'bodyClass', add:add, remove: WATCHED.filter(function(c){ return add.indexOf(c) === -1; }) }, '*'); } catch (e) {}
+            try {
+                window.parent.postMessage({
+                    type:'bodyClass',
+                    add:add,
+                    remove: WATCHED.filter(function(c){ return add.indexOf(c) === -1; })
+                }, '*');
+            } catch (e) {}
         }
         new MutationObserver(broadcast).observe(document.body, { attributes:true, attributeFilter:['class'] });
         broadcast();

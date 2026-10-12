@@ -586,10 +586,12 @@
     html, body {
         height: 100%;
         overflow: hidden;
+        overflow-x: hidden;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         background: var(--bg);
         color: var(--text);
         -webkit-tap-highlight-color: transparent;
+        overscroll-behavior-x: none;
     }
 
     .shell {
@@ -601,6 +603,7 @@
         flex-direction: column;
         height: 100%;
         height: 100dvh;
+        overflow-x: hidden;
     }
 
     @media (max-width: 1100px) {
@@ -637,10 +640,12 @@
         max-width: 500px;
     }
 
+    /* Notification panel: cap to viewport width, prevent horizontal bleed */
     @media (min-width: 801px) {
         .notification-panel {
-            right: calc((100vw - 1100px) / 2);
-            width: min(420px, 100%);
+            right: max(0px, calc((100vw - 1100px) / 2));
+            width: min(420px, 100vw);
+            max-width: 100vw;
         }
     }
 
@@ -753,7 +758,7 @@
 
     .header-sheet-backdrop {
         position: fixed;
-        top: var(--safe-top);               /* ← skip the notch/status-bar strip */
+        top: var(--safe-top);
         left: 0;
         right: 0;
         bottom: 0;
@@ -786,6 +791,7 @@
         padding: 12px 18px calc(20px + var(--safe-bottom));
         max-height: 50vh;
         overflow-y: auto;
+        overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
         will-change: transform;
     }
@@ -848,13 +854,11 @@
         overflow: hidden;
     }
 
-    /* Investor's Hub avatar — gold */
     .header-sheet-avatar.is-investor-hub {
         background: var(--gold);
         color: #fff;
     }
 
-    /* Developer's Hub avatar — gold, icon-based */
     .header-sheet-avatar.is-developer-hub {
         background: var(--gold);
         color: #fff;
@@ -934,7 +938,6 @@
         }
     }
 
-    /* Sub-account rows — profile avatar */
     .header-sheet-sub-item {
         display: flex;
         align-items: center;
@@ -975,7 +978,6 @@
         text-transform: uppercase;
         overflow: hidden;
     }
-    /* Active sub-account avatar stays green with ring */
     .header-sheet-sub-item.is-active .header-sheet-sub-avatar {
         background: var(--accent);
         box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
@@ -1039,11 +1041,14 @@
         .shell-page-header-title { font-size: 1.25rem; }
     }
 
+    /* ---------- Notifications: panel, list, items, toast ---------- */
+
     .notification-panel {
         position: fixed;
         top: 0;
         right: 0;
-        width: min(420px, 100%);
+        width: min(420px, 100vw);
+        max-width: 100vw;
         height: 100%;
         background: var(--surface);
         color: var(--text);
@@ -1054,14 +1059,22 @@
         display: flex;
         flex-direction: column;
         padding-top: var(--safe-top);
+        overflow-x: hidden;
+        overflow-y: hidden;
+        will-change: transform;
+        contain: layout paint;
     }
     .notification-panel.active { transform: translateX(0); }
+
     .notification-panel .panel-content {
         display: flex;
         flex-direction: column;
         height: 100%;
         min-height: 0;
+        min-width: 0;
+        overflow-x: hidden;
     }
+
     .notification-panel .notification-header {
         display: flex;
         align-items: center;
@@ -1069,25 +1082,39 @@
         padding: 16px 18px;
         flex: 0 0 auto;
         border-bottom: 1px solid var(--border);
+        min-width: 0;
     }
-    .notification-panel .notification-header h3 { font-size: 1rem; font-weight: 700; }
+    .notification-panel .notification-header h3 {
+        font-size: 1rem;
+        font-weight: 700;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
     .notification-panel .close-notifications {
         border: 0;
         background: transparent;
         color: var(--text-muted);
         font-size: 1rem;
-        width: 32px; height: 32px;
+        width: 32px;
+        height: 32px;
         border-radius: 8px;
         cursor: pointer;
+        flex-shrink: 0;
     }
     .notification-panel .close-notifications:hover { background: rgba(0,0,0,0.05); }
     body.dark-mode .notification-panel .close-notifications:hover { background: rgba(255,255,255,0.06); }
+
     .notification-panel .notification-list {
         flex: 1 1 auto;
         overflow-y: auto;
+        overflow-x: hidden;
         padding: 8px 0 24px;
         -webkit-overflow-scrolling: touch;
+        min-width: 0;
     }
+
     .notification-panel .notification-item {
         padding: 14px 18px;
         display: flex;
@@ -1097,6 +1124,10 @@
         cursor: pointer;
         transition: background .18s ease;
         position: relative;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-panel .notification-item:hover { background: var(--surface-2); }
     .notification-panel .notification-item.unread {
@@ -1109,15 +1140,20 @@
         border-radius: 50%;
         background: var(--accent);
         position: absolute;
+        top: 18px;
         right: 18px;
-        margin-top: 4px;
     }
+
     .notification-panel .notification-section {
         font-size: 0.68rem;
         font-weight: 700;
         letter-spacing: 0.5px;
         text-transform: uppercase;
         color: var(--accent);
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-panel .notification-title {
         font-size: .92rem;
@@ -1125,16 +1161,28 @@
         line-height: 1.3;
         color: var(--text);
         padding-right: 18px;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-panel .notification-message {
         font-size: 0.84rem;
         line-height: 1.45;
         color: var(--text);
         opacity: .9;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-panel .notification-time {
         font-size: 0.68rem;
         color: var(--text-muted);
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-panel .empty-notifications {
         padding: 50px 18px;
@@ -1147,7 +1195,8 @@
         position: fixed;
         top: calc(var(--safe-top) + 12px);
         left: 50%;
-        width: min(420px, calc(100% - 24px));
+        width: min(420px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         transform: translate(-50%, -140%);
         opacity: 0;
         pointer-events: none;
@@ -1160,6 +1209,9 @@
         padding: 13px 15px;
         transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .22s ease;
         cursor: pointer;
+        overflow-x: hidden;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     .notification-toast.active {
         transform: translate(-50%, 0);
@@ -1173,9 +1225,24 @@
         text-transform: uppercase;
         color: var(--accent);
         margin-bottom: 3px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
-    .notification-toast .toast-title { font-size: .9rem; font-weight: 750; line-height: 1.3; }
-    .notification-toast .toast-message { font-size: .78rem; line-height: 1.4; color: var(--text-muted); margin-top: 3px; }
+    .notification-toast .toast-title {
+        font-size: .9rem;
+        font-weight: 750;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+    .notification-toast .toast-message {
+        font-size: .78rem;
+        line-height: 1.4;
+        color: var(--text-muted);
+        margin-top: 3px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
 
     .notification-permission-backdrop {
         position: fixed;
@@ -1198,6 +1265,8 @@
         box-shadow: 0 25px 80px rgba(0,0,0,.3);
         text-align: center;
         animation: notificationPermissionIn .24s ease;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     @keyframes notificationPermissionIn {
         from { opacity: 0; transform: translateY(12px) scale(.98); }
@@ -1239,6 +1308,7 @@
         flex: 1;
         position: relative;
         overflow: hidden;
+        overflow-x: hidden;
         padding-bottom: calc(var(--nav-height) + var(--safe-bottom));
         background: var(--bg);
     }

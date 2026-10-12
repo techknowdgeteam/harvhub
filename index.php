@@ -323,20 +323,39 @@ try {
     --r:20px;
   }
 
-  *{box-sizing:border-box;margin:0;padding:0}
-  html{
-    scroll-behavior:smooth;
-    scrollbar-width:none;
-    -ms-overflow-style:none;
-    background:#02030a;
+  /* ---------------------------------------------------------------
+     HARD LOCK: no horizontal scrolling anywhere in the page.
+     Applies to the root scroller (html) AND the body. `clip` is
+     preferred over `hidden` because `hidden` still creates a scroll
+     container, which can be panned programmatically or by touch.
+     --------------------------------------------------------------- */
+  html {
+    overflow-x: clip;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 100%;
+    overscroll-behavior-x: none;
+    touch-action: pan-y pinch-zoom;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    background: #02030a;
   }
+  @supports not (overflow: clip) {
+    html { overflow-x: hidden; }
+  }
+
   html::-webkit-scrollbar,
   body::-webkit-scrollbar,
   .modal::-webkit-scrollbar,
-  .mc::-webkit-scrollbar{display:none;width:0;height:0}
+  .mc::-webkit-scrollbar { display:none; width:0; height:0; }
+
+  *{box-sizing:border-box;margin:0;padding:0}
 
   body{
     min-height:100vh;
+    width:100%;
+    max-width:100%;
     font-family:Segoe UI,system-ui,-apple-system,BlinkMacSystemFont,Roboto,sans-serif;
     background:
       radial-gradient(circle at 15% 20%, rgba(63,28,120,.28), transparent 32%),
@@ -345,10 +364,16 @@ try {
       #02030a;
     color:var(--text);
     line-height:1.6;
-    overflow-x:hidden;
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+    touch-action: pan-y pinch-zoom;
     scrollbar-width:none;
     -ms-overflow-style:none;
     position:relative;
+    isolation:isolate;
+  }
+  @supports not (overflow: clip) {
+    body { overflow-x: hidden; }
   }
   body::-webkit-scrollbar{display:none}
 
@@ -393,7 +418,7 @@ try {
     touch-action:manipulation;
   }
 
-  .wrap{max-width:1180px;margin:auto;padding:0 20px}
+  .wrap{max-width:1180px;margin:auto;padding:0 20px;width:100%;}
 
   .nav{
     position:sticky;
@@ -403,20 +428,20 @@ try {
     backdrop-filter:blur(16px);
     border-bottom:1px solid var(--border);
   }
-  .navin{height:68px;display:flex;align-items:center;justify-content:space-between}
-  .logo{display:flex;align-items:center;gap:10px;font-weight:900}
+  .navin{height:68px;display:flex;align-items:center;justify-content:space-between;min-width:0;}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:900;flex-shrink:0;}
   .logo i{
     display:grid;place-items:center;width:36px;height:36px;border-radius:11px;
     background:var(--accent);color:#03110b;font-style:normal
   }
-  .navlinks{display:flex;gap:25px;color:var(--muted);font-size:.9rem;font-weight:700}
+  .navlinks{display:flex;gap:25px;color:var(--muted);font-size:.9rem;font-weight:700;min-width:0;}
   .navlinks a:hover{color:var(--accent)}
-  .actions{display:flex;gap:9px}
+  .actions{display:flex;gap:9px;flex-shrink:0;}
 
   .btn{
     border:0;border-radius:12px;padding:11px 18px;font-weight:800;cursor:pointer;
     display:inline-flex;align-items:center;justify-content:center;gap:8px;
-    transition:transform .18s,opacity .18s,*background* .18s,border-color .18s;
+    transition:transform .18s,opacity .18s,background .18s,border-color .18s;
   }
   .btn:hover{transform:translateY(-1px)}
   .primary{background:var(--accent);color:#03110b}
@@ -432,7 +457,7 @@ try {
     padding:82px 0 90px;
     overflow:hidden;
   }
-  .heroGrid{display:grid;grid-template-columns:1.15fr .85fr;gap:45px;align-items:center}
+  .heroGrid{display:grid;grid-template-columns:1.15fr .85fr;gap:45px;align-items:center;min-width:0;}
   .badge{
     display:inline-block;background:rgba(255,255,255,.07);border:1px solid var(--border-strong);
     padding:7px 14px;border-radius:99px;font-size:.76rem;font-weight:900;letter-spacing:.5px;margin-bottom:18px
@@ -494,9 +519,10 @@ try {
   .heroCard h3{margin-bottom:15px}
   .mini{
     display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.12);
-    font-size:.9rem;color:#d7dceb
+    font-size:.9rem;color:#d7dceb;gap:12px;min-width:0;
   }
-  .mini b{color:#fff}.mini:last-child{border:0}
+  .mini b{color:#fff;text-align:right;min-width:0;word-break:break-word;}
+  .mini:last-child{border:0}
 
   section{padding:78px 0}
   .alt{background:rgba(255,255,255,.025);border-top:1px solid rgba(255,255,255,.035);border-bottom:1px solid rgba(255,255,255,.035)}
@@ -505,10 +531,10 @@ try {
   .head h2{font-size:2rem;line-height:1.15;margin:7px 0 10px}
   .head p{color:var(--muted)}
 
-  .roleGrid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .roleGrid{display:grid;grid-template-columns:1fr 1fr;gap:22px;min-width:0;}
   .roleCard{
     background:var(--card);border:1px solid var(--border);border-radius:22px;padding:30px;
-    box-shadow:var(--shadow);position:relative;overflow:hidden;backdrop-filter:blur(8px)
+    box-shadow:var(--shadow);position:relative;overflow:hidden;backdrop-filter:blur(8px);min-width:0;
   }
   .roleCard.dev{border-top:4px solid var(--accent)}
   .roleCard.inv{border-top:4px solid var(--blue)}
@@ -520,33 +546,35 @@ try {
   .roleCard h3{font-size:1.35rem;margin-bottom:8px}
   .roleCard p{color:var(--muted);font-size:.92rem}
   .list{margin:18px 0;display:grid;gap:10px}
-  .list div{display:flex;gap:9px;font-size:.88rem;color:#d9deea}
-  .list i{color:var(--accent);margin-top:4px}
+  .list div{display:flex;gap:9px;font-size:.88rem;color:#d9deea;min-width:0;}
+  .list i{color:var(--accent);margin-top:4px;flex-shrink:0;}
+  .list span{min-width:0;overflow-wrap:anywhere;}
 
-  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;min-width:0;}
   .box{
     background:var(--card);border:1px solid var(--border);border-radius:18px;padding:23px;
-    box-shadow:0 12px 40px rgba(0,0,0,.22)
+    box-shadow:0 12px 40px rgba(0,0,0,.22);min-width:0;
   }
   .num{color:var(--accent);font-weight:900;font-size:.8rem}
   .box h3{margin:7px 0}.box p{color:var(--muted);font-size:.86rem}
 
-  .featureGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .featureGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;min-width:0;}
   .feature{
     background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px;
-    box-shadow:0 12px 40px rgba(0,0,0,.18)
+    box-shadow:0 12px 40px rgba(0,0,0,.18);min-width:0;
   }
   .feature i{color:var(--accent);font-size:1.25rem;margin-bottom:12px}
   .feature p{color:var(--muted);font-size:.88rem}
 
   .markets-section{padding-top:30px}
-  .market-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+  .market-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;min-width:0;}
   .market-card{
     background:var(--card);border:1px solid var(--border);border-radius:17px;padding:20px;
-    display:flex;align-items:center;gap:13px;min-height:105px
+    display:flex;align-items:center;gap:13px;min-height:105px;min-width:0;
   }
-  .market-card i{color:var(--accent);font-size:1.25rem}
-  .market-card strong{display:block;font-size:.92rem}.market-card span{display:block;color:var(--muted);font-size:.76rem;margin-top:2px}
+  .market-card i{color:var(--accent);font-size:1.25rem;flex-shrink:0;}
+  .market-card strong{display:block;font-size:.92rem}
+  .market-card span{display:block;color:var(--muted);font-size:.76rem;margin-top:2px;overflow-wrap:anywhere;}
 
   .cta{
     background:
@@ -595,13 +623,14 @@ try {
   .err.show{display:block}
   .notice{background:var(--soft);padding:12px;border-radius:12px;color:#dfe9e4;font-size:.82rem;margin-bottom:15px}
   .check{font-size:.8rem;color:var(--muted);display:flex;gap:8px;margin:10px 0 18px}
+  .check span{min-width:0;overflow-wrap:anywhere;}
   .switch{text-align:center;color:var(--muted);font-size:.83rem;margin-top:15px}
   .switch a{color:var(--accent);font-weight:800;cursor:pointer}
 
-  .adGrid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .adGrid{display:grid;grid-template-columns:1fr 1fr;gap:20px;min-width:0;}
   .ad{
     background:var(--card);border:1px solid var(--border);border-radius:20px;padding:27px;
-    box-shadow:var(--shadow)
+    box-shadow:var(--shadow);min-width:0;
   }
   .ad h3{font-size:1.3rem;margin-bottom:8px}.ad p{color:var(--muted);font-size:.9rem}
   .ad ul{padding-left:20px;color:var(--muted);font-size:.86rem;margin:15px 0}
@@ -614,11 +643,11 @@ try {
     --ease-out-expo: cubic-bezier(.16, 1, .3, 1);
     --ease-smooth: cubic-bezier(.22, 1, .36, 1);
   }
-  body { isolation:isolate; }
   .nav { transition:background .45s ease, border-color .45s ease, box-shadow .45s ease; }
   .nav.scrolled { background:rgba(3,6,15,.9); box-shadow:0 12px 40px rgba(0,0,0,.22); border-color:rgba(255,255,255,.13); }
   .logo i { box-shadow:0 0 0 0 rgba(22,199,132,.38); animation:logoPulse 3.6s ease-in-out infinite; }
-  .hero { position:relative; isolation:isolate; }
+
+  .hero { position:relative; isolation:isolate; overflow:hidden; }
   .hero::before { content:""; position:absolute; width:540px; height:540px; right:-140px; top:-180px; border-radius:50%; background:radial-gradient(circle,rgba(22,199,132,.14),rgba(77,124,255,.055) 38%,transparent 70%); filter:blur(12px); z-index:-1; animation:orbDrift 13s ease-in-out infinite alternate; pointer-events:none; }
   .hero::after { content:""; position:absolute; inset:0; pointer-events:none; opacity:.22; z-index:-1; background:linear-gradient(115deg,transparent 25%,rgba(255,255,255,.035) 48%,transparent 70%); background-size:220% 100%; animation:ambientSweep 12s linear infinite; }
   .hero h1 { animation:heroRise .95s var(--ease-out-expo) both; }
@@ -692,6 +721,32 @@ try {
     .reveal { opacity:1; transform:none; filter:none; }
   }
 
+  /* ---------------------------------------------------------------
+     FINAL SAFETY NET — any decorative / hover element that could
+     extend past the right edge is clipped at its nearest section.
+     `clip` does NOT create a scroll container, so `.nav` sticky
+     and the modal system keep working.
+     --------------------------------------------------------------- */
+  .hero,
+  .cta,
+  section,
+  .role-prompt-stage {
+    overflow-x: clip;
+  }
+  @supports not (overflow: clip) {
+    .hero,
+    .cta,
+    section,
+    .role-prompt-stage {
+      overflow-x: hidden;
+    }
+  }
+
+  /* Media and long words must never widen the layout. */
+  img, svg, video, canvas, iframe, table { max-width:100%; height:auto; }
+  pre, code { white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere; }
+  * { min-width:0; }
+
   @media(max-width:1000px){
     .market-grid{grid-template-columns:repeat(3,1fr)}
   }
@@ -712,9 +767,6 @@ try {
     .roleChoice{grid-template-columns:1fr}
     .market-grid{grid-template-columns:1fr}
   }
-
-  /* Prevent accidental page movement while a modal is open. */
-  .modal.open \~ *{pointer-events:auto}
 </style>
 </head>
 <body>
@@ -1005,6 +1057,45 @@ try {
             document.body.classList.remove('modal-open');
         }
     });
+
+    // ---------------------------------------------------------------
+    // Hard-lock horizontal panning at the JS layer too.
+    // If anything (trackpad swipe, touch drag, programmatic scrollTo)
+    // tries to move the page horizontally, snap it back to 0.
+    // ---------------------------------------------------------------
+    (function lockHorizontalScroll(){
+        function snap(){
+            if (window.scrollX !== 0) window.scrollTo(0, window.scrollY);
+            if (document.documentElement.scrollLeft !== 0) document.documentElement.scrollLeft = 0;
+            if (document.body.scrollLeft !== 0) document.body.scrollLeft = 0;
+        }
+        window.addEventListener('scroll', snap, {passive:true});
+        window.addEventListener('wheel', function(e){
+            // If a wheel event has a clear horizontal component and the
+            // page is at x=0, prevent default so the browser doesn't pan.
+            if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+                e.preventDefault();
+            }
+        }, {passive:false});
+        document.addEventListener('touchmove', function(e){
+            // Block single-finger horizontal swipe on the root document.
+            if (e.touches.length === 1) {
+                var t = e.touches[0];
+                if (typeof lockHorizontalScroll._lastX === 'number') {
+                    var dx = Math.abs(t.clientX - lockHorizontalScroll._lastX);
+                    var dy = Math.abs(t.clientY - (lockHorizontalScroll._lastY || t.clientY));
+                    if (dx > dy && dx > 6) e.preventDefault();
+                }
+                lockHorizontalScroll._lastX = t.clientX;
+                lockHorizontalScroll._lastY = t.clientY;
+            }
+        }, {passive:false});
+        document.addEventListener('touchend', function(){
+            lockHorizontalScroll._lastX = null;
+            lockHorizontalScroll._lastY = null;
+        });
+        snap();
+    })();
 
     // Replaying scroll reveals: animate every time an element enters the viewport,
     // and reset it when it leaves so scrolling down AND back up retriggers the effect.

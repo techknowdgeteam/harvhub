@@ -980,14 +980,14 @@
                 }
                 return $state;
             }
-
             if ($brokerBalance < $minDeposit) {
+                $state['show_reset_button']    = true;
                 $state['loyalties_message']    = "Deposit Required";
-                $state['loyalty_text']         = "Your balance is below the minimum deposit of $" . number_format($minDeposit, 2) . ".";
+                $state['loyalty_text']         = "Your balance is below the minimum deposit of $" . number_format($minDeposit, 2) . ". Click below to start fresh.";
                 $state['dashboard_disclaimer'] = "Minimum deposit required before enrollment.";
-                $state['loyalty_btn_text']     = "Deposit Funds";
-                $state['loyalty_btn_class']    = "btn-loyalty-action";
-                $state['loyalty_btn_action']   = "deposit";
+                $state['loyalty_btn_text']     = "Let's get started";
+                $state['loyalty_btn_class']    = "btn-loyalty-action btn-reset";
+                $state['loyalty_btn_action']   = "reset";
                 return $state;
             }
 
@@ -1067,6 +1067,21 @@
             $is_contract_active = false;
         } else {
             $is_contract_active = true;
+        }
+    }
+
+    // ---- Account contract status sync --------------------------------------
+    // Keeps harvhub.account_contract_status in sync with the live contract state.
+    // Only writes when the value actually changes to avoid needless DB traffic.
+    $newAccountContractStatus = $is_contract_active ? 'contract_active' : 'no_contract';
+
+    if (($user['account_contract_status'] ?? null) !== $newAccountContractStatus) {
+        try {
+            $updStatus = $pdo->prepare("UPDATE $tableName SET account_contract_status = ? WHERE id = ?");
+            $updStatus->execute([$newAccountContractStatus, $userId]);
+            $user['account_contract_status'] = $newAccountContractStatus;
+        } catch (Throwable $e) {
+            // Silently ignore — dashboard still works without the column being fresh.
         }
     }
 
@@ -1224,31 +1239,67 @@
 
         $contractId = buildInvestorContractId($today, $endDate, $DEVELOPER_ID, $activeSubAccountId);
 
+        // ---- Resolve programme / trader context for this sub-account ----
+        $enrollProgrammeId   = 0;
+        $enrollProgrammeName = '';
+        $enrollTraderId      = 0;
+
+        if ($activeInvestment) {
+            $enrollProgrammeId = (int)($activeInvestment['programme_id'] ?? 0);
+            $enrollTraderId    = (int)($activeInvestment['developerid']  ?? 0);
+        }
+        if ($investmentProgramme && !empty($investmentProgramme['program_name'])) {
+            $enrollProgrammeName = (string)$investmentProgramme['program_name'];
+        }
+        // Fallbacks: if no activeInvestment row, fall back to session developer
+        if ($enrollTraderId <= 0 && $DEVELOPER_ID > 0) {
+            $enrollTraderId = (int)$DEVELOPER_ID;
+        }
+        if ($enrollProgrammeName === '' && $DEVELOPER_NAME !== '' && $DEVELOPER_NAME !== 'N/A') {
+            $enrollProgrammeName = $PROGRAMME_NAME;
+        }
+
         $stmt = $pdo->prepare("SELECT broker_balance FROM $tableName WHERE id = ?");
         $stmt->execute([$userId]);
         $currentData     = $stmt->fetch(PDO::FETCH_ASSOC);
         $startingBalance = (float)($currentData['broker_balance'] ?? 0);
 
-        $insertStmt = $pdo->prepare("
-            INSERT INTO $revenueHistoryTable
-            (user_email, sub_account_id, contract_id, execution_start_date, execution_end_date, starting_balance, current_balance, profit, user_share, server_share, loyalties, invested_with, developer_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ");
-        $insertStmt->execute([
-            $email,
-            $activeSubAccountId,
-            $contractId,
-            $today,
-            $endDate,
-            $startingBalance,
-            $startingBalance,
-            0,
-            0,
-            0,
-            'active',
-            $DEVELOPER_NAME ?: null,
-            $DEVELOPER_ID > 0 ? $DEVELOPER_ID : 0
-        ]);
+        try {
+            $insertStmt = $pdo->prepare("
+                INSERT INTO $revenueHistoryTable
+                    (user_email, sub_account_id, contract_id,
+                     execution_start_date, execution_end_date,
+                     starting_balance, current_balance, profit,
+                     user_share, server_share, loyalties, invested_with,
+                     programme_id, programme_name, trader_id, investor_user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $insertStmt->execute([
+                $email,
+                $activeSubAccountId,
+                $contractId,
+                $today,
+                $endDate,
+                $startingBalance,
+                $startingBalance,
+                0,
+                0,
+                0,
+                'active',
+                $DEVELOPER_NAME ?: null,
+                $enrollProgrammeId > 0 ? $enrollProgrammeId : null,
+                $enrollProgrammeName !== '' ? $enrollProgrammeName : null,
+                $enrollTraderId > 0 ? $enrollTraderId : null,
+                $userId
+            ]);
+        } catch (Throwable $insertErr) {
+            // Surface the real error instead of a silent blank page
+            error_log('Revenue history insert failed: ' . $insertErr->getMessage());
+            $_SESSION['enroll_error_message'] = 'Failed to enroll contract: ' . $insertErr->getMessage();
+            $_SESSION['prg_redirect_safe'] = true;
+            header("Location: mydashboard.php", true, 303);
+            exit;
+        }
 
         $upd = $pdo->prepare("UPDATE $tableName SET loyalties = NULL, profitandloss = 0, execution_start_date = ?, contract_id = ?, reset_contract = 0 WHERE id = ?");
         $upd->execute([$today, $contractId, $userId]);
@@ -1431,7 +1482,7 @@
                 SELECT id, sub_account_id, main_account_id, sub_account_name,
                        fullname, first_name, last_name, username, broker, server, login, broker_balance, profitandloss,
                        loyalties, execution_start_date, application_status, balance_verification,
-                       reset_contract, recent_highest_balance, balance_display
+                       reset_contract, recent_highest_balance, balance_display, account_contract_status
                 FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1
             ");
             $stmt->execute([$liveSubId, $email]);
@@ -1440,8 +1491,8 @@
                 SELECT id, sub_account_id, main_account_id, sub_account_name,
                        fullname, first_name, last_name, username, broker, server, login, broker_balance, profitandloss,
                        loyalties, execution_start_date, application_status, balance_verification,
-                       reset_contract, recent_highest_balance, balance_display
-                FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1
+                       reset_contract, recent_highest_balance, balance_display, account_contract_status
+                FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1
             ");
             $stmt->execute([$email]);
         }
@@ -1668,6 +1719,7 @@
             'success'                       => true,
             'sub_account_id'                => $liveSubAccountId,
             'sub_account_name'              => (string)($liveUser['sub_account_name'] ?? ''),
+            'account_contract_status'       => $liveUser['account_contract_status'] ?? null,
             'main_account_id'               => (int)($liveUser['main_account_id'] ?? 0),
             'deposit_balance'               => number_format($brokerBalance, 2, '.', ''),
             'profit_loss'                   => number_format($profitAndLoss, 2, '.', ''),
@@ -1902,6 +1954,111 @@
             padding-top: 0 !important;
         }
     }
+
+    /* Account meta row: Account | Server | Deposit (label + icon below) */
+    .md-account-meta {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .md-account-meta-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .md-account-meta-deposit {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        margin-left: auto;
+    }
+
+    .md-account-meta-deposit .deposit-label {
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+    }
+
+    .btn-deposit-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1.5px solid var(--accent, #2e8b57);
+        background: rgba(46, 139, 87, 0.10);
+        color: var(--accent, #2e8b57);
+        cursor: pointer;
+        font-size: 0.95rem;
+        transition: all 0.2s ease;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+        flex-shrink: 0;
+    }
+
+    .btn-deposit-icon:hover {
+        background: var(--accent, #2e8b57);
+        color: #fff;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(46, 139, 87, 0.3);
+    }
+
+    .btn-deposit-icon:active {
+        transform: translateY(0) scale(0.95);
+    }
+
+    body.dark-mode .btn-deposit-icon {
+        background: rgba(46, 139, 87, 0.2);
+        color: #6ee7a8;
+        border-color: var(--accent, #2e8b57);
+    }
+
+    body.dark-mode .btn-deposit-icon:hover {
+        background: var(--accent, #2e8b57);
+        color: #fff;
+    }
+    .md-greet-account {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        letter-spacing: 0.3px;
+        text-transform: capitalize;
+    }
+
+    .md-greet-account #greetAccountNameValue {
+        color: var(--text);
+        font-weight: 700;
+    }
+
+    .md-greet-account .account-contract-status {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    .md-greet-account.is-in-contract .account-contract-status {
+        background: rgba(46, 204, 113, 0.15);
+        color: #2ecc71;
+    }
+
+    .md-greet-account.no-contract .account-contract-status {
+        background: rgba(148, 163, 184, 0.18);
+        color: var(--text-muted);
+    }
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
@@ -2003,8 +2160,20 @@
         <div class="md-greeting-top">
             <div class="md-greeting-avatar"><?= htmlspecialchars(strtoupper(substr($greetingName, 0, 1))) ?></div>
             <div class="md-greeting-text">
-                <p class="md-greet-account" id="greetAccountName" <?= $subAccountName !== '' ? '' : 'style="display:none;"' ?>>
-                    Account &nbsp;•&nbsp; <span id="greetAccountNameValue"><?= htmlspecialchars($subAccountName) ?></span>
+                <?php
+                    $accountContractStatus   = $user['account_contract_status'] ?? null;
+                    $accountContractLabel    = ($accountContractStatus === 'contract_active')
+                        ? 'is in contract'
+                        : 'has no contract';
+                    $accountContractClass    = ($accountContractStatus === 'contract_active')
+                        ? 'is-in-contract'
+                        : 'no-contract';
+                ?>
+                <p class="md-greet-account <?= htmlspecialchars($accountContractClass) ?>"
+                   id="greetAccountName"
+                   <?= $subAccountName !== '' ? '' : 'style="display:none;"' ?>>
+                    <span id="greetAccountNameValue"><?= htmlspecialchars($subAccountName) ?></span>
+                    <span class="account-contract-status" id="greetAccountContractStatus"><?= htmlspecialchars($accountContractLabel) ?></span>
                 </p>
                 <p class="md-greet-title">Hi there <?= htmlspecialchars($greetingName) ?></p>
                 <p class="md-greet-sub" id="dashboardDisclaimer">
@@ -2150,6 +2319,31 @@
                 <div class="md-account-meta-item">
                     <span class="md-account-meta-label">Server</span>
                     <span class="md-account-meta-value" id="accountServerValue"><?= htmlspecialchars($server) ?></span>
+                </div>
+                <?php
+                // Deposit icon: shown when (a) "Apply for verification" is active CTA,
+                // OR (b) broker balance is below the programme minimum investment amount.
+                $showDepositIcon = false;
+                if ($hasProgramme && $userHasVps && $broker_connected) {
+                    if (!empty($show_apply_button)) {
+                        $showDepositIcon = true;
+                    } elseif ($MIN_INITIAL_DEPOSIT > 0 && $brokerBalance < $MIN_INITIAL_DEPOSIT) {
+                        $showDepositIcon = true;
+                    }
+                }
+                ?>
+                <div class="md-account-meta-deposit" id="accountDepositWrap" <?= $showDepositIcon ? '' : 'style="display:none;"' ?>>
+                    <span class="deposit-label">Deposit</span>
+                    <button
+                        type="button"
+                        class="btn-deposit-icon"
+                        id="accountDepositBtn"
+                        onclick="openDepositUrl()"
+                        title="Deposit funds"
+                        aria-label="Deposit funds"
+                    >
+                        <i class="fa-solid fa-circle-plus"></i>
+                    </button>
                 </div>
             </div>
 
@@ -2707,6 +2901,14 @@
     function openConnectBrokerModal() { harvhubGoToTab('connect_investor_broker'); }
     window.openConnectBrokerModal = openConnectBrokerModal;
 
+    function openDepositUrl() {
+        var target = '<?= $brokerTarget ?>';
+        if (target && target !== 'about:blank') {
+            window.open(target, '_blank');
+        }
+    }
+    window.openDepositUrl = openDepositUrl;
+
     if (window.history.replaceState) {
         window.history.replaceState(null, null, window.location.href.split("?")[0]);
     }
@@ -2928,6 +3130,16 @@
             if (greetAccountEl) greetAccountEl.style.display = '';
         }
 
+        var greetAccountStatusEl = document.getElementById('greetAccountContractStatus');
+        if (greetAccountStatusEl && data.account_contract_status !== undefined) {
+            var isActive = (data.account_contract_status === 'contract_active');
+            greetAccountStatusEl.textContent = isActive ? 'is in contract' : 'has no contract';
+            if (greetAccountEl) {
+                greetAccountEl.classList.toggle('is-in-contract', isActive);
+                greetAccountEl.classList.toggle('no-contract', !isActive);
+            }
+        }
+
         var disclaimerTextEl = document.getElementById('dashboardDisclaimerText');
         if (disclaimerTextEl && data.dashboard_disclaimer !== undefined) {
             disclaimerTextEl.textContent = data.dashboard_disclaimer;
@@ -3061,6 +3273,24 @@
                     depositBtn.style.display = 'none';
                 }
             }
+        }
+
+        // Deposit icon visibility inside the account meta row
+        // Conditions: (a) "Apply for verification" is active CTA, OR (b) broker balance < programme min investment.
+        var depositWrap = document.getElementById('accountDepositWrap');
+        if (depositWrap) {
+            var hasProg = !!data.has_programme;
+            var hasVps  = !!data.user_has_vps;
+            var hasBrk  = !!data.broker_connected;
+            var applyShown = !!data.show_apply_button;
+            var minDeposit = parseFloat(String(data.min_initial_deposit).replace(/[^0-9.-]/g, '')) || 0;
+            var brokerBal  = toNum(data.deposit_balance);
+            var showDeposit = false;
+            if (hasProg && hasVps && hasBrk) {
+                if (applyShown) showDeposit = true;
+                else if (minDeposit > 0 && brokerBal < minDeposit) showDeposit = true;
+            }
+            depositWrap.style.display = showDeposit ? '' : 'none';
         }
 
         var greetingDivider = document.getElementById('greetingDivider');

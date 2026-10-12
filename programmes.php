@@ -140,6 +140,15 @@ if (!function_exists('prettyBroker')) {
     }
 }
 
+if (!function_exists('prettyTimezone')) {
+    function prettyTimezone($tz) {
+        $tz = trim((string)$tz);
+        if ($tz === '') return '';
+        // Convert "Africa/Lagos" → "Africa / Lagos"
+        return str_replace('_', ' ', str_replace('/', ' / ', $tz));
+    }
+}
+
 if (!function_exists('resolveHostDisplayNameCompat')) {
     function resolveHostDisplayNameCompat(array $r) {
         $username = trim((string)($r['username'] ?? ''));
@@ -214,7 +223,7 @@ if (
         try {
             $stmt = $pdo->prepare("
                 SELECT p.id, p.userid, p.sub_account_id AS developer_sub_account_id,
-                       p.program_name, p.visibility, p.advertisement, p.broker,
+                       p.program_name, p.visibility, p.advertisement, p.broker, p.timezone,
                        h.fullname, h.first_name, h.last_name, h.username,
                        h.email AS developer_email
                 FROM programme p
@@ -232,6 +241,7 @@ if (
 
             $developerName  = resolveDeveloperDisplayName($programme);
             $programmeBroker = resolveProgrammeBroker($programme, $pdo);
+            $programmeTimezone = trim((string)($programme['timezone'] ?? ''));
 
             $stmt = $pdo->prepare("
                 SELECT contract_duration, developer_percentage, investor_percentage,
@@ -358,6 +368,8 @@ if (
                     'advertisement'   => (int)$programme['advertisement'],
                     'broker'          => $programmeBroker,
                     'broker_pretty'   => prettyBroker($programmeBroker),
+                    'timezone'        => $programmeTimezone,
+                    'timezone_pretty' => prettyTimezone($programmeTimezone),
                     'contract_duration'         => $contractDuration,
                     'developer_percentage'      => $developerPercent,
                     'investor_percentage'       => $investorPercent,
@@ -658,9 +670,9 @@ if (
             }
 
             // Capture programme/developer info BEFORE deleting for the notification
-            $cancelProgrammeId = 0;
+            $cancelProgrammeId   = 0;
             $cancelProgrammeName = '';
-            $cancelDeveloperId = 0;
+            $cancelDeveloperId   = 0;
             $cancelDeveloperSubId = 0;
             try {
                 $lookup = $pdo->prepare("
@@ -682,6 +694,10 @@ if (
                 }
             } catch (Throwable $e) {}
 
+            // ============================================================
+            // 1) Remove from programme_investors — scoped to THIS sub-account.
+            //    This is what makes the investor count drop on the developer side.
+            // ============================================================
             $del = $pdo->prepare("
                 DELETE FROM programme_investors
                 WHERE investorid = ?
@@ -689,9 +705,42 @@ if (
             ");
             $del->execute([$userId, $activeSubAccountId]);
 
-            // ============================================
+            // ============================================================
+            // 2) Remove the revenue deal row for this (programme, investor, sub-account)
+            //    so the developer's revenue card stops counting this investor.
+            // ============================================================
+            if ($cancelProgrammeId > 0) {
+                try {
+                    $delDeal = $pdo->prepare("
+                        DELETE FROM programme_revenue_deals
+                        WHERE programme_id = ?
+                          AND investor_id = ?
+                          AND (investor_sub_account_id = ? OR investor_sub_account_id IS NULL OR investor_sub_account_id = 0)
+                    ");
+                    $delDeal->execute([$cancelProgrammeId, $userId, $activeSubAccountId]);
+                } catch (Throwable $e) {}
+            }
+
+            // ============================================================
+            // 3) Remove any pending investment requests this sub-account sent
+            //    for that programme (cleanup — otherwise the developer still
+            //    sees a phantom pending request after cancellation).
+            // ============================================================
+            if ($cancelProgrammeId > 0) {
+                try {
+                    $delReq = $pdo->prepare("
+                        DELETE FROM programme_investment_requestors
+                        WHERE programme_id = ?
+                          AND requestor_id = ?
+                          AND (requestor_sub_account_id = ? OR requestor_sub_account_id IS NULL)
+                    ");
+                    $delReq->execute([$cancelProgrammeId, $userId, $activeSubAccountId]);
+                } catch (Throwable $e) {}
+            }
+
+            // ============================================================
             // NOTIFICATION: PROGRAMME CANCELLED (to developer)
-            // ============================================
+            // ============================================================
             $investorDisplayName = trim((string)($user['username'] ?? ''));
             if ($investorDisplayName === '') {
                 $investorDisplayName = trim((string)($user['first_name'] ?? ''));
@@ -789,7 +838,7 @@ $programmes = [];
 try {
     $stmt = $pdo->prepare("
         SELECT p.id, p.userid, p.sub_account_id AS developer_sub_account_id,
-               p.program_name, p.visibility, p.advertisement, p.broker,
+               p.program_name, p.visibility, p.advertisement, p.broker, p.timezone,
                h.fullname, h.first_name, h.last_name, h.username,
                h.email AS developer_email, h.broker AS developer_broker
         FROM programme p
@@ -803,6 +852,7 @@ try {
     foreach ($rawProgrammes as $p) {
         $developerName = resolveDeveloperDisplayName($p);
         $programmeBroker = resolveProgrammeBroker($p, $pdo);
+        $programmeTimezone = trim((string)($p['timezone'] ?? ''));
 
         $reqStmt = $pdo->prepare("
             SELECT contract_duration, developer_percentage, investor_percentage,
@@ -839,6 +889,8 @@ try {
             'program_name' => $p['program_name'],
             'broker' => $programmeBroker,
             'broker_pretty' => prettyBroker($programmeBroker),
+            'timezone' => $programmeTimezone,
+            'timezone_pretty' => prettyTimezone($programmeTimezone),
             'developer_name' => $developerName,
             'developer_email' => $p['developer_email'],
             'developer_username' => $p['username'],
@@ -867,6 +919,7 @@ $investedAnalytics = [
     'consecutive_sequential_loss' => null, 'highest_trades_per_day' => null,
 ];
 $investedReq = null;
+$investedTimezone = '';
 $cancelEligible = false;
 
 $hasActiveContract       = false;
@@ -875,7 +928,7 @@ $hasPaymentRequirement   = false;
 if ($userHasProgramme) {
     try {
         $stmt = $pdo->prepare("
-            SELECT p.id, p.userid, p.program_name, p.visibility, p.advertisement, p.broker,
+            SELECT p.id, p.userid, p.program_name, p.visibility, p.advertisement, p.broker, p.timezone,
                    h.fullname, h.first_name, h.last_name, h.username,
                    h.email AS developer_email
             FROM programme p
@@ -890,6 +943,7 @@ if ($userHasProgramme) {
     if ($investedProgramme) {
         $developerName = resolveDeveloperDisplayName($investedProgramme);
         $programmeBroker = resolveProgrammeBroker($investedProgramme, $pdo);
+        $investedTimezone = trim((string)($investedProgramme['timezone'] ?? ''));
 
         try {
             $stmt = $pdo->prepare("
@@ -937,6 +991,8 @@ if ($userHasProgramme) {
             'program_name'              => $investedProgramme['program_name'],
             'broker'                    => $programmeBroker,
             'broker_pretty'             => prettyBroker($programmeBroker),
+            'timezone'                  => $investedTimezone,
+            'timezone_pretty'           => prettyTimezone($investedTimezone),
             'developer_name'            => $developerName,
             'developer_email'           => $investedProgramme['developer_email'] ?: '',
             'visibility'                => (int)$investedProgramme['visibility'],
@@ -1038,6 +1094,19 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
     }
     .prog-item-broker i { font-size: 0.72rem; opacity: 0.85; }
     .prog-item-broker.is-empty { color: var(--text-muted, #8a9aa8); text-transform: none; font-weight: 500; }
+
+    .prog-item-timezone {
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        color: var(--text-muted, #6b7c8a);
+        margin-top: 2px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .prog-item-timezone i { font-size: 0.72rem; opacity: 0.85; color: var(--accent, #2ecc8f); }
+    .prog-item-timezone.is-empty { color: var(--text-muted, #8a9aa8); font-weight: 500; }
 
     .prog-detail-broker-badge {
         display: inline-flex;
@@ -1269,6 +1338,7 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
                              data-search-text="<?= htmlspecialchars(strtolower(
                                  ($p['program_name'] ?? '') . ' ' .
                                  ($p['broker'] ?? '') . ' ' .
+                                 ($p['timezone'] ?? '') . ' ' .
                                  ($p['developer_username'] ?? '') . ' ' .
                                  ($p['developer_first_name'] ?? '') . ' ' .
                                  ($p['developer_last_name'] ?? '') . ' ' .
@@ -1296,6 +1366,13 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
                                     <div class="prog-item-broker is-empty">
                                         <i class="fa-solid fa-link-slash"></i>
                                         Broker not set
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php if (!empty($p['timezone_pretty'])): ?>
+                                    <div class="prog-item-timezone">
+                                        <i class="fa-solid fa-globe"></i>
+                                        <?= htmlspecialchars($p['timezone_pretty']) ?>
                                     </div>
                                 <?php endif; ?>
 
@@ -1368,6 +1445,10 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
                         <div class="prog-detail-row">
                             <span class="prog-detail-label">Trades Provision</span>
                             <span class="prog-detail-value"><?= htmlspecialchars($ip['analytics']['period']) ?></span>
+                        </div>
+                        <div class="prog-detail-row">
+                            <span class="prog-detail-label">Timezone</span>
+                            <span class="prog-detail-value"><?= !empty($ip['timezone_pretty']) ? htmlspecialchars($ip['timezone_pretty']) : '—' ?></span>
                         </div>
                         <div class="prog-detail-row">
                             <span class="prog-detail-label">Consecutive Sequential Loss</span>
@@ -1771,6 +1852,7 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Winrate</span><span class="prog-detail-value">' + formatVal(p.analytics ? p.analytics.winrate : null, '%') + '</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Risk Reward</span><span class="prog-detail-value">' + formatRiskReward(p.analytics ? p.analytics.risk_reward : null) + '</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Trades Provision</span><span class="prog-detail-value">' + escapeHtml(p.analytics && p.analytics.period ? p.analytics.period : 'Daily') + '</span></div>';
+            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Timezone</span><span class="prog-detail-value">' + (p.timezone_pretty ? escapeHtml(p.timezone_pretty) : '—') + '</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Consecutive Sequential Loss</span><span class="prog-detail-value">' + formatVal(p.analytics ? p.analytics.consecutive_sequential_loss : null, '') + '</span></div>';
             html += '</div>';
 

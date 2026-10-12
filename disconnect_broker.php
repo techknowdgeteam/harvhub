@@ -13,7 +13,6 @@ try {
     die("Database connection failed.");
 }
 
-// Central notification service
 require_once __DIR__ . '/notification_service.php';
 
 if (!isset($_SESSION['user_email'])) {
@@ -167,7 +166,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker']))
     if (!$is_verified) {
         $requires_verification = true;
     } else {
-        // Always re-fetch the exact row before disconnecting
         $stmt = $pdo->prepare("SELECT * FROM harvhub WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
         $stmt->execute([$activeSubAccountId, $email]);
         $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -214,67 +212,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['disconnect_broker']))
                 }
             } catch (Exception $e) {}
 
-            // Capture broker details before clearing for the notification message
             $disconnectedBroker = $currentUser['broker'] ?? 'Unknown';
             $disconnectedLogin  = $currentUser['login'] ?? '';
 
             try {
                 if ($post_needs_warning) {
+                    // Suspended: wipe credentials, mark account suspended,
+                    // and flag the disconnect request so the VPS worker
+                    // knows to delete the terminal.
                     $stmt = $pdo->prepare("
                         UPDATE harvhub
                         SET broker = NULL, server = NULL, login = NULL, broker_password = NULL,
-                            application_status = 'suspended'
+                            application_status = 'suspended',
+                            disconnect_broker_request = 1
                         WHERE sub_account_id = ? AND LOWER(email) = ?
                     ");
                     $stmt->execute([$activeSubAccountId, $email]);
 
                     $disconnect_success = true;
                     $was_suspended      = true;
-                    $disconnect_message = 'Broker disconnected. This account has been suspended due to a policy violation.';
+                    $disconnect_message = 'Broker disconnected. This account has been suspended due to a policy violation. We will let you know once the terminal has been deleted from the VPS.';
 
-                    // ============================================
-                    // NOTIFICATION: BROKER DISCONNECTED + SUSPENDED
-                    // ============================================
-                    recordContractNotification($pdo, [
-                        'user_email'       => $email,
-                        'sub_account_id'   => $activeSubAccountId,
-                        'main_account_id'  => $mainAccountId,
-                        'notification_key' => 'broker-disconnected-suspended-' . $activeSubAccountId . '-' . date('YmdHis'),
-                        'title'            => 'Broker Disconnected - Account Suspended',
-                        'message'          => 'Your broker (' . $disconnectedBroker . ' - ' . $disconnectedLogin . ') has been disconnected and your account has been suspended due to a policy violation.',
-                        'type'             => 'danger',
-                        'section'          => 'Broker',
-                        'action_tab'       => 'disconnect_broker',
-                        'force'            => true
-                    ]);
+                    recordDisconnectBrokerRequestNotification(
+                        $pdo,
+                        $email,
+                        $activeSubAccountId,
+                        $mainAccountId,
+                        (string)$disconnectedBroker,
+                        (string)$disconnectedLogin,
+                        true
+                    );
 
                 } else {
+                    // Clean disconnect: wipe credentials and flag the
+                    // disconnect request.
                     $stmt = $pdo->prepare("
                         UPDATE harvhub
-                        SET broker = NULL, server = NULL, login = NULL, broker_password = NULL
+                        SET broker = NULL, server = NULL, login = NULL, broker_password = NULL,
+                            disconnect_broker_request = 1
                         WHERE sub_account_id = ? AND LOWER(email) = ?
                     ");
                     $stmt->execute([$activeSubAccountId, $email]);
 
                     $disconnect_success = true;
                     $was_suspended      = false;
-                    $disconnect_message = 'Broker disconnected successfully.';
+                    $disconnect_message = 'Broker disconnected. We will let you know once the terminal has been deleted from the VPS.';
 
-                    // ============================================
-                    // NOTIFICATION: BROKER DISCONNECTED
-                    // ============================================
-                    recordContractNotification($pdo, [
-                        'user_email'       => $email,
-                        'sub_account_id'   => $activeSubAccountId,
-                        'main_account_id'  => $mainAccountId,
-                        'notification_key' => 'broker-disconnected-' . $activeSubAccountId . '-' . date('YmdHis'),
-                        'title'            => 'Broker Disconnected',
-                        'message'          => 'Your broker (' . $disconnectedBroker . ' - ' . $disconnectedLogin . ') has been disconnected from your account.',
-                        'type'             => 'info',
-                        'section'          => 'Broker',
-                        'action_tab'       => 'connect_investor_broker',
-                        'force'            => true
-                    ]);
+                    recordDisconnectBrokerRequestNotification(
+                        $pdo,
+                        $email,
+                        $activeSubAccountId,
+                        $mainAccountId,
+                        (string)$disconnectedBroker,
+                        (string)$disconnectedLogin,
+                        false
+                    );
                 }
 
                 unset($_SESSION[$session_key]);

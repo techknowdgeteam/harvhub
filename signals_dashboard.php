@@ -65,13 +65,133 @@ function parseCleanList($raw) {
     return array_values(array_unique($out));
 }
 
+// ============================================================
+// >>> WORLD TIMEZONES (alphabetically sorted)
+// ============================================================
+function getTimezoneOptions(): array {
+    return [
+        'Africa' => [
+            'Africa/Abidjan'      => 'Abidjan (GMT)',
+            'Africa/Accra'        => 'Accra (GMT)',
+            'Africa/Addis_Ababa'  => 'Addis Ababa (EAT, UTC+3)',
+            'Africa/Algiers'      => 'Algiers (CET, UTC+1)',
+            'Africa/Cairo'        => 'Cairo (EET, UTC+2)',
+            'Africa/Casablanca'   => 'Casablanca (WET, UTC+1)',
+            'Africa/Johannesburg' => 'Johannesburg (SAST, UTC+2)',
+            'Africa/Lagos'        => 'Lagos (WAT, UTC+1)',
+            'Africa/Nairobi'      => 'Nairobi (EAT, UTC+3)',
+            'Africa/Tripoli'      => 'Tripoli (EET, UTC+2)',
+            'Africa/Tunis'        => 'Tunis (CET, UTC+1)',
+            'Africa/Windhoek'     => 'Windhoek (CAT, UTC+2)',
+        ],
+        'America' => [
+            'America/Anchorage'              => 'Anchorage (AKST, UTC-9)',
+            'America/Argentina/Buenos_Aires' => 'Buenos Aires (ART, UTC-3)',
+            'America/Bogota'                 => 'Bogota (COT, UTC-5)',
+            'America/Caracas'                => 'Caracas (VET, UTC-4)',
+            'America/Chicago'                => 'Chicago (CST, UTC-6)',
+            'America/Denver'                 => 'Denver (MST, UTC-7)',
+            'America/Halifax'                => 'Halifax (AST, UTC-4)',
+            'America/Lima'                   => 'Lima (PET, UTC-5)',
+            'America/Los_Angeles'            => 'Los Angeles (PST, UTC-8)',
+            'America/Mexico_City'            => 'Mexico City (CST, UTC-6)',
+            'America/New_York'               => 'New York (EST, UTC-5)',
+            'America/Phoenix'                => 'Phoenix (MST, UTC-7)',
+            'America/Santiago'               => 'Santiago (CLT, UTC-4)',
+            'America/Sao_Paulo'              => 'Sao Paulo (BRT, UTC-3)',
+            'America/St_Johns'               => 'St. Johns (NST, UTC-3:30)',
+            'America/Toronto'                => 'Toronto (EST, UTC-5)',
+            'America/Vancouver'              => 'Vancouver (PST, UTC-8)',
+        ],
+        'Asia' => [
+            'Asia/Almaty'       => 'Almaty (ALMT, UTC+6)',
+            'Asia/Baghdad'      => 'Baghdad (AST, UTC+3)',
+            'Asia/Bangkok'      => 'Bangkok (ICT, UTC+7)',
+            'Asia/Colombo'      => 'Colombo (IST, UTC+5:30)',
+            'Asia/Dhaka'        => 'Dhaka (BST, UTC+6)',
+            'Asia/Dubai'        => 'Dubai (GST, UTC+4)',
+            'Asia/Hong_Kong'    => 'Hong Kong (HKT, UTC+8)',
+            'Asia/Jakarta'      => 'Jakarta (WIB, UTC+7)',
+            'Asia/Jerusalem'    => 'Jerusalem (IST, UTC+2)',
+            'Asia/Karachi'      => 'Karachi (PKT, UTC+5)',
+            'Asia/Kathmandu'    => 'Kathmandu (NPT, UTC+5:45)',
+            'Asia/Kolkata'      => 'Kolkata / Mumbai (IST, UTC+5:30)',
+            'Asia/Kuala_Lumpur' => 'Kuala Lumpur (MYT, UTC+8)',
+            'Asia/Manila'       => 'Manila (PHT, UTC+8)',
+            'Asia/Riyadh'       => 'Riyadh (AST, UTC+3)',
+            'Asia/Seoul'        => 'Seoul (KST, UTC+9)',
+            'Asia/Shanghai'     => 'Shanghai (CST, UTC+8)',
+            'Asia/Singapore'    => 'Singapore (SGT, UTC+8)',
+            'Asia/Taipei'       => 'Taipei (CST, UTC+8)',
+            'Asia/Tehran'       => 'Tehran (IRST, UTC+3:30)',
+            'Asia/Tokyo'        => 'Tokyo (JST, UTC+9)',
+        ],
+        'Australia / Pacific' => [
+            'Australia/Adelaide'  => 'Adelaide (ACST, UTC+9:30)',
+            'Australia/Brisbane'  => 'Brisbane (AEST, UTC+10)',
+            'Australia/Darwin'    => 'Darwin (ACST, UTC+9:30)',
+            'Australia/Hobart'    => 'Hobart (AEDT, UTC+11)',
+            'Australia/Melbourne' => 'Melbourne (AEDT, UTC+11)',
+            'Australia/Perth'     => 'Perth (AWST, UTC+8)',
+            'Australia/Sydney'    => 'Sydney (AEDT, UTC+11)',
+            'Pacific/Auckland'    => 'Auckland (NZDT, UTC+13)',
+            'Pacific/Fiji'        => 'Fiji (FJT, UTC+12)',
+            'Pacific/Honolulu'    => 'Honolulu (HST, UTC-10)',
+        ],
+        'Europe' => [
+            'Europe/Amsterdam'  => 'Amsterdam (CET, UTC+1)',
+            'Europe/Athens'     => 'Athens (EET, UTC+2)',
+            'Europe/Berlin'     => 'Berlin (CET, UTC+1)',
+            'Europe/Brussels'   => 'Brussels (CET, UTC+1)',
+            'Europe/Bucharest'  => 'Bucharest (EET, UTC+2)',
+            'Europe/Budapest'   => 'Budapest (CET, UTC+1)',
+            'Europe/Copenhagen' => 'Copenhagen (CET, UTC+1)',
+            'Europe/Dublin'     => 'Dublin (GMT, UTC+0)',
+            'Europe/Helsinki'   => 'Helsinki (EET, UTC+2)',
+            'Europe/Istanbul'   => 'Istanbul (TRT, UTC+3)',
+            'Europe/Kyiv'       => 'Kyiv (EET, UTC+2)',
+            'Europe/Lisbon'     => 'Lisbon (WET, UTC+0)',
+            'Europe/London'     => 'London (GMT, UTC+0)',
+            'Europe/Madrid'     => 'Madrid (CET, UTC+1)',
+            'Europe/Moscow'     => 'Moscow (MSK, UTC+3)',
+            'Europe/Oslo'       => 'Oslo (CET, UTC+1)',
+            'Europe/Paris'      => 'Paris (CET, UTC+1)',
+            'Europe/Prague'     => 'Prague (CET, UTC+1)',
+            'Europe/Rome'       => 'Rome (CET, UTC+1)',
+            'Europe/Stockholm'  => 'Stockholm (CET, UTC+1)',
+            'Europe/Vienna'     => 'Vienna (CET, UTC+1)',
+            'Europe/Warsaw'     => 'Warsaw (CET, UTC+1)',
+            'Europe/Zurich'     => 'Zurich (CET, UTC+1)',
+        ],
+        'UTC / Global' => [
+            'UTC' => 'UTC (Coordinated Universal Time)',
+        ],
+    ];
+}
+
+function timezoneIsValid(string $tz): bool {
+    if ($tz === '') return false;
+    foreach (getTimezoneOptions() as $group) {
+        if (isset($group[$tz])) return true;
+    }
+    return false;
+}
+
 function syncInvestorProfitsIntoDeals($pdo) {
     try {
         $q = $pdo->query("
             SELECT d.contract_id, d.investor_id, d.investor_sub_account_id, d.accepted_at, d.contract_duration,
                    d.investor_profit, h.profitandloss
             FROM programme_revenue_deals d
-            LEFT JOIN harvhub h ON h.id = d.investor_id
+            LEFT JOIN harvhub h
+                ON h.id = d.investor_id
+               AND (
+                    (d.investor_sub_account_id IS NOT NULL AND d.investor_sub_account_id > 0
+                     AND h.sub_account_id = d.investor_sub_account_id)
+                    OR
+                    ((d.investor_sub_account_id IS NULL OR d.investor_sub_account_id = 0)
+                     AND h.is_main_account = 1)
+               )
             WHERE d.investor_id > 0
               AND d.contract_duration > 0
         ");
@@ -160,17 +280,347 @@ function countProgrammeVpsRequests($pdo, $programmeId) {
     }
 }
 
+function countProgrammeInvestmentRequests($pdo, $userId, $programmeId) {
+    try {
+        $q = $pdo->prepare("
+            SELECT COUNT(*) FROM programme_investment_requestors
+            WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'
+        ");
+        $q->execute([$userId, $programmeId]);
+        return (int)$q->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+function syncInterestRiskRewardIntoTrades($pdo, $userId, $programmeId, $interest) {
+    if (!$interest) return;
+
+    $type  = $interest['risk_reward_type'] ?? null;
+    $value = $interest['risk_reward']      ?? null;
+    if ($type === null && $value === null) return;
+
+    try {
+        $u = $pdo->prepare("
+            UPDATE programme_trades
+            SET interest_risk_reward_type = ?,
+                interest_risk_reward      = ?
+            WHERE userid = ? AND programmeid = ?
+              AND (
+                    interest_risk_reward_type IS NULL OR interest_risk_reward_type <> ?
+                 OR interest_risk_reward      IS NULL OR interest_risk_reward      <> ?
+              )
+        ");
+        $u->execute([$type, $value, $userId, $programmeId, $type, $value]);
+    } catch (Throwable $e) {}
+}
+
+function normalizeInterestRiskRewardType($raw) {
+    $s = trim((string)$raw);
+    if ($s === '') return '—';
+    $s = str_replace('_', ' ', $s);
+    $s = preg_replace('/\s+/', ' ', $s);
+    return $s;
+}
+
+// ============================================================
+// >>> SYNC ENGINE (shared)
+// ============================================================
+
+function getActiveInvestorsForProgramme($pdo, $programmeId) {
+    $out = [];
+    try {
+        $q = $pdo->prepare("
+            SELECT DISTINCT
+                d.investor_id,
+                d.investor_sub_account_id
+            FROM programme_revenue_deals d
+            INNER JOIN harvhub h
+                    ON h.id = d.investor_id
+                   AND h.sub_account_id = d.investor_sub_account_id
+            WHERE d.programme_id = ?
+              AND d.investor_id > 0
+              AND h.account_contract_status = 'contract_active'
+        ");
+        $q->execute([$programmeId]);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+
+        $seen = [];
+
+        foreach ($rows as $r) {
+            $invId = (int)$r['investor_id'];
+            $subId = (int)($r['investor_sub_account_id'] ?? 0);
+            if ($invId <= 0 || $subId <= 0) continue;
+
+            $key = $invId . '|' . $subId;
+            if (isset($seen[$key])) continue;
+            $seen[$key] = true;
+
+            $out[] = [
+                'investor_id'    => $invId,
+                'sub_account_id' => $subId,
+            ];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 /**
- * Build the greeting state for the signals dashboard.
- *
- * Returned keys:
- *  - greeting_sub: plain-text subtitle (or '' if a chevron row is used)
- *  - greeting_sub_html: HTML subtitle (may include the challenge chevron row)
- *  - show_explore_challenges: bool
- *  - show_begin_test: bool
- *  - show_session_modal / title / message / class / key
- *  - vps_request_count: int
+ * Count distinct investors currently enrolled in a programme.
  */
+function getAllInvestorsCountForProgramme($pdo, $programmeId) {
+    try {
+        $q = $pdo->prepare("
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT
+                    pi.investorid AS investor_id,
+                    COALESCE(pi.sub_account_id, 0) AS sub_account_id
+                FROM programme_investors pi
+                INNER JOIN programme_revenue_deals d
+                        ON d.programme_id = pi.programme_id
+                       AND d.investor_id = pi.investorid
+                       AND COALESCE(d.investor_sub_account_id, 0) = COALESCE(pi.sub_account_id, 0)
+                WHERE pi.programme_id = ?
+                  AND pi.investorid > 0
+            ) AS enrolled
+        ");
+        $q->execute([$programmeId]);
+        return (int)$q->fetchColumn();
+    } catch (Throwable $e) {
+        try {
+            $q = $pdo->prepare("
+                SELECT COUNT(DISTINCT investor_id)
+                FROM programme_revenue_deals
+                WHERE programme_id = ? AND investor_id > 0
+            ");
+            $q->execute([$programmeId]);
+            return (int)$q->fetchColumn();
+        } catch (Throwable $e2) {
+            return 0;
+        }
+    }
+}
+
+function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
+    try {
+        $pq = $pdo->prepare("
+            SELECT *
+            FROM programme_trades
+            WHERE userid = ? AND programmeid = ? AND investor_id IS NULL
+        ");
+        $pq->execute([$userId, $programmeId]);
+        $programmeTrades = $pq->fetchAll(PDO::FETCH_ASSOC);
+
+        $programmeByTradeId = [];
+        foreach ($programmeTrades as $pt) {
+            $tid = (string)($pt['tradeid'] ?? '');
+            if ($tid === '') continue;
+            $programmeByTradeId[$tid] = $pt;
+        }
+
+        $activeInvestors = getActiveInvestorsForProgramme($pdo, $programmeId);
+
+        $activePairs = [];
+        foreach ($activeInvestors as $inv) {
+            $invId = (int)$inv['investor_id'];
+            $subId = (int)$inv['sub_account_id'];
+            if ($invId <= 0 || $subId <= 0) continue;
+            $activePairs[$invId . '|' . $subId] = true;
+        }
+        $activePairs = array_keys($activePairs);
+
+        $iq = $pdo->prepare("
+            SELECT id, tradeid, investor_id, investor_sub_account_id,
+                   modify_trade, orderstatus, pnl, pnl_risk_reward
+            FROM programme_trades
+            WHERE userid = ? AND programmeid = ? AND investor_id IS NOT NULL
+        ");
+        $iq->execute([$userId, $programmeId]);
+        $investorRows = $iq->fetchAll(PDO::FETCH_ASSOC);
+
+        $investorIndex = [];
+        foreach ($investorRows as $ir) {
+            $tid   = (string)($ir['tradeid'] ?? '');
+            $invId = (int)($ir['investor_id'] ?? 0);
+            $subId = (int)($ir['investor_sub_account_id'] ?? 0);
+            $investorIndex[$tid . '|' . $invId . '|' . $subId] = $ir;
+        }
+
+        $insStmt = $pdo->prepare("
+            INSERT INTO programme_trades
+                (userid, programmeid, investor_id, investor_sub_account_id,
+                 tradeid, ordertype, symbol, entry, stoploss, takeprofit,
+                 orderstatus, trade_risk_reward, interest_risk_reward, interest_risk_reward_type,
+                 pnl, pnl_risk_reward, modify_trade, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+
+        foreach ($activeInvestors as $inv) {
+            foreach ($programmeByTradeId as $tid => $pt) {
+                $key = $tid . '|' . $inv['investor_id'] . '|' . $inv['sub_account_id'];
+                if (isset($investorIndex[$key])) {
+                    $existing = $investorIndex[$key];
+
+                    $progModify = (string)($pt['modify_trade'] ?? '');
+                    $invModify  = (string)($existing['modify_trade'] ?? '');
+                    $progStatus = (string)($pt['orderstatus'] ?? '');
+                    $invStatus  = (string)($existing['orderstatus'] ?? '');
+                    $progPnl    = $pt['pnl'] ?? null;
+                    $invPnl     = $existing['pnl'] ?? null;
+                    $progPrr    = $pt['pnl_risk_reward'] ?? null;
+                    $invPrr     = $existing['pnl_risk_reward'] ?? null;
+
+                    if (
+                        $progModify !== $invModify ||
+                        $progStatus !== $invStatus ||
+                        (string)$progPnl !== (string)$invPnl ||
+                        (string)$progPrr !== (string)$invPrr
+                    ) {
+                        try {
+                            $u = $pdo->prepare("
+                                UPDATE programme_trades
+                                SET modify_trade = ?, orderstatus = ?, pnl = ?, pnl_risk_reward = ?
+                                WHERE id = ?
+                            ");
+                            $u->execute([
+                                $progModify,
+                                $progStatus !== '' ? $progStatus : null,
+                                $progPnl,
+                                $progPrr,
+                                (int)$existing['id']
+                            ]);
+                        } catch (Throwable $e) {}
+                    }
+                    continue;
+                }
+
+                try {
+                    $insStmt->execute([
+                        $userId,
+                        $programmeId,
+                        $inv['investor_id'],
+                        $inv['sub_account_id'] ?: null,
+                        $tid,
+                        $pt['ordertype'] ?? null,
+                        $pt['symbol'] ?? null,
+                        $pt['entry'] ?? null,
+                        $pt['stoploss'] ?? null,
+                        $pt['takeprofit'] ?? null,
+                        $pt['orderstatus'] ?? null,
+                        $pt['trade_risk_reward'] ?? null,
+                        $pt['interest_risk_reward'] ?? null,
+                        $pt['interest_risk_reward_type'] ?? null,
+                        $pt['pnl'] ?? null,
+                        $pt['pnl_risk_reward'] ?? null,
+                        $pt['modify_trade'] ?? null,
+                        $pt['created_at'] ?? date('Y-m-d H:i:s'),
+                    ]);
+                } catch (Throwable $e) {}
+            }
+        }
+
+        $programmeTradeIds = array_keys($programmeByTradeId);
+        if (!empty($programmeTradeIds)) {
+            $placeholders = implode(',', array_fill(0, count($programmeTradeIds), '?'));
+            $params = array_merge([$userId, $programmeId], $programmeTradeIds);
+            try {
+                $sql = "
+                    DELETE FROM programme_trades
+                    WHERE userid = ?
+                      AND programmeid = ?
+                      AND investor_id IS NOT NULL
+                      AND (tradeid IS NULL OR tradeid = '' OR tradeid NOT IN ($placeholders))
+                ";
+                $d = $pdo->prepare($sql);
+                $d->execute($params);
+            } catch (Throwable $e) {}
+        } else {
+            try {
+                $d = $pdo->prepare("
+                    DELETE FROM programme_trades
+                    WHERE userid = ?
+                      AND programmeid = ?
+                      AND investor_id IS NOT NULL
+                ");
+                $d->execute([$userId, $programmeId]);
+            } catch (Throwable $e) {}
+        }
+
+        if (!empty($activePairs)) {
+            $pairConditions = [];
+            $pairParams = [];
+            foreach ($activePairs as $pair) {
+                list($pInv, $pSub) = explode('|', $pair);
+                $pairConditions[] = "(investor_id = ? AND investor_sub_account_id = ?)";
+                $pairParams[] = (int)$pInv;
+                $pairParams[] = (int)$pSub;
+            }
+            $pairSql = implode(' OR ', $pairConditions);
+            $params = array_merge([$userId, $programmeId], $pairParams);
+            try {
+                $sql = "
+                    DELETE FROM programme_trades
+                    WHERE userid = ?
+                      AND programmeid = ?
+                      AND investor_id IS NOT NULL
+                      AND NOT ($pairSql)
+                ";
+                $d = $pdo->prepare($sql);
+                $d->execute($params);
+            } catch (Throwable $e) {}
+        } else {
+            try {
+                $d = $pdo->prepare("
+                    DELETE FROM programme_trades
+                    WHERE userid = ?
+                      AND programmeid = ?
+                      AND investor_id IS NOT NULL
+                ");
+                $d->execute([$userId, $programmeId]);
+            } catch (Throwable $e) {}
+        }
+
+    } catch (Throwable $e) {
+        error_log('[syncProgrammeTradesToInvestors] ' . $e->getMessage());
+    }
+}
+
+function propagateTradeToInvestors($pdo, $userId, $programmeId, $tradeId, $changes) {
+    if (empty($changes)) return;
+
+    try {
+        $q = $pdo->prepare("
+            SELECT tradeid
+            FROM programme_trades
+            WHERE id = ? AND userid = ? AND programmeid = ?
+              AND investor_id IS NULL
+            LIMIT 1
+        ");
+        $q->execute([$tradeId, $userId, $programmeId]);
+        $tradeid = $q->fetchColumn();
+    } catch (Throwable $e) { return; }
+    if (!$tradeid) return;
+
+    $set = []; $params = [];
+    foreach ($changes as $col => $val) {
+        $set[] = "`$col` = ?";
+        $params[] = $val;
+    }
+    $params[] = $tradeid;
+    $params[] = $programmeId;
+
+    try {
+        $u = $pdo->prepare("
+            UPDATE programme_trades
+            SET " . implode(', ', $set) . "
+            WHERE tradeid = ?
+              AND programmeid = ?
+              AND investor_id IS NOT NULL
+        ");
+        $u->execute($params);
+    } catch (Throwable $e) {}
+}
+
 function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) {
     $state = [
         'advertisement' => 0,
@@ -188,6 +638,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         'greeting_sub_html' => '',
         'greeting_banners_html' => '',
         'vps_request_count' => 0,
+        'incoming_request_count' => 0,
     ];
 
     if (!$programme) return $state;
@@ -204,6 +655,8 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     $programmeId = (int)$programme['id'];
 
+    $state['incoming_request_count'] = countProgrammeInvestmentRequests($pdo, $userId, $programmeId);
+
     $ownsVps = false;
     try {
         $s = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
@@ -217,7 +670,6 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed';
 
-    // ---- helper to build the "In a X challenge" chevron row ----
     $buildChallengeChevron = function ($periodLabel) {
         $label = trim((string)$periodLabel);
         if ($label === '') $label = 'Signals';
@@ -307,12 +759,10 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
     }
 
-    // If HTML wasn't set, fall back to plain text
     if ($state['greeting_sub_html'] === '') {
         $state['greeting_sub_html'] = $state['greeting_sub'];
     }
 
-    // ---- Greeting banners (VPS request is only a button + count) ----
     $bannersHtml = '';
 
     if (!$hasVps && $advertisement === 0) {
@@ -369,6 +819,24 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $bannersHtml .= '</button>';
     }
 
+    if ((int)$state['incoming_request_count'] > 0) {
+        $reqCount = (int)$state['incoming_request_count'];
+        $bannersHtml .= '<div class="sd-greeting-divider"></div>';
+        $bannersHtml .= '<button type="button" class="sd-incoming-banner sd-investment-requests" onclick="sdGoToInvestorsRequests()">';
+        $bannersHtml .=   '<span class="sd-incoming-left">';
+        $bannersHtml .=     '<span class="sd-incoming-icon"><i class="fa-solid fa-hand-holding-dollar"></i></span>';
+        $bannersHtml .=     '<span class="sd-incoming-label">';
+        $bannersHtml .=       '<span class="sd-incoming-title">Investment Requests</span>';
+        $bannersHtml .=       '<span class="sd-incoming-sub">' . $reqCount . ' pending request' . ($reqCount === 1 ? '' : 's') . '</span>';
+        $bannersHtml .=     '</span>';
+        $bannersHtml .=   '</span>';
+        $bannersHtml .=   '<span class="sd-incoming-right">';
+        $bannersHtml .=     '<span class="sd-incoming-count">' . $reqCount . '</span>';
+        $bannersHtml .=     '<i class="fa-solid fa-chevron-right sd-incoming-chev"></i>';
+        $bannersHtml .=   '</span>';
+        $bannersHtml .= '</button>';
+    }
+
     if ($state['vps_request_count'] > 0) {
         $bannersHtml .= '<div class="sd-greeting-divider"></div>';
         $bannersHtml .= '<button type="button" class="sd-incoming-banner sd-vps-requests" onclick="harvhubGoToTab(\'vps\')">';
@@ -391,6 +859,314 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
     return $state;
 }
 
+/**
+ * Renders programme trade cards.
+ */
+function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
+    if (!$trades) {
+        return '<div class="sd-empty"><i class="fa-solid fa-chart-simple"></i><strong>No trades recorded yet</strong><p>Trades will appear here once they are generated.</p></div>';
+    }
+
+    $programmeRows = [];
+    foreach ($trades as $t) {
+        if (isset($t['investor_id']) && $t['investor_id'] !== null && (int)$t['investor_id'] > 0) continue;
+        $programmeRows[] = $t;
+    }
+
+    $investorStats = [];
+    foreach ($trades as $t) {
+        if (!isset($t['investor_id']) || $t['investor_id'] === null || (int)$t['investor_id'] <= 0) continue;
+
+        $invId = (int)$t['investor_id'];
+        $subId = (int)($t['investor_sub_account_id'] ?? 0);
+        $pairKey = $invId . '|' . $subId;
+        if (!empty($activeIds) && empty($activeIds[$pairKey])) continue;
+
+        $tid = (string)($t['tradeid'] ?? '');
+        if ($tid === '') continue;
+        if (!isset($investorStats[$tid])) $investorStats[$tid] = ['success' => 0, 'failed' => 0, 'total' => 0];
+        $st = strtolower(trim((string)($t['orderstatus'] ?? '')));
+        $investorStats[$tid]['total']++;
+        if ($st === 'failed') $investorStats[$tid]['failed']++;
+        else                  $investorStats[$tid]['success']++;
+    }
+
+    $groups = ['running' => [], 'pending' => [], 'closed' => [], 'failed' => []];
+
+    foreach ($programmeRows as $t) {
+        $status = strtolower(trim((string)($t['orderstatus'] ?? '')));
+        $tid    = (string)($t['tradeid'] ?? '');
+
+        if ($status === 'running')      $groups['running'][] = $t;
+        elseif ($status === 'pending')  $groups['pending'][] = $t;
+        elseif ($status === 'closed')   $groups['closed'][]  = $t;
+        elseif ($status === 'failed')   $groups['failed'][]  = $t;
+        else                            $groups['pending'][] = $t;
+
+        $stats = ($tid !== '' && isset($investorStats[$tid])) ? $investorStats[$tid] : null;
+
+        if ($status !== 'failed' && $stats && $stats['failed'] > 0) {
+            $groups['failed'][] = $t;
+        }
+        if ($status !== 'running' && $stats && $stats['success'] > 0) {
+            if ($status === 'failed') $groups['running'][] = $t;
+        }
+    }
+
+    foreach ($groups as $k => $list) {
+        $seen = []; $dedup = [];
+        foreach ($list as $row) {
+            $rid = (int)($row['id'] ?? 0);
+            if (isset($seen[$rid])) continue;
+            $seen[$rid] = true;
+            $dedup[] = $row;
+        }
+        $groups[$k] = $dedup;
+    }
+
+    $labels = ['running' => 'Running', 'pending' => 'Pending', 'closed' => 'Closed', 'failed' => 'Failed'];
+
+    $html  = '<div class="sd-trade-tabs">';
+    foreach ($labels as $key => $label) {
+        $count = count($groups[$key]);
+        $active = ($key === 'running') ? ' active' : '';
+        $html .= '<button type="button" class="sd-trade-tab' . $active . '" data-trade-tab="' . $key . '" onclick="sdSwitchTradeTab(\'' . $key . '\')">';
+        $html .=   $label . ' <span class="sd-trade-tab-count">' . $count . '</span>';
+        $html .= '</button>';
+    }
+    $html .= '</div>';
+
+    foreach ($labels as $key => $label) {
+        $panelActive = ($key === 'running') ? ' active' : '';
+        $html .= '<div class="sd-trade-panel' . $panelActive . '" id="sdTradePanel-' . $key . '">';
+
+        if (empty($groups[$key])) {
+            $html .= '<div class="sd-empty"><i class="fa-solid fa-inbox"></i><strong>No ' . strtolower($label) . ' trades</strong><p>Trades with orderstatus "' . $label . '" will appear here.</p></div>';
+        } else {
+            $html .= '<div class="sd-trades-scroll">';
+            $html .= '<div class="sd-trades-list">';
+            foreach ($groups[$key] as $t) {
+                $orderType = strtoupper((string)($t['ordertype'] ?? '—'));
+                $symbol    = strtoupper((string)($t['symbol'] ?? '—'));
+                $entry     = $t['entry']      !== null ? rtrim(rtrim(number_format((float)$t['entry'], 5), '0'), '.') : '—';
+                $sl        = $t['stoploss']   !== null ? rtrim(rtrim(number_format((float)$t['stoploss'], 5), '0'), '.') : '—';
+                $tp        = $t['takeprofit'] !== null ? rtrim(rtrim(number_format((float)$t['takeprofit'], 5), '0'), '.') : '—';
+                $status    = strtoupper((string)($t['orderstatus'] ?? '—'));
+                $trr       = $t['trade_risk_reward'] !== null ? number_format((float)$t['trade_risk_reward'], 2) : '—';
+                $irr       = $t['interest_risk_reward'] !== null ? number_format((float)$t['interest_risk_reward'], 2) : '—';
+                $irrType   = normalizeInterestRiskRewardType($t['interest_risk_reward_type'] ?? '');
+
+                $statusLower = strtolower((string)($t['orderstatus'] ?? ''));
+                $statusClass = 'sd-order-status';
+                if ($statusLower === 'running')      $statusClass .= ' is-running';
+                elseif ($statusLower === 'pending')  $statusClass .= ' is-pending';
+                elseif ($statusLower === 'closed')   $statusClass .= ' is-closed';
+                elseif ($statusLower === 'failed')   $statusClass .= ' is-failed';
+
+                $tid = (string)($t['tradeid'] ?? '');
+                $stats = ($tid !== '' && isset($investorStats[$tid])) ? $investorStats[$tid] : ['success' => 0, 'failed' => 0, 'total' => 0];
+                $showInvestorCounts = in_array($key, ['running', 'failed'], true) && $stats['total'] > 0;
+
+                $html .= '<div class="sd-trade-modal-card" data-trade-id="' . (int)$t['id'] . '">';
+                $html .=   '<div class="sd-trade-grid">';
+                $html .=     '<div><div class="sd-t-label">Symbol</div><b>' . esc_h($symbol) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Order type</div><b>' . esc_h($orderType) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Entry</div><b>' . esc_h($entry) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Stop loss</div><b>' . esc_h($sl) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Take profit</div><b>' . esc_h($tp) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Order status</div><b class="' . $statusClass . '">' . esc_h($status) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Trade risk reward</div><b> 1:' . esc_h($trr) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Interest risk reward</div><b> 1:' . esc_h($irr) . '</b></div>';
+                $html .=     '<div><div class="sd-t-label">Interest risk reward type</div><b>' . esc_h($irrType) . '</b></div>';
+
+                if ($statusLower === 'closed') {
+                    $pnlVal = $t['pnl'] !== null ? (float)$t['pnl'] : 0.0;
+                    $prrVal = $t['pnl_risk_reward'] !== null ? (float)$t['pnl_risk_reward'] : null;
+                    $prrTxt = $prrVal !== null ? number_format($prrVal, 2) : '—';
+
+                    if ($pnlVal > 0.01)      { $pnlLabel = 'Closed in Profit'; $pnlClass = 'is-profit'; }
+                    elseif ($pnlVal < -0.01) { $pnlLabel = 'Closed in Loss';   $pnlClass = 'is-loss'; }
+                    else                     { $pnlLabel = 'Closed Flat';      $pnlClass = 'is-flat'; }
+
+                    $html .= '<div><div class="sd-t-label">Outcome</div><b class="sd-pnl-outcome ' . $pnlClass . '">' . esc_h($pnlLabel) . '</b></div>';
+                    $html .= '<div><div class="sd-t-label">PnL risk reward</div><b> 1:' . esc_h($prrTxt) . '</b></div>';
+                }
+
+                if ($showInvestorCounts) {
+                    $html .= '<div style="grid-column:1/-1;">';
+                    $html .=   '<div class="sd-t-label">Investor breakdown</div>';
+                    $html .=   '<div class="sd-inv-breakdown">';
+                    $html .=     '<span class="sd-inv-count sd-inv-count-success"><i class="fa-solid fa-circle-check"></i> success for ' . (int)$stats['success'] . ' investor' . ($stats['success'] === 1 ? '' : 's') . '</span>';
+                    $html .=     '<span class="sd-inv-count sd-inv-count-failed"><i class="fa-solid fa-circle-xmark"></i> failed for ' . (int)$stats['failed'] . ' investor' . ($stats['failed'] === 1 ? '' : 's') . '</span>';
+                    $html .=   '</div>';
+                    $html .= '</div>';
+                }
+
+                $html .=   '</div>';
+
+                $modifyVal = (string)($t['modify_trade'] ?? '');
+                if ($key === 'running') {
+                    $html .=   '<div class="sd-trade-modify">';
+                    $html .=     '<div class="sd-t-label">Modify trade</div>';
+                    $html .=     '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '">';
+                    $html .=       '<option value="">Select action</option>';
+                    $html .=       '<option value="breakeven"' . ($modifyVal === 'breakeven' ? ' selected' : '') . '>Breakeven</option>';
+                    $html .=       '<option value="close-position"' . ($modifyVal === 'close-position' ? ' selected' : '') . '>Close Position</option>';
+                    $html .=     '</select>';
+                    $html .=   '</div>';
+                } elseif ($key === 'pending') {
+                    $html .=   '<div class="sd-trade-modify">';
+                    $html .=     '<div class="sd-t-label">Modify trade</div>';
+                    $html .=     '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '">';
+                    $html .=       '<option value="">Select action</option>';
+                    $html .=       '<option value="delete-order"' . ($modifyVal === 'delete-order' ? ' selected' : '') . '>Delete Order</option>';
+                    $html .=     '</select>';
+                    $html .=   '</div>';
+                }
+
+                $html .= '</div>';
+            }
+            $html .= '</div>';
+            $html .= '</div>';
+        }
+        $html .= '</div>';
+    }
+
+    return $html;
+}
+
+function fetchActiveProgrammeTrades($pdo, $userId, $programmeId, $limit = 400) {
+    $trades = [];
+    try {
+        $s = $pdo->prepare("
+            SELECT t.*
+            FROM programme_trades t
+            WHERE t.userid = ? AND t.programmeid = ?
+            ORDER BY t.created_at DESC
+            LIMIT " . (int)$limit . "
+        ");
+        $s->execute([$userId, $programmeId]);
+        $trades = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+    return $trades;
+}
+
+/**
+ * Purge `programme_revenue_deals` rows whose (investor_id, sub_account_id)
+ * pair no longer has a matching row in `programme_investors` for the same
+ * programme.
+ */
+function purgeOrphanedRevenueDeals($pdo, $programmeId) {
+    try {
+        $del = $pdo->prepare("
+            DELETE d
+            FROM programme_revenue_deals d
+            LEFT JOIN programme_investors pi
+                   ON pi.programme_id = d.programme_id
+                  AND pi.investorid = d.investor_id
+                  AND COALESCE(pi.sub_account_id, 0) = COALESCE(d.investor_sub_account_id, 0)
+            WHERE d.programme_id = ?
+              AND d.investor_id > 0
+              AND pi.id IS NULL
+        ");
+        $del->execute([$programmeId]);
+    } catch (Throwable $e) {
+        // Silent — best-effort cleanup.
+    }
+}
+
+// ============================================================================
+// >>> Programme Status card renderer — Broker tile FIRST, then Symbols,
+// then Timeframes, then Timezone.
+// ============================================================================
+function renderProgrammeStatusHtml($programme, $hasBroker, $symbols, $timeframes, $timezone) {
+    $statusHtml = '';
+    $statusHtml .= '<div class="sd-status-grid">';
+
+    // 1) Broker
+    $statusHtml .= '<div class="sd-status-tile">';
+    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-building-columns"></i> Broker</div>';
+    $statusHtml .=   '<div class="sd-status-tile-value">' . ($hasBroker ? esc_h($programme['broker']) : '—') . '</div>';
+    $statusHtml .= '</div>';
+
+    // 2) Symbols
+    $statusHtml .= '<div class="sd-status-tile">';
+    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-coins"></i> Symbols</div>';
+    $statusHtml .=   '<div class="sd-status-tile-value">';
+    if (!empty($symbols)) {
+        foreach ($symbols as $sym) {
+            $statusHtml .= '<span class="sd-chip">' . esc_h($sym) . '</span>';
+        }
+    } else {
+        $statusHtml .= 'No symbols selected';
+    }
+    $statusHtml .=   '</div>';
+    $statusHtml .= '</div>';
+
+    // 3) Timeframes
+    $statusHtml .= '<div class="sd-status-tile">';
+    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-clock"></i> Timeframes</div>';
+    $statusHtml .=   '<div class="sd-status-tile-value">';
+    if (!empty($timeframes)) {
+        foreach ($timeframes as $tf) {
+            $statusHtml .= '<span class="sd-chip">' . esc_h($tf) . '</span>';
+        }
+    } else {
+        $statusHtml .= 'No timeframes selected';
+    }
+    $statusHtml .=   '</div>';
+    $statusHtml .= '</div>';
+
+    // 4) Timezone
+    $statusHtml .= '<div class="sd-status-tile">';
+    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-globe"></i> Timezone</div>';
+    $statusHtml .=   '<div class="sd-status-tile-value">' . ($timezone !== '' ? esc_h($timezone) : '—') . '</div>';
+    $statusHtml .= '</div>';
+
+    $statusHtml .= '</div>';
+    return $statusHtml;
+}
+
+// ============================================================================
+// >>> Renders the settings-modal symbol + timeframe checkbox lists.
+// Used both on initial server render AND from the JS live-update path.
+// ============================================================================
+function renderSymbolChecklistHtml(array $allBrokerSymbols, array $selectedSymbols): string {
+    if (empty($allBrokerSymbols)) {
+        return '<p class="sd-sub">No symbols available.</p>';
+    }
+    $selectedLookup = [];
+    foreach ($selectedSymbols as $s) $selectedLookup[$s] = true;
+
+    $html = '';
+    foreach ($allBrokerSymbols as $sym) {
+        $checked = isset($selectedLookup[$sym]) ? ' checked' : '';
+        $html .= '<label class="sd-check-row">';
+        $html .=   '<input type="checkbox" value="' . esc_h($sym) . '" class="sd-settings-symbol-cb"' . $checked . '>';
+        $html .=   '<span>' . esc_h($sym) . '</span>';
+        $html .= '</label>';
+    }
+    return $html;
+}
+
+function renderTimeframeChecklistHtml(array $availableTimeframes, array $selectedTimeframes): string {
+    if (empty($availableTimeframes)) {
+        return '<p class="sd-sub">No timeframes available.</p>';
+    }
+    $selectedLookup = [];
+    foreach ($selectedTimeframes as $t) $selectedLookup[$t] = true;
+
+    $html = '';
+    foreach ($availableTimeframes as $tf) {
+        $checked = isset($selectedLookup[$tf]) ? ' checked' : '';
+        $html .= '<label class="sd-check-row">';
+        $html .=   '<input type="checkbox" value="' . esc_h($tf) . '" class="sd-settings-tf-cb"' . $checked . '>';
+        $html .=   '<span>' . esc_h($tf) . '</span>';
+        $html .= '</label>';
+    }
+    return $html;
+}
+
 function buildLiveState($pdo, $userId, $programme, $email) {
     $state = [
         'success' => true,
@@ -403,8 +1179,10 @@ function buildLiveState($pdo, $userId, $programme, $email) {
         'broker' => '',
         'broker_server' => '',
         'broker_login' => '',
+        'timezone' => '',
         'revenue_amount' => '0.00',
         'investor_count' => 0,
+        'active_investor_count' => 0,
         'developer_percentage' => '0.00',
         'incoming_request_count' => 0,
         'global_incoming_request_count' => 0,
@@ -415,6 +1193,11 @@ function buildLiveState($pdo, $userId, $programme, $email) {
         'server_min_broker_balance' => '0.00',
         'symbols' => [],
         'timeframes' => [],
+        // >>> broker metadata exposed for live AJAX updates
+        'broker_symbols' => [],
+        'broker_timeframes' => [],
+        'broker_symbols_count' => 0,
+        'broker_timeframes_count' => 0,
         'trades' => [],
         'trades_html' => '',
         'programme_status_html' => '',
@@ -444,6 +1227,10 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $state['is_public'] = ((int)($programme['visibility'] ?? 0) === 1);
     $state['published'] = ((int)($programme['advertisement'] ?? 0) === 1);
 
+    syncProgrammeTradesToInvestors($pdo, $userId, $programmeId);
+
+    purgeOrphanedRevenueDeals($pdo, $programmeId);
+
     $hasVps = false;
     try {
         $s = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
@@ -464,6 +1251,7 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $state['broker'] = (string)($programme['broker'] ?? '');
     $state['broker_server'] = (string)($programme['server'] ?? '');
     $state['broker_login'] = (string)($programme['login'] ?? '');
+    $state['timezone'] = (string)($programme['timezone'] ?? '');
 
     $revenueSettings = null;
     try {
@@ -503,25 +1291,30 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $state['server_contract_duration'] = $serverContractDuration;
     $state['server_min_broker_balance'] = number_format($serverMinBrokerBalance, 2, '.', '');
 
-    $investorCount = 0;
-    try {
-        $q = $pdo->prepare("
-            SELECT accepted_at, contract_duration
-            FROM programme_revenue_deals
-            WHERE programme_id = ? AND investor_id > 0
-        ");
-        $q->execute([$programmeId]);
-        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($rows as $r) {
-            $c = classifyDealState($r['accepted_at'] ?? null, (int)($r['contract_duration'] ?? 0));
-            if ($c['state'] === 'active') $investorCount++;
-        }
-    } catch (Throwable $e) {}
-    $state['investor_count'] = $investorCount;
+    $state['investor_count'] = getAllInvestorsCountForProgramme($pdo, $programmeId);
+
+    $activeInvestors = getActiveInvestorsForProgramme($pdo, $programmeId);
+    $activeInvestorIdSet = [];
+    foreach ($activeInvestors as $inv) {
+        $invId = (int)$inv['investor_id'];
+        $subId = (int)($inv['sub_account_id'] ?? 0);
+        if ($invId <= 0 || $subId <= 0) continue;
+        $activeInvestorIdSet[$invId . '|' . $subId] = true;
+    }
+    $state['active_investor_count'] = count($activeInvestorIdSet);
 
     $revenueAmount = 0.0;
     try {
-        $s = $pdo->prepare("SELECT h.profitandloss FROM programme_investors pi INNER JOIN harvhub h ON h.id = pi.investorid WHERE pi.developerid = ? AND pi.programme_id = ? AND pi.investorid > 0");
+        $s = $pdo->prepare("
+            SELECT h.profitandloss
+            FROM programme_investors pi
+            INNER JOIN harvhub h
+                    ON h.id = pi.investorid
+                   AND (pi.sub_account_id IS NULL OR pi.sub_account_id = 0 OR h.sub_account_id = pi.sub_account_id)
+            WHERE pi.developerid = ?
+              AND pi.programme_id = ?
+              AND pi.investorid > 0
+        ");
         $s->execute([$userId, $programmeId]);
         while ($r = $s->fetch(PDO::FETCH_ASSOC)) {
             $pnl = (float)($r['profitandloss'] ?? 0);
@@ -530,22 +1323,111 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     } catch (Throwable $e) {}
     $state['revenue_amount'] = number_format($revenueAmount, 2, '.', '');
 
-    $incomingRequestCount = 0;
-    try {
-        $s = $pdo->prepare("SELECT COUNT(*) FROM programme_investment_requestors WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'");
-        $s->execute([$userId, $programmeId]);
-        $incomingRequestCount = (int)$s->fetchColumn();
-    } catch (Throwable $e) {}
+    $incomingRequestCount = countProgrammeInvestmentRequests($pdo, $userId, $programmeId);
     $state['incoming_request_count'] = $incomingRequestCount;
 
-    $symbols = parseCleanList((string)($programme['selected_symbols'] ?? ''));
+    // ============================================================
+    // >>> BROKER METADATA — read the fresh snapshot first.
+    // This is the source of truth for both the settings picker
+    // and the "selected" chips cleanup below.
+    // ============================================================
+    $brokerSymbols    = parseCleanList((string)($programme['broker_symbols']    ?? ''));
+    $brokerTimeframes = parseCleanList((string)($programme['broker_timeframes'] ?? ''));
+    sort($brokerSymbols);
+    sort($brokerTimeframes);
+
+    $state['broker_symbols']          = $brokerSymbols;
+    $state['broker_timeframes']       = $brokerTimeframes;
+    $state['broker_symbols_count']    = count($brokerSymbols);
+    $state['broker_timeframes_count'] = count($brokerTimeframes);
+
+    // ============================================================
+    // >>> CLEANUP: if broker_symbols is empty, selected_symbols
+    // must also be empty for this programme. Same for timeframes.
+    // This keeps the DB consistent when a broker is disconnected
+    // or its metadata hasn't been collected yet.
+    // ============================================================
+    $symbols    = parseCleanList((string)($programme['selected_symbols']    ?? ''));
     $timeframes = parseCleanList((string)($programme['selected_timeframes'] ?? ''));
-    if (empty($symbols)) $symbols = parseCleanList((string)($programme['broker_symbols'] ?? ''));
-    if (empty($timeframes)) $timeframes = parseCleanList((string)($programme['broker_timeframes'] ?? ''));
-    $state['symbols'] = $symbols;
+
+    $symbolsChanged    = false;
+    $timeframesChanged = false;
+
+    if (empty($brokerSymbols) && !empty($symbols)) {
+        // broker list is empty but user has selections — wipe them
+        $symbols = [];
+        try {
+            $updSym = $pdo->prepare("UPDATE programme SET selected_symbols = NULL WHERE id = ? AND userid = ?");
+            $updSym->execute([$programmeId, $userId]);
+            $symbolsChanged = true;
+        } catch (Throwable $e) {}
+    }
+
+    if (empty($brokerTimeframes) && !empty($timeframes)) {
+        // broker timeframe list is empty but user has selections — wipe them
+        $timeframes = [];
+        try {
+            $updTf = $pdo->prepare("UPDATE programme SET selected_timeframes = NULL WHERE id = ? AND userid = ?");
+            $updTf->execute([$programmeId, $userId]);
+            $timeframesChanged = true;
+        } catch (Throwable $e) {}
+    }
+
+    // Also: drop any selected symbol that no longer exists in broker_symbols.
+    if (!empty($brokerSymbols) && !empty($symbols)) {
+        $brokerSymLookup = [];
+        foreach ($brokerSymbols as $bs) $brokerSymLookup[$bs] = true;
+
+        $prunedSymbols = [];
+        foreach ($symbols as $s) {
+            if (isset($brokerSymLookup[$s])) $prunedSymbols[] = $s;
+        }
+
+        if (count($prunedSymbols) !== count($symbols)) {
+            $symbols = $prunedSymbols;
+            try {
+                $updSym2 = $pdo->prepare("UPDATE programme SET selected_symbols = ? WHERE id = ? AND userid = ?");
+                $updSym2->execute([implode(',', $symbols), $programmeId, $userId]);
+                $symbolsChanged = true;
+            } catch (Throwable $e) {}
+        }
+    }
+
+    // Same pruning for timeframes.
+    if (!empty($brokerTimeframes) && !empty($timeframes)) {
+        $brokerTfLookup = [];
+        foreach ($brokerTimeframes as $bt) $brokerTfLookup[$bt] = true;
+
+        $prunedTimeframes = [];
+        foreach ($timeframes as $t) {
+            if (isset($brokerTfLookup[$t])) $prunedTimeframes[] = $t;
+        }
+
+        if (count($prunedTimeframes) !== count($timeframes)) {
+            $timeframes = $prunedTimeframes;
+            try {
+                $updTf2 = $pdo->prepare("UPDATE programme SET selected_timeframes = ? WHERE id = ? AND userid = ?");
+                $updTf2->execute([json_encode(array_values($timeframes)), $programmeId, $userId]);
+                $timeframesChanged = true;
+            } catch (Throwable $e) {}
+        }
+    }
+
+    // Reflect the (possibly modified) programme row back into the
+    // PHP array so the rest of buildLiveState() uses fresh values.
+    if ($symbolsChanged)    $programme['selected_symbols']    = empty($symbols)    ? null : implode(',', $symbols);
+    if ($timeframesChanged) $programme['selected_timeframes'] = empty($timeframes) ? null : json_encode(array_values($timeframes));
+
+    $state['symbols']    = $symbols;
     $state['timeframes'] = $timeframes;
 
+    // ---- Programme status HTML uses the same symbols/timeframes ----
+    $timezone = (string)($programme['timezone'] ?? '');
+
     $interest = getSignalProviderInterest($pdo, $userId, $programmeId);
+
+    syncInterestRiskRewardIntoTrades($pdo, $userId, $programmeId, $interest);
+
     $serverConfig = getServerAccountConfig($pdo);
     $signalsState = determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker);
 
@@ -554,168 +1436,13 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $state['greeting_banners_html'] = $signalsState['greeting_banners_html'];
     $state['vps_request_count'] = $signalsState['vps_request_count'];
 
-    $statusHtml = '';
-    $statusHtml .= '<div class="sd-status-grid">';
+    $state['programme_status_html'] = renderProgrammeStatusHtml($programme, $hasBroker, $symbols, $timeframes, $timezone);
 
-    $statusHtml .= '<div class="sd-status-tile">';
-    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-coins"></i> Symbols</div>';
-    $statusHtml .=   '<div class="sd-status-tile-value">';
-    if (!empty($symbols)) {
-        foreach ($symbols as $sym) {
-            $statusHtml .= '<span class="sd-chip">' . esc_h($sym) . '</span>';
-        }
-    } else {
-        $statusHtml .= 'No symbols selected';
-    }
-    $statusHtml .=   '</div>';
-    $statusHtml .= '</div>';
-
-    $statusHtml .= '<div class="sd-status-tile">';
-    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-building-columns"></i> Broker</div>';
-    $statusHtml .=   '<div class="sd-status-tile-value">' . ($hasBroker ? esc_h($programme['broker']) : '—') . '</div>';
-    $statusHtml .= '</div>';
-
-    $statusHtml .= '<div class="sd-status-tile">';
-    $statusHtml .=   '<div class="sd-status-tile-label"><i class="fa-solid fa-clock"></i> Timeframes</div>';
-    $statusHtml .=   '<div class="sd-status-tile-value">';
-    if (!empty($timeframes)) {
-        foreach ($timeframes as $tf) {
-            $statusHtml .= '<span class="sd-chip">' . esc_h($tf) . '</span>';
-        }
-    } else {
-        $statusHtml .= 'No timeframes selected';
-    }
-    $statusHtml .=   '</div>';
-    $statusHtml .= '</div>';
-
-    $statusHtml .= '</div>';
-    $state['programme_status_html'] = $statusHtml;
-
-    $trades = [];
-    try {
-        $s = $pdo->prepare("SELECT * FROM programme_trades WHERE userid = ? AND programmeid = ? ORDER BY created_at DESC LIMIT 200");
-        $s->execute([$userId, $programmeId]);
-        $trades = $s->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {}
+    $trades = fetchActiveProgrammeTrades($pdo, $userId, $programmeId, 400);
     $state['trades'] = $trades;
-
-    $tradesHtml = '';
-    if (!$trades) {
-        $tradesHtml .= '<div class="sd-empty"><i class="fa-solid fa-chart-simple"></i><strong>No trades recorded yet</strong><p>Trades will appear here once they are generated.</p></div>';
-    } else {
-        $tradesHtml .= '<div class="sd-trades-list">';
-        foreach ($trades as $t) {
-            $modifyVal = (string)($t['modify_trade'] ?? 'keep-running');
-            if (!in_array($modifyVal, ['keep-running','breakeven','close'], true)) $modifyVal = 'keep-running';
-            $tradesHtml .= '<div class="sd-trade-row" data-trade-id="' . (int)$t['id'] . '">';
-            $tradesHtml .=   '<div><div class="sd-t-label">Symbol</div><b>' . esc_h((string)$t['symbol']) . ' · ' . esc_h($t['timeframe']) . '</b></div>';
-            $tradesHtml .=   '<div><div class="sd-t-label">Entry</div><b>' . esc_h(rtrim(rtrim(number_format((float)$t['entry'], 5), '0'), '.')) . '</b></div>';
-            $tradesHtml .=   '<div><div class="sd-t-label">SL / TP</div><b>' . esc_h(rtrim(rtrim(number_format((float)$t['exit'], 5), '0'), '.')) . ' / ' . ($t['target'] !== null ? esc_h(rtrim(rtrim(number_format((float)$t['target'], 5), '0'), '.')) : '—') . '</b></div>';
-            $tradesHtml .=   '<div><div class="sd-t-label">R:R</div><b>1:' . esc_h(number_format((float)$t['risk_reward'], 2)) . '</b></div>';
-            $tradesHtml .=   '<div>';
-            $tradesHtml .=     '<div class="sd-t-label">Modify trade</div>';
-            $tradesHtml .=     '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '" data-mode="' . esc_h($modifyVal) . '">';
-            $tradesHtml .=       '<option value="keep-running" ' . ($modifyVal === 'keep-running' ? 'selected' : '') . '>Keep running</option>';
-            $tradesHtml .=       '<option value="breakeven" ' . ($modifyVal === 'breakeven' ? 'selected' : '') . '>Breakeven</option>';
-            $tradesHtml .=       '<option value="close" ' . ($modifyVal === 'close' ? 'selected' : '') . '>Close</option>';
-            $tradesHtml .=     '</select>';
-            $tradesHtml .=   '</div>';
-            $tradesHtml .= '</div>';
-        }
-        $tradesHtml .= '</div>';
-    }
-    $state['trades_html'] = $tradesHtml;
+    $state['trades_html'] = renderProgrammeTradesHtml($trades, $activeInvestorIdSet);
 
     return $state;
-}
-
-function getDealsForProgramme($pdo, $userId, $programmeId) {
-    $active = [];
-    $inactive = [];
-    try {
-        $q = $pdo->prepare("
-            SELECT d.contract_id, d.investor_id, d.investor_sub_account_id,
-                   d.accepted_at, d.contract_duration,
-                   d.developer_percentage, d.investor_percentage,
-                   d.investor_profit, d.investor_payment_status, d.server_payment_status,
-                   d.programme_name,
-                   h.username, h.first_name, h.last_name, h.fullname, h.email AS investor_email,
-                   h.profitandloss
-            FROM programme_revenue_deals d
-            LEFT JOIN harvhub h ON h.id = d.investor_id
-            WHERE d.programme_id = ? AND d.investor_id > 0
-            ORDER BY d.accepted_at DESC, d.contract_id DESC
-        ");
-        $q->execute([$programmeId]);
-        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {
-        return ['active' => [], 'inactive' => []];
-    }
-
-    foreach ($rows as $r) {
-        $c = classifyDealState($r['accepted_at'] ?? null, (int)($r['contract_duration'] ?? 0));
-        if (!$c['start'] || !$c['end']) continue;
-
-        $name = trim((string)($r['username'] ?? '')) ?: (trim((string)($r['first_name'] ?? '')) ?: (trim((string)($r['fullname'] ?? '')) ?: (string)($r['investor_email'] ?? ('Investor #' . (int)$r['investor_id']))));
-        $initial = strtoupper(substr($name !== '' ? $name : 'I', 0, 1));
-
-        $pnl = (float)($r['profitandloss'] ?? 0);
-        $devPct = (float)($r['developer_percentage'] ?? 0);
-        $traderRevenue = $pnl > 0 ? ($pnl * $devPct / 100) : 0;
-
-        $entry = [
-            'contract_id'             => (int)$r['contract_id'],
-            'investor_id'             => (int)$r['investor_id'],
-            'name'                    => $name,
-            'initial'                 => $initial,
-            'trader_revenue'          => $traderRevenue,
-            'investor_profit'         => (float)($r['investor_profit'] ?? 0),
-            'your_split_pct'          => $devPct,
-            'investor_pct'            => (float)($r['investor_percentage'] ?? 0),
-            'start_date'              => $c['start']->format('Y-m-d'),
-            'end_date'                => $c['end']->format('Y-m-d'),
-            'days_left'               => $c['diff'],
-            'contract_duration'       => (int)$r['contract_duration'],
-            'accepted_at'             => (string)$r['accepted_at'],
-            'programme_name'          => (string)($r['programme_name'] ?? ''),
-            'investor_payment_status' => (string)($r['investor_payment_status'] ?? ''),
-            'server_payment_status'   => (string)($r['server_payment_status'] ?? ''),
-        ];
-
-        if ($c['state'] === 'active') $active[] = $entry;
-        else                          $inactive[] = $entry;
-    }
-
-    return ['active' => $active, 'inactive' => $inactive];
-}
-
-function getClosedDealsForProgramme($pdo, $userId, $programmeId) {
-    $deals = getDealsForProgramme($pdo, $userId, $programmeId);
-    $inactive = $deals['inactive'];
-
-    $grouped = [];
-    foreach ($inactive as $it) {
-        try {
-            $start = new DateTime($it['start_date']);
-            $end   = new DateTime($it['end_date']);
-        } catch (Exception $e) { continue; }
-        $key = $start->format('M d, Y') . ' – ' . $end->format('M d, Y');
-        if (!isset($grouped[$key])) $grouped[$key] = [];
-        $grouped[$key][] = [
-            'contract_id'             => (int)$it['contract_id'],
-            'name'                    => (string)$it['name'],
-            'initial'                 => (string)$it['initial'],
-            'investor_profit'         => (float)$it['investor_profit'],
-            'investor_payment_status' => (string)$it['investor_payment_status'],
-            'server_payment_status'   => (string)$it['server_payment_status'],
-        ];
-    }
-
-    $out = [];
-    foreach ($grouped as $range => $items) {
-        $out[] = ['range' => $range, 'items' => $items];
-    }
-    return $out;
 }
 
 // ==================== AJAX ====================
@@ -811,275 +1538,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
 
-    if ($action === 'get_investors') {
-        if (!$programme) jres(['success' => false]);
-        try {
-            $programmeId = (int)$programme['id'];
-
-            $deals = getDealsForProgramme($pdo, $userId, $programmeId);
-            $active   = $deals['active'];
-            $inactive = $deals['inactive'];
-
-            $rq = $pdo->prepare("
-                SELECT r.id, r.programme_id, r.developerid, r.owner_sub_account_id,
-                       r.requestor_id, r.requestor_sub_account_id,
-                       r.request_status, r.created_at,
-                       h.username, h.first_name, h.last_name, h.fullname, h.email AS requestor_email
-                FROM programme_investment_requestors r
-                LEFT JOIN harvhub h ON h.id = r.requestor_id
-                WHERE r.developerid = ? AND r.programme_id = ? AND r.request_status = 'pending'
-                ORDER BY r.created_at DESC
-            ");
-            $rq->execute([$userId, $programmeId]);
-            $requestors = $rq->fetchAll(PDO::FETCH_ASSOC);
-
-            $requestorList = [];
-            foreach ($requestors as $r) {
-                $name = trim((string)($r['username'] ?? '')) ?: (trim((string)($r['first_name'] ?? '')) ?: (trim((string)($r['fullname'] ?? '')) ?: (string)($r['requestor_email'] ?? ('Requestor #' . (int)$r['requestor_id']))));
-                $initial = strtoupper(substr($name !== '' ? $name : 'R', 0, 1));
-                $requestorList[] = [
-                    'request_id'     => (int)$r['id'],
-                    'requestor_id'   => (int)$r['requestor_id'],
-                    'name'           => $name,
-                    'initial'        => $initial,
-                    'request_status' => $r['request_status'],
-                    'created_at'     => (string)($r['created_at'] ?? ''),
-                ];
-            }
-
-            $closed = getClosedDealsForProgramme($pdo, $userId, $programmeId);
-
-            jres([
-                'success'    => true,
-                'active'     => $active,
-                'inactive'   => $inactive,
-                'requestors' => $requestorList,
-                'closed'     => $closed,
-            ]);
-        } catch (Throwable $e) {
-            jres(['success' => false, 'message' => 'Failed to load investors: ' . $e->getMessage()]);
-        }
-    }
-
-    if ($action === 'update_request_status') {
-        if (!$programme) jres(['success' => false, 'message' => 'No programme']);
-        $requestId = (int)($_POST['request_id'] ?? 0);
-        $newStatus = trim($_POST['new_status'] ?? '');
-
-        $allowed = ['accept', 'reject'];
-        if ($requestId <= 0 || !in_array($newStatus, $allowed, true)) {
-            jres(['success' => false, 'message' => 'Invalid request.']);
-        }
-
-        try {
-            $stmt = $pdo->prepare("
-                SELECT r.*, p.program_name, p.userid AS dev_userid, p.sub_account_id AS dev_sub_id,
-                       h.email AS requestor_email, h.username, h.first_name, h.last_name, h.fullname
-                FROM programme_investment_requestors r
-                LEFT JOIN programme p ON p.id = r.programme_id
-                LEFT JOIN harvhub h ON h.id = r.requestor_id
-                WHERE r.id = ? AND r.programme_id = ? AND r.developerid = ?
-                LIMIT 1
-            ");
-            $stmt->execute([$requestId, (int)$programme['id'], $userId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$row) jres(['success' => false, 'message' => 'Request not found or not for this programme.']);
-            if ($row['request_status'] !== 'pending') jres(['success' => false, 'message' => 'This request is already ' . $row['request_status'] . '.']);
-
-            $requestorId  = (int)$row['requestor_id'];
-            $reqSubId     = (int)($row['requestor_sub_account_id'] ?? 0);
-            $programmeId  = (int)$row['programme_id'];
-            $developerId  = (int)$row['developerid'];
-
-            if ($newStatus === 'accept') {
-                $existing = null;
-                try {
-                    $chk = $pdo->prepare("
-                        SELECT pi.id, pi.programme_id, p.program_name
-                        FROM programme_investors pi
-                        LEFT JOIN programme p ON p.id = pi.programme_id
-                        WHERE pi.investorid = ?
-                          AND (pi.sub_account_id = ? OR pi.sub_account_id IS NULL)
-                        LIMIT 1
-                    ");
-                    $chk->execute([$requestorId, $reqSubId]);
-                    $existing = $chk->fetch(PDO::FETCH_ASSOC);
-                } catch (PDOException $e) {}
-
-                if ($existing) {
-                    $del = $pdo->prepare("DELETE FROM programme_investment_requestors WHERE id = ?");
-                    $del->execute([$requestId]);
-                    jres([
-                        'success'      => false,
-                        'message'      => 'This user is already invested in a programme (' . ($existing['program_name'] ?? 'another programme') . '). Their pending request has been cleared.',
-                        'cleared'      => true,
-                        'needs_reload' => true
-                    ]);
-                }
-
-                $piReq = null;
-                try {
-                    $ps = $pdo->prepare("
-                        SELECT contract_duration, developer_percentage, investor_percentage,
-                               minimum_investment_amount, maximum_investment_amount
-                        FROM programme_investors
-                        WHERE programme_id = ? AND developerid = ? AND investorid = 0
-                        ORDER BY id ASC LIMIT 1
-                    ");
-                    $ps->execute([$programmeId, $developerId]);
-                    $piReq = $ps->fetch(PDO::FETCH_ASSOC);
-
-                    if (!$piReq) {
-                        $ps = $pdo->prepare("
-                            SELECT contract_duration, developer_percentage, investor_percentage,
-                                   minimum_investment_amount, maximum_investment_amount
-                            FROM programme_investors
-                            WHERE programme_id = ? AND investorid = 0
-                            ORDER BY id ASC LIMIT 1
-                        ");
-                        $ps->execute([$programmeId]);
-                        $piReq = $ps->fetch(PDO::FETCH_ASSOC);
-                    }
-                } catch (PDOException $e) {}
-
-                $srvRow = $pdo->query("SELECT contract_duration, min_broker_balance, server_share_percent, user_share_percent FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                $srvContractDuration = (int)($srvRow['contract_duration'] ?? 30);
-                $srvMinBrokerBalance = (float)($srvRow['min_broker_balance'] ?? 0);
-                $srvServerShare      = (int)($srvRow['server_share_percent'] ?? 30);
-                $srvUserShare        = (int)($srvRow['user_share_percent'] ?? 70);
-
-                $contractDuration = $piReq && (int)$piReq['contract_duration'] > 0 ? (int)$piReq['contract_duration'] : $srvContractDuration;
-                $minInvestment    = $piReq && (float)$piReq['minimum_investment_amount'] > 0 ? (float)$piReq['minimum_investment_amount'] : $srvMinBrokerBalance;
-                $maxInvestment    = $piReq ? (float)$piReq['maximum_investment_amount'] : 0;
-                $developerPercent = $piReq && (int)$piReq['developer_percentage'] > 0 ? (int)$piReq['developer_percentage'] : $srvServerShare;
-                $investorPercent  = $piReq && (int)$piReq['investor_percentage'] > 0 ? (int)$piReq['investor_percentage'] : $srvUserShare;
-
-                $ins = $pdo->prepare("
-                    INSERT INTO programme_investors
-                        (investorid, developerid, programme_id, sub_account_id, invested_at,
-                         contract_duration, developer_percentage, investor_percentage,
-                         minimum_investment_amount, maximum_investment_amount)
-                    VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?)
-                ");
-                $ins->execute([
-                    $requestorId,
-                    $developerId,
-                    $programmeId,
-                    $reqSubId ?: null,
-                    $contractDuration,
-                    $developerPercent,
-                    $investorPercent,
-                    $minInvestment,
-                    $maxInvestment
-                ]);
-
-                $dealIns = $pdo->prepare("
-                    INSERT INTO programme_revenue_deals
-                        (programme_id, investor_id, investor_sub_account_id,
-                         programme_name, accepted_at, investor_investment_amount,
-                         contract_duration, programme_percentage, minimum_investment, maximum_investment,
-                         investor_profit, investor_payment_status, server_payment_status)
-                    VALUES (?, ?, ?, ?, NOW(), 0.00, ?, ?, ?, ?, 0.00, NULL, NULL)
-                ");
-                $dealIns->execute([
-                    $programmeId,
-                    $requestorId,
-                    $reqSubId ?: null,
-                    $row['program_name'] ?? 'Programme',
-                    $contractDuration,
-                    $developerPercent,
-                    $minInvestment,
-                    $maxInvestment
-                ]);
-
-                try {
-                    if ($reqSubId > 0) {
-                        $delOthers = $pdo->prepare("
-                            DELETE FROM programme_investment_requestors
-                            WHERE requestor_id = ?
-                              AND (requestor_sub_account_id = ? OR requestor_sub_account_id IS NULL)
-                              AND id <> ?
-                              AND NOT (programme_id = ? AND developerid = ?)
-                        ");
-                        $delOthers->execute([$requestorId, $reqSubId, $requestId, $programmeId, $developerId]);
-                    } else {
-                        $delOthers = $pdo->prepare("
-                            DELETE FROM programme_investment_requestors
-                            WHERE requestor_id = ?
-                              AND id <> ?
-                              AND NOT (programme_id = ? AND developerid = ?)
-                        ");
-                        $delOthers->execute([$requestorId, $requestId, $programmeId, $developerId]);
-                    }
-                } catch (PDOException $e) {}
-
-                $delRow = $pdo->prepare("DELETE FROM programme_investment_requestors WHERE id = ?");
-                $delRow->execute([$requestId]);
-
-                $requestorEmail = strtolower(trim((string)($row['requestor_email'] ?? '')));
-                if ($requestorEmail !== '' && $reqSubId > 0) {
-                    try {
-                        $mainAccId = 0;
-                        $mq = $pdo->prepare("SELECT main_account_id FROM harvhub WHERE id = ? LIMIT 1");
-                        $mq->execute([$requestorId]);
-                        $mainAccId = (int)($mq->fetchColumn() ?: 0);
-
-                        recordContractNotification($pdo, [
-                            'user_email'       => $requestorEmail,
-                            'sub_account_id'   => $reqSubId,
-                            'main_account_id'  => $mainAccId,
-                            'notification_key' => 'programme-investment-accepted-' . $programmeId . '-' . $requestId,
-                            'title'            => 'Investment Request Accepted',
-                            'message'          => 'Your request to join the ' . ($row['program_name'] ?? 'Programme') . ' programme has been accepted.',
-                            'type'             => 'success',
-                            'section'          => 'Programme',
-                            'action_tab'       => 'programmes',
-                            'force'            => true
-                        ]);
-                    } catch (Throwable $e) {}
-                }
-
-                jres(['success' => true, 'message' => 'Request accepted. User added as investor.']);
-
-            } else {
-                $upd = $pdo->prepare("UPDATE programme_investment_requestors SET request_status = 'reject' WHERE id = ? AND request_status = 'pending'");
-                $upd->execute([$requestId]);
-
-                if ($upd->rowCount() === 0) {
-                    jres(['success' => false, 'message' => 'Request is already processed.']);
-                }
-
-                $requestorEmail = strtolower(trim((string)($row['requestor_email'] ?? '')));
-                if ($requestorEmail !== '' && $reqSubId > 0) {
-                    try {
-                        $mainAccId = 0;
-                        $mq = $pdo->prepare("SELECT main_account_id FROM harvhub WHERE id = ? LIMIT 1");
-                        $mq->execute([$requestorId]);
-                        $mainAccId = (int)($mq->fetchColumn() ?: 0);
-
-                        recordContractNotification($pdo, [
-                            'user_email'       => $requestorEmail,
-                            'sub_account_id'   => $reqSubId,
-                            'main_account_id'  => $mainAccId,
-                            'notification_key' => 'programme-investment-rejected-' . $programmeId . '-' . $requestId,
-                            'title'            => 'Investment Request Declined',
-                            'message'          => 'Your request to join the ' . ($row['program_name'] ?? 'Programme') . ' programme has been declined.',
-                            'type'             => 'warning',
-                            'section'          => 'Programme',
-                            'action_tab'       => 'programmes',
-                            'force'            => true
-                        ]);
-                    } catch (Throwable $e) {}
-                }
-
-                jres(['success' => true, 'message' => 'Request rejected.']);
-            }
-        } catch (Throwable $e) {
-            jres(['success' => false, 'message' => 'Failed to update request: ' . $e->getMessage()]);
-        }
-    }
-
     if ($action === 'get_symbols_timeframes') {
         if (!$programme) jres(['success' => false, 'message' => 'No programme']);
         try {
@@ -1147,6 +1605,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } catch (Throwable $e) { jres(['success' => false, 'message' => 'Failed to save visibility.']); }
     }
 
+    if ($action === 'save_timezone') {
+        if (!$programme) jres(['success' => false, 'message' => 'No programme']);
+        try {
+            $tz = trim((string)($_POST['timezone'] ?? ''));
+            if ($tz !== '' && !timezoneIsValid($tz)) {
+                jres(['success' => false, 'message' => 'Invalid timezone selection.']);
+            }
+            if ($tz === '') $tz = null;
+
+            $upd = $pdo->prepare("UPDATE programme SET timezone = ? WHERE id = ? AND userid = ?");
+            $upd->execute([$tz, (int)$programme['id'], $userId]);
+            jres(['success' => true, 'timezone' => $tz]);
+        } catch (Throwable $e) {
+            jres(['success' => false, 'message' => 'Failed to save timezone.']);
+        }
+    }
+
     if ($action === 'save_requirements') {
         if (!$programme) jres(['success' => false, 'message' => 'No programme']);
         try {
@@ -1154,6 +1629,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $developerPercent = (float)($_POST['developer_percentage'] ?? 0);
             $minInvestment    = (float)($_POST['minimum_investment_amount'] ?? 0);
             $maxInvestment    = (float)($_POST['maximum_investment_amount'] ?? 0);
+            $timezone         = trim((string)($_POST['timezone'] ?? ''));
+
+            if ($timezone !== '' && !timezoneIsValid($timezone)) {
+                jres(['success' => false, 'message' => 'Invalid timezone selection.']);
+            }
+            if ($timezone === '') $timezone = null;
 
             $developerPercent = max(0, min(100, $developerPercent));
             $investorPercent  = 100 - $developerPercent;
@@ -1167,6 +1648,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($contractDuration < $floorContract) jres(['success'=>false,'message'=>"Contract Duration must be at least {$floorContract} days."]);
             if ($minInvestment < $floorMinBal) jres(['success'=>false,'message'=>'Minimum Investment must be at least $'.number_format($floorMinBal,2).'.']);
             if ($maxInvestment < 0) $maxInvestment = 0;
+
+            try {
+                $tzUpd = $pdo->prepare("UPDATE programme SET timezone = ? WHERE id = ? AND userid = ?");
+                $tzUpd->execute([$timezone, (int)$programme['id'], $userId]);
+            } catch (Throwable $e) {}
 
             $checkRow = $pdo->prepare("SELECT id FROM programme_investors WHERE programme_id=? AND developerid=? AND investorid=0 LIMIT 1");
             $checkRow->execute([(int)$programme['id'], $userId]);
@@ -1183,7 +1669,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sync = $pdo->prepare("UPDATE programme_investors SET contract_duration=?, developer_percentage=?, investor_percentage=?, minimum_investment_amount=?, maximum_investment_amount=? WHERE programme_id=? AND developerid=? AND investorid>0");
             $sync->execute([$contractDuration, $developerPercent, $investorPercent, $minInvestment, $maxInvestment, (int)$programme['id'], $userId]);
 
-            jres(['success'=>true, 'developer_percentage'=>$developerPercent, 'investor_percentage'=>$investorPercent]);
+            jres(['success'=>true, 'developer_percentage'=>$developerPercent, 'investor_percentage'=>$investorPercent, 'timezone'=>$timezone]);
         } catch (Throwable $e) { jres(['success' => false, 'message' => 'Failed to save requirements.']); }
     }
 
@@ -1191,13 +1677,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (!$programme) jres(['success' => false, 'message' => 'No programme']);
         $tradeId = (int)($_POST['trade_id'] ?? 0);
         $mode    = (string)($_POST['modify_trade'] ?? '');
-        $allowed = ['keep-running', 'breakeven', 'close'];
-        if ($tradeId <= 0 || !in_array($mode, $allowed, true)) jres(['success' => false, 'message' => 'Invalid request.']);
+
+        $allowed = ['keep-position', 'breakeven', 'close-position', 'keep-order', 'delete-order'];
+        if ($tradeId <= 0 || !in_array($mode, $allowed, true)) {
+            jres(['success' => false, 'message' => 'Invalid request.']);
+        }
+
         try {
-            $u = $pdo->prepare("UPDATE programme_trades SET modify_trade = ? WHERE id = ? AND userid = ? AND programmeid = ?");
+            $u = $pdo->prepare("
+                UPDATE programme_trades
+                SET modify_trade = ?
+                WHERE id = ? AND userid = ? AND programmeid = ?
+                  AND investor_id IS NULL
+            ");
             $u->execute([$mode, $tradeId, $userId, (int)$programme['id']]);
+
+            propagateTradeToInvestors($pdo, $userId, (int)$programme['id'], $tradeId, [
+                'modify_trade' => $mode,
+            ]);
+
             jres(['success' => true, 'modify_trade' => $mode]);
-        } catch (Throwable $e) { jres(['success' => false, 'message' => 'Failed to update trade.']); }
+        } catch (Throwable $e) {
+            jres(['success' => false, 'message' => 'Failed to update trade.']);
+        }
     }
 
     if ($action === 'toggle_dark_mode') {
@@ -1216,6 +1718,8 @@ syncInvestorProfitsIntoDeals($pdo);
 $revenueSettings = null; $developerPercentage = 0.0; $investorCount = 0; $revenueAmount = 0.0;
 $contractDuration = 0; $minInvestment = 0.0; $maxInvestment = 0.0;
 $globalIncomingRequestCount = 0;
+$activeInvestorIdSet = [];
+$timezoneValue = '';
 
 try {
     $g = $pdo->prepare("
@@ -1228,6 +1732,7 @@ try {
 } catch (Throwable $e) {}
 
 if ($programme) {
+    $timezoneValue = (string)($programme['timezone'] ?? '');
     try { $s = $pdo->prepare("SELECT * FROM programme_investors WHERE developerid = ? AND programme_id = ? AND investorid = 0 ORDER BY id DESC LIMIT 1"); $s->execute([$userId, (int)$programme['id']]); $revenueSettings = $s->fetch(PDO::FETCH_ASSOC) ?: null; } catch (Throwable $e) {}
     if ($revenueSettings && $revenueSettings['developer_percentage'] !== null) $developerPercentage = (float)$revenueSettings['developer_percentage'];
     if ($revenueSettings) {
@@ -1236,24 +1741,34 @@ if ($programme) {
         $maxInvestment    = isset($revenueSettings['maximum_investment_amount']) ? (float)$revenueSettings['maximum_investment_amount'] : 0.0;
     }
 
-    try {
-        $q = $pdo->prepare("
-            SELECT accepted_at, contract_duration
-            FROM programme_revenue_deals
-            WHERE programme_id = ? AND investor_id > 0
-        ");
-        $q->execute([(int)$programme['id']]);
-        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($rows as $r) {
-            $c = classifyDealState($r['accepted_at'] ?? null, (int)($r['contract_duration'] ?? 0));
-            if ($c['state'] === 'active') $investorCount++;
-        }
-    } catch (Throwable $e) {}
+    purgeOrphanedRevenueDeals($pdo, (int)$programme['id']);
+
+    $investorCount = getAllInvestorsCountForProgramme($pdo, (int)$programme['id']);
+
+    $activeInvestors = getActiveInvestorsForProgramme($pdo, (int)$programme['id']);
+    foreach ($activeInvestors as $inv) {
+        $invId = (int)$inv['investor_id'];
+        $subId = (int)($inv['sub_account_id'] ?? 0);
+        if ($invId <= 0 || $subId <= 0) continue;
+        $activeInvestorIdSet[$invId . '|' . $subId] = true;
+    }
 
     try {
-        $s = $pdo->prepare("SELECT h.profitandloss FROM programme_investors pi INNER JOIN harvhub h ON h.id = pi.investorid WHERE pi.developerid = ? AND pi.programme_id = ? AND pi.investorid > 0");
+        $s = $pdo->prepare("
+            SELECT h.profitandloss
+            FROM programme_investors pi
+            INNER JOIN harvhub h
+                    ON h.id = pi.investorid
+                   AND (pi.sub_account_id IS NULL OR pi.sub_account_id = 0 OR h.sub_account_id = pi.sub_account_id)
+            WHERE pi.developerid = ?
+              AND pi.programme_id = ?
+              AND pi.investorid > 0
+        ");
         $s->execute([$userId, (int)$programme['id']]);
-        while ($r = $s->fetch(PDO::FETCH_ASSOC)) { $pnl = (float)($r['profitandloss'] ?? 0); if ($pnl > 0) $revenueAmount += ($pnl * $developerPercentage / 100); }
+        while ($r = $s->fetch(PDO::FETCH_ASSOC)) {
+            $pnl = (float)($r['profitandloss'] ?? 0);
+            if ($pnl > 0) $revenueAmount += ($pnl * $developerPercentage / 100);
+        }
     } catch (Throwable $e) {}
 }
 
@@ -1272,12 +1787,16 @@ $isPublic  = $programme && (int)($programme['visibility'] ?? 0) === 1;
 
 $incomingRequestCount = 0;
 if ($programme) {
-    try { $s = $pdo->prepare("SELECT COUNT(*) FROM programme_investment_requestors WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'"); $s->execute([$userId, (int)$programme['id']]); $incomingRequestCount = (int)$s->fetchColumn(); } catch (Throwable $e) {}
+    $incomingRequestCount = countProgrammeInvestmentRequests($pdo, $userId, (int)$programme['id']);
+}
+
+if ($programme) {
+    syncProgrammeTradesToInvestors($pdo, $userId, (int)$programme['id']);
 }
 
 $trades = [];
 if ($programme) {
-    try { $s = $pdo->prepare("SELECT * FROM programme_trades WHERE userid = ? AND programmeid = ? ORDER BY created_at DESC LIMIT 200"); $s->execute([$userId, (int)$programme['id']]); $trades = $s->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
+    $trades = fetchActiveProgrammeTrades($pdo, $userId, (int)$programme['id'], 400);
 }
 
 $serverContractDuration = 0; $serverMinBrokerBalance = 0.0;
@@ -1288,35 +1807,58 @@ try {
 if ($contractDuration < $serverContractDuration) $contractDuration = $serverContractDuration;
 if ($minInvestment < $serverMinBrokerBalance) $minInvestment = $serverMinBrokerBalance;
 
+// ============================================================================
+// >>> Settings-modal picker source.
+// Prefer programme.broker_symbols / broker_timeframes (written by
+// brokerdetails.py) over the legacy `broker_symbols` table. Fall back to
+// the table only if the programme columns are empty.
+// ============================================================================
 $allBrokerSymbols = []; $availableTimeframes = [];
-try {
-    $bs = $pdo->prepare("SELECT symbol, timeframes FROM broker_symbols WHERE userid = ? ORDER BY symbol ASC");
-    $bs->execute([$userId]);
-    while ($r = $bs->fetch(PDO::FETCH_ASSOC)) {
-        if (($r['symbol'] ?? '') === '__GLOBAL_TF__') continue;
-        $allBrokerSymbols[] = $r['symbol'];
-        $rawTfs = (string)($r['timeframes'] ?? '');
-        $rawTfs = str_replace(['[', ']', '{', '}', '"', "'", ' '], '', $rawTfs);
-        foreach (array_filter(explode(',', $rawTfs)) as $tf) {
-            $tf = trim($tf);
-            if ($tf !== '') $availableTimeframes[$tf] = true;
-        }
-    }
-    $availableTimeframes = array_keys($availableTimeframes);
+if ($programme) {
+    $allBrokerSymbols    = parseCleanList((string)($programme['broker_symbols']    ?? ''));
+    $availableTimeframes = parseCleanList((string)($programme['broker_timeframes'] ?? ''));
+    sort($allBrokerSymbols);
     sort($availableTimeframes);
-} catch (Throwable $e) {}
+}
+
+if (empty($allBrokerSymbols) || empty($availableTimeframes)) {
+    try {
+        $bs = $pdo->prepare("SELECT symbol, timeframes FROM broker_symbols WHERE userid = ? ORDER BY symbol ASC");
+        $bs->execute([$userId]);
+        $tableSymbols = [];
+        $tableTfs = [];
+        while ($r = $bs->fetch(PDO::FETCH_ASSOC)) {
+            if (($r['symbol'] ?? '') === '__GLOBAL_TF__') continue;
+            $tableSymbols[] = $r['symbol'];
+            $rawTfs = (string)($r['timeframes'] ?? '');
+            $rawTfs = str_replace(['[', ']', '{', '}', '"', "'", ' '], '', $rawTfs);
+            foreach (array_filter(explode(',', $rawTfs)) as $tf) {
+                $tf = trim($tf);
+                if ($tf !== '') $tableTfs[$tf] = true;
+            }
+        }
+        if (empty($allBrokerSymbols))    $allBrokerSymbols    = $tableSymbols;
+        if (empty($availableTimeframes)) {
+            $availableTimeframes = array_keys($tableTfs);
+            sort($availableTimeframes);
+        }
+    } catch (Throwable $e) {}
+}
 
 function getProgrammeMarketSettings(array $programme): array {
     $symbols    = parseCleanList((string)($programme['selected_symbols']    ?? ''));
     $timeframes = parseCleanList((string)($programme['selected_timeframes'] ?? ''));
-    if (empty($symbols))    $symbols    = parseCleanList((string)($programme['broker_symbols'] ?? ''));
-    if (empty($timeframes)) $timeframes = parseCleanList((string)($programme['broker_timeframes'] ?? ''));
     return ['symbols' => $symbols, 'timeframes' => $timeframes];
 }
 
 $marketSettings = $programme ? getProgrammeMarketSettings($programme) : ['symbols'=>[], 'timeframes'=>[]];
 
 $interest = $programme ? getSignalProviderInterest($pdo, $userId, (int)$programme['id']) : null;
+
+if ($programme) {
+    syncInterestRiskRewardIntoTrades($pdo, $userId, (int)$programme['id'], $interest);
+}
+
 $serverConfig = getServerAccountConfig($pdo);
 $signalsState = $programme ? determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) : [];
 
@@ -1330,9 +1872,12 @@ $sessionModalClass = $signalsState['session_modal_class'] ?? 'info';
 $sessionModalKey   = $signalsState['session_modal_key'] ?? '';
 $vpsRequestCount = $signalsState['vps_request_count'] ?? 0;
 
-// ============================================================
-// SYNC NOTIFICATIONS FOR SIGNALS DASHBOARD (programme side)
-// ============================================================
+$TIMEZONE_OPTIONS = getTimezoneOptions();
+
+$initialStatusHtml = $programme
+    ? renderProgrammeStatusHtml($programme, $hasBroker, $marketSettings['symbols'], $marketSettings['timeframes'], $timezoneValue)
+    : '';
+
 if ($programme && !empty($email)) {
     try {
         $signalsEmail = strtolower((string)($user['email'] ?? $email));
@@ -1393,43 +1938,11 @@ if ($programme && !empty($email)) {
     .sd-greeting-text .sd-greet-sub { font-size: 0.82rem; color: var(--sd-muted); margin: 0; line-height: 1.45; }
     .sd-greeting-divider { height: 1px; background: var(--sd-border); margin: 0 -18px; opacity: 0.6; }
 
-    /* --- Challenge chevron row --- */
-    .sd-challenge-chevron {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        width: 100%;
-        padding: 6px 0;
-        background: transparent;
-        border: none;
-        color: var(--sd-text);
-        font-family: inherit;
-        font-size: 0.77rem;
-        cursor: pointer;
-        text-align: left;
-        transition: color .18s, transform .15s;
-    }
-
-    .sd-challenge-chevron:hover {
-        transform: translateX(2px);
-    }
-
-    .sd-challenge-chevron-text {
-        min-width: 0;
-        word-break: break-word;
-    }
-
-    .sd-challenge-chevron-right {
-        flex-shrink: 0;
-        color: var(--sd-muted);
-        font-size: 0.70rem;
-        transition: color .18s;
-    }
-
-    .sd-challenge-chevron:hover .sd-challenge-chevron-right {
-        color: var(--sd-accent);
-    }
+    .sd-challenge-chevron { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 6px 0; background: transparent; border: none; color: var(--sd-text); font-family: inherit; font-size: 0.77rem; cursor: pointer; text-align: left; transition: color .18s, transform .15s; }
+    .sd-challenge-chevron:hover { transform: translateX(2px); }
+    .sd-challenge-chevron-text { min-width: 0; word-break: break-word; }
+    .sd-challenge-chevron-right { flex-shrink: 0; color: var(--sd-muted); font-size: 0.70rem; transition: color .18s; }
+    .sd-challenge-chevron:hover .sd-challenge-chevron-right { color: var(--sd-accent); }
 
     .sd-incoming-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; background: var(--sd-card); border: 1px solid var(--sd-border); border-radius: 12px; color: var(--sd-text); font-family: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-align: left; transition: transform .15s, border-color .2s; }
     .sd-incoming-banner:hover { border-color: var(--sd-accent); transform: translateX(2px); }
@@ -1444,6 +1957,9 @@ if ($programme && !empty($email)) {
     .sd-explore-challenges .sd-incoming-icon { background: rgba(245,166,35,0.15); color: var(--sd-gold, #f5a623); }
     .sd-begin-test .sd-incoming-icon { background: rgba(52,152,219,0.15); color: #3498db; }
     .sd-vps-requests .sd-incoming-icon { background: rgba(155,89,182,0.15); color: #9b59b6; }
+
+    .sd-investment-requests .sd-incoming-icon { background: rgba(245,166,35,0.18); color: var(--sd-gold, #f5a623); }
+    .sd-investment-requests .sd-incoming-count { background: var(--sd-gold, #f5a623); }
 
     .sd-stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 18px; }
     @media (max-width: 640px) { .sd-stats-grid { grid-template-columns: 1fr; } }
@@ -1483,17 +1999,57 @@ if ($programme && !empty($email)) {
     .sd-btn.ghost { background: transparent; color: var(--sd-text); border: 1px solid var(--sd-border); }
     .sd-btn.primary:hover { background: var(--sd-accent-2); }
 
-    .sd-trades-list { display: grid; gap: 9px; }
-    .sd-trade-row { display: grid; grid-template-columns: 1.1fr 1fr 1.4fr 0.8fr 1fr; gap: 10px; border: 1px solid var(--sd-border); border-radius: 13px; padding: 13px; background: var(--sd-bg); font-size: .82rem; align-items: center; }
-    @media (max-width: 760px) { .sd-trade-row { grid-template-columns: 1fr 1fr; } }
-    .sd-trade-row .sd-t-label { font-size: .66rem; color: var(--sd-muted); text-transform: uppercase; font-weight: 700; letter-spacing: .5px; }
+    .sd-trade-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--sd-border); margin-bottom: 14px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; max-height: 48px; }
+    .sd-trade-tabs::-webkit-scrollbar { display: none; width: 0; height: 0; }
+    .sd-trade-tab { background: transparent; border: none; color: var(--sd-muted); padding: 9px 14px; font-weight: 700; font-size: .82rem; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; margin-bottom: -1px; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .sd-trade-tab.active { color: var(--sd-accent); border-bottom-color: var(--sd-accent); }
+    .sd-trade-tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--sd-border); color: var(--sd-muted); font-size: .65rem; font-weight: 800; }
+    .sd-trade-tab.active .sd-trade-tab-count { background: var(--sd-accent); color: #fff; }
+    .sd-trade-panel { display: none; } .sd-trade-panel.active { display: block; }
+
+    .sd-trades-scroll { max-height: 520px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-right: 4px; scrollbar-width: thin; }
+    .sd-trades-scroll::-webkit-scrollbar { width: 6px; }
+    .sd-trades-scroll::-webkit-scrollbar-thumb { background: var(--sd-border); border-radius: 999px; }
+    @media (max-width: 600px) { .sd-trades-scroll { max-height: 380px; } }
+
+    .sd-trades-list { display: grid; gap: 10px; }
+    .sd-trade-modal-card { border: 1px solid var(--sd-border); border-radius: 14px; padding: 14px; background: var(--sd-bg); }
+    .sd-trade-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-bottom: 12px; }
+    @media (max-width: 600px) { .sd-trade-grid { grid-template-columns: 1fr 1fr; gap: 8px 12px; } }
+    .sd-trade-grid > div { min-width: 0; }
+    .sd-trade-modal-card .sd-t-label { font-size: .6rem; color: var(--sd-muted); text-transform: uppercase; font-weight: 700; letter-spacing: .5px; margin-bottom: 2px; }
+    .sd-trade-modal-card .sd-t-label + b { font-size: .84rem; font-weight: 800; word-break: break-word; display: block; }
+    .sd-trade-modify { padding-top: 10px; border-top: 1px dashed var(--sd-border); }
+
+    .sd-order-status { font-weight: 800; }
+    .sd-order-status.is-running { color: var(--sd-success, #2ecc71); }
+    .sd-order-status.is-pending { color: var(--sd-warning, #b87513); }
+    .sd-order-status.is-closed  { color: var(--sd-info, #3498db); }
+    .sd-order-status.is-failed  { color: var(--sd-danger, #df4e4e); }
+    body.dark-mode .sd-order-status.is-running { color: #4ade80; }
+    body.dark-mode .sd-order-status.is-pending { color: #facc15; }
+    body.dark-mode .sd-order-status.is-closed  { color: #60a5fa; }
+    body.dark-mode .sd-order-status.is-failed  { color: #ff8080; }
+
+    .sd-pnl-outcome { font-weight: 800; }
+    .sd-pnl-outcome.is-profit { color: var(--sd-success, #2ecc71); }
+    .sd-pnl-outcome.is-loss   { color: var(--sd-danger, #df4e4e); }
+    .sd-pnl-outcome.is-flat   { color: var(--sd-muted, #60736d); }
+    body.dark-mode .sd-pnl-outcome.is-profit { color: #4ade80; }
+    body.dark-mode .sd-pnl-outcome.is-loss   { color: #ff8080; }
+    body.dark-mode .sd-pnl-outcome.is-flat   { color: #93a8a1; }
+
+    .sd-inv-breakdown { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    .sd-inv-count { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: .72rem; font-weight: 800; }
+    .sd-inv-count-success { background: rgba(46,204,143,0.12); color: var(--sd-success, #2ecc71); }
+    .sd-inv-count-failed  { background: rgba(223,78,78,0.12); color: var(--sd-danger, #df4e4e); }
+    body.dark-mode .sd-inv-count-success { color: #4ade80; }
+    body.dark-mode .sd-inv-count-failed  { color: #ff8080; }
 
     .sd-modify-select { width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--sd-border); background: var(--sd-card); color: var(--sd-text); font-family: inherit; font-size: .82rem; font-weight: 600; cursor: pointer; }
     .sd-modify-select:focus { outline: none; border-color: var(--sd-accent); }
-    .sd-modify-select[data-mode="breakeven"] { border-color: var(--sd-warning); color: var(--sd-warning); }
-    .sd-modify-select[data-mode="close"]     { border-color: var(--sd-danger);  color: var(--sd-danger); }
 
-    .sd-status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .sd-status-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
     @media (max-width: 640px) { .sd-status-grid { grid-template-columns: 1fr; } }
     .sd-status-tile { background: var(--sd-bg); border: 1px solid var(--sd-border); border-radius: 12px; padding: 14px; }
     .sd-status-tile-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .6px; color: var(--sd-muted); font-weight: 700; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
@@ -1540,61 +2096,6 @@ if ($programme && !empty($email)) {
     .sd-err { display: none; background: #fdecec; color: var(--sd-danger); padding: 10px; border-radius: 10px; font-size: .82rem; margin-bottom: 10px; }
     body.dark-mode .sd-err { background: #3a1c1c; color: #ff9c9c; }
 
-    .sd-investors-view { position: fixed; inset: 0; background: var(--sd-bg); z-index: 99998; display: none; flex-direction: column; overflow: hidden; overscroll-behavior: contain; }
-    .sd-investors-view.open { display: flex; }
-    .sd-investors-view-header { display:flex; align-items:center; justify-content:center; position:relative; padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px 14px; background: var(--sd-bg); min-height:56px; flex: 0 0 auto; }
-    .sd-investors-view-back { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--sd-text); font-size: 1.2rem; cursor: pointer; padding: 8px; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-    .sd-investors-view-title { font-size: 1.15rem; font-weight: 800; }
-    .sd-investors-view-body { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 20px; max-width: 720px; margin: 0 auto; width: 100%; }
-
-    .sd-inv-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--sd-border); margin-bottom: 18px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
-    .sd-inv-tabs::-webkit-scrollbar { display: none; width: 0; height: 0; }
-    .sd-inv-tab { background: transparent; border: none; color: var(--sd-muted); padding: 10px 16px; font-weight: 700; font-size: .85rem; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; margin-bottom: -1px; font-family: inherit; }
-    .sd-inv-tab.active { color: var(--sd-accent); border-bottom-color: var(--sd-accent); }
-    .sd-inv-panel { display: none; }
-    .sd-inv-panel.active { display: block; }
-
-    .sd-inv-card { display: flex; gap: 14px; border-radius: 14px; padding: 16px 0px; margin-bottom: 12px; }
-    .sd-inv-avatar { width: 54px; height: 54px; flex-shrink: 0; border-radius: 50%; background: var(--sd-accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    .sd-inv-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
-    .sd-inv-username { font-size: 1rem; font-weight: 800; color: var(--sd-text); word-break: break-word; line-height: 1.25; }
-    .sd-inv-stat { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: .85rem; }
-    .sd-inv-stat-key { color: var(--sd-muted); font-weight: 600; }
-    .sd-inv-stat-val { font-weight: 800; color: var(--sd-text); text-align: right; word-break: break-word; }
-    .sd-inv-stat-val.money { color: var(--sd-accent);font-size: 1.15rem;}
-    .sd-inv-stat-val.ended { color: var(--sd-danger); }
-
-    .sd-inv-card.is-inactive .sd-inv-avatar { background: var(--sd-muted); }
-    .sd-inv-card.is-inactive .sd-inv-stat-val.money { color: var(--sd-muted); font-size: 1.1rem; }
-
-    .sd-req-card { display: flex; gap: 14px; border-radius: 14px; padding: 16px 0px; margin-bottom: 12px; box-shadow: var(--sd-shadow); align-items: center; }
-    .sd-req-avatar { width: 54px; height: 54px; flex-shrink: 0; border-radius: 50%; background: var(--sd-accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.5px; }
-    .sd-req-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-    .sd-req-username { font-size: 1rem; font-weight: 800; color: var(--sd-text); word-break: break-word; }
-    .sd-req-meta { font-size: .8rem; color: var(--sd-muted); }
-    .sd-req-select { padding: 8px 12px; border: 1px solid var(--sd-border); border-radius: 9px; background: var(--sd-bg); color: var(--sd-text); font-family: inherit; font-size: .82rem; font-weight: 600; cursor: pointer; min-width: 100px; flex-shrink: 0; }
-    .sd-req-select:focus { outline: none; border-color: var(--sd-accent); }
-
-    .sd-closed-group { margin-bottom: 22px; }
-    .sd-closed-range { font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; color: var(--sd-accent); padding: 6px 0 10px; border-bottom: 1px solid var(--sd-border); margin-bottom: 12px; }
-    .sd-closed-item { display: flex; gap: 14px; padding: 14px 0; border-bottom: 1px dashed var(--sd-border); }
-    .sd-closed-item:last-child { border-bottom: none; }
-    .sd-closed-avatar { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; background: var(--sd-accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.1rem; text-transform: uppercase; }
-    .sd-closed-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-    .sd-closed-name { font-size: .95rem; font-weight: 800; color: var(--sd-text); word-break: break-word; }
-    .sd-closed-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: .82rem; }
-    .sd-closed-key { color: var(--sd-muted); font-weight: 600; }
-    .sd-closed-val { font-weight: 800; color: var(--sd-text); text-align: right; word-break: break-word; }
-    .sd-closed-val.money { color: var(--sd-accent); }
-    .sd-closed-val.muted { color: var(--sd-muted); font-weight: 600; }
-
-    .sd-confirm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 999999; }
-    .sd-confirm-modal.open { display: flex; }
-    .sd-confirm-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
-    .sd-confirm-card h3 { margin-bottom: 8px; font-size: 1.05rem; font-weight: 800; }
-    .sd-confirm-card p { color: var(--sd-muted); font-size: .88rem; margin-bottom: 18px; line-height: 1.5; }
-    .sd-confirm-actions { display: grid; gap: 9px; }
-
     .sd-session-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 9999999; }
     .sd-session-modal.open { display: flex; }
     .sd-session-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); text-align: center; }
@@ -1609,11 +2110,18 @@ if ($programme && !empty($email)) {
     .sd-alert-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); text-align: center; }
     .sd-alert-icon { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin: 0 auto 14px; }
     .sd-alert-icon.info    { background: rgba(52,152,219,0.12); color: var(--sd-info); }
-    .sd-alert-icon.success { background: rgba(46,204,113,0.12); color: var(--sd-success); }
+    .sd-alert-icon.success { background: rgba(46,204,143,0.12); color: var(--sd-success); }
     .sd-alert-icon.error   { background: #fdecec; color: var(--sd-danger); }
     body.dark-mode .sd-alert-icon.error { background: #3a1c1c; color: #ff9c9c; }
     .sd-alert-title { font-size: 1.05rem; font-weight: 800; margin-bottom: 8px; }
     .sd-alert-text { color: var(--sd-muted); font-size: .88rem; margin-bottom: 18px; line-height: 1.5; }
+
+    .sd-confirm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 999999; }
+    .sd-confirm-modal.open { display: flex; }
+    .sd-confirm-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
+    .sd-confirm-card h3 { margin-bottom: 8px; font-size: 1.05rem; font-weight: 800; }
+    .sd-confirm-card p { color: var(--sd-muted); font-size: .88rem; margin-bottom: 18px; line-height: 1.5; }
+    .sd-confirm-actions { display: grid; gap: 9px; }
 
     @keyframes sdLivePulse {
         0% { background: rgba(46,204,143,0.0); }
@@ -1635,7 +2143,7 @@ if ($programme && !empty($email)) {
             <div class="sd-greeting-text">
                 <p class="sd-greet-account">Programme &nbsp;•&nbsp; <?= esc_h($programme['program_name'] ?: 'Unnamed Programme') ?></p>
                 <p class="sd-greet-title">Hi there <?= esc_h($fullName) ?></p>
-                <p class="sd-greet-sub" id="sdGreetSub"><?= $greetingSubHtml /* already escaped/HTML-controlled */ ?></p>
+                <p class="sd-greet-sub" id="sdGreetSub"><?= $greetingSubHtml ?></p>
             </div>
         </div>
 
@@ -1652,7 +2160,7 @@ if ($programme && !empty($email)) {
             </div>
             <div class="sd-card-sub">Your percentage reward across investors.</div>
 
-            <div class="sd-investors-badge" onclick="sdOpenInvestorsView()" role="button" tabindex="0" aria-label="View investors">
+            <div class="sd-investors-badge" onclick="sdGoToInvestors()" role="button" tabindex="0" aria-label="View investors">
                 <i class="fa-solid fa-users"></i>
                 <span id="sdInvestorCountLabel"><?= (int)$investorCount ?> investor<?= $investorCount === 1 ? '' : 's' ?></span>
             </div>
@@ -1688,36 +2196,13 @@ if ($programme && !empty($email)) {
             <div class="sd-card-head">
                 <div>
                     <div class="sd-card-title">Trades</div>
-                    <div class="sd-card-desc">Trades generated from this programme.</div>
+                    <div class="sd-card-desc" id="sdTradesCardDesc">
+                        Trades generated from this programme for <?= count($activeInvestorIdSet) ?> active investor<?= count($activeInvestorIdSet) === 1 ? '' : 's' ?>
+                    </div>
                 </div>
             </div>
             <div id="sdTradesContainer">
-                <?php if (!$trades): ?>
-                    <div class="sd-empty"><i class="fa-solid fa-chart-simple"></i><strong>No trades recorded yet</strong><p>Trades will appear here once they are generated.</p></div>
-                <?php else: ?>
-                    <div class="sd-trades-list">
-                        <?php foreach ($trades as $t): ?>
-                            <?php
-                                $modifyVal = (string)($t['modify_trade'] ?? 'keep-running');
-                                if (!in_array($modifyVal, ['keep-running','breakeven','close'], true)) $modifyVal = 'keep-running';
-                            ?>
-                            <div class="sd-trade-row" data-trade-id="<?= (int)$t['id'] ?>">
-                                <div><div class="sd-t-label">Symbol</div><b><?= esc_h((string)$t['symbol']) ?> · <?= esc_h($t['timeframe']) ?></b></div>
-                                <div><div class="sd-t-label">Entry</div><b><?= esc_h(rtrim(rtrim(number_format((float)$t['entry'], 5), '0'), '.')) ?></b></div>
-                                <div><div class="sd-t-label">SL / TP</div><b><?= esc_h(rtrim(rtrim(number_format((float)$t['exit'], 5), '0'), '.')) ?> / <?= $t['target'] !== null ? esc_h(rtrim(rtrim(number_format((float)$t['target'], 5), '0'), '.')) : '—' ?></b></div>
-                                <div><div class="sd-t-label">R:R</div><b>1:<?= esc_h(number_format((float)$t['risk_reward'], 2)) ?></b></div>
-                                <div>
-                                    <div class="sd-t-label">Modify trade</div>
-                                    <select class="sd-modify-select" data-trade-id="<?= (int)$t['id'] ?>" data-mode="<?= esc_h($modifyVal) ?>">
-                                        <option value="keep-running" <?= $modifyVal === 'keep-running' ? 'selected' : '' ?>>Keep running</option>
-                                        <option value="breakeven"    <?= $modifyVal === 'breakeven'    ? 'selected' : '' ?>>Breakeven</option>
-                                        <option value="close"        <?= $modifyVal === 'close'        ? 'selected' : '' ?>>Close</option>
-                                    </select>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
+                <?= renderProgrammeTradesHtml($trades, $activeInvestorIdSet) ?>
             </div>
         </div>
     </div>
@@ -1732,32 +2217,7 @@ if ($programme && !empty($email)) {
                 <button class="sd-btn ghost" onclick="sdOpenModal('sdSettingsModal')"><i class="fa-solid fa-sliders"></i> Settings</button>
             </div>
             <div id="sdProgrammeStatusContainer">
-                <div class="sd-status-grid">
-                    <div class="sd-status-tile">
-                        <div class="sd-status-tile-label"><i class="fa-solid fa-building-columns"></i> Broker</div>
-                        <div class="sd-status-tile-value"><?= $hasBroker ? esc_h($programme['broker']) : '—' ?></div>
-                    </div>
-                    <div class="sd-status-tile">
-                        <div class="sd-status-tile-label"><i class="fa-solid fa-coins"></i> Symbols</div>
-                        <div class="sd-status-tile-value">
-                            <?php if (!empty($marketSettings['symbols'])): foreach ($marketSettings['symbols'] as $sym): ?>
-                                <span class="sd-chip"><?= esc_h($sym) ?></span>
-                            <?php endforeach; else: ?>
-                                No symbols selected
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="sd-status-tile">
-                        <div class="sd-status-tile-label"><i class="fa-solid fa-clock"></i> Timeframes</div>
-                        <div class="sd-status-tile-value">
-                            <?php if (!empty($marketSettings['timeframes'])): foreach ($marketSettings['timeframes'] as $tf): ?>
-                                <span class="sd-chip"><?= esc_h($tf) ?></span>
-                            <?php endforeach; else: ?>
-                                No timeframes selected
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
+                <?= $initialStatusHtml ?>
             </div>
         </div>
     </div>
@@ -1789,14 +2249,8 @@ if ($programme && !empty($email)) {
         <div class="sd-fold-section">
             <button type="button" class="sd-fold-toggle" data-target="sdFoldTimeframes"><span>Select Timeframes</span><i class="fa-solid fa-chevron-down"></i></button>
             <div class="sd-fold-body" id="sdFoldTimeframes">
-                <div class="sd-check-list">
-                    <?php foreach ($availableTimeframes as $tf): ?>
-                    <label class="sd-check-row">
-                        <input type="checkbox" value="<?= esc_h($tf) ?>" class="sd-settings-tf-cb" <?= in_array($tf, $marketSettings['timeframes'], true) ? 'checked' : '' ?>>
-                        <span><?= esc_h($tf) ?></span>
-                    </label>
-                    <?php endforeach; ?>
-                    <?php if (empty($availableTimeframes)): ?><p class="sd-sub">No timeframes available.</p><?php endif; ?>
+                <div class="sd-check-list" id="sdTimeframesList">
+                    <?= renderTimeframeChecklistHtml($availableTimeframes, $marketSettings['timeframes']) ?>
                 </div>
             </div>
         </div>
@@ -1804,14 +2258,8 @@ if ($programme && !empty($email)) {
         <div class="sd-fold-section">
             <button type="button" class="sd-fold-toggle" data-target="sdFoldSymbols"><span>Select Symbols</span><i class="fa-solid fa-chevron-down"></i></button>
             <div class="sd-fold-body" id="sdFoldSymbols">
-                <div class="sd-check-list">
-                    <?php foreach ($allBrokerSymbols as $sym): ?>
-                    <label class="sd-check-row">
-                        <input type="checkbox" value="<?= esc_h($sym) ?>" class="sd-settings-symbol-cb" <?= in_array($sym, $marketSettings['symbols'], true) ? 'checked' : '' ?>>
-                        <span><?= esc_h($sym) ?></span>
-                    </label>
-                    <?php endforeach; ?>
-                    <?php if (empty($allBrokerSymbols)): ?><p class="sd-sub">No symbols available.</p><?php endif; ?>
+                <div class="sd-check-list" id="sdSymbolsList">
+                    <?= renderSymbolChecklistHtml($allBrokerSymbols, $marketSettings['symbols']) ?>
                 </div>
             </div>
         </div>
@@ -1838,6 +2286,23 @@ if ($programme && !empty($email)) {
                     <div class="sd-field">
                         <label>Maximum Investment Amount</label>
                         <input id="sdReqMaxInv" type="number" min="0" step="0.01" value="<?= esc_h(number_format($maxInvestment,2,'.','')) ?>">
+                    </div>
+
+                    <div class="sd-field">
+                        <label>Timezone</label>
+                        <select id="sdReqTimezone">
+                            <option value="">— No timezone selected —</option>
+                            <?php foreach ($TIMEZONE_OPTIONS as $groupLabel => $groupTzs): ?>
+                                <optgroup label="<?= esc_h($groupLabel) ?>">
+                                    <?php foreach ($groupTzs as $tzKey => $tzLabel): ?>
+                                        <option value="<?= esc_h($tzKey) ?>" <?= ($timezoneValue === $tzKey) ? 'selected' : '' ?>>
+                                            <?= esc_h($tzLabel) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="sd-sub" style="margin-top:4px">Used for market analysis timing and challenge windows.</p>
                     </div>
                 </div>
             </div>
@@ -1873,7 +2338,7 @@ if ($programme && !empty($email)) {
             <i class="fa-solid fa-play"></i>
         </div>
         <h3>Begin Test</h3>
-        <p class="sd-sub" style="margin-bottom:20px;">Once you agree to begin test, your trades analytics will be compared with the challenge interest and once met, you will be monetized.</p>
+        <p class="sd-sub" style="margin-bottom:20px;">Once you agree to begin test, your trades analytics will be compared with the challenge interest and once met, you will be advertised.</p>
         <div style="display:grid;gap:9px;">
             <button class="sd-btn primary" id="sdConfirmBeginTest" style="width:100%;">Confirm Test</button>
             <button class="sd-btn ghost" onclick="sdCloseModal('sdBeginTestModal')" style="width:100%;">Cancel</button>
@@ -1900,42 +2365,14 @@ if ($programme && !empty($email)) {
     </div>
 </div>
 
-<!-- INVESTORS VIEW -->
-<div class="sd-investors-view" id="sdInvestorsView">
-    <div class="sd-investors-view-header">
-        <button class="sd-investors-view-back" onclick="sdCloseInvestorsView()" aria-label="Close"><i class="fa-solid fa-arrow-left"></i></button>
-        <div class="sd-investors-view-title">Investors</div>
-    </div>
-    <div class="sd-investors-view-body" id="sdInvestorsViewBody">
-        <div class="sd-inv-tabs">
-            <button class="sd-inv-tab active" data-inv-tab="active" onclick="sdSwitchInvTab('active')">Active Investors</button>
-            <button class="sd-inv-tab" data-inv-tab="inactive" onclick="sdSwitchInvTab('inactive')">Inactive Investors</button>
-            <button class="sd-inv-tab" data-inv-tab="requestors" onclick="sdSwitchInvTab('requestors')">Investment Requestors</button>
-            <button class="sd-inv-tab" data-inv-tab="closed" onclick="sdSwitchInvTab('closed')">Closed Deals</button>
-        </div>
-        <div id="sdInvPanelActive" class="sd-inv-panel active">
-            <div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading investors…</p></div>
-        </div>
-        <div id="sdInvPanelInactive" class="sd-inv-panel">
-            <div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading inactive investors…</p></div>
-        </div>
-        <div id="sdInvPanelRequestors" class="sd-inv-panel">
-            <div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading requestors…</p></div>
-        </div>
-        <div id="sdInvPanelClosed" class="sd-inv-panel">
-            <div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading closed deals…</p></div>
-        </div>
-    </div>
-</div>
-
-<!-- CONFIRM MODAL -->
+<!-- CONFIRM MODAL (trade modify) -->
 <div class="sd-confirm-modal" id="sdConfirmModal">
     <div class="sd-confirm-card">
         <h3 id="sdConfirmTitle">Confirm Action</h3>
         <p id="sdConfirmMessage">Are you sure?</p>
         <div class="sd-confirm-actions">
             <button class="sd-btn primary" id="sdConfirmYes" style="width:100%;">Yes, Confirm</button>
-            <button class="sd-btn ghost" onclick="sdCloseConfirm()" style="width:100%;">Cancel</button>
+            <button class="sd-btn ghost" id="sdConfirmNo" style="width:100%;">Cancel</button>
         </div>
     </div>
 </div>
@@ -1955,7 +2392,7 @@ if ($programme && !empty($email)) {
     }
 
     function anyOverlayOpen() {
-        return !!document.querySelector('.sd-modal.open, .sd-investors-view.open, .sd-confirm-modal.open, .sd-session-modal.open, .sd-alert-modal.open');
+        return !!document.querySelector('.sd-modal.open, .sd-session-modal.open, .sd-alert-modal.open, .sd-confirm-modal.open');
     }
     function lockBodyScroll() { document.body.classList.add('sd-scroll-locked'); }
     function unlockBodyScroll() { if (!anyOverlayOpen()) document.body.classList.remove('sd-scroll-locked'); }
@@ -1975,6 +2412,31 @@ if ($programme && !empty($email)) {
         window.location.href = 'traderapp.php?tab=signals_provision_request';
     };
 
+    window.sdGoToInvestors = function () {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchTab', tab: 'programme_investors' }, '*');
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'traderapp.php?tab=programme_investors';
+    };
+
+    window.sdGoToInvestorsRequests = function () {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchTab', tab: 'programme_investors' }, '*');
+                setTimeout(function () {
+                    try {
+                        window.parent.postMessage({ type: 'switchInvestorsTab', tab: 'requestors' }, '*');
+                    } catch (e) {}
+                }, 260);
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'traderapp.php?tab=programme_investors';
+    };
+
     document.querySelectorAll('.sd-tab').forEach(function (t) {
         t.addEventListener('click', function () {
             var target = t.dataset.tab;
@@ -1982,6 +2444,15 @@ if ($programme && !empty($email)) {
             document.querySelectorAll('.sd-panel').forEach(function (x) { x.classList.toggle('active', x.id === 'sd-tab-' + target); });
         });
     });
+
+    window.sdSwitchTradeTab = function (tab) {
+        document.querySelectorAll('.sd-trade-tab').forEach(function (x) {
+            x.classList.toggle('active', x.dataset.tradeTab === tab);
+        });
+        document.querySelectorAll('.sd-trade-panel').forEach(function (p) {
+            p.classList.toggle('active', p.id === 'sdTradePanel-' + tab);
+        });
+    };
 
     window.sdOpenModal = function (id) {
         var el = document.getElementById(id);
@@ -2020,7 +2491,6 @@ if ($programme && !empty($email)) {
     }
 
     function escapeHtml(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
-    function fmtMoney(v) { var n = parseFloat(v) || 0; return '$' + n.toFixed(2); }
 
     window.sdAlert = function (message, kind, title) {
         kind = kind || 'info';
@@ -2111,63 +2581,60 @@ if ($programme && !empty($email)) {
         });
     }
 
-    // ---------- Confirm modal state ----------
-    var _pendingRequestId = null;
-    var _pendingRequestAction = null;
-    var _pendingSelectEl = null;
+    var _sdConfirmOnYes = null;
+    var _sdConfirmOnCancel = null;
 
-    window.sdHandleRequestAction = function (selectEl) {
-        var requestId = selectEl.getAttribute('data-request-id');
-        var action = selectEl.value;
-        if (!requestId || !action) return;
+    window.sdShowConfirm = function (title, message, yesLabel, onYes, onCancel) {
+        var modal = document.getElementById('sdConfirmModal');
+        if (!modal) { if (typeof onYes === 'function') onYes(); return; }
 
-        _pendingRequestId = requestId;
-        _pendingRequestAction = action;
-        _pendingSelectEl = selectEl;
+        document.getElementById('sdConfirmTitle').textContent = title || 'Confirm Action';
+        document.getElementById('sdConfirmMessage').textContent = message || '';
+        document.getElementById('sdConfirmYes').textContent = yesLabel || 'Yes, Confirm';
 
-        var title = action === 'accept' ? 'Accept Request' : 'Reject Request';
-        var msg = action === 'accept'
-            ? 'Are you sure you want to accept this investment request? The investor will be added to this programme.'
-            : 'Are you sure you want to reject this investment request?';
+        _sdConfirmOnYes = onYes;
+        _sdConfirmOnCancel = onCancel;
 
-        document.getElementById('sdConfirmTitle').textContent = title;
-        document.getElementById('sdConfirmMessage').textContent = msg;
-        document.getElementById('sdConfirmYes').textContent = action === 'accept' ? 'Yes, Accept' : 'Yes, Reject';
-        document.getElementById('sdConfirmModal').classList.add('open');
+        modal.classList.add('open');
         lockBodyScroll();
+        notifyParentModal(true);
     };
 
-    document.getElementById('sdConfirmYes').addEventListener('click', function () {
-        if (_pendingRequestId && _pendingRequestAction) {
-            var requestId = _pendingRequestId;
-            var action = _pendingRequestAction;
-            var selectEl = _pendingSelectEl;
-
-            document.getElementById('sdConfirmModal').classList.remove('open');
-            if (selectEl) selectEl.disabled = true;
-
-            post({ action: 'update_request_status', request_id: requestId, new_status: action }, function (d) {
-                if (d.success) {
-                    sdOpenInvestorsView();
-                    if (liveStateRunning) fetchLiveState();
-                } else {
-                    sdAlert(d.message || 'Failed to update request.', 'error', 'Request failed');
-                    if (selectEl) { selectEl.value = ''; selectEl.disabled = false; }
-                    if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
-                }
-                _pendingRequestId = null;
-                _pendingRequestAction = null;
-                _pendingSelectEl = null;
-            });
-        }
-    });
-
-    window.sdCloseConfirm = function () {
-        document.getElementById('sdConfirmModal').classList.remove('open');
-        if (_pendingSelectEl) { _pendingSelectEl.value = ''; _pendingSelectEl.disabled = false; }
-        _pendingRequestId = null; _pendingRequestAction = null; _pendingSelectEl = null;
+    function sdCloseConfirmModal(runCancel) {
+        var modal = document.getElementById('sdConfirmModal');
+        if (!modal) return;
+        modal.classList.remove('open');
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
-    };
+        var cancelFn = _sdConfirmOnCancel;
+        _sdConfirmOnYes = null;
+        _sdConfirmOnCancel = null;
+        if (runCancel && typeof cancelFn === 'function') cancelFn();
+    }
+
+    var sdConfirmYesBtn = document.getElementById('sdConfirmYes');
+    if (sdConfirmYesBtn) {
+        sdConfirmYesBtn.addEventListener('click', function () {
+            var fn = _sdConfirmOnYes;
+            _sdConfirmOnYes = null;
+            _sdConfirmOnCancel = null;
+            var modal = document.getElementById('sdConfirmModal');
+            if (modal) modal.classList.remove('open');
+            if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
+            if (typeof fn === 'function') fn();
+        });
+    }
+
+    var sdConfirmNoBtn = document.getElementById('sdConfirmNo');
+    if (sdConfirmNoBtn) {
+        sdConfirmNoBtn.addEventListener('click', function () { sdCloseConfirmModal(true); });
+    }
+
+    var sdConfirmModalEl = document.getElementById('sdConfirmModal');
+    if (sdConfirmModalEl) {
+        sdConfirmModalEl.addEventListener('click', function (e) {
+            if (e.target === sdConfirmModalEl) sdCloseConfirmModal(true);
+        });
+    }
 
     // ---------- LIVE UPDATE ENGINE ----------
     var liveStateInterval = null;
@@ -2176,6 +2643,71 @@ if ($programme && !empty($email)) {
     var LIVE_BASE_INTERVAL = 1000;
     var LIVE_MAX_INTERVAL = 15000;
     var LIVE_STATE_LAST = null;
+
+    // remember which symbols/timeframes the user has currently ticked
+    // so a live refresh doesn't wipe out an in-progress selection.
+    function captureCurrentSelections() {
+        var syms = {};
+        document.querySelectorAll('.sd-settings-symbol-cb:checked').forEach(function (cb) { syms[cb.value] = true; });
+        var tfs = {};
+        document.querySelectorAll('.sd-settings-tf-cb:checked').forEach(function (cb) { tfs[cb.value] = true; });
+        return { syms: syms, tfs: tfs };
+    }
+
+    function restoreSelections(sel) {
+        document.querySelectorAll('.sd-settings-symbol-cb').forEach(function (cb) {
+            cb.checked = !!sel.syms[cb.value];
+        });
+        document.querySelectorAll('.sd-settings-tf-cb').forEach(function (cb) {
+            cb.checked = !!sel.tfs[cb.value];
+        });
+    }
+
+    // rebuild the checkbox lists from the live state, but preserve
+    // whatever the user has ticked or unticked since the last refresh.
+    function renderSettingsPickers(brokerSymbols, brokerTimeframes, selectedSymbols, selectedTimeframes) {
+        var symsList = document.getElementById('sdSymbolsList');
+        var tfsList  = document.getElementById('sdTimeframesList');
+        if (!symsList || !tfsList) return;
+
+        var current = captureCurrentSelections();
+
+        // Symbols
+        if (!brokerSymbols || !brokerSymbols.length) {
+            symsList.innerHTML = '<p class="sd-sub">No symbols available.</p>';
+        } else {
+            var selectedSymLookup = {};
+            (selectedSymbols || []).forEach(function (s) { selectedSymLookup[s] = true; });
+
+            var html = '';
+            brokerSymbols.forEach(function (sym) {
+                var checked = current.syms[sym] || selectedSymLookup[sym];
+                html += '<label class="sd-check-row">';
+                html +=   '<input type="checkbox" value="' + escapeHtml(sym) + '" class="sd-settings-symbol-cb"' + (checked ? ' checked' : '') + '>';
+                html +=   '<span>' + escapeHtml(sym) + '</span>';
+                html += '</label>';
+            });
+            symsList.innerHTML = html;
+        }
+
+        // Timeframes
+        if (!brokerTimeframes || !brokerTimeframes.length) {
+            tfsList.innerHTML = '<p class="sd-sub">No timeframes available.</p>';
+        } else {
+            var selectedTfLookup = {};
+            (selectedTimeframes || []).forEach(function (t) { selectedTfLookup[t] = true; });
+
+            var htmlTf = '';
+            brokerTimeframes.forEach(function (tf) {
+                var checked = current.tfs[tf] || selectedTfLookup[tf];
+                htmlTf += '<label class="sd-check-row">';
+                htmlTf +=   '<input type="checkbox" value="' + escapeHtml(tf) + '" class="sd-settings-tf-cb"' + (checked ? ' checked' : '') + '>';
+                htmlTf +=   '<span>' + escapeHtml(tf) + '</span>';
+                htmlTf += '</label>';
+            });
+            tfsList.innerHTML = htmlTf;
+        }
+    }
 
     function pulse(el) {
         if (!el) return;
@@ -2198,6 +2730,21 @@ if ($programme && !empty($email)) {
         return false;
     }
 
+    function tradesSignature(trades) {
+        if (!trades || !trades.length) return '';
+        var parts = [];
+        for (var i = 0; i < trades.length; i++) {
+            var t = trades[i] || {};
+            parts.push((t.id || '') + ':' + (t.modify_trade || '') + ':' + (t.orderstatus || ''));
+        }
+        return parts.join('|');
+    }
+
+    function brokerSymbolsSignature(arr) {
+        if (!arr || !arr.length) return '';
+        return arr.length + ':' + arr[0] + ':' + arr[arr.length - 1];
+    }
+
     function applyLiveState(data) {
         if (!data || !data.success) return;
 
@@ -2208,6 +2755,16 @@ if ($programme && !empty($email)) {
         if (invLabel) {
             var c = parseInt(data.investor_count, 10) || 0;
             updateText(invLabel, c + ' investor' + (c === 1 ? '' : 's'), true);
+        }
+
+        var tradesDescEl = document.getElementById('sdTradesCardDesc');
+        if (tradesDescEl && data.active_investor_count !== undefined) {
+            var ac = parseInt(data.active_investor_count, 10) || 0;
+            updateText(
+                tradesDescEl,
+                'Trades generated from this programme for ' + ac + ' active investor' + (ac === 1 ? '' : 's'),
+                true
+            );
         }
 
         var psEl = document.getElementById('sdProfitSplitValue');
@@ -2227,14 +2784,37 @@ if ($programme && !empty($email)) {
         var statusEl = document.getElementById('sdProgrammeStatusContainer');
         if (statusEl && data.programme_status_html !== undefined) updateHtml(statusEl, data.programme_status_html, false);
 
+        // ============================================================
+        // >>> LIVE BROKER SYMBOLS / TIMEFRAMES REFRESH
+        // Rebuild the settings-modal checkbox lists from the freshest
+        // programme.broker_symbols / broker_timeframes, preserving any
+        // in-progress user ticks. Detects change via a cheap signature
+        // so we don't thrash the DOM every second.
+        // ============================================================
+        if (data.broker_symbols !== undefined && data.broker_timeframes !== undefined) {
+            var newSig = brokerSymbolsSignature(data.broker_symbols)
+                       + '|'
+                       + brokerSymbolsSignature(data.broker_timeframes);
+            var oldSig = LIVE_STATE_LAST
+                ? (brokerSymbolsSignature(LIVE_STATE_LAST.broker_symbols)
+                    + '|' + brokerSymbolsSignature(LIVE_STATE_LAST.broker_timeframes))
+                : null;
+
+            if (oldSig !== newSig) {
+                renderSettingsPickers(
+                    data.broker_symbols || [],
+                    data.broker_timeframes || [],
+                    data.symbols || [],
+                    data.timeframes || []
+                );
+            }
+        }
+
         var tradesEl = document.getElementById('sdTradesContainer');
         if (tradesEl && data.trades_html !== undefined) {
-            var prevCount = (LIVE_STATE_LAST && LIVE_STATE_LAST.trades) ? LIVE_STATE_LAST.trades.length : -1;
-            var newCount = (data.trades || []).length;
-            var prevFirstId = (LIVE_STATE_LAST && LIVE_STATE_LAST.trades && LIVE_STATE_LAST.trades[0]) ? LIVE_STATE_LAST.trades[0].id : null;
-            var newFirstId = (data.trades && data.trades[0]) ? data.trades[0].id : null;
-
-            if (prevCount !== newCount || prevFirstId !== newFirstId) {
+            var prevSig = LIVE_STATE_LAST ? tradesSignature(LIVE_STATE_LAST.trades) : null;
+            var newSigT = tradesSignature(data.trades);
+            if (prevSig !== newSigT) {
                 updateHtml(tradesEl, data.trades_html, true);
                 bindModifySelects();
             }
@@ -2296,7 +2876,6 @@ if ($programme && !empty($email)) {
     var HAS_PROGRAMME = <?= $programme ? 'true' : 'false' ?>;
     if (HAS_PROGRAMME) startLiveState();
 
-    // ---------- GLOBAL REQUEST PICKER ----------
     window.sdOpenRequestPicker = function () {
         var list = document.getElementById('sdRequestPickerList');
         list.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading programmes…</p></div>';
@@ -2332,8 +2911,14 @@ if ($programme && !empty($email)) {
 
                     if (isCurrent) {
                         setTimeout(function () {
-                            sdOpenInvestorsView();
-                            setTimeout(function () { sdSwitchInvTab('requestors'); }, 30);
+                            sdGoToInvestors();
+                            setTimeout(function () {
+                                try {
+                                    if (window.parent && window.parent !== window) {
+                                        window.parent.postMessage({ type: 'switchInvestorsTab', tab: 'requestors' }, '*');
+                                    }
+                                } catch (e) {}
+                            }, 200);
                         }, 60);
                     } else {
                         post({ action: 'switch_programme', programme_id: pid }, function (res) {
@@ -2354,141 +2939,6 @@ if ($programme && !empty($email)) {
         });
     };
 
-    // ---------- Investors view ----------
-    var _currentInvestorsData = null;
-
-    function renderInvestorCard(inv, inactive) {
-        var initial = inv.initial && inv.initial.length ? inv.initial : (String(inv.name || 'I').charAt(0).toUpperCase());
-        var cls = 'sd-inv-card' + (inactive ? ' is-inactive' : '');
-        var html = '';
-        html += '<div class="' + cls + '">';
-        html +=   '<div class="sd-inv-avatar">' + escapeHtml(initial) + '</div>';
-        html +=   '<div class="sd-inv-info">';
-        html +=     '<div class="sd-inv-username">' + escapeHtml(inv.name || 'Investor') + '</div>';
-        html +=     '<div class="sd-inv-stat"><span class="sd-inv-stat-key">Revenue from investor</span><span class="sd-inv-stat-val money">' + fmtMoney(inv.trader_revenue) + '</span></div>';
-        if (inv.start_date) html += '<div class="sd-inv-stat"><span class="sd-inv-stat-key">Started</span><span class="sd-inv-stat-val">' + escapeHtml(inv.start_date) + '</span></div>';
-        if (inv.end_date)   html += '<div class="sd-inv-stat"><span class="sd-inv-stat-key">Ending</span><span class="sd-inv-stat-val">' + escapeHtml(inv.end_date) + '</span></div>';
-        if (inv.end_date) {
-            html += '<div class="sd-inv-stat"><span class="sd-inv-stat-key">Days Left</span>';
-            var dl = inv.days_left !== null ? inv.days_left : 0;
-            if (inactive || dl <= 0) html += '<span class="sd-inv-stat-val ended">Ended</span>';
-            else html += '<span class="sd-inv-stat-val">' + dl + ' day' + (dl === 1 ? '' : 's') + ' left</span>';
-            html += '</div>';
-        }
-        html +=   '</div>';
-        html += '</div>';
-        return html;
-    }
-
-    window.sdOpenInvestorsView = function () {
-        var view = document.getElementById('sdInvestorsView');
-        if (!view) return;
-        view.classList.add('open');
-        lockBodyScroll();
-        notifyParentModal(true);
-
-        var activePanel = document.getElementById('sdInvPanelActive');
-        var inactivePanel = document.getElementById('sdInvPanelInactive');
-        var requestorsPanel = document.getElementById('sdInvPanelRequestors');
-        var closedPanel = document.getElementById('sdInvPanelClosed');
-
-        activePanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading investors…</p></div>';
-        inactivePanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading inactive investors…</p></div>';
-        requestorsPanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading requestors…</p></div>';
-        closedPanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading closed deals…</p></div>';
-
-        sdSwitchInvTab('active');
-
-        post({ action: 'get_investors' }, function (d) {
-            if (!d.success) {
-                var html = '<div class="sd-empty"><i class="fa-solid fa-exclamation-triangle"></i><strong>Error</strong><p>' + escapeHtml(d.message || 'Failed to load investors.') + '</p></div>';
-                activePanel.innerHTML = html; inactivePanel.innerHTML = html;
-                requestorsPanel.innerHTML = html; closedPanel.innerHTML = html;
-                return;
-            }
-
-            _currentInvestorsData = d;
-
-            if (!d.active || !d.active.length) {
-                activePanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-users"></i><strong>No active investors yet</strong><p>Investors with a currently running contract will appear here.</p></div>';
-            } else {
-                var html = '';
-                d.active.forEach(function (inv) { html += renderInvestorCard(inv, false); });
-                activePanel.innerHTML = html;
-            }
-
-            if (!d.inactive || !d.inactive.length) {
-                inactivePanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-user-clock"></i><strong>No inactive investors yet</strong><p>Investors whose contract has ended will appear here.</p></div>';
-            } else {
-                var ihtml = '';
-                d.inactive.forEach(function (inv) { ihtml += renderInvestorCard(inv, true); });
-                inactivePanel.innerHTML = ihtml;
-            }
-
-            if (!d.requestors || !d.requestors.length) {
-                requestorsPanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-hand-holding-dollar"></i><strong>No pending requests</strong><p>Investment requests will appear here.</p></div>';
-            } else {
-                var rhtml = '';
-                d.requestors.forEach(function (req) {
-                    var initial = req.initial && req.initial.length ? req.initial : (String(req.name || 'R').charAt(0).toUpperCase());
-                    rhtml += '<div class="sd-req-card" data-request-id="' + req.request_id + '">';
-                    rhtml +=   '<div class="sd-req-avatar">' + escapeHtml(initial) + '</div>';
-                    rhtml +=   '<div class="sd-req-info">';
-                    rhtml +=     '<div class="sd-req-username">' + escapeHtml(req.name || 'Requestor') + '</div>';
-                    rhtml +=     '<div class="sd-req-meta">Requested ' + escapeHtml(req.created_at || '') + '</div>';
-                    rhtml +=   '</div>';
-                    rhtml +=   '<select class="sd-req-select" data-request-id="' + req.request_id + '" onchange="sdHandleRequestAction(this)">';
-                    rhtml +=     '<option value="">Action</option>';
-                    rhtml +=     '<option value="accept">Accept</option>';
-                    rhtml +=     '<option value="reject">Reject</option>';
-                    rhtml +=   '</select>';
-                    rhtml += '</div>';
-                });
-                requestorsPanel.innerHTML = rhtml;
-            }
-
-            if (!d.closed || !d.closed.length) {
-                closedPanel.innerHTML = '<div class="sd-empty"><i class="fa-solid fa-box-archive"></i><strong>No closed deals yet</strong><p>Ended contracts will appear here grouped by date range.</p></div>';
-            } else {
-                var chtml = '';
-                d.closed.forEach(function (group) {
-                    chtml += '<div class="sd-closed-group">';
-                    chtml +=   '<div class="sd-closed-range">' + escapeHtml(group.range) + '</div>';
-                    group.items.forEach(function (it) {
-                        var initial = it.initial && it.initial.length ? it.initial : (String(it.name || 'I').charAt(0).toUpperCase());
-                        chtml += '<div class="sd-closed-item">';
-                        chtml +=   '<div class="sd-closed-avatar">' + escapeHtml(initial) + '</div>';
-                        chtml +=   '<div class="sd-closed-body">';
-                        chtml +=     '<div class="sd-closed-name">' + escapeHtml(it.name || 'Investor') + '</div>';
-                        chtml +=     '<div class="sd-closed-row"><span class="sd-closed-key">Revenue from investor</span><span class="sd-closed-val money">' + fmtMoney(it.investor_profit) + '</span></div>';
-                        chtml +=     '<div class="sd-closed-row"><span class="sd-closed-key">Investor payment status</span><span class="sd-closed-val' + (it.investor_payment_status ? '' : ' muted') + '">' + escapeHtml(it.investor_payment_status || '—') + '</span></div>';
-                        chtml +=     '<div class="sd-closed-row"><span class="sd-closed-key">Server payment status</span><span class="sd-closed-val' + (it.server_payment_status ? '' : ' muted') + '">' + escapeHtml(it.server_payment_status || '—') + '</span></div>';
-                        chtml +=   '</div>';
-                        chtml += '</div>';
-                    });
-                    chtml += '</div>';
-                });
-                closedPanel.innerHTML = chtml;
-            }
-        });
-    };
-
-    window.sdCloseInvestorsView = function () {
-        var view = document.getElementById('sdInvestorsView');
-        if (!view) return;
-        view.classList.remove('open');
-        if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
-    };
-
-    window.sdSwitchInvTab = function (tab) {
-        document.querySelectorAll('.sd-inv-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.invTab === tab); });
-        document.querySelectorAll('.sd-inv-panel').forEach(function (p) { p.classList.remove('active'); });
-        if (tab === 'active') document.getElementById('sdInvPanelActive').classList.add('active');
-        else if (tab === 'inactive') document.getElementById('sdInvPanelInactive').classList.add('active');
-        else if (tab === 'requestors') document.getElementById('sdInvPanelRequestors').classList.add('active');
-        else if (tab === 'closed') document.getElementById('sdInvPanelClosed').classList.add('active');
-    };
-
     function bindModifySelects() {
         document.querySelectorAll('.sd-modify-select').forEach(function (sel) {
             if (sel.dataset.sdBound === '1') return;
@@ -2496,19 +2946,34 @@ if ($programme && !empty($email)) {
             sel.addEventListener('change', function () {
                 var tradeId = parseInt(sel.getAttribute('data-trade-id'), 10) || 0;
                 var mode    = sel.value;
-                if (tradeId <= 0) return;
-                sel.disabled = true;
-                post({ action: 'modify_trade', trade_id: tradeId, modify_trade: mode }, function (d) {
-                    sel.disabled = false;
-                    if (d && d.success) sel.setAttribute('data-mode', mode);
-                    else sdAlert((d && d.message) ? d.message : 'Failed to update trade.', 'error', 'Trade update failed');
-                });
+                if (tradeId <= 0 || mode === '') return;
+
+                var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : mode;
+                sdShowConfirm(
+                    'Confirm Action',
+                    'Are you sure you want to "' + label + '" for trade #' + tradeId + '?',
+                    label,
+                    function () {
+                        sel.disabled = true;
+                        post({ action: 'modify_trade', trade_id: tradeId, modify_trade: mode }, function (d) {
+                            sel.disabled = false;
+                            if (d && d.success) {
+                                sel.value = mode;
+                            } else {
+                                sdAlert((d && d.message) ? d.message : 'Failed to update trade.', 'error', 'Trade update failed');
+                                sel.value = '';
+                            }
+                        });
+                    },
+                    function () {
+                        sel.value = '';
+                    }
+                );
             });
         });
     }
     bindModifySelects();
 
-    // ---------- Save settings ----------
     var saveBtn = document.getElementById('sdSaveSettingsBtn');
     if (saveBtn) {
         saveBtn.addEventListener('click', function () {
@@ -2522,6 +2987,9 @@ if ($programme && !empty($email)) {
             var oldText = saveBtn.textContent;
             saveBtn.textContent = 'Saving…';
 
+            var tzSelect = document.getElementById('sdReqTimezone');
+            var tzValue = tzSelect ? tzSelect.value : '';
+
             post({ action: 'save_visibility', visibility: document.getElementById('sdVisSelect').value }, function (d1) {
                 if (!d1.success) { showErr(d1.message); return; }
                 post({ action: 'save_symbols_timeframes', symbols: symbols.join(','), timeframes: tfs.join(',') }, function (d2) {
@@ -2531,7 +2999,8 @@ if ($programme && !empty($email)) {
                         contract_duration: document.getElementById('sdReqContract').value,
                         developer_percentage: document.getElementById('sdRevInput').value,
                         minimum_investment_amount: document.getElementById('sdReqMinInv').value,
-                        maximum_investment_amount: document.getElementById('sdReqMaxInv').value
+                        maximum_investment_amount: document.getElementById('sdReqMaxInv').value,
+                        timezone: tzValue
                     }, function (d3) {
                         saveBtn.disabled = false;
                         saveBtn.textContent = oldText;

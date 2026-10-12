@@ -1,19 +1,6 @@
 <?php
     // programme_accountmanagement.php — Account Management (Standalone, shelled)
     // Fully per-programme.
-    //
-    // No dynamic JSON construction anywhere. Every JSON column that used to
-    // exist has become a dedicated programme-scoped table.
-    //
-    // List tables:
-    //   - accountmanagement_trades_breakeven
-    //   - accountmanagement_trades_martingale
-    //   - accountmanagement_min_balance_risk_distance
-    //   - accountmanagement_max_balance_risk_distance
-    //   - accountmanagement_balance_default_risk
-    //   - accountmanagement_balance_maximum_risk
-    //   - accountmanagement_restricted_days
-    //   - programme_revenue_target (hierarchical: week -> day -> range)
 
     session_start();
 
@@ -85,6 +72,9 @@
         die("No programme selected. Please create or select a programme.");
     }
 
+    // >>> Programme timezone — the single source of truth for restricted rows
+    $programmeTimezone = trim((string)($programme['timezone'] ?? ''));
+
     // ==================== ACCOUNT MANAGEMENT COLUMNS (master row only) ====================
     $ACCOUNT_MGMT_COLUMNS = [
         'skip_orders_close_to_position'                       => ['label' => 'Skip Orders Close To Position',                       'type' => 'bool'],
@@ -94,7 +84,31 @@
         'enable_order_type_conversion'                        => ['label' => 'Enable Order Type Conversion',                        'type' => 'bool'],
     ];
 
-    // ==================== LIST-TABLE REGISTRY ====================
+    // ==================== MARTINGALE GLOBAL COLUMNS (trades_martingale, first row only) ====================
+    // NOTE: martingale_per_stage_drawdown_amount is NOT here. It belongs to
+    // each per-range row and holds the "Drawdown Amount" of that range.
+    $MARTINGALE_GLOBAL_COLUMNS = [
+        'enable_martingale'                         => ['label' => 'Enable Martingale',                         'type' => 'bool'],
+        'martingale_type'                           => ['label' => 'Martingale Type',                           'type' => 'enum', 'options' => ['balance_based','loss_streak'], 'default' => 'balance_based'],
+        'martingale_factor'                         => ['label' => 'Martingale Factor',                         'type' => 'enum', 'options' => ['profit_factor','stoploss_factor'], 'default' => ''],
+        'martingale_for_position_order_scale'       => ['label' => 'Martingale For Position Order Scale',       'type' => 'bool'],
+        'martingale_loss_recovery_adder_percentage' => ['label' => 'Martingale Loss Recovery Adder Percentage', 'type' => 'percent_string'],
+        'pre_drawdown_assumption'                   => ['label' => 'Pre-Drawdown Assumption',                   'type' => 'bool'],
+        'martingale_pre_scaling'                    => ['label' => 'Martingale Pre Scaling',                    'type' => 'bool'],
+        'martingale_linear_scaling'                 => ['label' => 'Martingale Linear Scaling',                 'type' => 'bool'],
+        'enable_initial_risk_retention'             => ['label' => 'Enable Initial Risk Retention',             'type' => 'bool'],
+        'initial_risk_retention_percentage'         => ['label' => 'Initial Risk Retention Percentage',         'type' => 'percent_string'],
+    ];
+
+    // ==================== MARTINGALE RANGE COLUMNS (per stage drawdown rows) ====================
+    // Each row now carries a Drawdown Amount. All three fields are required.
+    $MARTINGALE_RANGE_COLUMNS = [
+        'from_balance'                          => ['label' => 'From Amount',     'type' => 'decimal_required'],
+        'to_balance'                            => ['label' => 'To Amount',       'type' => 'decimal_required'],
+        'martingale_per_stage_drawdown_amount'  => ['label' => 'Drawdown Amount', 'type' => 'decimal_required'],
+    ];
+
+    // ==================== LIST-TABLE REGISTRY (simple tables only; martingale is custom) ====================
     $LIST_TABLES = [
         'trades_breakeven' => [
             'table'   => 'accountmanagement_trades_breakeven',
@@ -102,25 +116,6 @@
             'columns' => [
                 'floating_profit_at_risk_reward' => ['label' => 'Floating Profit At Risk Reward', 'type' => 'rr_decimal'],
                 'breakeven_at_risk_reward'       => ['label' => 'Breakeven At Risk Reward',       'type' => 'rr_decimal'],
-            ],
-        ],
-        'trades_martingale' => [
-            'table'   => 'accountmanagement_trades_martingale',
-            'label'   => 'Trades Martingale',
-            'columns' => [
-                'from_balance'                              => ['label' => 'From Balance',                              'type' => 'decimal'],
-                'to_balance'                                => ['label' => 'To Balance',                                'type' => 'decimal_null'],
-                'enable_martingale'                         => ['label' => 'Enable Martingale',                         'type' => 'bool'],
-                'martingale_type'                           => ['label' => 'Martingale Type',                           'type' => 'enum', 'options' => ['balance_based','loss_streak'], 'default' => 'balance_based'],
-                'martingale_factor'                         => ['label' => 'Martingale Factor',                         'type' => 'enum', 'options' => ['profit_factor','stoploss_factor'], 'default' => ''],
-                'martingale_for_position_order_scale'       => ['label' => 'Martingale For Position Order Scale',       'type' => 'bool'],
-                'martingale_loss_recovery_adder_percentage' => ['label' => 'Martingale Loss Recovery Adder Percentage', 'type' => 'percent_string'],
-                'pre_drawdown_assumption'                   => ['label' => 'Pre-Drawdown Assumption',                   'type' => 'bool'],
-                'martingale_pre_scaling'                    => ['label' => 'Martingale Pre Scaling',                    'type' => 'bool'],
-                'martingale_linear_scaling'                 => ['label' => 'Martingale Linear Scaling',                 'type' => 'bool'],
-                'enable_initial_risk_retention'             => ['label' => 'Enable Initial Risk Retention',             'type' => 'bool'],
-                'initial_risk_retention_percentage'         => ['label' => 'Initial Risk Retention Percentage',         'type' => 'percent_string'],
-                'martingale_per_stage_drawdown_amount'      => ['label' => 'Martingale Per Stage Drawdown Amount',      'type' => 'decimal'],
             ],
         ],
         'min_balance_risk_distance' => [
@@ -159,6 +154,13 @@
                 'risk_amount'        => ['label' => 'Risk Amount',        'type' => 'decimal'],
             ],
         ],
+        'restricted_dates' => [
+            'table'   => 'accountmanagement_restricted_dates',
+            'label'   => 'Restricted Dates',
+            'columns' => [
+                'restricted_date' => ['label' => 'Date', 'type' => 'date'],
+            ],
+        ],
         'restricted_days' => [
             'table'   => 'accountmanagement_restricted_days',
             'label'   => 'Restricted Days',
@@ -171,6 +173,20 @@
     ];
 
     $REVENUE_TARGET_TABLE = 'programme_revenue_target';
+    $MARTINGALE_TABLE      = 'accountmanagement_trades_martingale';
+
+    // ==================== PAGE ORDER ====================
+    $CARD_ORDER = [
+        'restricted_dates',
+        'restricted_days',
+        '__revenue_target__',
+        'trades_breakeven',
+        'min_balance_risk_distance',
+        'max_balance_risk_distance',
+        'balance_default_risk',
+        'balance_maximum_risk',
+        '__martingale__',
+    ];
 
     // ==================== HELPERS ====================
     function getDeveloperInvestors(PDO $pdo, int $developerId): array {
@@ -234,6 +250,11 @@
 
     function fetchListRows(PDO $pdo, string $table, int $developerId, int $programmeId): array {
         try {
+            if ($table === 'accountmanagement_restricted_dates') {
+                $stmt = $pdo->prepare("SELECT * FROM `$table` WHERE developerid = ? AND programme_id = ? ORDER BY restricted_date ASC, id ASC");
+                $stmt->execute([$developerId, $programmeId]);
+                return $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
             $stmt = $pdo->prepare("SELECT * FROM `$table` WHERE developerid = ? AND programme_id = ? ORDER BY id ASC");
             $stmt->execute([$developerId, $programmeId]);
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -248,6 +269,140 @@
         $v = rtrim($v, "% \t\n\r\0\x0B");
         if ($v === '' || !is_numeric($v)) return '0%';
         return $v . '%';
+    }
+
+    /**
+     * Pull the auto-synced loss streak value for this programme from
+     * signals_provider_interest.consecutive_expected_loss.
+     */
+    function fetchLossStreakFromSignals(PDO $pdo, int $programmeId): ?int {
+        try {
+            $q = $pdo->prepare("
+                SELECT `consecutive_expected_loss`
+                  FROM `signals_provider_interest`
+                 WHERE `programme_id` = ?
+                   AND `consecutive_expected_loss` IS NOT NULL
+                 ORDER BY `id` DESC
+                 LIMIT 1
+            ");
+            $q->execute([$programmeId]);
+            $v = $q->fetchColumn();
+            if ($v === false || $v === null || $v === '') return null;
+            return (int)$v;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    function rtGlobalsSessionKey(int $programmeId): string {
+        return 'rt_globals_' . $programmeId;
+    }
+
+    function mgGlobalsSessionKey(int $programmeId): string {
+        return 'mg_globals_' . $programmeId;
+    }
+
+    function readRevenueTargetGlobals(PDO $pdo, string $table, int $developerId, int $programmeId, ?int $autoLossStreak): array {
+        $defaults = [
+            'target_daily_profit'         => 0,
+            'include_missed_days'         => 0,
+            'include_current_day_as_owed' => 0,
+            'loss_streak_chances'         => ($autoLossStreak === null ? 0 : (int)$autoLossStreak),
+        ];
+
+        try {
+            $q = $pdo->prepare("
+                SELECT `target_daily_profit`, `include_missed_days`,
+                       `include_current_day_as_owed`, `loss_streak_chances`
+                  FROM `$table`
+                 WHERE `developerid` = ? AND `programme_id` = ?
+                 LIMIT 1
+            ");
+            $q->execute([$developerId, $programmeId]);
+            $row = $q->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                return [
+                    'target_daily_profit'         => (int)$row['target_daily_profit'],
+                    'include_missed_days'         => (int)$row['include_missed_days'],
+                    'include_current_day_as_owed' => (int)$row['include_current_day_as_owed'],
+                    'loss_streak_chances'         => ($autoLossStreak === null ? (int)$row['loss_streak_chances'] : (int)$autoLossStreak),
+                ];
+            }
+        } catch (Throwable $e) {}
+
+        $sessKey = rtGlobalsSessionKey($programmeId);
+        if (isset($_SESSION[$sessKey]) && is_array($_SESSION[$sessKey])) {
+            $s = $_SESSION[$sessKey];
+            return [
+                'target_daily_profit'         => (int)($s['target_daily_profit'] ?? 0),
+                'include_missed_days'         => (int)($s['include_missed_days'] ?? 0),
+                'include_current_day_as_owed' => (int)($s['include_current_day_as_owed'] ?? 0),
+                'loss_streak_chances'         => ($autoLossStreak === null ? (int)($s['loss_streak_chances'] ?? 0) : (int)$autoLossStreak),
+            ];
+        }
+
+        return $defaults;
+    }
+
+    /**
+     * Read the effective martingale globals for this programme.
+     * Priority:
+     *   1. First row of accountmanagement_trades_martingale (if any rows exist).
+     *   2. Session fallback.
+     *   3. Hard defaults.
+     *
+     * Only the global columns (per $MARTINGALE_GLOBAL_COLUMNS) are read here.
+     * The per-row drawdown amount lives on each range row.
+     */
+    function readMartingaleGlobals(PDO $pdo, string $table, int $developerId, int $programmeId, array $globalCols): array {
+        $defaults = [];
+        foreach ($globalCols as $col => $meta) {
+            if ($meta['type'] === 'bool') $defaults[$col] = 0;
+            elseif ($meta['type'] === 'enum') $defaults[$col] = $meta['default'] ?? '';
+            elseif ($meta['type'] === 'percent_string') $defaults[$col] = '0%';
+            else $defaults[$col] = '';
+        }
+
+        try {
+            $colNames = array_keys($globalCols);
+            $selectCols = implode(', ', array_map(function($c){ return "`$c`"; }, $colNames));
+            $q = $pdo->prepare("
+                SELECT $selectCols
+                  FROM `$table`
+                 WHERE `developerid` = ? AND `programme_id` = ?
+                 ORDER BY id ASC
+                 LIMIT 1
+            ");
+            $q->execute([$developerId, $programmeId]);
+            $row = $q->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $out = [];
+                foreach ($globalCols as $col => $meta) {
+                    $v = $row[$col] ?? null;
+                    if ($meta['type'] === 'bool') $out[$col] = (int)$v;
+                    elseif ($meta['type'] === 'enum') $out[$col] = $v === null ? ($meta['default'] ?? '') : (string)$v;
+                    elseif ($meta['type'] === 'percent_string') $out[$col] = $v === null ? '0%' : (string)$v;
+                    else $out[$col] = $v === null ? '' : $v;
+                }
+                return $out;
+            }
+        } catch (Throwable $e) {}
+
+        $sessKey = mgGlobalsSessionKey($programmeId);
+        if (isset($_SESSION[$sessKey]) && is_array($_SESSION[$sessKey])) {
+            $s = $_SESSION[$sessKey];
+            $out = [];
+            foreach ($globalCols as $col => $meta) {
+                $v = $s[$col] ?? null;
+                if ($meta['type'] === 'bool') $out[$col] = (int)$v;
+                elseif ($meta['type'] === 'enum') $out[$col] = $v === null ? ($meta['default'] ?? '') : (string)$v;
+                elseif ($meta['type'] === 'percent_string') $out[$col] = $v === null ? '0%' : (string)$v;
+                else $out[$col] = $v === null ? '' : $v;
+            }
+            return $out;
+        }
+
+        return $defaults;
     }
 
     // ==================== HANDLE AJAX: SAVE ACCOUNT MANAGEMENT ====================
@@ -319,21 +474,66 @@
         $listAction = $_POST['list_action'];
         $listKey    = isset($_POST['list_key']) ? trim($_POST['list_key']) : '';
 
-        // ---------- PROGRAMME REVENUE TARGET ----------
+        // ================================================================
+        // PROGRAMME REVENUE TARGET
+        // ================================================================
         if ($listKey === 'programme_revenue_target') {
             $table = $REVENUE_TARGET_TABLE;
 
-            $rtCols = [
-                'target_daily_profit'         => ['type' => 'bool'],
-                'include_missed_days'         => ['type' => 'bool'],
-                'include_current_day_as_owed' => ['type' => 'bool'],
-                'loss_streak_chances'         => ['type' => 'int'],
-                'week_no'                     => ['type' => 'int'],
-                'day_name'                    => ['type' => 'day'],
-                'pre_pending_sum'             => ['type' => 'bool'],
-                'from_balance'                => ['type' => 'decimal'],
-                'to_balance'                  => ['type' => 'decimal_null'],
-                'risk_amount'                 => ['type' => 'decimal'],
+            if ($listAction === 'save_globals') {
+                $targetDaily = isset($_POST['target_daily_profit'])         ? ((int)$_POST['target_daily_profit'] ? 1 : 0)         : 0;
+                $incMissed   = isset($_POST['include_missed_days'])         ? ((int)$_POST['include_missed_days'] ? 1 : 0)         : 0;
+                $incToday    = isset($_POST['include_current_day_as_owed']) ? ((int)$_POST['include_current_day_as_owed'] ? 1 : 0) : 0;
+
+                $autoLoss = fetchLossStreakFromSignals($pdo, $programmeId);
+                $lossVal  = $autoLoss === null ? 0 : (int)$autoLoss;
+
+                $_SESSION[rtGlobalsSessionKey($programmeId)] = [
+                    'target_daily_profit'         => $targetDaily,
+                    'include_missed_days'         => $incMissed,
+                    'include_current_day_as_owed' => $incToday,
+                    'loss_streak_chances'         => $lossVal,
+                ];
+
+                try {
+                    $upd = $pdo->prepare("
+                        UPDATE `$table`
+                           SET `target_daily_profit`         = ?,
+                               `include_missed_days`         = ?,
+                               `include_current_day_as_owed` = ?,
+                               `loss_streak_chances`         = ?
+                         WHERE `developerid` = ?
+                           AND `programme_id` = ?
+                    ");
+                    $upd->execute([$targetDaily, $incMissed, $incToday, $lossVal, $userId, $programmeId]);
+                    echo json_encode([
+                        'success' => true,
+                        'message' => 'Global settings saved.',
+                        'auto_loss_streak' => $autoLoss,
+                    ]);
+                } catch (PDOException $e) {
+                    echo json_encode(['success' => false, 'message' => 'Failed to save globals: ' . $e->getMessage()]);
+                }
+                exit;
+            }
+
+            $rtRowCols = [
+                'week_no'         => ['type' => 'int'],
+                'day_name'        => ['type' => 'day'],
+                'from_balance'    => ['type' => 'decimal'],
+                'to_balance'      => ['type' => 'decimal_null'],
+                'target_amount'   => ['type' => 'decimal'],
+                'pre_pending_sum' => ['type' => 'bool'],
+            ];
+
+            $autoLoss = fetchLossStreakFromSignals($pdo, $programmeId);
+            $effectiveGlobals = readRevenueTargetGlobals($pdo, $table, $userId, $programmeId, $autoLoss);
+
+            $globalsForInsert = [
+                'target_daily_profit'         => (int)$effectiveGlobals['target_daily_profit'],
+                'include_missed_days'         => (int)$effectiveGlobals['include_missed_days'],
+                'include_current_day_as_owed' => (int)$effectiveGlobals['include_current_day_as_owed'],
+                'loss_streak_chances'         => ($autoLoss === null ? (int)$effectiveGlobals['loss_streak_chances'] : (int)$autoLoss),
             ];
 
             if ($listAction === 'list') {
@@ -360,7 +560,8 @@
                 if (!is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row data.']); exit; }
 
                 $insertCols = []; $insertVals = [];
-                foreach ($rtCols as $colName => $colMeta) {
+
+                foreach ($rtRowCols as $colName => $colMeta) {
                     $v = $row[$colName] ?? null;
                     if ($colMeta['type'] === 'bool') { $v = ((int)$v) ? 1 : 0; }
                     elseif ($colMeta['type'] === 'int') { $v = (int)$v; }
@@ -373,6 +574,12 @@
                     } else { $v = (string)$v; }
                     $insertCols[] = $colName; $insertVals[] = $v;
                 }
+
+                foreach ($globalsForInsert as $gCol => $gVal) {
+                    $insertCols[] = $gCol;
+                    $insertVals[] = $gVal;
+                }
+
                 $colSql   = '`' . implode('`,`', $insertCols) . '`';
                 $placeSql = implode(',', array_fill(0, count($insertCols), '?'));
                 $sql = "INSERT INTO `$table` (`developerid`,`programme_id`,$colSql) VALUES (?,?,$placeSql)";
@@ -394,7 +601,8 @@
                 if ($rowId <= 0 || !is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row.']); exit; }
 
                 $setParts = []; $setVals = [];
-                foreach ($rtCols as $colName => $colMeta) {
+
+                foreach ($rtRowCols as $colName => $colMeta) {
                     if (!array_key_exists($colName, $row)) continue;
                     $v = $row[$colName];
                     if ($colMeta['type'] === 'bool') { $v = ((int)$v) ? 1 : 0; }
@@ -408,7 +616,13 @@
                     } else { $v = (string)$v; }
                     $setParts[] = "`$colName` = ?"; $setVals[] = $v;
                 }
+
                 if (empty($setParts)) { echo json_encode(['success' => false, 'message' => 'Nothing to update.']); exit; }
+
+                foreach ($globalsForInsert as $gCol => $gVal) {
+                    $setParts[] = "`$gCol` = ?"; $setVals[] = $gVal;
+                }
+
                 $setVals[] = $rowId; $setVals[] = $userId; $setVals[] = $programmeId;
                 $sql = "UPDATE `$table` SET " . implode(', ', $setParts) . " WHERE id = ? AND developerid = ? AND programme_id = ?";
                 try {
@@ -459,7 +673,227 @@
             exit;
         }
 
-        // ---------- SIMPLE LIST TABLES ----------
+        // ================================================================
+        // MARTINGALE (globals + stage drawdown ranges)
+        // ================================================================
+        if ($listKey === 'trades_martingale') {
+            $table = $MARTINGALE_TABLE;
+
+            // ---------- GLOBAL settings (mirrored onto every row) ----------
+            if ($listAction === 'save_martingale_globals') {
+                $raw = $_POST['fields'] ?? '{}';
+                $fields = json_decode($raw, true);
+                if (!is_array($fields)) { echo json_encode(['success' => false, 'message' => 'Invalid data.']); exit; }
+
+                $clean = [];
+                foreach ($MARTINGALE_GLOBAL_COLUMNS as $col => $meta) {
+                    if (!array_key_exists($col, $fields)) {
+                        if ($meta['type'] === 'bool') $clean[$col] = 0;
+                        elseif ($meta['type'] === 'enum') $clean[$col] = $meta['default'] ?? '';
+                        elseif ($meta['type'] === 'percent_string') $clean[$col] = '0%';
+                        else $clean[$col] = '';
+                        continue;
+                    }
+                    $val = $fields[$col];
+                    if ($meta['type'] === 'bool') $clean[$col] = ((int)$val) ? 1 : 0;
+                    elseif ($meta['type'] === 'enum') {
+                        $val = trim((string)$val);
+                        $allowed = $meta['options'] ?? [];
+                        $defVal  = $meta['default'] ?? '';
+                        if ($val === '' && $defVal !== '') $val = $defVal;
+                        if (!in_array($val, $allowed, true)) { echo json_encode(['success' => false, 'message' => 'Invalid value for ' . $meta['label'] . '.']); exit; }
+                        $clean[$col] = $val;
+                    }
+                    elseif ($meta['type'] === 'percent_string') $clean[$col] = normalizePercentString($val);
+                    else $clean[$col] = (string)$val;
+                }
+
+                $_SESSION[mgGlobalsSessionKey($programmeId)] = $clean;
+
+                try {
+                    $pdo->beginTransaction();
+
+                    // Ensure at least one row exists so globals have somewhere to live
+                    $chk = $pdo->prepare("SELECT id FROM `$table` WHERE developerid = ? AND programme_id = ? ORDER BY id ASC LIMIT 1");
+                    $chk->execute([$userId, $programmeId]);
+                    $firstRow = $chk->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$firstRow) {
+                        // Insert a placeholder range row (0.00 → 0.00, drawdown 0) with the globals
+                        $insCols = array_merge(
+                            ['developerid','programme_id','from_balance','to_balance','martingale_per_stage_drawdown_amount'],
+                            array_keys($clean)
+                        );
+                        $insVals = array_merge(
+                            [$userId, $programmeId, 0.00, 0.00, 0.00],
+                            array_values($clean)
+                        );
+                        $colSql   = '`' . implode('`,`', $insCols) . '`';
+                        $placeSql = implode(',', array_fill(0, count($insCols), '?'));
+                        $ins = $pdo->prepare("INSERT INTO `$table` ($colSql) VALUES ($placeSql)");
+                        $ins->execute($insVals);
+                    } else {
+                        // Mirror globals onto every existing row (row values stay consistent)
+                        $setParts = [];
+                        $setVals  = [];
+                        foreach ($clean as $col => $val) {
+                            $setParts[] = "`$col` = ?";
+                            $setVals[]  = $val;
+                        }
+                        $setVals[] = $userId;
+                        $setVals[] = $programmeId;
+                        $sql = "UPDATE `$table` SET " . implode(', ', $setParts) . " WHERE developerid = ? AND programme_id = ?";
+                        $upd = $pdo->prepare($sql);
+                        $upd->execute($setVals);
+                    }
+
+                    $pdo->commit();
+                    echo json_encode(['success' => true, 'message' => 'Martingale settings saved.']);
+                } catch (PDOException $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    echo json_encode(['success' => false, 'message' => 'Failed to save: ' . $e->getMessage()]);
+                }
+                exit;
+            }
+
+            // Snapshot globals to denormalize onto every range row
+            $effectiveGlobals = readMartingaleGlobals($pdo, $table, $userId, $programmeId, $MARTINGALE_GLOBAL_COLUMNS);
+
+            // ---------- PER-RANGE rows ----------
+            if ($listAction === 'list') {
+                try {
+                    $stmt = $pdo->prepare("
+                        SELECT * FROM `$table`
+                        WHERE developerid = ? AND programme_id = ?
+                        ORDER BY from_balance ASC, id ASC
+                    ");
+                    $stmt->execute([$userId, $programmeId]);
+                    echo json_encode(['success' => true, 'rows' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+                } catch (PDOException $e) {
+                    echo json_encode(['success' => false, 'message' => 'Failed to load: ' . $e->getMessage()]);
+                }
+                exit;
+            }
+
+            if ($listAction === 'add') {
+                $rowRaw = $_POST['row'] ?? '';
+                $row = is_string($rowRaw) ? json_decode($rowRaw, true) : (is_array($rowRaw) ? $rowRaw : []);
+                if (!is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row data.']); exit; }
+
+                $fromRaw   = $row['from_balance'] ?? null;
+                $toRaw     = $row['to_balance']   ?? null;
+                $drawRaw   = $row['martingale_per_stage_drawdown_amount'] ?? null;
+
+                if ($fromRaw === null || $fromRaw === '' || $toRaw === null || $toRaw === '' || $drawRaw === null || $drawRaw === '') {
+                    echo json_encode(['success' => false, 'message' => 'From Amount, To Amount and Drawdown Amount are all required.']);
+                    exit;
+                }
+
+                $fromVal = (float)$fromRaw;
+                $toVal   = (float)$toRaw;
+                $drawVal = (float)$drawRaw;
+
+                if ($toVal <= $fromVal) {
+                    echo json_encode(['success' => false, 'message' => 'To Amount must be greater than From Amount.']);
+                    exit;
+                }
+
+                $insertCols = [
+                    'developerid',
+                    'programme_id',
+                    'from_balance',
+                    'to_balance',
+                    'martingale_per_stage_drawdown_amount',
+                ];
+                $insertVals = [$userId, $programmeId, $fromVal, $toVal, $drawVal];
+
+                foreach ($effectiveGlobals as $gCol => $gVal) {
+                    $insertCols[] = $gCol;
+                    $insertVals[] = $gVal;
+                }
+
+                $colSql   = '`' . implode('`,`', $insertCols) . '`';
+                $placeSql = implode(',', array_fill(0, count($insertCols), '?'));
+                $sql = "INSERT INTO `$table` ($colSql) VALUES ($placeSql)";
+                try {
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute($insertVals);
+                    echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId(), 'message' => 'Range added.']);
+                } catch (PDOException $e) {
+                    if ((int)$e->getCode() === 23000) echo json_encode(['success' => false, 'message' => 'A range with that From Amount already exists.']);
+                    else echo json_encode(['success' => false, 'message' => 'Failed to add: ' . $e->getMessage()]);
+                }
+                exit;
+            }
+
+            if ($listAction === 'update') {
+                $rowId  = (int)($_POST['row_id'] ?? 0);
+                $rowRaw = $_POST['row'] ?? '';
+                $row = is_string($rowRaw) ? json_decode($rowRaw, true) : (is_array($rowRaw) ? $rowRaw : []);
+                if ($rowId <= 0 || !is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row.']); exit; }
+
+                $fromRaw   = $row['from_balance'] ?? null;
+                $toRaw     = $row['to_balance']   ?? null;
+                $drawRaw   = $row['martingale_per_stage_drawdown_amount'] ?? null;
+
+                if ($fromRaw === null || $fromRaw === '' || $toRaw === null || $toRaw === '' || $drawRaw === null || $drawRaw === '') {
+                    echo json_encode(['success' => false, 'message' => 'From Amount, To Amount and Drawdown Amount are all required.']);
+                    exit;
+                }
+
+                $fromVal = (float)$fromRaw;
+                $toVal   = (float)$toRaw;
+                $drawVal = (float)$drawRaw;
+
+                if ($toVal <= $fromVal) {
+                    echo json_encode(['success' => false, 'message' => 'To Amount must be greater than From Amount.']);
+                    exit;
+                }
+
+                $setParts = [
+                    '`from_balance` = ?',
+                    '`to_balance` = ?',
+                    '`martingale_per_stage_drawdown_amount` = ?'
+                ];
+                $setVals  = [$fromVal, $toVal, $drawVal];
+
+                foreach ($effectiveGlobals as $gCol => $gVal) {
+                    $setParts[] = "`$gCol` = ?";
+                    $setVals[]  = $gVal;
+                }
+
+                $setVals[] = $rowId;
+                $setVals[] = $userId;
+                $setVals[] = $programmeId;
+                $sql = "UPDATE `$table` SET " . implode(', ', $setParts) . " WHERE id = ? AND developerid = ? AND programme_id = ?";
+                try {
+                    $stmt = $pdo->prepare($sql); $stmt->execute($setVals);
+                    echo json_encode(['success' => true, 'message' => 'Range updated.']);
+                } catch (PDOException $e) {
+                    if ((int)$e->getCode() === 23000) echo json_encode(['success' => false, 'message' => 'A range with that From Amount already exists.']);
+                    else echo json_encode(['success' => false, 'message' => 'Failed to update: ' . $e->getMessage()]);
+                }
+                exit;
+            }
+
+            if ($listAction === 'delete') {
+                $rowId = (int)($_POST['row_id'] ?? 0);
+                if ($rowId <= 0) { echo json_encode(['success' => false, 'message' => 'Invalid row.']); exit; }
+                try {
+                    $stmt = $pdo->prepare("DELETE FROM `$table` WHERE id = ? AND developerid = ? AND programme_id = ?");
+                    $stmt->execute([$rowId, $userId, $programmeId]);
+                    echo json_encode(['success' => true, 'message' => 'Range deleted.']);
+                } catch (PDOException $e) { echo json_encode(['success' => false, 'message' => 'Failed to delete: ' . $e->getMessage()]); }
+                exit;
+            }
+
+            echo json_encode(['success' => false, 'message' => 'Unknown martingale action.']);
+            exit;
+        }
+
+        // ================================================================
+        // SIMPLE LIST TABLES
+        // ================================================================
         if (!array_key_exists($listKey, $LIST_TABLES)) {
             echo json_encode(['success' => false, 'message' => 'Unknown list table.']);
             exit;
@@ -478,6 +912,10 @@
             $rowRaw = $_POST['row'] ?? '';
             $row = is_string($rowRaw) ? json_decode($rowRaw, true) : (is_array($rowRaw) ? $rowRaw : []);
             if (!is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row data.']); exit; }
+
+            if ($listKey === 'restricted_dates' || $listKey === 'restricted_days') {
+                $row['timezone'] = $programmeTimezone;
+            }
 
             $insertCols = []; $insertVals = [];
             foreach ($cols as $colName => $colMeta) {
@@ -500,6 +938,11 @@
                     $v = trim((string)$v);
                     if (!preg_match('/^\d{2}:\d{2}(:\d{2})?$/', $v)) { echo json_encode(['success' => false, 'message' => 'Invalid time format for ' . $colMeta['label'] . '.']); exit; }
                     if (strlen($v) === 5) $v .= ':00';
+                } elseif ($colMeta['type'] === 'date') {
+                    $v = trim((string)$v);
+                    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) { echo json_encode(['success' => false, 'message' => 'Invalid date format for ' . $colMeta['label'] . '.']); exit; }
+                    $d = DateTime::createFromFormat('Y-m-d', $v);
+                    if (!$d || $d->format('Y-m-d') !== $v) { echo json_encode(['success' => false, 'message' => 'Invalid calendar date.']); exit; }
                 } else { $v = (string)$v; }
                 $insertCols[] = $colName; $insertVals[] = $v;
             }
@@ -519,8 +962,10 @@
                 $stmt->execute(array_merge([$userId, $programmeId], $insertVals));
                 echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId(), 'message' => 'Row added.']);
             } catch (PDOException $e) {
-                if ((int)$e->getCode() === 23000) echo json_encode(['success' => false, 'message' => 'A row with the same identifier already exists for this programme.']);
-                else echo json_encode(['success' => false, 'message' => 'Failed to add: ' . $e->getMessage()]);
+                if ((int)$e->getCode() === 23000) {
+                    if ($listKey === 'restricted_dates') echo json_encode(['success' => false, 'message' => 'That date is already restricted for this programme.']);
+                    else echo json_encode(['success' => false, 'message' => 'A row with the same identifier already exists for this programme.']);
+                } else echo json_encode(['success' => false, 'message' => 'Failed to add: ' . $e->getMessage()]);
             }
             exit;
         }
@@ -530,6 +975,10 @@
             $rowRaw = $_POST['row'] ?? '';
             $row = is_string($rowRaw) ? json_decode($rowRaw, true) : (is_array($rowRaw) ? $rowRaw : []);
             if ($rowId <= 0 || !is_array($row) || empty($row)) { echo json_encode(['success' => false, 'message' => 'Invalid row.']); exit; }
+
+            if ($listKey === 'restricted_dates' || $listKey === 'restricted_days') {
+                $row['timezone'] = $programmeTimezone;
+            }
 
             $setParts = []; $setVals = [];
             foreach ($cols as $colName => $colMeta) {
@@ -553,6 +1002,11 @@
                     $v = trim((string)$v);
                     if (!preg_match('/^\d{2}:\d{2}(:\d{2})?$/', $v)) { echo json_encode(['success' => false, 'message' => 'Invalid time format for ' . $colMeta['label'] . '.']); exit; }
                     if (strlen($v) === 5) $v .= ':00';
+                } elseif ($colMeta['type'] === 'date') {
+                    $v = trim((string)$v);
+                    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) { echo json_encode(['success' => false, 'message' => 'Invalid date format for ' . $colMeta['label'] . '.']); exit; }
+                    $d = DateTime::createFromFormat('Y-m-d', $v);
+                    if (!$d || $d->format('Y-m-d') !== $v) { echo json_encode(['success' => false, 'message' => 'Invalid calendar date.']); exit; }
                 } else { $v = (string)$v; }
                 $setParts[] = "`$colName` = ?"; $setVals[] = $v;
             }
@@ -571,8 +1025,10 @@
                 $stmt = $pdo->prepare($sql); $stmt->execute($setVals);
                 echo json_encode(['success' => true, 'message' => 'Row updated.']);
             } catch (PDOException $e) {
-                if ((int)$e->getCode() === 23000) echo json_encode(['success' => false, 'message' => 'A row with the same identifier already exists for this programme.']);
-                else echo json_encode(['success' => false, 'message' => 'Failed to update: ' . $e->getMessage()]);
+                if ((int)$e->getCode() === 23000) {
+                    if ($listKey === 'restricted_dates') echo json_encode(['success' => false, 'message' => 'That date is already restricted for this programme.']);
+                    else echo json_encode(['success' => false, 'message' => 'A row with the same identifier already exists for this programme.']);
+                } else echo json_encode(['success' => false, 'message' => 'Failed to update: ' . $e->getMessage()]);
             }
             exit;
         }
@@ -613,7 +1069,7 @@
         $listRows[$key] = fetchListRows($pdo, $def['table'], $userId, $programmeId);
     }
 
-    // ==================== FETCH REVENUE TARGET ROWS ====================
+    // ==================== FETCH REVENUE TARGET ROWS + GLOBALS ====================
     $revenueTargetRows = [];
     try {
         $stmt = $pdo->prepare("
@@ -640,12 +1096,564 @@
     $revenueWeeks = array_keys($revenueGrouped);
     sort($revenueWeeks);
 
+    $autoLossStreak = fetchLossStreakFromSignals($pdo, $programmeId);
+    $autoLossStreakDisplay = ($autoLossStreak === null) ? null : $autoLossStreak;
+
+    $globalSettings = readRevenueTargetGlobals(
+        $pdo,
+        $REVENUE_TARGET_TABLE,
+        $userId,
+        $programmeId,
+        $autoLossStreak
+    );
+
+    // ==================== FETCH MARTINGALE ====================
+    $martingaleRows = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT * FROM `$MARTINGALE_TABLE`
+            WHERE developerid = ? AND programme_id = ?
+            ORDER BY from_balance ASC, id ASC
+        ");
+        $stmt->execute([$userId, $programmeId]);
+        $martingaleRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) { $martingaleRows = []; }
+
+    $martingaleGlobals = readMartingaleGlobals(
+        $pdo,
+        $MARTINGALE_TABLE,
+        $userId,
+        $programmeId,
+        $MARTINGALE_GLOBAL_COLUMNS
+    );
+
+    // Keep only actual range rows (from_balance < to_balance). The placeholder
+    // globals row (0.00 → 0.00) inserted when no ranges exist is hidden from UI.
+    $martingaleRangeRows = [];
+    foreach ($martingaleRows as $mr) {
+        $fb = (float)$mr['from_balance'];
+        $tb = (float)$mr['to_balance'];
+        if ($tb > $fb) {
+            $martingaleRangeRows[] = $mr;
+        }
+    }
+
     $programmeName = $programme['program_name'] ?? 'Unnamed Programme';
 
     // ==================== SAFE JSON PAYLOADS ====================
     $JSON_FLAGS = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE;
     $jsonAccountMgmtColumns = json_encode($ACCOUNT_MGMT_COLUMNS, $JSON_FLAGS);
     $jsonListTables         = json_encode($LIST_TABLES,         $JSON_FLAGS);
+    $jsonMartingaleGlobals  = json_encode($MARTINGALE_GLOBAL_COLUMNS, $JSON_FLAGS);
+
+    // ==================== SHARED RENDERERS ====================
+    function renderListCard(string $listKey, array $listDef, array $rows, string $programmeTimezone = ''): string {
+        $isRestrictedDates = ($listKey === 'restricted_dates');
+        $isRestrictedDays  = ($listKey === 'restricted_days');
+
+        ob_start();
+        ?>
+        <section class="dd-card" id="dd-list-section-<?= htmlspecialchars($listKey) ?>">
+            <div class="dd-card-head">
+                <div>
+                    <h2 class="dd-card-title"><?= htmlspecialchars($listDef['label']) ?></h2>
+                    <p class="dd-card-subtitle">
+                        <?php if ($isRestrictedDates): ?>
+                            Add specific calendar dates. Any configured date that matches today
+                            locks trading for the entire day, regardless of the day-of-week rule below.
+                        <?php elseif ($isRestrictedDays): ?>
+                            Add a day and the from/to window during which trading is restricted.
+                            A row from 12:00 AM to 12:00 AM means the whole day is restricted.
+                            A day with no row means no restriction.
+                        <?php else: ?>
+                            Multiple rows are allowed per programme. Each row is stored independently.
+                        <?php endif; ?>
+                    </p>
+                </div>
+            </div>
+
+            <?php if ($isRestrictedDates || $isRestrictedDays): ?>
+                <div class="dd-tz-global">
+                    <i class="fa-solid fa-globe"></i>
+                    <span class="dd-tz-global-label">Timezone</span>
+                    <span class="dd-tz-global-value"><?= $programmeTimezone !== '' ? htmlspecialchars($programmeTimezone) : '—' ?></span>
+                </div>
+            <?php endif; ?>
+
+            <div class="dd-list-editor" data-list-key="<?= htmlspecialchars($listKey) ?>">
+                <?php if ($isRestrictedDates): ?>
+                    <button type="button" class="dd-list-add-btn"
+                            id="dd-date-add-trigger"
+                            onclick="ddDateOpenAdd()">
+                        <i class="fa-solid fa-calendar-plus"></i> Add restricted date
+                    </button>
+
+                    <div id="dd-date-add-form" style="display:none;"></div>
+                <?php else: ?>
+                    <button type="button" class="dd-list-add-btn"
+                            onclick="ddListOpenAdd('<?= htmlspecialchars($listKey) ?>')">
+                        <i class="fa-solid fa-plus"></i>
+                        <?php
+                            if ($isRestrictedDays) echo 'Add day to restrict';
+                            else echo 'Add new row';
+                        ?>
+                    </button>
+
+                    <div id="dd-list-add-<?= htmlspecialchars($listKey) ?>"></div>
+                <?php endif; ?>
+
+                <div class="dd-list-rows" id="dd-list-rows-<?= htmlspecialchars($listKey) ?>">
+                    <?php if (empty($rows)): ?>
+                        <div class="dd-list-row-empty">
+                            <?= $isRestrictedDates ? 'No restricted dates yet.' : 'No rows yet. Add one above.' ?>
+                        </div>
+                    <?php else: ?>
+                        <?php foreach ($rows as $row): ?>
+                            <div class="dd-list-row" data-row-id="<?= (int)$row['id'] ?>">
+                                <div class="dd-list-row-display">
+                                    <?php foreach ($listDef['columns'] as $cName => $cMeta): ?>
+                                        <div class="dd-row-field">
+                                            <span class="dd-row-field-label"><?= htmlspecialchars($cMeta['label']) ?></span>
+                                            <span class="dd-row-field-value">
+                                                <?php
+                                                    $v = $row[$cName] ?? '';
+                                                    if ($cMeta['type'] === 'decimal') {
+                                                        echo htmlspecialchars(number_format((float)$v, 2, '.', ''));
+                                                    } elseif ($cMeta['type'] === 'rr_decimal') {
+                                                        echo '1:' . htmlspecialchars(number_format((float)$v, 2, '.', ''));
+                                                    } elseif ($cMeta['type'] === 'decimal_null') {
+                                                        echo $v === null || $v === '' ? '∞' : htmlspecialchars(number_format((float)$v, 2, '.', ''));
+                                                    } elseif ($cMeta['type'] === 'bool') {
+                                                        echo ((int)$v) ? 'Yes' : 'No';
+                                                    } elseif ($cMeta['type'] === 'time') {
+                                                        echo htmlspecialchars(substr((string)$v, 0, 5));
+                                                    } else {
+                                                        echo htmlspecialchars((string)$v);
+                                                    }
+                                                ?>
+                                            </span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <div class="dd-list-row-actions">
+                                    <button type="button" class="dd-btn-mini dd-btn-edit"
+                                            onclick="<?= $isRestrictedDates
+                                                ? 'ddDateOpenEdit(' . (int)$row['id'] . ')'
+                                                : 'ddListOpenEdit(\'' . htmlspecialchars($listKey) . '\', ' . (int)$row['id'] . ')' ?>">
+                                        <i class="fa-solid fa-pen"></i> Edit
+                                    </button>
+                                    <button type="button" class="dd-btn-mini dd-btn-danger"
+                                            onclick="<?= $isRestrictedDates
+                                                ? 'ddDateDelete(' . (int)$row['id'] . ')'
+                                                : 'ddListDelete(\'' . htmlspecialchars($listKey) . '\', ' . (int)$row['id'] . ')' ?>">
+                                        <i class="fa-solid fa-trash"></i> Delete
+                                    </button>
+                                </div>
+                                <div id="dd-list-edit-<?= htmlspecialchars($listKey) ?>-<?= (int)$row['id'] ?>"></div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </section>
+        <?php
+        return ob_get_clean();
+    }
+
+    function renderRevenueTargetCard(array $revenueGrouped,
+                                     array $revenueWeeks,
+                                     array $globalSettings,
+                                     ?int  $autoLossStreak,
+                                     string $programmeName): string {
+        $validDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+        $gTargetDaily = (int)($globalSettings['target_daily_profit'] ?? 0);
+        $gIncMissed   = (int)($globalSettings['include_missed_days'] ?? 0);
+        $gIncToday    = (int)($globalSettings['include_current_day_as_owed'] ?? 0);
+
+        $lossStreakDisplay = ($autoLossStreak === null)
+            ? 'Not configured (auto-disabled)'
+            : (string)$autoLossStreak . ' consecutive losses allowed';
+
+        ob_start();
+        ?>
+        <section class="dd-card" id="dd-list-section-programme_revenue_target">
+            <div class="dd-card-head">
+                <div>
+                    <h2 class="dd-card-title">Daily Revenue Target</h2>
+                    <p class="dd-card-subtitle">
+                        Global settings apply to the entire programme. Below, define per-week, per-day,
+                        per-balance-range target rows. Each investor under this programme inherits these
+                        settings for their own <code>daily_target_revenue</code> tracking.
+                    </p>
+                </div>
+            </div>
+
+            <div class="dd-rt-globals" id="dd-rt-globals">
+                <div class="dd-rt-globals-head">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Target Settings</span>
+                </div>
+
+                <div class="dd-rt-globals-grid">
+                    <div class="dd-rt-global-item">
+                        <label class="dd-rt-global-label">Target Daily Profit</label>
+                        <select class="dd-input dd-select" id="dd-rt-global-target-daily">
+                            <option value="0" <?= $gTargetDaily === 0 ? 'selected' : '' ?>>No</option>
+                            <option value="1" <?= $gTargetDaily === 1 ? 'selected' : '' ?>>Yes</option>
+                        </select>
+                    </div>
+
+                    <div class="dd-rt-global-item">
+                        <label class="dd-rt-global-label">Include Missed Days</label>
+                        <select class="dd-input dd-select" id="dd-rt-global-inc-missed">
+                            <option value="0" <?= $gIncMissed === 0 ? 'selected' : '' ?>>No</option>
+                            <option value="1" <?= $gIncMissed === 1 ? 'selected' : '' ?>>Yes</option>
+                        </select>
+                    </div>
+
+                    <div class="dd-rt-global-item">
+                        <label class="dd-rt-global-label">Include Current Day as Owed</label>
+                        <select class="dd-input dd-select" id="dd-rt-global-inc-today">
+                            <option value="0" <?= $gIncToday === 0 ? 'selected' : '' ?>>No</option>
+                            <option value="1" <?= $gIncToday === 1 ? 'selected' : '' ?>>Yes</option>
+                        </select>
+                    </div>
+
+                    <div class="dd-rt-global-item dd-rt-global-item-readonly">
+                        <label class="dd-rt-global-label">Loss Streak Chances</label>
+                        <div class="dd-rt-global-readonly">
+                            <i class="fa-solid fa-link"></i>
+                            <span><?= htmlspecialchars($lossStreakDisplay) ?></span>
+                        </div>
+                        <div class="dd-rt-global-hint">
+                            Auto-synced from the signals provider challenge (consecutive expected loss).
+                        </div>
+                    </div>
+                </div>
+
+                <button type="button" class="dd-btn-primary" style="width:auto;margin-top:12px;"
+                        onclick="ddRtSaveGlobals()">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Target Settings
+                </button>
+            </div>
+
+            <div class="dd-list-editor" data-list-key="programme_revenue_target">
+
+                <button type="button" class="dd-list-add-btn" onclick="ddRtOpenAddWeek()">
+                    <i class="fa-solid fa-plus"></i> Add week
+                </button>
+                <div id="dd-rt-add-week-form"></div>
+
+                <div class="dd-rt-weeks">
+                    <?php if (empty($revenueWeeks)): ?>
+                        <div class="dd-list-row-empty">No revenue target rows yet. Add a week above.</div>
+                    <?php else: ?>
+                        <?php foreach ($revenueWeeks as $wk): ?>
+                            <?php $days = $revenueGrouped[$wk]; ?>
+                            <div class="dd-rt-week" data-week="<?= (int)$wk ?>">
+                                <div class="dd-rt-week-head">
+                                    <span class="dd-rt-week-title">Week <?= (int)$wk ?></span>
+                                    <div class="dd-rt-week-actions">
+                                        <button type="button" class="dd-btn-mini dd-btn-edit"
+                                                onclick="ddRtOpenAddDay(<?= (int)$wk ?>)">
+                                            <i class="fa-solid fa-plus"></i> Add day
+                                        </button>
+                                        <button type="button" class="dd-btn-mini dd-btn-danger"
+                                                onclick="ddRtDeleteWeek(<?= (int)$wk ?>)">
+                                            <i class="fa-solid fa-trash"></i> Delete week
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div id="dd-rt-add-day-<?= (int)$wk ?>"></div>
+
+                                <?php foreach ($validDays as $dayName): ?>
+                                    <?php if (!isset($days[$dayName])) continue; ?>
+                                    <?php $rows = $days[$dayName]; ?>
+                                    <div class="dd-rt-day" data-day="<?= htmlspecialchars($dayName) ?>">
+                                        <div class="dd-rt-day-head">
+                                            <span class="dd-rt-day-title"><?= htmlspecialchars($dayName) ?></span>
+                                            <div class="dd-rt-day-actions">
+                                                <button type="button" class="dd-btn-mini dd-btn-edit"
+                                                        onclick="ddRtOpenAddRow(<?= (int)$wk ?>, '<?= htmlspecialchars($dayName) ?>')">
+                                                    <i class="fa-solid fa-plus"></i> Add range
+                                                </button>
+                                                <button type="button" class="dd-btn-mini dd-btn-danger"
+                                                        onclick="ddRtDeleteDay(<?= (int)$wk ?>, '<?= htmlspecialchars($dayName) ?>')">
+                                                    <i class="fa-solid fa-trash"></i> Delete day
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div id="dd-rt-add-row-<?= (int)$wk ?>-<?= htmlspecialchars($dayName) ?>"></div>
+
+                                        <div class="dd-rt-rows">
+                                            <?php foreach ($rows as $r): ?>
+                                                <?php
+                                                    $rid = (int)$r['id'];
+                                                    $toBal = $r['to_balance'] === null || $r['to_balance'] === '' ? '∞' : number_format((float)$r['to_balance'], 2, '.', '');
+                                                ?>
+                                                <div class="dd-rt-row" data-row-id="<?= $rid ?>">
+                                                    <div class="dd-rt-row-display">
+                                                        <div class="dd-row-field">
+                                                            <span class="dd-row-field-label">From Balance</span>
+                                                            <span class="dd-row-field-value"><?= htmlspecialchars(number_format((float)$r['from_balance'], 2, '.', '')) ?></span>
+                                                        </div>
+                                                        <div class="dd-row-field">
+                                                            <span class="dd-row-field-label">To Balance</span>
+                                                            <span class="dd-row-field-value"><?= htmlspecialchars($toBal) ?></span>
+                                                        </div>
+                                                        <div class="dd-row-field">
+                                                            <span class="dd-row-field-label">Target Amount</span>
+                                                            <span class="dd-row-field-value"><?= htmlspecialchars(number_format((float)$r['target_amount'], 2, '.', '')) ?></span>
+                                                        </div>
+                                                        <div class="dd-row-field">
+                                                            <span class="dd-row-field-label">Pre Sum</span>
+                                                            <span class="dd-row-field-value"><?= ((int)$r['pre_pending_sum']) ? 'Yes' : 'No' ?></span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="dd-list-row-actions">
+                                                        <button type="button" class="dd-btn-mini dd-btn-edit"
+                                                                onclick="ddRtOpenEdit(<?= $rid ?>)">
+                                                            <i class="fa-solid fa-pen"></i> Edit
+                                                        </button>
+                                                        <button type="button" class="dd-btn-mini dd-btn-danger"
+                                                                onclick="ddRtDeleteRow(<?= $rid ?>)">
+                                                            <i class="fa-solid fa-trash"></i> Delete
+                                                        </button>
+                                                    </div>
+
+                                                    <div id="dd-rt-edit-<?= $rid ?>"></div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </section>
+        <?php
+        return ob_get_clean();
+    }
+
+    function renderAccountMgmtCard(array $ACCOUNT_MGMT_COLUMNS, array $accountMgmt, string $programmeName): string {
+        ob_start();
+        ?>
+        <section class="dd-card">
+            <div class="dd-card-head">
+                <div>
+                    <h2 class="dd-card-title">Account Management</h2>
+                    <p class="dd-card-subtitle">
+                        Each investor under you has exactly one row in the account management table.
+                        Saving here propagates to all of them for this programme.
+                    </p>
+                </div>
+                <button type="button" class="dd-btn-primary" style="width:auto;" id="saveAccountMgmtBtn" onclick="saveAccountManagement()">
+                    Save All
+                </button>
+            </div>
+
+            <div class="dd-am-note">
+                <strong>Note:</strong> Any change here will be applied to all investors under you for
+                <strong><?= htmlspecialchars($programmeName) ?></strong>. Every setting is a direct input or a dedicated table.
+            </div>
+
+            <div class="dd-am-list">
+                <?php foreach ($ACCOUNT_MGMT_COLUMNS as $col => $meta):
+                    $val = $accountMgmt[$col] ?? null;
+                ?>
+                    <div class="dd-am-item" data-col="<?= htmlspecialchars($col) ?>">
+                        <div class="dd-am-head">
+                            <label class="dd-am-label"><?= htmlspecialchars($meta['label']) ?></label>
+                        </div>
+                        <div class="dd-am-input-wrap">
+                            <?php if ($meta['type'] === 'bool'): ?>
+                                <select class="dd-input dd-am-input dd-select" data-col="<?= htmlspecialchars($col) ?>" data-type="bool">
+                                    <option value="0" <?= ((int)$val === 0) ? 'selected' : '' ?>>Disabled</option>
+                                    <option value="1" <?= ((int)$val === 1) ? 'selected' : '' ?>>Enabled</option>
+                                </select>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <button type="button" class="dd-btn-primary" id="saveAccountMgmtBtnBottom" onclick="saveAccountManagement()">
+                Save All Account Management
+            </button>
+        </section>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Martingale card — Global toggles at top + stage drawdown ranges below.
+     * Global fields live on every row (denormalized). Each stage range row
+     * carries its own From Amount, To Amount and Drawdown Amount.
+     */
+    function renderMartingaleCard(array $globalCols,
+                                  array $globals,
+                                  array $rangeRows,
+                                  string $programmeName): string {
+        ob_start();
+        ?>
+        <section class="dd-card" id="dd-list-section-trades_martingale">
+            <div class="dd-card-head">
+                <div>
+                    <h2 class="dd-card-title">Trades Martingale</h2>
+                    <p class="dd-card-subtitle">
+                        Configure the martingale strategy for <strong><?= htmlspecialchars($programmeName) ?></strong>.
+                        Global settings apply to every stage range below.
+                    </p>
+                </div>
+            </div>
+
+            <!-- ==================== GLOBAL SETTINGS ==================== -->
+            <div class="dd-mg-globals">
+                <div class="dd-mg-globals-head">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Global Settings</span>
+                </div>
+
+                <div class="dd-mg-globals-grid">
+                    <?php foreach ($globalCols as $col => $meta):
+                        $val = $globals[$col] ?? null;
+                    ?>
+                        <div class="dd-mg-global-item" data-col="<?= htmlspecialchars($col) ?>">
+                            <label class="dd-mg-global-label"><?= htmlspecialchars($meta['label']) ?></label>
+                            <?php if ($meta['type'] === 'bool'): ?>
+                                <select class="dd-input dd-select dd-mg-global-input"
+                                        data-col="<?= htmlspecialchars($col) ?>"
+                                        data-type="bool">
+                                    <option value="0" <?= ((int)$val === 0) ? 'selected' : '' ?>>No</option>
+                                    <option value="1" <?= ((int)$val === 1) ? 'selected' : '' ?>>Yes</option>
+                                </select>
+                            <?php elseif ($meta['type'] === 'enum'): ?>
+                                <select class="dd-input dd-select dd-mg-global-input"
+                                        data-col="<?= htmlspecialchars($col) ?>"
+                                        data-type="enum">
+                                    <?php
+                                        $opts = $meta['options'] ?? [];
+                                        $defVal = $meta['default'] ?? '';
+                                        if ($defVal === '') {
+                                            echo '<option value=""' . (($val === '' || $val === null) ? ' selected' : '') . '>— Select —</option>';
+                                        }
+                                        foreach ($opts as $o):
+                                            $selected = '';
+                                            if ($val !== null && $val !== '' && $val === $o) $selected = ' selected';
+                                            elseif (($val === null || $val === '') && $defVal === $o) $selected = ' selected';
+                                    ?>
+                                        <option value="<?= htmlspecialchars($o) ?>"<?= $selected ?>><?= htmlspecialchars($o) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php elseif ($meta['type'] === 'percent_string'): ?>
+                                <input type="text" class="dd-input dd-mg-global-input"
+                                       data-col="<?= htmlspecialchars($col) ?>"
+                                       data-type="percent_string"
+                                       value="<?= htmlspecialchars($val !== null && $val !== '' ? $val : '0%') ?>"
+                                       placeholder="e.g. 0%">
+                            <?php else: ?>
+                                <input type="text" class="dd-input dd-mg-global-input"
+                                       data-col="<?= htmlspecialchars($col) ?>"
+                                       data-type="text"
+                                       value="<?= htmlspecialchars((string)$val) ?>">
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <button type="button" class="dd-btn-primary" style="width:auto;margin-top:12px;"
+                        onclick="ddMgSaveGlobals()">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Global Settings
+                </button>
+            </div>
+
+            <!-- ==================== STAGE DRAWDOWN RANGES ==================== -->
+            <div class="dd-list-editor" data-list-key="trades_martingale">
+                <div class="dd-mg-ranges-head">
+                    <span>Per-Stage Drawdown Amount</span>
+                </div>
+
+                <button type="button" class="dd-list-add-btn" onclick="ddMgOpenAddRange()">
+                    <i class="fa-solid fa-plus"></i> Add range
+                </button>
+
+                <div id="dd-mg-add-range-form"></div>
+
+                <div class="dd-list-rows" id="dd-list-rows-trades_martingale">
+                    <?php if (empty($rangeRows)): ?>
+                        <div class="dd-list-row-empty">No stage ranges yet. Add one above.</div>
+                    <?php else: ?>
+                        <?php foreach ($rangeRows as $row): ?>
+                            <div class="dd-list-row" data-row-id="<?= (int)$row['id'] ?>">
+                                <div class="dd-list-row-display">
+                                    <div class="dd-row-field">
+                                        <span class="dd-row-field-label">From Amount</span>
+                                        <span class="dd-row-field-value"><?= htmlspecialchars(number_format((float)$row['from_balance'], 2, '.', '')) ?></span>
+                                    </div>
+                                    <div class="dd-row-field">
+                                        <span class="dd-row-field-label">To Amount</span>
+                                        <span class="dd-row-field-value"><?= htmlspecialchars(number_format((float)$row['to_balance'], 2, '.', '')) ?></span>
+                                    </div>
+                                    <div class="dd-row-field">
+                                        <span class="dd-row-field-label">Drawdown Amount</span>
+                                        <span class="dd-row-field-value"><?= htmlspecialchars(number_format((float)($row['martingale_per_stage_drawdown_amount'] ?? 0), 2, '.', '')) ?></span>
+                                    </div>
+                                </div>
+                                <div class="dd-list-row-actions">
+                                    <button type="button" class="dd-btn-mini dd-btn-edit"
+                                            onclick="ddMgOpenEditRange(<?= (int)$row['id'] ?>)">
+                                        <i class="fa-solid fa-pen"></i> Edit
+                                    </button>
+                                    <button type="button" class="dd-btn-mini dd-btn-danger"
+                                            onclick="ddMgDeleteRange(<?= (int)$row['id'] ?>)">
+                                        <i class="fa-solid fa-trash"></i> Delete
+                                    </button>
+                                </div>
+                                <div id="dd-mg-edit-<?= (int)$row['id'] ?>"></div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </section>
+        <?php
+        return ob_get_clean();
+    }
+
+    // ==================== BUILD ORDERED CARD STACK ====================
+    $cardsHtml = '';
+
+    foreach ($CARD_ORDER as $listKey) {
+        if ($listKey === '__revenue_target__') {
+            $cardsHtml .= renderRevenueTargetCard(
+                $revenueGrouped,
+                $revenueWeeks,
+                $globalSettings,
+                $autoLossStreakDisplay,
+                $programmeName
+            );
+            continue;
+        }
+        if ($listKey === '__martingale__') {
+            $cardsHtml .= renderMartingaleCard(
+                $MARTINGALE_GLOBAL_COLUMNS,
+                $martingaleGlobals,
+                $martingaleRangeRows,
+                $programmeName
+            );
+            continue;
+        }
+        if (!isset($LIST_TABLES[$listKey])) continue;
+        $cardsHtml .= renderListCard($listKey, $LIST_TABLES[$listKey], $listRows[$listKey] ?? [], $programmeTimezone);
+    }
+
+    $cardsHtml .= renderAccountMgmtCard($ACCOUNT_MGMT_COLUMNS, $accountMgmt, $programmeName);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -728,6 +1736,20 @@
     .dd-am-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
     .dd-am-label { font-size: 0.82rem; font-weight: 700; color: var(--spr-text); text-transform: uppercase; letter-spacing: 0.4px; }
     .dd-am-input-wrap { display: flex; flex-direction: column; gap: 8px; }
+
+    .dd-tz-global {
+        display: inline-flex; align-items: center; gap: 10px;
+        background: var(--spr-soft); border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px); padding: 10px 14px; margin-bottom: 14px;
+        font-size: 0.82rem;
+    }
+    .dd-tz-global i { color: var(--spr-accent); }
+    .dd-tz-global-label {
+        font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.6px;
+        font-weight: 800; color: var(--spr-muted);
+    }
+    .dd-tz-global-value { font-weight: 800; color: var(--spr-text); }
+
     .dd-list-editor { background: var(--spr-bg); border: 1px solid var(--spr-border); border-radius: var(--radius-sm, 10px); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
     body.dark-mode .dd-list-editor { background: rgba(255,255,255,0.03); }
     .dd-list-add-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 18px; border-radius: var(--radius-sm, 10px); background: var(--spr-soft); color: var(--spr-accent); border: 1px dashed var(--spr-accent); font-family: inherit; font-size: 0.82rem; font-weight: 800; cursor: pointer; transition: all 0.15s ease; align-self: flex-start; -webkit-tap-highlight-color: transparent; }
@@ -746,6 +1768,8 @@
     .dd-list-row-display .dd-row-field-value { font-size: 0.92rem; font-weight: 800; color: var(--spr-text); word-break: break-word; }
     .dd-list-row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .dd-list-row-empty { padding: 20px 14px; text-align: center; color: var(--spr-muted); font-size: 0.82rem; font-style: italic; border: 1px dashed var(--spr-border); border-radius: var(--radius-sm, 10px); }
+    .dd-list-row.is-draft { border-color: var(--spr-accent); border-style: dashed; background: var(--spr-soft); }
+    body.dark-mode .dd-list-row.is-draft { background: rgba(46,204,143,0.08); }
     .dd-time-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .dd-time-input { width: 60px; text-align: center; padding: 8px 6px !important; border: 1px solid var(--spr-border); border-radius: 8px; background: var(--spr-card); color: var(--spr-text); font-family: inherit; font-weight: 700; -webkit-appearance: none; appearance: none; }
     .dd-time-input:focus { outline: none; border-color: var(--spr-accent); box-shadow: 0 0 0 2px var(--spr-soft); }
@@ -756,30 +1780,6 @@
     .dd-rr-wrap:focus-within { border-color: var(--spr-accent); box-shadow: 0 0 0 3px var(--spr-soft); }
     .dd-rr-prefix { font-weight: 800; color: var(--spr-muted); padding-right: 4px; user-select: none; font-size: 16px !important; line-height: 1; }
     .dd-rr-input { flex: 1; border: none; outline: none; background: transparent; color: var(--spr-text); font-family: inherit; font-weight: 700; font-size: 16px !important; padding: 10px 0; min-width: 0; -webkit-appearance: none; appearance: none; }
-    .dd-rt-wrap { display: flex; flex-direction: column; gap: 16px; }
-    .dd-rt-week { background: var(--spr-bg); border: 1px solid var(--spr-border); border-radius: var(--radius-sm, 10px); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
-    .dd-rt-week-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-    .dd-rt-week-title { font-size: 0.95rem; font-weight: 800; color: var(--spr-text); display: flex; align-items: center; gap: 8px; }
-    .dd-rt-week-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .dd-rt-days { display: flex; flex-direction: column; gap: 10px; }
-    .dd-rt-day { background: var(--spr-card); border: 1px solid var(--spr-border); border-radius: var(--radius-sm, 10px); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-    .dd-rt-day-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-    .dd-rt-day-title { font-size: 0.85rem; font-weight: 800; color: var(--spr-text); display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 0.4px; }
-    .dd-rt-ranges { display: flex; flex-direction: column; gap: 8px; }
-    .dd-rt-range { background: var(--spr-bg); border: 1px solid var(--spr-border); border-radius: 8px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; }
-    .dd-rt-range-fields { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; }
-    .dd-rt-range-fields .dd-row-field { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
-    .dd-rt-range-fields .dd-row-field-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; color: var(--spr-muted); }
-    .dd-rt-range-fields .dd-row-field-value { font-size: 0.88rem; font-weight: 800; color: var(--spr-text); }
-    .dd-rt-range-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .dd-rt-empty { padding: 16px 14px; text-align: center; color: var(--spr-muted); font-size: 0.8rem; font-style: italic; border: 1px dashed var(--spr-border); border-radius: var(--radius-sm, 10px); }
-    .dd-rt-weeks-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
-    .dd-rt-week-tab { padding: 6px 12px; border-radius: 999px; background: var(--spr-bg); border: 1px solid var(--spr-border); color: var(--spr-text); font-family: inherit; font-size: 0.75rem; font-weight: 800; cursor: pointer; transition: all 0.15s ease; }
-    .dd-rt-week-tab:hover { border-color: var(--spr-accent); }
-    .dd-rt-week-tab.active { background: var(--spr-accent); color: #fff; border-color: var(--spr-accent); }
-    .dd-rt-new-week { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px; border: 1px dashed var(--spr-border); border-radius: var(--radius-sm, 10px); background: var(--spr-bg); }
-    .dd-rt-new-week label { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; color: var(--spr-muted); }
-    .dd-rt-new-week input { width: 90px; }
     .dd-input { width: 100%; box-sizing: border-box; padding: 10px 14px; border: 1px solid var(--spr-border); border-radius: var(--radius-sm, 10px); background: var(--spr-card); color: var(--spr-text); font-size: 16px !important; font-family: inherit; transition: border-color 0.2s ease, box-shadow 0.2s ease; -webkit-appearance: none; appearance: none; }
     .dd-input:focus { outline: none; border-color: var(--spr-accent); box-shadow: 0 0 0 3px var(--spr-soft); }
     .dd-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 24px; border-radius: var(--radius-sm, 10px); font-family: inherit; font-size: 0.88rem; font-weight: 800; cursor: pointer; border: none; background: var(--spr-accent); color: #fff; width: 100%; margin-top: 8px; }
@@ -809,6 +1809,108 @@
         .dd-list-editor { padding: 12px; }
         .dd-list-form { padding: 12px; }
         .dd-time-input { width: 52px; }
+    }
+
+    /* ============ REVENUE TARGET STYLES ============ */
+    .dd-rt-globals {
+        background: var(--spr-soft);
+        border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px);
+        padding: 14px 16px;
+        margin-bottom: 16px;
+    }
+    .dd-rt-globals-head {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 0.82rem; font-weight: 800; text-transform: uppercase;
+        letter-spacing: 0.5px; color: var(--spr-accent); margin-bottom: 12px;
+    }
+    .dd-rt-globals-head i { font-size: 0.9rem; }
+    .dd-rt-globals-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 12px;
+    }
+    .dd-rt-global-item { display: flex; flex-direction: column; gap: 5px; }
+    .dd-rt-global-label {
+        font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.4px;
+        font-weight: 800; color: var(--spr-muted);
+    }
+    .dd-rt-global-readonly {
+        display: flex; align-items: center; gap: 8px;
+        background: var(--spr-card); border: 1px dashed var(--spr-border);
+        border-radius: var(--radius-sm, 10px); padding: 10px 14px;
+        font-weight: 800; color: var(--spr-text); font-size: 0.88rem;
+    }
+    .dd-rt-global-readonly i { color: var(--spr-accent); }
+    .dd-rt-global-hint {
+        font-size: 0.68rem; color: var(--spr-muted); line-height: 1.4;
+        font-style: italic;
+    }
+
+    .dd-rt-weeks { display: flex; flex-direction: column; gap: 16px; margin-top: 6px; }
+    .dd-rt-week {
+        background: var(--spr-card); border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px); padding: 14px;
+    }
+    .dd-rt-week-head {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+    }
+    .dd-rt-week-title { font-size: 1rem; font-weight: 800; color: var(--spr-accent); text-transform: uppercase; letter-spacing: 0.6px; }
+    .dd-rt-week-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .dd-rt-day {
+        background: var(--spr-bg); border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px); padding: 10px 12px; margin-bottom: 10px;
+    }
+    body.dark-mode .dd-rt-day { background: rgba(255,255,255,0.03); }
+    .dd-rt-day:last-child { margin-bottom: 0; }
+    .dd-rt-day-head {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .dd-rt-day-title { font-size: 0.88rem; font-weight: 800; color: var(--spr-text); }
+    .dd-rt-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .dd-rt-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+    .dd-rt-row {
+        background: var(--spr-card); border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px); padding: 10px 12px;
+        display: flex; flex-direction: column; gap: 8px;
+    }
+    body.dark-mode .dd-rt-row { background: var(--spr-card); border-color: var(--spr-border); }
+    .dd-rt-row:hover { border-color: var(--spr-accent); }
+    .dd-rt-row-display { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+    .dd-rt-row-display .dd-row-field { display: flex; flex-direction: column; gap: 2px; min-width: 80px; }
+    .dd-rt-row-display .dd-row-field-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; color: var(--spr-muted); }
+    .dd-rt-row-display .dd-row-field-value { font-size: 0.88rem; font-weight: 800; color: var(--spr-text); }
+
+    /* ============ MARTINGALE STYLES ============ */
+    .dd-mg-globals {
+        background: var(--spr-soft);
+        border: 1px solid var(--spr-border);
+        border-radius: var(--radius-sm, 10px);
+        padding: 14px 16px;
+        margin-bottom: 16px;
+    }
+    .dd-mg-globals-head {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 0.82rem; font-weight: 800; text-transform: uppercase;
+        letter-spacing: 0.5px; color: var(--spr-accent); margin-bottom: 12px;
+    }
+    .dd-mg-globals-head i { font-size: 0.9rem; }
+    .dd-mg-globals-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+    }
+    .dd-mg-global-item { display: flex; flex-direction: column; gap: 5px; }
+    .dd-mg-global-label {
+        font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.4px;
+        font-weight: 800; color: var(--spr-muted);
+    }
+    .dd-mg-ranges-head {
+        font-size: 0.82rem; font-weight: 800; text-transform: uppercase;
+        letter-spacing: 0.5px; color: var(--spr-accent); margin-bottom: 4px;
+        display: flex; align-items: center; gap: 8px;
     }
 </style>
 </head>
@@ -840,276 +1942,7 @@
             </span>
         </div>
 
-        <section class="dd-card">
-            <div class="dd-card-head">
-                <div>
-                    <h2 class="dd-card-title">Account Management</h2>
-                    <p class="dd-card-subtitle">
-                        Each investor under you has exactly one row in the account management table.
-                        Saving here propagates to all of them for this programme.
-                    </p>
-                </div>
-                <button type="button" class="dd-btn-primary" style="width:auto;" id="saveAccountMgmtBtn" onclick="saveAccountManagement()">
-                    Save All
-                </button>
-            </div>
-
-            <div class="dd-am-note">
-                <strong>Note:</strong> Any change here will be applied to all investors under you for
-                <strong><?= htmlspecialchars($programmeName) ?></strong>. Every setting is a direct input or a dedicated table.
-            </div>
-
-            <div class="dd-am-list">
-                <?php foreach ($ACCOUNT_MGMT_COLUMNS as $col => $meta):
-                    $val = $accountMgmt[$col] ?? null;
-                ?>
-                    <div class="dd-am-item" data-col="<?= htmlspecialchars($col) ?>">
-                        <div class="dd-am-head">
-                            <label class="dd-am-label"><?= htmlspecialchars($meta['label']) ?></label>
-                        </div>
-                        <div class="dd-am-input-wrap">
-                            <?php if ($meta['type'] === 'bool'): ?>
-                                <select class="dd-input dd-am-input dd-select" data-col="<?= htmlspecialchars($col) ?>" data-type="bool">
-                                    <option value="0" <?= ((int)$val === 0) ? 'selected' : '' ?>>Disabled</option>
-                                    <option value="1" <?= ((int)$val === 1) ? 'selected' : '' ?>>Enabled</option>
-                                </select>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-
-            <button type="button" class="dd-btn-primary" id="saveAccountMgmtBtnBottom" onclick="saveAccountManagement()">
-                Save All Account Management
-            </button>
-        </section>
-
-        <!-- ============================================================
-             PROGRAMME REVENUE TARGET
-             ============================================================ -->
-        <section class="dd-card" id="dd-rt-section">
-            <div class="dd-card-head">
-                <div>
-                    <h2 class="dd-card-title">Programme Revenue Target</h2>
-                    <p class="dd-card-subtitle">
-                        Independent weeks. Each week can have any subset of days.
-                        Each day can have as many balance-range risk rows as you need.
-                    </p>
-                </div>
-            </div>
-
-            <?php if (!empty($revenueWeeks)): ?>
-                <div class="dd-rt-weeks-tabs" id="ddRtWeekTabs">
-                    <?php foreach ($revenueWeeks as $w): ?>
-                        <button type="button"
-                                class="dd-rt-week-tab <?= $w === $revenueWeeks[0] ? 'active' : '' ?>"
-                                data-week="<?= (int)$w ?>"
-                                onclick="ddRtSelectWeek(<?= (int)$w ?>)">
-                            Week <?= (int)$w ?>
-                        </button>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
-
-            <div class="dd-rt-new-week">
-                <label>Add a new week</label>
-                <input type="number" min="1" max="255" class="dd-input" id="ddRtNewWeekInput" value="<?= empty($revenueWeeks) ? 1 : (max($revenueWeeks) + 1) ?>">
-                <button type="button" class="dd-list-add-btn" onclick="ddRtCreateWeek()">
-                    <i class="fa-solid fa-plus"></i> Create Week
-                </button>
-            </div>
-
-            <div class="dd-rt-wrap" id="ddRtWeeksContainer">
-                <?php if (empty($revenueWeeks)): ?>
-                    <div class="dd-rt-empty">
-                        No weeks yet. Create a week above to start adding days and balance ranges.
-                    </div>
-                <?php else: ?>
-                    <?php foreach ($revenueWeeks as $wIndex => $w): ?>
-                        <div class="dd-rt-week"
-                             data-week="<?= (int)$w ?>"
-                             style="<?= $wIndex === 0 ? '' : 'display:none;' ?>"
-                             id="ddRtWeek-<?= (int)$w ?>">
-
-                            <div class="dd-rt-week-head">
-                                <div class="dd-rt-week-title">
-                                    <i class="fa-solid fa-calendar-week"></i>
-                                    Week <?= (int)$w ?>
-                                </div>
-                                <div class="dd-rt-week-actions">
-                                    <button type="button" class="dd-list-add-btn" style="padding:8px 14px;font-size:0.75rem;"
-                                            onclick="ddRtOpenAddDay(<?= (int)$w ?>)">
-                                        <i class="fa-solid fa-plus"></i> Add Day
-                                    </button>
-                                    <button type="button" class="dd-btn-mini dd-btn-danger"
-                                            onclick="ddRtDeleteWeek(<?= (int)$w ?>)">
-                                        <i class="fa-solid fa-trash"></i> Delete Week
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div id="ddRtAddDay-<?= (int)$w ?>"></div>
-
-                            <div class="dd-rt-days" id="ddRtDays-<?= (int)$w ?>">
-                                <?php
-                                    $daysOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-                                    $presentDays = isset($revenueGrouped[$w]) ? array_keys($revenueGrouped[$w]) : [];
-                                    usort($presentDays, function($a, $b) use ($daysOrder) {
-                                        return array_search($a, $daysOrder, true) <=> array_search($b, $daysOrder, true);
-                                    });
-                                ?>
-                                <?php if (empty($presentDays)): ?>
-                                    <div class="dd-rt-empty">No days in this week yet. Add a day above.</div>
-                                <?php else: ?>
-                                    <?php foreach ($presentDays as $d): ?>
-                                        <div class="dd-rt-day" data-week="<?= (int)$w ?>" data-day="<?= htmlspecialchars($d) ?>">
-                                            <div class="dd-rt-day-head">
-                                                <div class="dd-rt-day-title">
-                                                    <i class="fa-solid fa-calendar-day"></i>
-                                                    <?= htmlspecialchars($d) ?>
-                                                </div>
-                                                <div class="dd-rt-day-actions">
-                                                    <button type="button" class="dd-btn-mini dd-btn-edit"
-                                                            onclick="ddRtOpenAddRange(<?= (int)$w ?>, '<?= htmlspecialchars($d) ?>')">
-                                                        <i class="fa-solid fa-plus"></i> Add Range
-                                                    </button>
-                                                    <button type="button" class="dd-btn-mini dd-btn-danger"
-                                                            onclick="ddRtDeleteDay(<?= (int)$w ?>, '<?= htmlspecialchars($d) ?>')">
-                                                        <i class="fa-solid fa-trash"></i> Delete Day
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div id="ddRtAddRange-<?= (int)$w ?>-<?= htmlspecialchars($d) ?>"></div>
-
-                                            <div class="dd-rt-ranges" id="ddRtRanges-<?= (int)$w ?>-<?= htmlspecialchars($d) ?>">
-                                                <?php foreach ($revenueGrouped[$w][$d] as $r):
-                                                    $id = (int)$r['id'];
-                                                    $from = (float)$r['from_balance'];
-                                                    $to   = $r['to_balance'] === null ? null : (float)$r['to_balance'];
-                                                    $risk = (float)$r['risk_amount'];
-                                                    $pre  = (int)$r['pre_pending_sum'];
-                                                ?>
-                                                    <div class="dd-rt-range" data-range-id="<?= $id ?>">
-                                                        <div class="dd-rt-range-fields">
-                                                            <div class="dd-row-field">
-                                                                <span class="dd-row-field-label">From</span>
-                                                                <span class="dd-row-field-value"><?= htmlspecialchars(number_format($from, 2, '.', '')) ?></span>
-                                                            </div>
-                                                            <div class="dd-row-field">
-                                                                <span class="dd-row-field-label">To</span>
-                                                                <span class="dd-row-field-value"><?= $to === null ? '∞' : htmlspecialchars(number_format($to, 2, '.', '')) ?></span>
-                                                            </div>
-                                                            <div class="dd-row-field">
-                                                                <span class="dd-row-field-label">Risk Amount</span>
-                                                                <span class="dd-row-field-value"><?= htmlspecialchars(number_format($risk, 2, '.', '')) ?></span>
-                                                            </div>
-                                                            <div class="dd-row-field">
-                                                                <span class="dd-row-field-label">Pre-Pending Sum</span>
-                                                                <span class="dd-row-field-value"><?= $pre ? 'Yes' : 'No' ?></span>
-                                                            </div>
-                                                        </div>
-                                                        <div class="dd-rt-range-actions">
-                                                            <button type="button" class="dd-btn-mini dd-btn-edit"
-                                                                    onclick="ddRtOpenEditRange(<?= $id ?>, <?= (int)$w ?>, '<?= htmlspecialchars($d) ?>')">
-                                                                <i class="fa-solid fa-pen"></i> Edit
-                                                            </button>
-                                                            <button type="button" class="dd-btn-mini dd-btn-danger"
-                                                                    onclick="ddRtDeleteRange(<?= $id ?>)">
-                                                                <i class="fa-solid fa-trash"></i> Delete
-                                                            </button>
-                                                        </div>
-                                                        <div id="ddRtEditRange-<?= $id ?>"></div>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
-        </section>
-
-        <!-- ============================================================
-             SIMPLE LIST-TABLE SECTIONS
-             ============================================================ -->
-        <?php foreach ($LIST_TABLES as $listKey => $listDef): ?>
-            <section class="dd-card" id="dd-list-section-<?= htmlspecialchars($listKey) ?>">
-                <div class="dd-card-head">
-                    <div>
-                        <h2 class="dd-card-title"><?= htmlspecialchars($listDef['label']) ?></h2>
-                        <p class="dd-card-subtitle">
-                            Multiple rows are allowed per programme. Each row is stored independently.
-                        </p>
-                    </div>
-                </div>
-
-                <div class="dd-list-editor" data-list-key="<?= htmlspecialchars($listKey) ?>">
-                    <button type="button" class="dd-list-add-btn"
-                            onclick="ddListOpenAdd('<?= htmlspecialchars($listKey) ?>')">
-                        <i class="fa-solid fa-plus"></i>
-                        <?php
-                            if ($listKey === 'restricted_days') echo 'Add day to restrict';
-                            elseif ($listKey === 'trades_martingale') echo 'Add new balance range';
-                            elseif (strpos($listKey, 'balance') !== false || strpos($listKey, 'risk') !== false) echo 'Add new balance range risk';
-                            else echo 'Add new row';
-                        ?>
-                    </button>
-
-                    <div id="dd-list-add-<?= htmlspecialchars($listKey) ?>"></div>
-
-                    <div class="dd-list-rows" id="dd-list-rows-<?= htmlspecialchars($listKey) ?>">
-                        <?php if (empty($listRows[$listKey])): ?>
-                            <div class="dd-list-row-empty">No rows yet. Add one above.</div>
-                        <?php else: ?>
-                            <?php foreach ($listRows[$listKey] as $row): ?>
-                                <div class="dd-list-row" data-row-id="<?= (int)$row['id'] ?>">
-                                    <div class="dd-list-row-display">
-                                        <?php foreach ($listDef['columns'] as $cName => $cMeta): ?>
-                                            <div class="dd-row-field">
-                                                <span class="dd-row-field-label"><?= htmlspecialchars($cMeta['label']) ?></span>
-                                                <span class="dd-row-field-value">
-                                                    <?php
-                                                        $v = $row[$cName] ?? '';
-                                                        if ($cMeta['type'] === 'decimal') {
-                                                            echo htmlspecialchars(number_format((float)$v, 2, '.', ''));
-                                                        } elseif ($cMeta['type'] === 'rr_decimal') {
-                                                            echo '1:' . htmlspecialchars(number_format((float)$v, 2, '.', ''));
-                                                        } elseif ($cMeta['type'] === 'decimal_null') {
-                                                            echo $v === null || $v === '' ? '∞' : htmlspecialchars(number_format((float)$v, 2, '.', ''));
-                                                        } elseif ($cMeta['type'] === 'bool') {
-                                                            echo ((int)$v) ? 'Yes' : 'No';
-                                                        } elseif ($cMeta['type'] === 'time') {
-                                                            echo htmlspecialchars(substr((string)$v, 0, 5));
-                                                        } else {
-                                                            echo htmlspecialchars((string)$v);
-                                                        }
-                                                    ?>
-                                                </span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                    <div class="dd-list-row-actions">
-                                        <button type="button" class="dd-btn-mini dd-btn-edit"
-                                                onclick="ddListOpenEdit('<?= htmlspecialchars($listKey) ?>', <?= (int)$row['id'] ?>)">
-                                            <i class="fa-solid fa-pen"></i> Edit
-                                        </button>
-                                        <button type="button" class="dd-btn-mini dd-btn-danger"
-                                                onclick="ddListDelete('<?= htmlspecialchars($listKey) ?>', <?= (int)$row['id'] ?>)">
-                                            <i class="fa-solid fa-trash"></i> Delete
-                                        </button>
-                                    </div>
-                                    <div id="dd-list-edit-<?= htmlspecialchars($listKey) ?>-<?= (int)$row['id'] ?>"></div>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </section>
-        <?php endforeach; ?>
+        <?= $cardsHtml ?>
 
     </div>
 
@@ -1129,30 +1962,28 @@
 
 <div id="ddSaveToast" class="dd-save-toast"></div>
 
-<!-- ============================================================
-     JSON config for JavaScript — separate tags, each on its own
-     line, with hex-escaped content so nothing can break the page.
-     ============================================================ -->
 <script type="application/json" id="ddAmColumnsData"><?= $jsonAccountMgmtColumns ?></script>
 <script type="application/json" id="ddListTablesData"><?= $jsonListTables ?></script>
+<script type="application/json" id="ddMartingaleGlobalsData"><?= $jsonMartingaleGlobals ?></script>
 
 <script>
 (function () {
     'use strict';
 
-    // ---------------- Config from JSON script tags ----------------
     var ACCOUNT_MGMT_COLUMNS = {};
     var LIST_TABLES = {};
+    var MARTINGALE_GLOBAL_COLUMNS = {};
     try {
         var elAm = document.getElementById('ddAmColumnsData');
         var elLt = document.getElementById('ddListTablesData');
+        var elMg = document.getElementById('ddMartingaleGlobalsData');
         ACCOUNT_MGMT_COLUMNS = elAm ? JSON.parse(elAm.textContent) : {};
         LIST_TABLES = elLt ? JSON.parse(elLt.textContent) : {};
+        MARTINGALE_GLOBAL_COLUMNS = elMg ? JSON.parse(elMg.textContent) : {};
     } catch (err) {
         console.error('Failed to parse embedded config:', err);
     }
 
-    // ---------------- Back navigation ----------------
     window.ddGoBack = function () {
         try {
             if (window.parent && window.parent !== window) {
@@ -1163,7 +1994,6 @@
         window.location.href = 'programme_menu.php';
     };
 
-    // ---------------- Theme sync ----------------
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
         if (e.data.type === 'theme') {
@@ -1172,7 +2002,6 @@
     });
     try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
 
-    // ---------------- Modal → shell bridge ----------------
     function notifyParentModal(open) {
         try {
             if (window.parent && window.parent !== window) {
@@ -1181,7 +2010,6 @@
         } catch (e) {}
     }
 
-    // ---------------- Helpers ----------------
     function escapeHtml(t) {
         var d = document.createElement('div');
         d.textContent = t == null ? '' : String(t);
@@ -1201,7 +2029,6 @@
         document.body.style.overflow = '';
     }
 
-    // ---------------- Toast ----------------
     var _toastTimer = null;
     function showToast(msg, isError) {
         var t = document.getElementById('ddSaveToast');
@@ -1213,7 +2040,6 @@
         _toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
     }
 
-    // ---------------- Alert modal ----------------
     function showDdAlert(msg, title) {
         document.getElementById('ddAlertTitle').textContent = title || 'Notice';
         document.getElementById('ddAlertMessage').textContent = msg == null ? '' : String(msg);
@@ -1227,7 +2053,6 @@
         notifyParentModal(false);
     }
 
-    // ---------------- Account management save ----------------
     function saveAccountManagement() {
         var btn = document.getElementById('saveAccountMgmtBtn');
         var btn2 = document.getElementById('saveAccountMgmtBtnBottom');
@@ -1340,6 +2165,8 @@
                 html += '<option value="AM"' + (ap === 'AM' ? ' selected' : '') + '>AM</option>';
                 html += '<option value="PM"' + (ap === 'PM' ? ' selected' : '') + '>PM</option>';
                 html += '</select></div>';
+            } else if (meta.type === 'date') {
+                html += '<input type="date" class="dd-input" id="' + id + '" value="' + escapeHtml(val) + '">';
             } else if (meta.type === 'decimal') {
                 html += '<input type="number" step="0.01" class="dd-input" id="' + id + '" value="' + escapeHtml(val !== '' ? val : '0.00') + '">';
             } else if (meta.type === 'decimal_null') {
@@ -1417,6 +2244,11 @@
                 var ap = apEl.value;
                 var h24 = hh % 12; if (ap === 'PM') h24 += 12;
                 row[colName] = ('0' + h24).slice(-2) + ':' + ('0' + mm).slice(-2) + ':00';
+            } else if (meta.type === 'date') {
+                var elD = document.getElementById(id);
+                var vD = elD ? String(elD.value || '').trim() : '';
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(vD)) { showDdAlert('Please pick a valid date.', 'Invalid date'); return null; }
+                row[colName] = vD;
             } else if (meta.type === 'decimal' || meta.type === 'rr_decimal') {
                 var el2 = document.getElementById(id);
                 var raw = el2 ? el2.value : '';
@@ -1509,6 +2341,8 @@
             ddListRenderRows(listKey, data.rows || []);
             var addContainer = document.getElementById('dd-list-add-' + listKey);
             if (addContainer) addContainer.innerHTML = '';
+            var dateAddForm = document.getElementById('dd-date-add-form');
+            if (dateAddForm) { dateAddForm.innerHTML = ''; dateAddForm.style.display = 'none'; }
         })
         .catch(function () {});
     }
@@ -1519,8 +2353,12 @@
         var container = document.getElementById('dd-list-rows-' + listKey);
         if (!container) return;
 
+        var isRestrictedDates = (listKey === 'restricted_dates');
+
         if (!rows.length) {
-            container.innerHTML = '<div class="dd-list-row-empty">No rows yet. Add one above.</div>';
+            container.innerHTML = '<div class="dd-list-row-empty">' +
+                (isRestrictedDates ? 'No restricted dates yet.' : 'No rows yet. Add one above.') +
+                '</div>';
             return;
         }
 
@@ -1546,8 +2384,13 @@
             });
             html += '</div>';
             html += '<div class="dd-list-row-actions">';
-            html += '<button type="button" class="dd-btn-mini dd-btn-edit" onclick="ddListOpenEdit(\'' + escapeAttr(listKey) + '\',' + row.id + ')"><i class="fa-solid fa-pen"></i> Edit</button>';
-            html += '<button type="button" class="dd-btn-mini dd-btn-danger" onclick="ddListDelete(\'' + escapeAttr(listKey) + '\',' + row.id + ')"><i class="fa-solid fa-trash"></i> Delete</button>';
+            if (isRestrictedDates) {
+                html += '<button type="button" class="dd-btn-mini dd-btn-edit" onclick="ddDateOpenEdit(' + row.id + ')"><i class="fa-solid fa-pen"></i> Edit</button>';
+                html += '<button type="button" class="dd-btn-mini dd-btn-danger" onclick="ddDateDelete(' + row.id + ')"><i class="fa-solid fa-trash"></i> Delete</button>';
+            } else {
+                html += '<button type="button" class="dd-btn-mini dd-btn-edit" onclick="ddListOpenEdit(\'' + escapeAttr(listKey) + '\',' + row.id + ')"><i class="fa-solid fa-pen"></i> Edit</button>';
+                html += '<button type="button" class="dd-btn-mini dd-btn-danger" onclick="ddListDelete(\'' + escapeAttr(listKey) + '\',' + row.id + ')"><i class="fa-solid fa-trash"></i> Delete</button>';
+            }
             html += '</div>';
             html += '<div id="dd-list-edit-' + listKey + '-' + row.id + '"></div>';
             html += '</div>';
@@ -1555,210 +2398,406 @@
         container.innerHTML = html;
     }
 
-    // ---------------- Programme Revenue Target ----------------
-    var REVENUE_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    // ---------------- Restricted Dates ----------------
+    window.ddDateOpenAdd = function () {
+        var c = document.getElementById('dd-date-add-form');
+        if (!c) return;
+        if (c.innerHTML.trim() !== '') {
+            c.innerHTML = '';
+            c.style.display = 'none';
+            return;
+        }
+        c.innerHTML = '' +
+            '<div class="dd-list-form">' +
+              '<div class="dd-list-form-row">' +
+                '<label>Date</label>' +
+                '<input type="date" class="dd-input" id="dd-restricted-date-input">' +
+              '</div>' +
+              '<div class="dd-list-form-actions">' +
+                '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddDateMark()"><i class="fa-solid fa-check"></i> Add</button>' +
+                '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddDateCancelAdd()">Cancel</button>' +
+              '</div>' +
+            '</div>';
+        c.style.display = 'block';
+    };
 
-    function ddRtSelectWeek(weekNo) {
-        document.querySelectorAll('.dd-rt-week-tab').forEach(function (t) {
-            t.classList.toggle('active', parseInt(t.getAttribute('data-week'), 10) === weekNo);
-        });
-        document.querySelectorAll('.dd-rt-week').forEach(function (w) {
-            w.style.display = (parseInt(w.getAttribute('data-week'), 10) === weekNo) ? '' : 'none';
-        });
-    }
+    window.ddDateCancelAdd = function () {
+        var c = document.getElementById('dd-date-add-form');
+        if (c) { c.innerHTML = ''; c.style.display = 'none'; }
+    };
 
-    function ddRtCreateWeek() {
-        var input = document.getElementById('ddRtNewWeekInput');
+    window.ddDateMark = function () {
+        var input = document.getElementById('dd-restricted-date-input');
         if (!input) return;
-        var weekNo = parseInt(input.value, 10);
-        if (isNaN(weekNo) || weekNo < 1 || weekNo > 255) {
-            showDdAlert('Week number must be between 1 and 255.', 'Invalid week');
+        var v = String(input.value || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            showDdAlert('Please pick a valid date.', 'Missing date');
             return;
         }
-        var existing = document.getElementById('ddRtWeek-' + weekNo);
-        if (existing) { ddRtSelectWeek(weekNo); return; }
 
-        var container = document.getElementById('ddRtWeeksContainer');
-        if (!container) return;
-        var empty = container.querySelector('.dd-rt-empty');
+        var list = document.getElementById('dd-list-rows-restricted_dates');
+        if (!list) return;
+
+        var empty = list.querySelector('.dd-list-row-empty');
         if (empty) empty.remove();
 
-        var tabBar = document.getElementById('ddRtWeekTabs');
-        if (!tabBar) {
-            tabBar = document.createElement('div');
-            tabBar.className = 'dd-rt-weeks-tabs';
-            tabBar.id = 'ddRtWeekTabs';
-            container.parentNode.insertBefore(tabBar, container);
+        var row = document.createElement('div');
+        row.className = 'dd-list-row is-draft';
+        row.innerHTML = '' +
+            '<div class="dd-list-row-display">' +
+              '<div class="dd-row-field">' +
+                '<span class="dd-row-field-label">Date</span>' +
+                '<span class="dd-row-field-value">' + escapeHtml(v) + '</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="dd-list-row-actions">' +
+              '<button type="button" class="dd-btn-mini dd-btn-save" data-draft-action="save"><i class="fa-solid fa-floppy-disk"></i> Save</button>' +
+              '<button type="button" class="dd-btn-mini dd-btn-cancel" data-draft-action="cancel">Cancel</button>' +
+            '</div>';
+
+        row.querySelector('[data-draft-action="save"]').addEventListener('click', function () {
+            ddDateCommitDraft(row, v);
+        });
+        row.querySelector('[data-draft-action="cancel"]').addEventListener('click', function () {
+            ddDateDiscardDraft(row);
+        });
+
+        list.appendChild(row);
+
+        var c = document.getElementById('dd-date-add-form');
+        if (c) { c.innerHTML = ''; c.style.display = 'none'; }
+    };
+
+    function ddDateDiscardDraft(rowEl) {
+        if (!rowEl) return;
+        rowEl.remove();
+
+        var list = document.getElementById('dd-list-rows-restricted_dates');
+        if (list && !list.querySelector('.dd-list-row')) {
+            list.innerHTML = '<div class="dd-list-row-empty">No restricted dates yet.</div>';
         }
-
-        var tab = document.createElement('button');
-        tab.type = 'button';
-        tab.className = 'dd-rt-week-tab';
-        tab.setAttribute('data-week', weekNo);
-        tab.textContent = 'Week ' + weekNo;
-        tab.onclick = function () { ddRtSelectWeek(weekNo); };
-        tabBar.appendChild(tab);
-
-        var weekHtml = ''
-            + '<div class="dd-rt-week-head">'
-            +   '<div class="dd-rt-week-title"><i class="fa-solid fa-calendar-week"></i> Week ' + weekNo + '</div>'
-            +   '<div class="dd-rt-week-actions">'
-            +     '<button type="button" class="dd-list-add-btn" style="padding:8px 14px;font-size:0.75rem;" onclick="ddRtOpenAddDay(' + weekNo + ')"><i class="fa-solid fa-plus"></i> Add Day</button>'
-            +     '<button type="button" class="dd-btn-mini dd-btn-danger" onclick="ddRtDeleteWeek(' + weekNo + ')"><i class="fa-solid fa-trash"></i> Delete Week</button>'
-            +   '</div>'
-            + '</div>'
-            + '<div id="ddRtAddDay-' + weekNo + '"></div>'
-            + '<div class="dd-rt-days" id="ddRtDays-' + weekNo + '">'
-            +   '<div class="dd-rt-empty">No days in this week yet. Add a day above.</div>'
-            + '</div>';
-
-        var weekEl = document.createElement('div');
-        weekEl.className = 'dd-rt-week';
-        weekEl.setAttribute('data-week', weekNo);
-        weekEl.id = 'ddRtWeek-' + weekNo;
-        weekEl.innerHTML = weekHtml;
-        container.appendChild(weekEl);
-
-        input.value = weekNo + 1;
-        ddRtSelectWeek(weekNo);
     }
 
-    function ddRtOpenAddDay(weekNo) {
-        var c = document.getElementById('ddRtAddDay-' + weekNo);
+    function ddDateCommitDraft(rowEl, dateVal) {
+        if (!rowEl) return;
+        var saveBtn = rowEl.querySelector('[data-draft-action="save"]');
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving'; }
+
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=add&list_key=restricted_dates&row=' + encodeURIComponent(JSON.stringify({ restricted_date: dateVal }))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                showToast('Restricted date added.');
+                ddListReload('restricted_dates');
+            } else {
+                showDdAlert((data && data.message) || 'Failed to add restricted date.', 'Error');
+                if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save'; }
+            }
+        })
+        .catch(function () {
+            showDdAlert('Network error.', 'Error');
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save'; }
+        });
+    }
+
+    window.ddDateOpenEdit = function (rowId) {
+        var rowEl = document.querySelector('#dd-list-rows-restricted_dates .dd-list-row[data-row-id="' + rowId + '"]');
+        if (!rowEl) return;
+        var ec = document.getElementById('dd-list-edit-restricted_dates-' + rowId);
+        if (!ec) return;
+        if (ec.innerHTML.trim() !== '') { ec.innerHTML = ''; return; }
+
+        var dateVal = '';
+        var vEl = rowEl.querySelector('.dd-row-field-value');
+        if (vEl) dateVal = vEl.textContent.trim();
+
+        ec.innerHTML = '' +
+            '<div class="dd-list-form">' +
+              '<div class="dd-list-form-row">' +
+                '<label>Date</label>' +
+                '<input type="date" class="dd-input" id="dd-restricted-date-edit-' + rowId + '" value="' + escapeHtml(dateVal) + '">' +
+              '</div>' +
+              '<div class="dd-list-form-actions">' +
+                '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddDateSaveEdit(' + rowId + ')"><i class="fa-solid fa-floppy-disk"></i> Save</button>' +
+                '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddDateCancelEdit(' + rowId + ')">Cancel</button>' +
+              '</div>' +
+            '</div>';
+    };
+
+    window.ddDateCancelEdit = function (rowId) {
+        var c = document.getElementById('dd-list-edit-restricted_dates-' + rowId);
+        if (c) c.innerHTML = '';
+    };
+
+    window.ddDateSaveEdit = function (rowId) {
+        var input = document.getElementById('dd-restricted-date-edit-' + rowId);
+        if (!input) return;
+        var v = String(input.value || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            showDdAlert('Please pick a valid date.', 'Invalid date');
+            return;
+        }
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=update&list_key=restricted_dates&row_id=' + encodeURIComponent(rowId) + '&row=' + encodeURIComponent(JSON.stringify({ restricted_date: v }))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                showToast('Restricted date updated.');
+                ddListReload('restricted_dates');
+            } else {
+                showDdAlert((data && data.message) || 'Failed to update restricted date.', 'Error');
+            }
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddDateDelete = function (rowId) {
+        if (!confirm('Delete this restricted date? This cannot be undone.')) return;
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=delete&list_key=restricted_dates&row_id=' + encodeURIComponent(rowId)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) { showToast('Restricted date deleted.'); ddListReload('restricted_dates'); }
+            else showDdAlert((data && data.message) || 'Failed to delete date.', 'Error');
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    /* ================================================================
+       PROGRAMME REVENUE TARGET
+       ================================================================ */
+
+    var VALID_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+    window.ddRtSaveGlobals = function () {
+        var td  = document.getElementById('dd-rt-global-target-daily');
+        var im  = document.getElementById('dd-rt-global-inc-missed');
+        var ic  = document.getElementById('dd-rt-global-inc-today');
+        if (!td || !im || !ic) return;
+
+        var body = 'list_action=save_globals'
+                 + '&list_key=programme_revenue_target'
+                 + '&target_daily_profit='         + encodeURIComponent(td.value === '1' ? 1 : 0)
+                 + '&include_missed_days='         + encodeURIComponent(im.value === '1' ? 1 : 0)
+                 + '&include_current_day_as_owed=' + encodeURIComponent(ic.value === '1' ? 1 : 0);
+
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                showToast('Global settings saved.');
+                window.location.reload();
+            } else {
+                showDdAlert((data && data.message) || 'Failed to save global settings.', 'Error');
+            }
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddRtOpenAddWeek = function () {
+        var c = document.getElementById('dd-rt-add-week-form');
         if (!c) return;
         if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
 
-        var html = '<div class="dd-list-form">'
-            + '<div class="dd-list-form-row">'
-            +   '<label>Day</label>'
-            +   '<select class="dd-input dd-select" id="ddRtNewDaySelect-' + weekNo + '">'
-            +     '<option value="">— Select day —</option>';
-        REVENUE_DAYS.forEach(function (d) { html += '<option value="' + d + '">' + d + '</option>'; });
-        html +=   '</select></div>'
-            + '<div class="dd-list-form-actions">'
-            +   '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtConfirmAddDay(' + weekNo + ')"><i class="fa-solid fa-plus"></i> Add Day</button>'
-            +   '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelAddDay(' + weekNo + ')">Cancel</button>'
-            + '</div></div>';
-        c.innerHTML = html;
-    }
+        c.innerHTML = '' +
+            '<div class="dd-list-form">' +
+              '<div class="dd-list-form-row">' +
+                '<label>Week No</label>' +
+                '<input type="number" min="1" max="52" class="dd-input" id="dd-rt-new-week-no" value="1">' +
+              '</div>' +
+              '<div class="dd-list-form-row">' +
+                '<label>Day</label>' +
+                '<select class="dd-input dd-select" id="dd-rt-new-week-day">' +
+                  VALID_DAYS.map(function(d){ return '<option value="'+d+'">'+d+'</option>'; }).join('') +
+                '</select>' +
+              '</div>' +
+              '<div class="dd-list-form-actions">' +
+                '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSubmitNewWeek()"><i class="fa-solid fa-plus"></i> Continue</button>' +
+                '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelAddWeek()">Cancel</button>' +
+              '</div>' +
+            '</div>';
+    };
 
-    function ddRtCancelAddDay(weekNo) {
-        var c = document.getElementById('ddRtAddDay-' + weekNo);
+    window.ddRtCancelAddWeek = function () {
+        var c = document.getElementById('dd-rt-add-week-form');
         if (c) c.innerHTML = '';
-    }
+    };
 
-    function ddRtConfirmAddDay(weekNo) {
-        var sel = document.getElementById('ddRtNewDaySelect-' + weekNo);
-        if (!sel || !sel.value) { showDdAlert('Please select a day.', 'Missing value'); return; }
-        var day = sel.value;
-        if (document.querySelector('.dd-rt-day[data-week="' + weekNo + '"][data-day="' + day + '"]')) {
-            showDdAlert('That day already exists in this week.', 'Duplicate day');
-            return;
-        }
-        var daysContainer = document.getElementById('ddRtDays-' + weekNo);
-        if (!daysContainer) return;
-        var empty = daysContainer.querySelector('.dd-rt-empty');
-        if (empty) empty.remove();
+    window.ddRtSubmitNewWeek = function () {
+        var wkEl = document.getElementById('dd-rt-new-week-no');
+        var dayEl = document.getElementById('dd-rt-new-week-day');
+        if (!wkEl || !dayEl) return;
+        var wk = parseInt(wkEl.value, 10);
+        var day = dayEl.value;
+        if (isNaN(wk) || wk < 1) { showDdAlert('Enter a valid week number.', 'Invalid week'); return; }
 
-        var dayHtml = ''
-            + '<div class="dd-rt-day-head">'
-            +   '<div class="dd-rt-day-title"><i class="fa-solid fa-calendar-day"></i> ' + escapeHtml(day) + '</div>'
-            +   '<div class="dd-rt-day-actions">'
-            +     '<button type="button" class="dd-btn-mini dd-btn-edit" onclick="ddRtOpenAddRange(' + weekNo + ', \'' + escapeAttr(day) + '\')"><i class="fa-solid fa-plus"></i> Add Range</button>'
-            +     '<button type="button" class="dd-btn-mini dd-btn-danger" onclick="ddRtDeleteDay(' + weekNo + ', \'' + escapeAttr(day) + '\')"><i class="fa-solid fa-trash"></i> Delete Day</button>'
-            +   '</div>'
-            + '</div>'
-            + '<div id="ddRtAddRange-' + weekNo + '-' + escapeAttr(day) + '"></div>'
-            + '<div class="dd-rt-ranges" id="ddRtRanges-' + weekNo + '-' + escapeAttr(day) + '">'
-            +   '<div class="dd-rt-empty">No balance ranges yet. Add one above.</div>'
-            + '</div>';
+        var c = document.getElementById('dd-rt-add-week-form');
+        if (!c) return;
+        c.innerHTML = ddRtBuildRowFormHtml(null, { week_no: wk, day_name: day });
+    };
 
-        var dayEl = document.createElement('div');
-        dayEl.className = 'dd-rt-day';
-        dayEl.setAttribute('data-week', weekNo);
-        dayEl.setAttribute('data-day', day);
-        dayEl.innerHTML = dayHtml;
-        daysContainer.appendChild(dayEl);
-
-        ddRtCancelAddDay(weekNo);
-    }
-
-    function ddRtOpenAddRange(weekNo, dayName) {
-        var c = document.getElementById('ddRtAddRange-' + weekNo + '-' + dayName);
+    window.ddRtOpenAddDay = function (weekNo) {
+        var c = document.getElementById('dd-rt-add-day-' + weekNo);
         if (!c) return;
         if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
-        c.innerHTML = ddRtBuildRangeForm(weekNo, dayName, null, null);
-    }
 
-    function ddRtCancelAddRange(weekNo, dayName) {
-        var c = document.getElementById('ddRtAddRange-' + weekNo + '-' + dayName);
+        c.innerHTML = '' +
+            '<div class="dd-list-form">' +
+              '<div class="dd-list-form-row">' +
+                '<label>Day</label>' +
+                '<select class="dd-input dd-select" id="dd-rt-newday-day-' + weekNo + '">' +
+                  VALID_DAYS.map(function(d){ return '<option value="'+d+'">'+d+'</option>'; }).join('') +
+                '</select>' +
+              '</div>' +
+              '<div class="dd-list-form-actions">' +
+                '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSubmitNewDay(' + weekNo + ')"><i class="fa-solid fa-plus"></i> Continue</button>' +
+                '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelAddDay(' + weekNo + ')">Cancel</button>' +
+              '</div>' +
+            '</div>';
+    };
+
+    window.ddRtCancelAddDay = function (weekNo) {
+        var c = document.getElementById('dd-rt-add-day-' + weekNo);
         if (c) c.innerHTML = '';
-    }
+    };
 
-    function ddRtBuildRangeForm(weekNo, dayName, rangeId, prefill) {
-        prefill = prefill || {};
-        var f = prefill.from_balance !== undefined ? prefill.from_balance : '';
-        var t = prefill.to_balance !== undefined ? prefill.to_balance : '';
-        var r = prefill.risk_amount !== undefined ? prefill.risk_amount : '';
-        var p = prefill.pre_pending_sum !== undefined ? prefill.pre_pending_sum : 0;
+    window.ddRtSubmitNewDay = function (weekNo) {
+        var dayEl = document.getElementById('dd-rt-newday-day-' + weekNo);
+        if (!dayEl) return;
+        var day = dayEl.value;
+        var c = document.getElementById('dd-rt-add-day-' + weekNo);
+        if (!c) return;
+        c.innerHTML = ddRtBuildRowFormHtml(null, { week_no: weekNo, day_name: day });
+    };
+
+    window.ddRtOpenAddRow = function (weekNo, dayName) {
+        var c = document.getElementById('dd-rt-add-row-' + weekNo + '-' + dayName);
+        if (!c) return;
+        if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
+        c.innerHTML = ddRtBuildRowFormHtml(null, { week_no: weekNo, day_name: dayName });
+    };
+
+    window.ddRtCancelAddRow = function (weekNo, dayName) {
+        var c = document.getElementById('dd-rt-add-row-' + weekNo + '-' + dayName);
+        if (c) c.innerHTML = '';
+    };
+
+    window.ddRtOpenEdit = function (rowId) {
+        var ec = document.getElementById('dd-rt-edit-' + rowId);
+        if (!ec) return;
+        if (ec.innerHTML.trim() !== '') { ec.innerHTML = ''; return; }
+
+        var rowEl = document.querySelector('.dd-rt-row[data-row-id="' + rowId + '"]');
+        var data = {};
+        if (rowEl) {
+            var fields = rowEl.querySelectorAll('.dd-row-field');
+            fields.forEach(function (f) {
+                var label = f.querySelector('.dd-row-field-label').textContent.trim().toLowerCase();
+                var value = f.querySelector('.dd-row-field-value').textContent.trim();
+                if (label === 'from balance') data.from_balance = value;
+                else if (label === 'to balance') data.to_balance = value;
+                else if (label === 'target amount') data.target_amount = value;
+                else if (label === 'pre sum') data.pre_pending_sum = value === 'Yes' ? 1 : 0;
+            });
+        }
+
+        ec.innerHTML = ddRtBuildRowFormHtml(rowId, data);
+    };
+
+    window.ddRtCancelEdit = function (rowId) {
+        var c = document.getElementById('dd-rt-edit-' + rowId);
+        if (c) c.innerHTML = '';
+    };
+
+    function ddRtBuildRowFormHtml(rowId, data) {
+        data = data || {};
+        var idPrefix = 'dd-rt-field-' + (rowId ? rowId : 'new') + '-';
 
         var html = '<div class="dd-list-form">';
-        html += '<div class="dd-list-form-row"><label>From Balance</label>';
-        html += '<input type="number" step="0.01" class="dd-input" id="ddRtFrom-' + weekNo + '-' + escapeAttr(dayName) + '" value="' + escapeHtml(f) + '"></div>';
-        html += '<div class="dd-list-form-row"><label>To Balance (leave blank for ∞)</label>';
-        html += '<input type="number" step="0.01" class="dd-input" id="ddRtTo-' + weekNo + '-' + escapeAttr(dayName) + '" value="' + escapeHtml(t) + '"></div>';
-        html += '<div class="dd-list-form-row"><label>Risk Amount</label>';
-        html += '<input type="number" step="0.01" class="dd-input" id="ddRtRisk-' + weekNo + '-' + escapeAttr(dayName) + '" value="' + escapeHtml(r) + '"></div>';
-        html += '<div class="dd-list-form-row"><label>Pre-Pending Sum</label>';
-        html += '<select class="dd-input dd-select" id="ddRtPre-' + weekNo + '-' + escapeAttr(dayName) + '">';
-        html += '<option value="0"' + ((parseInt(p, 10) === 0) ? ' selected' : '') + '>No</option>';
-        html += '<option value="1"' + ((parseInt(p, 10) === 1) ? ' selected' : '') + '>Yes</option>';
+
+        html += '<div class="dd-list-form-row"><label>Week No</label>';
+        html += '<input type="number" min="1" max="52" class="dd-input" id="' + idPrefix + 'week_no" value="' + (data.week_no || 1) + '">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>Day Name</label>';
+        html += '<select class="dd-input dd-select" id="' + idPrefix + 'day_name">';
+        VALID_DAYS.forEach(function (d) {
+            html += '<option value="' + d + '"' + ((data.day_name === d) ? ' selected' : '') + '>' + d + '</option>';
+        });
         html += '</select></div>';
+
+        html += '<div class="dd-list-form-row"><label>From Balance</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'from_balance" value="' + (data.from_balance !== undefined ? data.from_balance : '0.00') + '">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>To Balance (blank = ∞)</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'to_balance" value="' + (data.to_balance !== undefined && data.to_balance !== '∞' ? data.to_balance : '') + '" placeholder="∞ if blank">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>Target Amount</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'target_amount" value="' + (data.target_amount !== undefined ? data.target_amount : '0.00') + '">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>Pre Sum</label>';
+        html += '<select class="dd-input dd-select" id="' + idPrefix + 'pre_pending_sum">';
+        html += '<option value="0"' + ((parseInt(data.pre_pending_sum, 10) === 0) ? ' selected' : '') + '>No</option>';
+        html += '<option value="1"' + ((parseInt(data.pre_pending_sum, 10) === 1) ? ' selected' : '') + '>Yes</option>';
+        html += '</select></div>';
+
         html += '<div class="dd-list-form-actions">';
-        if (rangeId) {
-            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSaveEditRange(' + rangeId + ', ' + weekNo + ', \'' + escapeAttr(dayName) + '\')"><i class="fa-solid fa-floppy-disk"></i> Save</button>';
-            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelEditRange(' + rangeId + ')">Cancel</button>';
+        if (rowId) {
+            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSaveEdit(' + rowId + ')"><i class="fa-solid fa-floppy-disk"></i> Save</button>';
+            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelEdit(' + rowId + ')">Cancel</button>';
         } else {
-            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSaveAddRange(' + weekNo + ', \'' + escapeAttr(dayName) + '\')"><i class="fa-solid fa-plus"></i> Add</button>';
-            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelAddRange(' + weekNo + ', \'' + escapeAttr(dayName) + '\')">Cancel</button>';
+            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddRtSaveAdd()"><i class="fa-solid fa-plus"></i> Add</button>';
+            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddRtCancelAnyAdd()">Cancel</button>';
         }
         html += '</div></div>';
         return html;
     }
 
-    function ddRtCollectRangeFields(weekNo, dayName) {
-        var fromEl = document.getElementById('ddRtFrom-' + weekNo + '-' + dayName);
-        var toEl   = document.getElementById('ddRtTo-' + weekNo + '-' + dayName);
-        var riskEl = document.getElementById('ddRtRisk-' + weekNo + '-' + dayName);
-        var preEl  = document.getElementById('ddRtPre-' + weekNo + '-' + dayName);
-        if (!fromEl || !riskEl || !preEl) return null;
+    window.ddRtCancelAnyAdd = function () {
+        var c1 = document.getElementById('dd-rt-add-week-form'); if (c1) c1.innerHTML = '';
+        document.querySelectorAll('[id^="dd-rt-add-day-"]').forEach(function (el) { el.innerHTML = ''; });
+        document.querySelectorAll('[id^="dd-rt-add-row-"]').forEach(function (el) { el.innerHTML = ''; });
+    };
 
-        var from = parseFloat(fromEl.value);
-        if (isNaN(from)) { showDdAlert('From Balance is required.', 'Missing value'); return null; }
-        var risk = parseFloat(riskEl.value);
-        if (isNaN(risk)) { showDdAlert('Risk Amount is required.', 'Missing value'); return null; }
-
-        var toRaw = toEl.value.trim();
-        var to = toRaw === '' ? null : parseFloat(toRaw);
-        if (toRaw !== '' && isNaN(to)) { showDdAlert('To Balance is invalid.', 'Invalid value'); return null; }
-
+    function ddRtCollect(rowId) {
+        var idPrefix = 'dd-rt-field-' + (rowId ? rowId : 'new') + '-';
+        function val(name) {
+            var el = document.getElementById(idPrefix + name);
+            return el ? el.value : '';
+        }
         return {
-            week_no: weekNo,
-            day_name: dayName,
-            from_balance: from,
-            to_balance: to,
-            risk_amount: risk,
-            pre_pending_sum: parseInt(preEl.value, 10) ? 1 : 0,
-            target_daily_profit: 0,
-            include_missed_days: 0,
-            include_current_day_as_owed: 0,
-            loss_streak_chances: 0
+            week_no: parseInt(val('week_no'), 10) || 1,
+            day_name: val('day_name') || 'Monday',
+            from_balance: parseFloat(val('from_balance')) || 0,
+            to_balance: val('to_balance').trim() === '' ? null : parseFloat(val('to_balance')),
+            target_amount: parseFloat(val('target_amount')) || 0,
+            pre_pending_sum: val('pre_pending_sum') === '1' ? 1 : 0
         };
     }
 
-    function ddRtSaveAddRange(weekNo, dayName) {
-        var row = ddRtCollectRangeFields(weekNo, dayName);
-        if (!row) return;
+    window.ddRtSaveAdd = function () {
+        var row = ddRtCollect(null);
         fetch('programme_accountmanagement.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
@@ -1767,88 +2806,46 @@
         })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            if (data && data.success) { showToast('Range added.'); window.location.reload(); }
-            else showDdAlert((data && data.message) || 'Failed to add range.', 'Error');
+            if (data && data.success) { showToast('Revenue target row added.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to add row.', 'Error');
         })
         .catch(function () { showDdAlert('Network error.', 'Error'); });
-    }
+    };
 
-    function ddRtSaveEditRange(rangeId, weekNo, dayName) {
-        var row = ddRtCollectRangeFields(weekNo, dayName);
-        if (!row) return;
+    window.ddRtSaveEdit = function (rowId) {
+        var row = ddRtCollect(rowId);
         fetch('programme_accountmanagement.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
             credentials: 'same-origin',
-            body: 'list_action=update&list_key=programme_revenue_target&row_id=' + encodeURIComponent(rangeId) + '&row=' + encodeURIComponent(JSON.stringify(row))
+            body: 'list_action=update&list_key=programme_revenue_target&row_id=' + encodeURIComponent(rowId) + '&row=' + encodeURIComponent(JSON.stringify(row))
         })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            if (data && data.success) { showToast('Range updated.'); window.location.reload(); }
-            else showDdAlert((data && data.message) || 'Failed to update range.', 'Error');
+            if (data && data.success) { showToast('Revenue target row updated.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to update row.', 'Error');
         })
         .catch(function () { showDdAlert('Network error.', 'Error'); });
-    }
+    };
 
-    function ddRtOpenEditRange(rangeId, weekNo, dayName) {
-        var c = document.getElementById('ddRtEditRange-' + rangeId);
-        if (!c) return;
-        if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
-
-        var rangeEl = document.querySelector('.dd-rt-range[data-range-id="' + rangeId + '"]');
-        if (!rangeEl) return;
-
-        var fields = rangeEl.querySelectorAll('.dd-row-field-value');
-        var from = fields[0] ? fields[0].textContent.trim() : '';
-        var to   = fields[1] ? fields[1].textContent.trim() : '';
-        if (to === '∞') to = '';
-        var risk = fields[2] ? fields[2].textContent.trim() : '';
-        var pre  = fields[3] ? (fields[3].textContent.trim() === 'Yes' ? 1 : 0) : 0;
-
-        c.innerHTML = ddRtBuildRangeForm(weekNo, dayName, rangeId, {
-            from_balance: from, to_balance: to, risk_amount: risk, pre_pending_sum: pre
-        });
-    }
-
-    function ddRtCancelEditRange(rangeId) {
-        var c = document.getElementById('ddRtEditRange-' + rangeId);
-        if (c) c.innerHTML = '';
-    }
-
-    function ddRtDeleteRange(rangeId) {
-        if (!confirm('Delete this balance range? This cannot be undone.')) return;
+    window.ddRtDeleteRow = function (rowId) {
+        if (!confirm('Delete this revenue target row? This cannot be undone.')) return;
         fetch('programme_accountmanagement.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
             credentials: 'same-origin',
-            body: 'list_action=delete&list_key=programme_revenue_target&row_id=' + encodeURIComponent(rangeId)
+            body: 'list_action=delete&list_key=programme_revenue_target&row_id=' + encodeURIComponent(rowId)
         })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            if (data && data.success) { showToast('Range deleted.'); window.location.reload(); }
-            else showDdAlert((data && data.message) || 'Failed to delete range.', 'Error');
+            if (data && data.success) { showToast('Row deleted.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to delete row.', 'Error');
         })
         .catch(function () { showDdAlert('Network error.', 'Error'); });
-    }
+    };
 
-    function ddRtDeleteDay(weekNo, dayName) {
-        if (!confirm('Delete all balance ranges for ' + dayName + ' in Week ' + weekNo + '?')) return;
-        fetch('programme_accountmanagement.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
-            credentials: 'same-origin',
-            body: 'list_action=delete_day&list_key=programme_revenue_target&week_no=' + encodeURIComponent(weekNo) + '&day_name=' + encodeURIComponent(dayName)
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (data && data.success) { showToast('Day deleted.'); window.location.reload(); }
-            else showDdAlert((data && data.message) || 'Failed to delete day.', 'Error');
-        })
-        .catch(function () { showDdAlert('Network error.', 'Error'); });
-    }
-
-    function ddRtDeleteWeek(weekNo) {
-        if (!confirm('Delete ALL rows for Week ' + weekNo + '? This cannot be undone.')) return;
+    window.ddRtDeleteWeek = function (weekNo) {
+        if (!confirm('Delete ALL rows for week ' + weekNo + '? This cannot be undone.')) return;
         fetch('programme_accountmanagement.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
@@ -1861,9 +2858,212 @@
             else showDdAlert((data && data.message) || 'Failed to delete week.', 'Error');
         })
         .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddRtDeleteDay = function (weekNo, dayName) {
+        if (!confirm('Delete all rows for ' + dayName + ' (week ' + weekNo + ')? This cannot be undone.')) return;
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=delete_day&list_key=programme_revenue_target&week_no=' + encodeURIComponent(weekNo) + '&day_name=' + encodeURIComponent(dayName)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) { showToast('Day deleted.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to delete day.', 'Error');
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    /* ================================================================
+       MARTINGALE — global settings + stage drawdown ranges
+       ================================================================ */
+
+    window.ddMgSaveGlobals = function () {
+        var fields = {};
+        document.querySelectorAll('.dd-mg-global-input').forEach(function (inp) {
+            var col = inp.getAttribute('data-col');
+            var type = inp.getAttribute('data-type');
+            if (!col) return;
+            if (type === 'bool') fields[col] = inp.value === '1' ? 1 : 0;
+            else if (type === 'enum') fields[col] = inp.value;
+            else if (type === 'percent_string') fields[col] = inp.value;
+            else fields[col] = inp.value;
+        });
+
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=save_martingale_globals&list_key=trades_martingale&fields=' + encodeURIComponent(JSON.stringify(fields))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                showToast('Global settings saved.');
+                window.location.reload();
+            } else {
+                showDdAlert((data && data.message) || 'Failed to save global settings.', 'Error');
+            }
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddMgOpenAddRange = function () {
+        var c = document.getElementById('dd-mg-add-range-form');
+        if (!c) return;
+        if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
+        c.innerHTML = ddMgBuildRangeFormHtml(null, {});
+    };
+
+    window.ddMgCancelAddRange = function () {
+        var c = document.getElementById('dd-mg-add-range-form');
+        if (c) c.innerHTML = '';
+    };
+
+    window.ddMgOpenEditRange = function (rowId) {
+        var ec = document.getElementById('dd-mg-edit-' + rowId);
+        if (!ec) return;
+        if (ec.innerHTML.trim() !== '') { ec.innerHTML = ''; return; }
+
+        var rowEl = document.querySelector('#dd-list-rows-trades_martingale .dd-list-row[data-row-id="' + rowId + '"]');
+        var data = {};
+        if (rowEl) {
+            var fields = rowEl.querySelectorAll('.dd-row-field');
+            fields.forEach(function (f) {
+                var label = f.querySelector('.dd-row-field-label').textContent.trim().toLowerCase();
+                var value = f.querySelector('.dd-row-field-value').textContent.trim();
+                if (label === 'from amount') data.from_balance = value;
+                else if (label === 'to amount') data.to_balance = value;
+                else if (label === 'drawdown amount') data.martingale_per_stage_drawdown_amount = value;
+            });
+        }
+        ec.innerHTML = ddMgBuildRangeFormHtml(rowId, data);
+    };
+
+    window.ddMgCancelEditRange = function (rowId) {
+        var c = document.getElementById('dd-mg-edit-' + rowId);
+        if (c) c.innerHTML = '';
+    };
+
+    function ddMgBuildRangeFormHtml(rowId, data) {
+        data = data || {};
+        var idPrefix = 'dd-mg-field-' + (rowId ? rowId : 'new') + '-';
+
+        var html = '<div class="dd-list-form">';
+
+        html += '<div class="dd-list-form-row"><label>From Amount</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'from_balance" value="' + (data.from_balance !== undefined ? data.from_balance : '') + '" placeholder="Required">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>To Amount</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'to_balance" value="' + (data.to_balance !== undefined ? data.to_balance : '') + '" placeholder="Required, must be > From Amount">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-row"><label>Drawdown Amount</label>';
+        html += '<input type="number" step="0.01" class="dd-input" id="' + idPrefix + 'martingale_per_stage_drawdown_amount" value="' + (data.martingale_per_stage_drawdown_amount !== undefined ? data.martingale_per_stage_drawdown_amount : '') + '" placeholder="Required">';
+        html += '</div>';
+
+        html += '<div class="dd-list-form-actions">';
+        if (rowId) {
+            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddMgSaveEditRange(' + rowId + ')"><i class="fa-solid fa-floppy-disk"></i> Save</button>';
+            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddMgCancelEditRange(' + rowId + ')">Cancel</button>';
+        } else {
+            html += '<button type="button" class="dd-btn-mini dd-btn-save" onclick="ddMgSaveAddRange()"><i class="fa-solid fa-plus"></i> Add</button>';
+            html += '<button type="button" class="dd-btn-mini dd-btn-cancel" onclick="ddMgCancelAddRange()">Cancel</button>';
+        }
+        html += '</div></div>';
+        return html;
     }
 
-    // ---------------- Keyboard ----------------
+    function ddMgCollectRange(rowId) {
+        var idPrefix = 'dd-mg-field-' + (rowId ? rowId : 'new') + '-';
+        var fromEl = document.getElementById(idPrefix + 'from_balance');
+        var toEl   = document.getElementById(idPrefix + 'to_balance');
+        var drawEl = document.getElementById(idPrefix + 'martingale_per_stage_drawdown_amount');
+        if (!fromEl || !toEl || !drawEl) return null;
+
+        var fromRaw = String(fromEl.value || '').trim();
+        var toRaw   = String(toEl.value || '').trim();
+        var drawRaw = String(drawEl.value || '').trim();
+
+        if (fromRaw === '' || toRaw === '' || drawRaw === '') {
+            showDdAlert('From Amount, To Amount and Drawdown Amount are all required.', 'Missing value');
+            return null;
+        }
+
+        var fromVal = parseFloat(fromRaw);
+        var toVal   = parseFloat(toRaw);
+        var drawVal = parseFloat(drawRaw);
+
+        if (isNaN(fromVal) || isNaN(toVal) || isNaN(drawVal)) {
+            showDdAlert('Amounts must be valid numbers.', 'Invalid value');
+            return null;
+        }
+
+        if (toVal <= fromVal) {
+            showDdAlert('To Amount must be greater than From Amount.', 'Invalid range');
+            return null;
+        }
+
+        return {
+            from_balance: fromVal,
+            to_balance: toVal,
+            martingale_per_stage_drawdown_amount: drawVal
+        };
+    }
+
+    window.ddMgSaveAddRange = function () {
+        var row = ddMgCollectRange(null);
+        if (!row) return;
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=add&list_key=trades_martingale&row=' + encodeURIComponent(JSON.stringify(row))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) { showToast('Range added.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to add range.', 'Error');
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddMgSaveEditRange = function (rowId) {
+        var row = ddMgCollectRange(rowId);
+        if (!row) return;
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=update&list_key=trades_martingale&row_id=' + encodeURIComponent(rowId) + '&row=' + encodeURIComponent(JSON.stringify(row))
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) { showToast('Range updated.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to update range.', 'Error');
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
+    window.ddMgDeleteRange = function (rowId) {
+        if (!confirm('Delete this stage range? This cannot be undone.')) return;
+        fetch('programme_accountmanagement.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            body: 'list_action=delete&list_key=trades_martingale&row_id=' + encodeURIComponent(rowId)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) { showToast('Range deleted.'); window.location.reload(); }
+            else showDdAlert((data && data.message) || 'Failed to delete range.', 'Error');
+        })
+        .catch(function () { showDdAlert('Network error.', 'Error'); });
+    };
+
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
             var am = document.getElementById('ddAlertModal');
@@ -1875,7 +3075,6 @@
         if (am && am.classList.contains('active') && e.target === am) closeDdAlert();
     });
 
-    // ---------------- Exports ----------------
     window.saveAccountManagement = saveAccountManagement;
     window.closeDdAlert          = closeDdAlert;
     window.showToast             = showToast;
@@ -1888,22 +3087,6 @@
     window.ddListSaveEdit        = ddListSaveEdit;
     window.ddListDelete          = ddListDelete;
     window.ddListReload          = ddListReload;
-
-    window.ddRtSelectWeek        = ddRtSelectWeek;
-    window.ddRtCreateWeek        = ddRtCreateWeek;
-    window.ddRtOpenAddDay        = ddRtOpenAddDay;
-    window.ddRtCancelAddDay      = ddRtCancelAddDay;
-    window.ddRtConfirmAddDay     = ddRtConfirmAddDay;
-    window.ddRtOpenAddRange      = ddRtOpenAddRange;
-    window.ddRtCancelAddRange    = ddRtCancelAddRange;
-    window.ddRtSaveAddRange      = ddRtSaveAddRange;
-    window.ddRtSaveEditRange     = ddRtSaveEditRange;
-    window.ddRtOpenEditRange     = ddRtOpenEditRange;
-    window.ddRtCancelEditRange   = ddRtCancelEditRange;
-    window.ddRtDeleteRange       = ddRtDeleteRange;
-    window.ddRtDeleteDay         = ddRtDeleteDay;
-    window.ddRtDeleteWeek        = ddRtDeleteWeek;
-    window.ddRtReloadAll         = function () { window.location.reload(); };
 })();
 </script>
 

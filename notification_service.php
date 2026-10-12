@@ -1480,6 +1480,172 @@ if (!function_exists('markProgrammeNotificationsSeen')) {
 
 
 /* ============================================================
+ * DISCONNECT BROKER REQUEST NOTIFICATION
+ * ------------------------------------------------------------
+ * Fired by disconnect_broker.php after the sub-account's broker
+ * details have been wiped. Sets the sub-account's
+ * disconnect_broker_request flag to 1 and records a notification
+ * telling the user the terminal is queued for deletion.
+ * ============================================================ */
+
+if (!function_exists('recordDisconnectBrokerRequestNotification')) {
+
+    /**
+     * @param PDO    $pdo
+     * @param string $email
+     * @param int    $subAccountId
+     * @param int    $mainAccountId
+     * @param string $broker
+     * @param string $login
+     * @param bool   $suspended   Optional; when true, use the suspension wording.
+     *
+     * @return int|null  Notification id, or null on failure.
+     */
+    function recordDisconnectBrokerRequestNotification(
+        PDO $pdo,
+        string $email,
+        int $subAccountId,
+        int $mainAccountId,
+        string $broker = '',
+        string $login  = '',
+        bool $suspended = false
+    ): ?int {
+
+        $email = strtolower(trim($email));
+        if ($email === '' || $subAccountId <= 0) {
+            return null;
+        }
+
+        try {
+            $upd = $pdo->prepare("
+                UPDATE harvhub
+                SET disconnect_broker_request = 1
+                WHERE sub_account_id = ?
+                  AND LOWER(email) = ?
+            ");
+            $upd->execute([$subAccountId, $email]);
+        } catch (Throwable $e) {
+            error_log(
+                '[HarvHub Notification Service] Failed to set disconnect_broker_request'
+                . ' | sub_account_id=' . $subAccountId
+                . ' | error=' . $e->getMessage()
+            );
+        }
+
+        if ($suspended) {
+            $title = 'Broker Disconnected - Account Suspended';
+            $message = 'Your broker details have been removed and your account has been suspended. '
+                     . 'We will let you know once the terminal has been deleted from the VPS. '
+                     . 'You will be able to connect a new broker after that.';
+        } else {
+            $title = 'Broker Disconnected';
+            $message = 'We have removed your broker details. '
+                     . 'We will let you know once the terminal has been deleted from the VPS. '
+                     . 'You will be able to connect a new broker after that.';
+        }
+
+        return recordContractNotification($pdo, [
+            'user_email'       => $email,
+            'sub_account_id'   => $subAccountId,
+            'main_account_id'  => $mainAccountId,
+            'notification_key' => 'broker-disconnect-request-' . $subAccountId . '-' . date('YmdHis'),
+            'title'            => $title,
+            'message'          => $message,
+            'type'             => $suspended ? 'danger' : 'warning',
+            'section'          => 'Broker',
+            'action_tab'       => 'connect_investor_broker',
+            'force'            => true
+        ]);
+    }
+}
+
+
+/* ============================================================
+ * PROGRAMME DISCONNECT BROKER REQUEST NOTIFICATION
+ * ------------------------------------------------------------
+ * Fired by disconnect_programme_broker.php after the
+ * programme's broker details have been wiped. Sets
+ * programme.disconnect_broker_request = 1 and records a
+ * programme notification telling the user the terminal is
+ * queued for deletion.
+ * ============================================================ */
+
+if (!function_exists('recordProgrammeDisconnectBrokerRequestNotification')) {
+
+    /**
+     * @param PDO    $pdo
+     * @param int    $programmeId
+     * @param string $email
+     * @param int    $subAccountId
+     * @param int    $mainAccountId
+     * @param string $broker
+     * @param string $login
+     * @param bool   $suspended   Optional; when true, use suspension wording.
+     *
+     * @return int|null  Notification id, or null on failure.
+     */
+    function recordProgrammeDisconnectBrokerRequestNotification(
+        PDO $pdo,
+        int $programmeId,
+        string $email,
+        int $subAccountId,
+        int $mainAccountId,
+        string $broker = '',
+        string $login  = '',
+        bool $suspended = false
+    ): ?int {
+
+        $email = strtolower(trim($email));
+        if ($email === '' || $programmeId <= 0) {
+            return null;
+        }
+
+        // Make sure the disconnect flag is set on the programme row,
+        // independent of the caller.
+        try {
+            $upd = $pdo->prepare("
+                UPDATE programme
+                SET disconnect_broker_request = 1
+                WHERE id = ?
+            ");
+            $upd->execute([$programmeId]);
+        } catch (Throwable $e) {
+            error_log(
+                '[HarvHub Notification Service] Failed to set programme disconnect_broker_request'
+                . ' | programme_id=' . $programmeId
+                . ' | error=' . $e->getMessage()
+            );
+        }
+
+        if ($suspended) {
+            $title   = 'Broker Disconnected - Programme Suspended';
+            $message = 'Your programme broker details have been removed and the programme has been suspended. '
+                     . 'We will let you know once the terminal has been deleted from the VPS. '
+                     . 'You will be able to connect a new broker after that.';
+            $type    = 'danger';
+        } else {
+            $title   = 'Broker Disconnected';
+            $message = 'We have removed your programme broker details. '
+                     . 'We will let you know once the terminal has been deleted from the VPS. '
+                     . 'You will be able to connect a new broker after that.';
+            $type    = 'warning';
+        }
+
+        return recordProgrammeNotification($pdo, $programmeId, $email, [
+            'notification_key' => 'prog-broker-disconnect-request-' . $programmeId . '-' . date('YmdHis'),
+            'title'            => $title,
+            'message'          => $message,
+            'type'             => $type,
+            'section'          => 'Broker',
+            'action_tab'       => 'connect_trader_broker',
+            'force'            => true,
+            'send_email'       => true,
+        ]);
+    }
+}
+
+
+/* ============================================================
  * SYNC DASHBOARD CONTRACT NOTIFICATIONS
  * ============================================================ */
 

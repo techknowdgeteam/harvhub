@@ -13,7 +13,6 @@ try {
     die("Database connection failed.");
 }
 
-// Central notification service
 require_once __DIR__ . '/notification_service.php';
 
 if (!isset($_SESSION['user_email'])) {
@@ -51,6 +50,61 @@ $userId             = (int)$user['id'];
 $activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
 $mainAccountId      = (int)($user['main_account_id'] ?? 0);
 $_SESSION['active_sub_account_id'] = $activeSubAccountId;
+
+// ==================== HELPERS ====================
+if (!function_exists('resolveBrokerState')) {
+    /**
+     * Returns a normalized snapshot of the active sub-account's broker
+     * state, including the disconnect request flag.
+     */
+    function resolveBrokerState($pdo, $subAccountId, $email) {
+        $stmt = $pdo->prepare("
+            SELECT broker, server, login, broker_login_status,
+                   broker_login_attempt_used, broker_total_login_attempt,
+                   disconnect_broker_request
+            FROM harvhub
+            WHERE sub_account_id = ? AND LOWER(email) = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$subAccountId, $email]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $broker   = trim((string)($row['broker']   ?? ''));
+        $server   = trim((string)($row['server']   ?? ''));
+        $login    = trim((string)($row['login']    ?? ''));
+        $connected = ($broker !== '' && $server !== '' && $login !== '');
+
+        $disconnectRequest = (int)($row['disconnect_broker_request'] ?? 0);
+
+        return [
+            'broker'                       => $broker,
+            'server'                       => $server,
+            'login'                        => $login,
+            'broker_login_status'          => trim((string)($row['broker_login_status'] ?? '')),
+            'broker_login_attempt_used'    => $row['broker_login_attempt_used'] ?? null,
+            'broker_total_login_attempt'   => $row['broker_total_login_attempt'] ?? null,
+            'broker_connected'             => $connected,
+            'disconnect_broker_request'    => $disconnectRequest,
+        ];
+    }
+}
+
+if (!function_exists('emptyBrokerLoginMeta')) {
+    /**
+     * Clear broker_login_status and broker_login_attempt_used for a
+     * sub-account. Called whenever the user re-saves broker details so
+     * the probe loop starts fresh on the next tick.
+     */
+    function emptyBrokerLoginMeta($pdo, $userId) {
+        $stmt = $pdo->prepare("
+            UPDATE harvhub
+            SET broker_login_status = NULL,
+                broker_login_attempt_used = NULL
+            WHERE id = ?
+        ");
+        $stmt->execute([$userId]);
+    }
+}
 
 // ==================== FETCH BROKER CONFIGURATION ====================
 $allowed_brokers = [];
@@ -121,7 +175,12 @@ $application_status = $user['application_status'] ?? '';
 $darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
-$broker_connected = !empty($current_broker) && !empty($current_server) && !empty($current_login);
+$broker_connected         = !empty($current_broker) && !empty($current_server) && !empty($current_login);
+$disconnect_broker_request = (int)($user['disconnect_broker_request'] ?? 0);
+
+// Page-level UI decision.
+// If a disconnect is pending, we lock the connect/update forms entirely.
+$broker_locked = ($disconnect_broker_request === 1);
 
 $has_links = false;
 foreach ($allowed_brokers as $broker) {
@@ -131,9 +190,43 @@ foreach ($allowed_brokers as $broker) {
     }
 }
 
+// ==================== AJAX HANDLER: LIVE STATE POLL ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_broker_state'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $state = resolveBrokerState($pdo, $activeSubAccountId, $email);
+
+    echo json_encode([
+        'success'                     => true,
+        'broker'                      => $state['broker'],
+        'server'                      => $state['server'],
+        'login'                       => $state['login'],
+        'broker_connected'            => (bool)$state['broker_connected'],
+        'broker_login_status'         => $state['broker_login_status'],
+        'broker_login_attempt_used'   => $state['broker_login_attempt_used'],
+        'broker_total_login_attempt'  => $state['broker_total_login_attempt'],
+        'disconnect_broker_request'   => $state['disconnect_broker_request'],
+        'broker_locked'               => ($state['disconnect_broker_request'] === 1),
+    ]);
+    exit;
+}
+
 // ==================== AJAX HANDLER: CONNECT/UPDATE BROKER ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax'])) {
     header('Content-Type: application/json; charset=utf-8');
+
+    // Block if a disconnect is pending — the previous terminal has not
+    // yet been deleted from the VPS.
+    $preState = resolveBrokerState($pdo, $activeSubAccountId, $email);
+    if ((int)$preState['disconnect_broker_request'] === 1) {
+        echo json_encode([
+            'success' => false,
+            'errors'  => [
+                'You cannot add a broker yet. Please wait while we finish deleting the previous broker terminal from the VPS. You will be notified once that is complete.'
+            ]
+        ]);
+        exit;
+    }
 
     $broker = trim($_POST['broker'] ?? '');
     $server = trim($_POST['server'] ?? '');
@@ -151,13 +244,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         exit;
     }
 
-    // Validate broker against allowed list
     if (!in_array($broker, $allowed_brokers, true)) {
         echo json_encode(['success' => false, 'errors' => ['Invalid broker selected.']]);
         exit;
     }
 
-    // Check for duplicate login across sub-accounts
     try {
         $dup = $pdo->prepare("
             SELECT id FROM harvhub
@@ -176,18 +267,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         }
     } catch (Throwable $e) {}
 
-    // Determine if this is a first-time connection or an update
     $isUpdate = $broker_connected;
 
     try {
-        $u = $pdo->prepare("UPDATE harvhub SET broker = ?, server = ?, login = ?, broker_password = ? WHERE id = ?");
+        $u = $pdo->prepare("
+            UPDATE harvhub
+            SET broker = ?, server = ?, login = ?, broker_password = ?,
+                disconnect_broker_request = 0
+            WHERE id = ?
+        ");
         $u->execute([$broker, $server, $login, $broker_password, $userId]);
 
+        emptyBrokerLoginMeta($pdo, $userId);
+
         if (!$isUpdate) {
-            // ============================================
-            // FIRST-TIME CONNECTION
-            // ============================================
-            // Deduplicated by notification_key (no timestamp).
             recordContractNotification($pdo, [
                 'user_email'       => $email,
                 'sub_account_id'   => $activeSubAccountId,
@@ -201,10 +294,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 'force'            => false
             ]);
         } else {
-            // ============================================
-            // UPDATE — always notify on the update form
-            // ============================================
-            // Timestamped key so every update produces a fresh notification + email.
             recordContractNotification($pdo, [
                 'user_email'       => $email,
                 'sub_account_id'   => $activeSubAccountId,
@@ -219,10 +308,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             ]);
         }
 
+        $state = resolveBrokerState($pdo, $activeSubAccountId, $email);
+
         echo json_encode([
-            'success' => true,
-            'message' => $isUpdate ? 'Broker details updated successfully!' : 'Broker connected successfully!',
-            'is_update' => $isUpdate
+            'success'                    => true,
+            'message'                    => $isUpdate ? 'Broker details updated successfully!' : 'Broker connected successfully!',
+            'is_update'                  => $isUpdate,
+            'broker_connected'           => (bool)$state['broker_connected'],
+            'broker'                     => $state['broker'],
+            'server'                     => $state['server'],
+            'login'                      => $state['login'],
+            'disconnect_broker_request'  => $state['disconnect_broker_request'],
+            'broker_locked'              => ($state['disconnect_broker_request'] === 1),
         ]);
 
     } catch (Throwable $e) {
@@ -243,7 +340,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
 <?php include 'style.php'; ?>
 <?php include 'connect_investor_broker_style.php'; ?>
 <style>
-    /* Broker confirm modal */
     .broker-confirm-overlay {
         position: fixed; inset: 0;
         background: rgba(0,0,0,0.62);
@@ -300,6 +396,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         color: var(--text, #1a2332);
     }
     body.dark-mode .broker-confirm-actions .btn-cancel { color: #e6edf3; }
+
+    /* Live state pill */
+    .broker-live-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+    }
+    .broker-live-pill .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+        box-shadow: 0 0 0 3px rgba(0,0,0,0.05);
+    }
+    .broker-live-pill.state-connected {
+        background: rgba(46,204,143,0.14);
+        color: #2ecc8f;
+    }
+    .broker-live-pill.state-pending {
+        background: rgba(245,166,35,0.16);
+        color: #f5a623;
+    }
+    .broker-live-pill.state-error {
+        background: rgba(239,68,68,0.14);
+        color: #ef4444;
+    }
+    .broker-live-pill.state-idle {
+        background: rgba(127,127,127,0.14);
+        color: var(--text-muted, #8a9aa8);
+    }
+
+    /* Lock card */
+    .broker-lock-card {
+        background: rgba(245,166,35,0.10);
+        border: 1px solid rgba(245,166,35,0.35);
+        border-radius: 14px;
+        padding: 18px 16px;
+        margin-bottom: 18px;
+        color: var(--text, #1a2332);
+        line-height: 1.6;
+        font-size: 0.92rem;
+    }
+    body.dark-mode .broker-lock-card {
+        background: rgba(245,166,35,0.10);
+        border-color: rgba(245,166,35,0.35);
+        color: #e6edf3;
+    }
+    .broker-lock-card .lock-title {
+        font-weight: 700;
+        margin-bottom: 6px;
+        color: #f5a623;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .broker-lock-card .lock-title i {
+        font-size: 1.05rem;
+    }
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?> broker-page-body">
@@ -325,18 +485,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 <span class="broker-user-label">User</span>
                 <span class="broker-user-value"><?= htmlspecialchars($fullname ?: $email) ?></span>
             </span>
+            <span class="broker-user-info-item">
+                <span class="broker-user-label">Status</span>
+                <span id="brokerLivePill" class="broker-live-pill state-idle">
+                    <span class="dot"></span>
+                    <span id="brokerLivePillText">Checking…</span>
+                </span>
+            </span>
         </div>
 
         <div id="brokerError" class="broker-error-message" style="display: none;"></div>
         <div id="brokerSuccess" class="broker-success-message" style="display: none;"></div>
 
-        <?php if ($broker_connected): ?>
+        <!-- Lock card: shown while a disconnect request is pending -->
+        <div id="brokerLockCard" class="broker-lock-card" style="<?= $broker_locked ? '' : 'display:none;' ?>">
+            <div class="lock-title">
+                <i class="fa-solid fa-hourglass-half"></i>
+                <span>Broker Deletion in Progress</span>
+            </div>
+            <div>
+                You cannot add a broker yet. Please wait while we finish deleting
+                the previous broker terminal from the VPS. You will be notified
+                once that is complete, and you will then be able to add new
+                broker details.
+            </div>
+        </div>
+
+        <!-- Update form: shown when broker is already connected -->
+        <div id="updateFormWrapper" style="<?= ($broker_connected && !$broker_locked) ? '' : 'display:none;' ?>">
             <div class="broker-section-title">Update Your Broker Account</div>
 
-            <form id="connectBrokerForm" novalidate>
+            <form id="updateBrokerForm" novalidate>
                 <div class="broker-form-group">
-                    <label for="broker_select">Select Broker</label>
-                    <select name="broker" id="broker_select" required>
+                    <label for="update_broker_select">Select Broker</label>
+                    <select name="broker" id="update_broker_select" required>
                         <option value="">-- Select Broker --</option>
                         <?php foreach ($allowed_brokers as $broker): ?>
                             <option value="<?= htmlspecialchars($broker) ?>" <?= ($current_broker == $broker) ? 'selected' : '' ?>>
@@ -347,29 +529,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 </div>
 
                 <div class="broker-form-group">
-                    <label for="server_input">Server</label>
-                    <input type="text" name="server" id="server_input" placeholder="broker server" value="<?= htmlspecialchars($current_server) ?>" required>
+                    <label for="update_server_input">Server</label>
+                    <input type="text" name="server" id="update_server_input" placeholder="broker server" value="<?= htmlspecialchars($current_server) ?>" required>
                 </div>
 
                 <div class="broker-form-group">
-                    <label for="login_input">Login Number</label>
-                    <input type="text" name="login" id="login_input" placeholder="Your MT5 login number" value="<?= htmlspecialchars($current_login) ?>" required>
+                    <label for="update_login_input">Login Number</label>
+                    <input type="text" name="login" id="update_login_input" placeholder="Your MT5 login number" value="<?= htmlspecialchars($current_login) ?>" required>
                 </div>
 
                 <div class="broker-form-group">
-                    <label for="password_input">MT5 Password</label>
+                    <label for="update_password_input">MT5 Password</label>
                     <div class="broker-password-wrapper">
-                        <input type="password" name="broker_password" id="password_input" placeholder="Re-enter your MT5 password" required>
-                        <button type="button" class="broker-password-toggle" onclick="togglePasswordField()">Show</button>
+                        <input type="password" name="broker_password" id="update_password_input" placeholder="Re-enter your MT5 password" required>
+                        <button type="button" class="broker-password-toggle" onclick="togglePasswordField('update_password_input')">Show</button>
                     </div>
                 </div>
 
-                <button type="submit" id="connectBrokerBtn" class="broker-btn-submit">
+                <button type="submit" id="updateBrokerBtn" class="broker-btn-submit">
                     Update Broker Details
                 </button>
             </form>
-        <?php else: ?>
+        </div>
 
+        <!-- Connect (fresh) form: shown when no broker is connected -->
+        <div id="connectFormWrapper" style="<?= ($broker_connected || $broker_locked) ? 'display:none;' : '' ?>">
             <div id="availableBrokersSection">
                 <div class="broker-section-title">Available Brokers</div>
 
@@ -399,13 +583,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                 </div>
             </div>
 
-            <div id="connectForm" class="hidden">
+            <div id="connectForm" class="<?= ($has_links && !$broker_connected) ? 'hidden' : '' ?>">
                 <hr class="broker-divider">
 
                 <form id="connectBrokerForm" novalidate>
                     <div class="broker-form-group">
-                        <label for="broker_select">Select Broker</label>
-                        <select name="broker" id="broker_select" required>
+                        <label for="connect_broker_select">Select Broker</label>
+                        <select name="broker" id="connect_broker_select" required>
                             <option value="">-- Select Broker --</option>
                             <?php foreach ($allowed_brokers as $broker): ?>
                                 <option value="<?= htmlspecialchars($broker) ?>">
@@ -416,20 +600,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                     </div>
 
                     <div class="broker-form-group">
-                        <label for="server_input">Server</label>
-                        <input type="text" name="server" id="server_input" placeholder="e.g. Exness-MT5" required>
+                        <label for="connect_server_input">Server</label>
+                        <input type="text" name="server" id="connect_server_input" placeholder="e.g. Exness-MT5" required>
                     </div>
 
                     <div class="broker-form-group">
-                        <label for="login_input">Login Number</label>
-                        <input type="text" name="login" id="login_input" placeholder="Your MT5 login number" required>
+                        <label for="connect_login_input">Login Number</label>
+                        <input type="text" name="login" id="connect_login_input" placeholder="Your MT5 login number" required>
                     </div>
 
                     <div class="broker-form-group">
-                        <label for="password_input">MT5 Password</label>
+                        <label for="connect_password_input">MT5 Password</label>
                         <div class="broker-password-wrapper">
-                            <input type="password" name="broker_password" id="password_input" placeholder="Your MT5 password" required>
-                            <button type="button" class="broker-password-toggle" onclick="togglePasswordField()">Show</button>
+                            <input type="password" name="broker_password" id="connect_password_input" placeholder="Your MT5 password" required>
+                            <button type="button" class="broker-password-toggle" onclick="togglePasswordField('connect_password_input')">Show</button>
                         </div>
                     </div>
 
@@ -438,7 +622,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
                     </button>
                 </form>
             </div>
-        <?php endif; ?>
+        </div>
 
         <div class="broker-info-note">
             <strong>Secure:</strong> Your broker credentials are encrypted and stored securely.
@@ -448,7 +632,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
     </div>
 </div>
 
-<!-- Broker confirmation modal -->
 <div id="brokerConfirmModal" class="broker-confirm-overlay" aria-hidden="true">
     <div class="broker-confirm-box" role="dialog" aria-modal="true" aria-labelledby="brokerConfirmTitle">
         <h3 id="brokerConfirmTitle">Confirm Broker Connection</h3>
@@ -509,8 +692,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
     })();
 
-    function togglePasswordField() {
-        var input = document.getElementById('password_input');
+    function togglePasswordField(inputId) {
+        var input = document.getElementById(inputId);
         if (!input) return;
         var toggle = input.parentElement.querySelector('.broker-password-toggle');
         if (input.type === 'password') {
@@ -521,6 +704,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             if (toggle) toggle.textContent = 'Show';
         }
     }
+    window.togglePasswordField = togglePasswordField;
 
     function showConnectForm() {
         var section = document.getElementById('availableBrokersSection');
@@ -540,6 +724,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             }, 100);
         }
     }
+    window.showConnectForm = showConnectForm;
 
     function showBrokerError(msg) {
         var box = document.getElementById('brokerError');
@@ -613,11 +798,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         });
     });
 
-    // ---------- Form submit / save ----------
-    function initBrokerForm() {
-        var form = document.getElementById('connectBrokerForm');
-        if (!form) return;
+    // ---------- Live state polling ----------
+    var _livePoll = null;
+    var _livePollInterval = 5000;
 
+    function applyLiveState(state) {
+        if (!state) return;
+
+        var connected = !!state.broker_connected;
+        var locked    = !!state.broker_locked;
+        var status    = (state.broker_login_status || '').toString().toLowerCase();
+
+        var updateWrap  = document.getElementById('updateFormWrapper');
+        var connectWrap = document.getElementById('connectFormWrapper');
+        var lockCard    = document.getElementById('brokerLockCard');
+
+        // Lock takes priority — nothing else should be visible.
+        if (lockCard) {
+            lockCard.style.display = locked ? '' : 'none';
+        }
+
+        if (locked) {
+            if (updateWrap)  updateWrap.style.display  = 'none';
+            if (connectWrap) connectWrap.style.display = 'none';
+        } else {
+            if (updateWrap && connectWrap) {
+                var currentlyShowingUpdate = updateWrap.style.display !== 'none';
+                if (connected && !currentlyShowingUpdate) {
+                    updateWrap.style.display = '';
+                    connectWrap.style.display = 'none';
+
+                    var ub = document.getElementById('update_broker_select');
+                    var us = document.getElementById('update_server_input');
+                    var ul = document.getElementById('update_login_input');
+                    if (ub && state.broker) ub.value = state.broker;
+                    if (us) us.value = state.server || '';
+                    if (ul) ul.value = state.login || '';
+                } else if (!connected && currentlyShowingUpdate) {
+                    updateWrap.style.display = 'none';
+                    connectWrap.style.display = '';
+                } else if (connected) {
+                    var ub2 = document.getElementById('update_broker_select');
+                    var us2 = document.getElementById('update_server_input');
+                    var ul2 = document.getElementById('update_login_input');
+                    if (ub2 && state.broker && !ub2.matches(':focus')) ub2.value = state.broker;
+                    if (us2 && !us2.matches(':focus')) us2.value = state.server || '';
+                    if (ul2 && !ul2.matches(':focus')) ul2.value = state.login || '';
+                }
+            }
+        }
+
+        var pill = document.getElementById('brokerLivePill');
+        var pillText = document.getElementById('brokerLivePillText');
+        if (pill && pillText) {
+            pill.classList.remove('state-connected', 'state-pending', 'state-error', 'state-idle');
+
+            if (locked) {
+                pill.classList.add('state-pending');
+                pillText.textContent = 'Deletion Pending';
+            } else if (status === 'invalid_credentials') {
+                pill.classList.add('state-error');
+                pillText.textContent = 'Credentials Invalid';
+            } else if (status === 'fullname_mismatch') {
+                pill.classList.add('state-error');
+                pillText.textContent = 'Name Mismatch';
+            } else if (status === 'invalid_account') {
+                pill.classList.add('state-error');
+                pillText.textContent = 'Demo Not Allowed';
+            } else if (status === 'valid_credentials') {
+                pill.classList.add('state-connected');
+                pillText.textContent = 'Live';
+            } else if (connected) {
+                pill.classList.add('state-pending');
+                pillText.textContent = 'Awaiting Confirmation';
+            } else {
+                pill.classList.add('state-idle');
+                pillText.textContent = 'Not Connected';
+            }
+        }
+    }
+
+    function fetchLiveState() {
+        fetch('connect_investor_broker.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'same-origin',
+            body: 'get_broker_state=1'
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data && data.success) {
+                applyLiveState(data);
+            }
+        })
+        .catch(function () {});
+    }
+
+    function startLivePoll() {
+        if (_livePoll) return;
+        fetchLiveState();
+        _livePoll = setInterval(fetchLiveState, _livePollInterval);
+    }
+    function stopLivePoll() {
+        if (_livePoll) { clearInterval(_livePoll); _livePoll = null; }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) stopLivePoll();
+        else startLivePoll();
+    });
+    window.addEventListener('focus', function () { fetchLiveState(); });
+    window.addEventListener('beforeunload', function () { stopLivePoll(); });
+
+    // ---------- Form bindings ----------
+    function bindBrokerForm(formId, buttonId) {
+        var form = document.getElementById(formId);
+        if (!form) return;
         if (form.dataset.bound === '1') return;
         form.dataset.bound = '1';
 
@@ -626,11 +925,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             hideBrokerError();
             hideBrokerSuccess();
 
-            var brokerEl  = form.querySelector('#broker_select');
-            var serverEl  = form.querySelector('#server_input');
-            var loginEl   = form.querySelector('#login_input');
-            var passEl    = form.querySelector('#password_input');
-            var btn       = form.querySelector('#connectBrokerBtn');
+            var brokerEl = form.querySelector('select[name="broker"]');
+            var serverEl = form.querySelector('input[name="server"]');
+            var loginEl  = form.querySelector('input[name="login"]');
+            var passEl   = form.querySelector('input[name="broker_password"]');
+            var btn      = document.getElementById(buttonId);
 
             var broker = brokerEl ? brokerEl.value.trim() : '';
             var server = serverEl ? serverEl.value.trim() : '';
@@ -649,12 +948,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
             }
 
             openBrokerConfirm(function () {
-                doSaveBroker(form, broker, server, login, pass, passEl, btn);
+                doSaveBroker(broker, server, login, pass, passEl, btn);
             });
         });
     }
 
-    function doSaveBroker(form, broker, server, login, pass, passEl, btn) {
+    function doSaveBroker(broker, server, login, pass, passEl, btn) {
         if (btn) {
             btn.disabled = true;
             btn.dataset.originalText = btn.textContent;
@@ -692,22 +991,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
 
             if (data && data.success) {
                 if (btn) {
-                    btn.disabled = true;
-                    btn.textContent = 'Saved';
+                    btn.disabled = false;
+                    btn.textContent = btn.dataset.originalText || 'Save';
                 }
                 showBrokerSuccess(data.message || 'Broker connected successfully.');
 
                 if (passEl) passEl.value = '';
 
-                setTimeout(function () {
-                    try {
-                        if (window.parent && window.parent !== window) {
-                            window.parent.postMessage({ type: 'reloadWithSpinner' }, '*');
-                            return;
-                        }
-                    } catch (e) {}
-                    window.location.href = 'investorapp.php?tab=mydashboard';
-                }, 1200);
+                fetchLiveState();
+
+                try {
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({ type: 'harvhubRefreshShell' }, '*');
+                    }
+                } catch (e) {}
             } else {
                 if (btn) {
                     btn.disabled = false;
@@ -727,20 +1024,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['connect_broker_ajax']
         });
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initBrokerForm);
-    } else {
-        initBrokerForm();
+    function init() {
+        bindBrokerForm('connectBrokerForm', 'connectBrokerBtn');
+        bindBrokerForm('updateBrokerForm',  'updateBrokerBtn');
+
+        <?php if (!$has_links && !$broker_connected && !$broker_locked): ?>
+            showConnectForm();
+        <?php endif; ?>
+
+        startLivePoll();
     }
 
-    <?php if (!$has_links && !$broker_connected): ?>
-        document.addEventListener('DOMContentLoaded', function() {
-            showConnectForm();
-        });
-    <?php endif; ?>
-
-    window.togglePasswordField = togglePasswordField;
-    window.showConnectForm = showConnectForm;
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 </script>
 
 </body>

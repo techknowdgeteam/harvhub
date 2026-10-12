@@ -115,8 +115,18 @@ if (!function_exists('programmeOwnsAnyVps')) {
 if (!function_exists('findUserSubAccountVps')) {
     function findUserSubAccountVps($pdo, $userId, $mainAccountId) {
         try {
+            // NOTE: v.* already pulls vps_ip_address, but we list it explicitly
+            // so the link helper can propagate it into programme_vps.
             $sql = "
-                SELECT v.*, h.sub_account_name, h.username, h.fullname, h.email,
+                SELECT v.id, v.user_id, v.sub_account_id,
+                       v.server_location, v.subscription_duration,
+                       v.subscription_start_date,
+                       v.vps_ip_address,
+                       v.vps_provider_login, v.vps_provider_password,
+                       v.computer_username, v.computer_password,
+                       v.rdp_password,
+                       v.visibility, v.created_at, v.updated_at,
+                       h.sub_account_name, h.username, h.fullname, h.email,
                        h.sub_account_id AS h_sub_account_id
                 FROM vps v
                 INNER JOIN harvhub h ON h.id = v.user_id AND h.sub_account_id = v.sub_account_id
@@ -134,6 +144,11 @@ if (!function_exists('findUserSubAccountVps')) {
         } catch (Throwable $e) { return null; }
     }
 }
+
+// ==================== MODIFIED LINK HELPER ====================
+// Copies the IP address from the source vps row into the new programme_vps
+// row's programme_vps_ip_address column. The IP is stored for background
+// use only — it is never rendered in the UI.
 if (!function_exists('linkSubAccountVpsToProgramme')) {
     function linkSubAccountVpsToProgramme($pdo, $vpsRow, $programmeId) {
         try {
@@ -143,8 +158,11 @@ if (!function_exists('linkSubAccountVpsToProgramme')) {
 
             $ins = $pdo->prepare("
                 INSERT INTO programme_vps
-                  (programme_id, user_id, sub_account_id, server_location, subscription_duration, visibility)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (programme_id, user_id, sub_account_id,
+                   server_location, subscription_duration,
+                   programme_vps_ip_address,
+                   visibility)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ");
             $ins->execute([
                 (int)$programmeId,
@@ -152,7 +170,9 @@ if (!function_exists('linkSubAccountVpsToProgramme')) {
                 (int)($vpsRow['sub_account_id'] ?? 0),
                 (string)($vpsRow['server_location'] ?? ''),
                 (int)($vpsRow['subscription_duration'] ?? 0),
-                'public',
+                // programme_vps_ip_address — comes from vps.vps_ip_address
+                (string)($vpsRow['vps_ip_address'] ?? ''),
+                (string)($vpsRow['visibility'] ?? 'public'),
             ]);
             return true;
         } catch (Throwable $e) {
@@ -163,10 +183,6 @@ if (!function_exists('linkSubAccountVpsToProgramme')) {
 }
 
 // ==================== CONSISTENCY HELPERS ====================
-/**
- * Delete stale 'accept' requestor rows for a pair where the follower link
- * no longer exists. Safe to call on every read.
- */
 if (!function_exists('cleanupStaleAcceptedRequests')) {
     function cleanupStaleAcceptedRequests($pdo, $ownerProgrammeId, $requestorProgrammeId) {
         try {
@@ -189,10 +205,6 @@ if (!function_exists('cleanupStaleAcceptedRequests')) {
     }
 }
 
-/**
- * Delete ALL requestor rows (any status) for a pair. Used when a follower
- * is removed, so they can cleanly re-request later.
- */
 if (!function_exists('purgeRequestorRowsForPair')) {
     function purgeRequestorRowsForPair($pdo, $ownerProgrammeId, $requestorProgrammeId) {
         try {
@@ -285,7 +297,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['link_subaccount_vps']
         $programmeDisplayName = resolveProgrammeDisplayName($programme);
         $subAccountDisplay    = resolveSubAccountName($subVps);
 
-        // Programme-side in-app notification
         recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
             'notification_key' => 'pvps-linked-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'VPS Linked',
@@ -319,7 +330,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
         exit;
     }
 
-    // Defensive: purge any stale 'accept' rows for this pair before checking
     cleanupStaleAcceptedRequests($pdo, $ownerProgId, $activeProgrammeId);
 
     try {
@@ -350,7 +360,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
         ");
         $ins->execute([$ownerProgId, $activeProgrammeId]);
 
-        // Notify the OWNER's programme about the new request
         recordProgrammeNotification($pdo, $ownerProgId, resolveUserEmailById($pdo, $ownerId), [
             'notification_key' => 'pvps-req-received-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'New VPS Space Request',
@@ -361,7 +370,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
             'force'            => true
         ]);
 
-        // Notify the REQUESTOR's programme that the request was sent
         recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
             'notification_key' => 'pvps-sent-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
             'title'            => 'VPS Request Sent',
@@ -390,7 +398,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
         exit;
     }
 
-    // Defensive cleanup so the UI's alreadyRequested flag is accurate
     cleanupStaleAcceptedRequests($pdo, $ownerProgId, $activeProgrammeId);
 
     try {
@@ -584,8 +591,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
 
         $requestorProgrammeId = (int)$row['requestor_programme_id'];
 
-        // Mark status (historical record). We will delete the row for accept,
-        // and keep it as 'reject' for reject.
         $upd = $pdo->prepare("
             UPDATE programme_vps_hosts_requestors
             SET request_status = ?
@@ -594,7 +599,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
         $upd->execute([$newStatus, $requestId]);
 
         if ($newStatus === 'accept') {
-            // Insert follower link (idempotent)
             try {
                 $chk = $pdo->prepare("
                     SELECT id FROM programme_vps_hosts_followers
@@ -612,15 +616,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                 }
             } catch (Throwable $e) {}
 
-            // ========================================================
-            // CRITICAL FIX: purge ALL requestor rows for this pair so
-            // the follower's UI no longer sees "already requested".
-            // This mirrors vps.php's DELETE behaviour on accept.
-            // ========================================================
             purgeRequestorRowsForPair($pdo, $activeProgrammeId, $requestorProgrammeId);
         }
 
-        // Resolve the requestor's user email for notification
         $requestorEmail = '';
         $requestorUserId = 0;
         try {
@@ -740,7 +738,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
 
         $removedFollowerProgId = (int)$row['follower_programme_id'];
 
-        // Resolve follower's user id + email BEFORE deleting
         $followerUserId = 0;
         $followerEmail  = '';
         try {
@@ -752,15 +749,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
             }
         } catch (Throwable $e) {}
 
-        // 1) Delete the follower link
         $pdo->prepare("DELETE FROM programme_vps_hosts_followers WHERE id = ?")->execute([$rowId]);
 
-        // ========================================================
-        // 2) CRITICAL FIX: purge every requestor row between this
-        //    owner and this follower — 'accept', 'pending', 'reject'.
-        //    Without this, the follower's UI still shows the host as
-        //    "already requested" after removal.
-        // ========================================================
         purgeRequestorRowsForPair($pdo, $activeProgrammeId, $removedFollowerProgId);
 
         if ($followerEmail !== '' && $followerUserId > 0) {

@@ -559,17 +559,18 @@ $tabSrc = [
     'disconnect_trader_broker'   => 'disconnect_programme_broker.php',
     'signals_provision_request'  => 'signals_provision_request.php',
     'account_management'         => 'programme_accountmanagement.php',
+    'programme_investors'        => 'programme_investors.php',
 ];
 
 if (!array_key_exists($defaultTab, $tabSrc)) $defaultTab = 'signals';
 
-$hiddenTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
+$hiddenTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
 
 $tabsWithBrandHeader = ['signals'];
 $tabsWithNav         = ['signals', 'training', 'analytics', 'menu'];
 $tabsWithPageHeader  = ['training', 'analytics', 'menu'];
-$tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
+$tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
 $tabTitles = [
     'signals'                    => 'Signals Dashboard',
@@ -580,6 +581,7 @@ $tabTitles = [
     'connect_trader_broker'      => 'Connect Broker',
     'disconnect_trader_broker'   => 'Disconnect Broker',
     'signals_provision_request'  => 'Signals Provision Request',
+    'programme_investors'        => 'Investors',
     'account_management'         => 'Account Management',
 ];
 
@@ -593,7 +595,7 @@ if (in_array($defaultTab, $tabsWithNoChrome, true)) {
     $showPageHeader  = false;
 }
 
-$takeoverTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
+$takeoverTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 $bodyExtraClass = in_array($defaultTab, $takeoverTabs, true) ? 'page-' . $defaultTab : '';
 
 $chromeClasses = [];
@@ -1615,7 +1617,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     var TABS_WITH_BRAND_HEADER = ['signals'];
     var TABS_WITH_NAV          = ['signals', 'training', 'analytics', 'menu'];
     var TABS_WITH_PAGE_HEADER  = ['training', 'analytics', 'menu'];
-    var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management'];
+    var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
     var TAB_TITLES = {
         'signals':'Signals Dashboard','training':'Programme Training','analytics':'Programme Analytics',
@@ -1678,7 +1680,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         connect_trader_broker:      document.getElementById('frame-connect_trader_broker'),
         disconnect_trader_broker:   document.getElementById('frame-disconnect_trader_broker'),
         signals_provision_request:  document.getElementById('frame-signals_provision_request'),
-        account_management:         document.getElementById('frame-account_management')
+        account_management:         document.getElementById('frame-account_management'),
+        programme_investors:        document.getElementById('frame-programme_investors')
     };
     var names = Object.keys(frames);
     var navTabNames = ['signals', 'training', 'analytics', 'menu'];
@@ -1692,7 +1695,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         'connect_programme_broker.php':'connect_trader_broker',
         'disconnect_programme_broker.php':'disconnect_trader_broker',
         'signals_provision_request.php':'signals_provision_request',
-        'programme_accountmanagement.php':'account_management'
+        'programme_accountmanagement.php':'account_management',
+        'programme_investors.php':'programme_investors'
     };
 
     var loader = document.getElementById('loader');

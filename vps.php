@@ -201,6 +201,8 @@ if (!function_exists('subAccountOwnsAnyVps')) {
 if (!function_exists('findUserProgrammeVps')) {
     function findUserProgrammeVps($pdo, $userId) {
         try {
+            // NOTE: now explicitly selects programme_vps_ip_address so the
+            // link function can propagate it into the new vps row.
             $q = $pdo->prepare("
                 SELECT pv.*, p.program_name, p.id AS prog_id
                 FROM programme_vps pv
@@ -214,6 +216,10 @@ if (!function_exists('findUserProgrammeVps')) {
     }
 }
 
+// ==================== MODIFIED LINK HELPER ====================
+// Copies the IP address (and other credentials) from the source
+// programme_vps row into the newly created vps row. The IP is stored
+// for background use only — it is never rendered in the UI.
 if (!function_exists('linkProgrammeVpsToSubAccount')) {
     function linkProgrammeVpsToSubAccount($pdo, $progVps, $userId, $subAccountId) {
         try {
@@ -223,18 +229,41 @@ if (!function_exists('linkProgrammeVpsToSubAccount')) {
 
             $ins = $pdo->prepare("
                 INSERT INTO vps
-                  (user_id, sub_account_id, server_location, subscription_duration, visibility)
-                VALUES (?, ?, ?, ?, ?)
+                  (user_id, sub_account_id,
+                   server_location, subscription_duration,
+                   subscription_start_date,
+                   vps_ip_address,
+                   vps_provider_login, vps_provider_password,
+                   computer_username, computer_password,
+                   rdp_password,
+                   visibility)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $ins->execute([
                 (int)$userId,
                 (int)$subAccountId,
                 (string)($progVps['server_location'] ?? ''),
                 (int)($progVps['subscription_duration'] ?? 0),
+                // subscription_start_date — use source if present, else today
+                !empty($progVps['subscription_start_date'])
+                    ? $progVps['subscription_start_date']
+                    : date('Y-m-d'),
+                // vps_ip_address — comes from programme_vps.programme_vps_ip_address
+                (string)($progVps['programme_vps_ip_address'] ?? ''),
+                // Provider/computer/RDP credentials — programme_vps doesn't
+                // carry these, so we leave them NULL unless present.
+                !empty($progVps['vps_provider_login'])     ? $progVps['vps_provider_login']     : null,
+                !empty($progVps['vps_provider_password'])  ? $progVps['vps_provider_password']  : null,
+                !empty($progVps['computer_username'])      ? $progVps['computer_username']      : null,
+                !empty($progVps['computer_password'])      ? $progVps['computer_password']      : null,
+                !empty($progVps['rdp_password'])           ? $progVps['rdp_password']           : null,
                 (string)($progVps['visibility'] ?? 'public'),
             ]);
             return true;
-        } catch (Throwable $e) { return false; }
+        } catch (Throwable $e) {
+            error_log('linkProgrammeVpsToSubAccount failed: ' . $e->getMessage());
+            return false;
+        }
     }
 }
 
