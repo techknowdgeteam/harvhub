@@ -137,27 +137,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST'
         exit;
     }
 
-    // Re-resolve sub-account on each poll
-    $liveSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
-    if ($liveSubId <= 0) {
-        $stmt = $pdo->prepare("SELECT sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
-        $stmt->execute([$email]);
-        $lr = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($lr) $liveSubId = (int)($lr['sub_account_id'] ?? 0);
-    }
+    try {
+        // Re-resolve the active sub-account on each request so switching
+        // sub-accounts mid-session updates the activity feed.
+        $liveSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
 
-    $p = buildActivityPayload($pdo, $tableName, $email, $liveSubId);
-    if (!$p) {
-        echo json_encode(['success'=>false,'error'=>'User not found']);
+        if ($liveSubId <= 0) {
+            $stmt = $pdo->prepare("SELECT sub_account_id FROM $tableName WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
+            $stmt->execute([$email]);
+            $lr = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($lr) $liveSubId = (int)($lr['sub_account_id'] ?? 0);
+        }
+
+        $p = buildActivityPayload($pdo, $tableName, $email, $liveSubId);
+        if (!$p) {
+            echo json_encode(['success' => false, 'error' => 'User not found']);
+            exit;
+        }
+
+        echo json_encode([
+            'success'  => true,
+            'has_rows' => $p['has_rows'],
+            'rows'     => $p['rows'],
+            'count'    => count($p['rows']),
+        ]);
+        exit;
+
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'error' => 'Failed to build activity payload.']);
         exit;
     }
-    echo json_encode([
-        'success' => true,
-        'has_rows' => $p['has_rows'],
-        'rows' => $p['rows'],
-        'count' => count($p['rows'])
-    ]);
-    exit;
 }
 
 $payload = buildActivityPayload($pdo, $tableName, $email, $activeSubAccountId);
