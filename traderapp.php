@@ -569,7 +569,7 @@ $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
 
 $tabsWithBrandHeader = ['signals'];
 $tabsWithNav         = ['signals', 'training', 'analytics', 'menu'];
-$tabsWithPageHeader  = ['training', 'analytics', 'menu'];
+$tabsWithPageHeader  = ['analytics', 'menu'];
 $tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
 $tabTitles = [
@@ -682,6 +682,25 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         .shell {
             max-width: 100%;
         }
+    }
+
+    /* Programme Training runs edge-to-edge; every other tab keeps
+       the 1100px centered workspace. */
+    body.tab-training .shell {
+        max-width: 100%;
+        margin: 0;
+    }
+
+    body.tab-training .viewport {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    body.tab-training .app-frame.active {
+        border: 0;
+        outline: 0;
+        margin: 0;
+        padding: 0;
     }
 
     body.shell-no-header       .harvhub-header-top { display: none !important; }
@@ -1424,7 +1443,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     body.prog-detail-view-open .shell-page-header { display: none !important; }
 </style>
 </head>
-<body class="<?= $darkMode ? 'dark-mode' : '' ?><?= $bodyExtraClass ? ' ' . htmlspecialchars($bodyExtraClass) : '' ?><?= $chromeClassStr ? ' ' . htmlspecialchars($chromeClassStr) : '' ?>">
+<body class="<?= $darkMode ? 'dark-mode' : '' ?><?= $bodyExtraClass ? ' ' . htmlspecialchars($bodyExtraClass) : '' ?><?= $chromeClassStr ? ' ' . htmlspecialchars($chromeClassStr) : '' ?><?= $defaultTab === 'training' ? ' tab-training' : '' ?>">
 
 <div class="shell-blocking-loader" id="shellBlockingLoader">
     <div class="spinner"></div>
@@ -1616,7 +1635,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 (function () {
     var TABS_WITH_BRAND_HEADER = ['signals'];
     var TABS_WITH_NAV          = ['signals', 'training', 'analytics', 'menu'];
-    var TABS_WITH_PAGE_HEADER  = ['training', 'analytics', 'menu'];
+    var TABS_WITH_PAGE_HEADER  = ['analytics', 'menu'];
     var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
     var TAB_TITLES = {
@@ -1642,6 +1661,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         if (TABS_NO_CHROME.indexOf(tab) !== -1) {
             showBrandHeader = false; showNav = false; showPageHeader = false;
         }
+
+        document.body.classList.toggle('tab-training', tab === 'training');
 
         document.body.classList.toggle('shell-no-header',       !showBrandHeader && !showPageHeader);
         document.body.classList.toggle('shell-no-brand-header', !showBrandHeader);

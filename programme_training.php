@@ -1,8 +1,8 @@
 <?php
-// programme_training.php — Candlestick chart viewer for a programme
-// Multi-root team model: Root #1 is foundation, heirs inherit from existing roots/refs.
-// Supports re-projection of a configured higher-TF configuration onto a lower TF.
-// ANCHOR REMOVED ENTIRELY.
+//programme_training.php — Candlestick chart viewer for a programme
+// Programme candlestick chart and persistent configuration builder.
+// Configuration is stored separately from candle_records. Match results are browser-local JSON only.
+ // Live candle refresh is wired in via `fetch_candles_latest`.
 
 session_start();
 
@@ -15,10 +15,59 @@ try {
     );
 } catch (Exception $e) { die("Database connection failed."); }
 
+// Add the two per-candle annotation fields when upgrading an existing installation.
+// This is a safe, additive migration; candle_records is not modified.
+try {
+    $cfgColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_configuration`")->fetchAll(PDO::FETCH_COLUMN);
+    // Trade configuration columns: support both legacy *_from and current *_at names.
+    if (in_array('entry_from', $cfgColumns, true) && !in_array('entry_at', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` CHANGE COLUMN `entry_from` `entry_at` VARCHAR(160) NULL DEFAULT NULL");
+        $cfgColumns = array_values(array_diff($cfgColumns, ['entry_from'])); $cfgColumns[] = 'entry_at';
+    }
+    if (in_array('stoploss_from', $cfgColumns, true) && !in_array('stoploss_at', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` CHANGE COLUMN `stoploss_from` `stoploss_at` VARCHAR(160) NULL DEFAULT NULL");
+        $cfgColumns = array_values(array_diff($cfgColumns, ['stoploss_from'])); $cfgColumns[] = 'stoploss_at';
+    }
+    if (in_array('take_profit_from', $cfgColumns, true) && !in_array('take_profit_at', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` CHANGE COLUMN `take_profit_from` `take_profit_at` VARCHAR(160) NULL DEFAULT NULL");
+        $cfgColumns = array_values(array_diff($cfgColumns, ['take_profit_from'])); $cfgColumns[] = 'take_profit_at';
+    }
+    if (!in_array('order_type', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `order_type` VARCHAR(24) NOT NULL DEFAULT 'buy'");
+        $cfgColumns[] = 'order_type';
+    }
+    if (!in_array('entry_trigger_after', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `entry_trigger_after` VARCHAR(160) NULL DEFAULT NULL");
+        $cfgColumns[] = 'entry_trigger_after';
+    }
+    if (!in_array('entry_order_type', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `entry_order_type` VARCHAR(24) NOT NULL DEFAULT 'buy'");
+        $cfgColumns[] = 'entry_order_type';
+    }
+    if (!in_array('candle_text', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `candle_text` VARCHAR(160) NULL DEFAULT NULL");
+    }
+    if (!in_array('text_position', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `text_position` VARCHAR(32) NULL DEFAULT NULL");
+    }
+    if (!in_array('root_name', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `root_name` VARCHAR(160) NULL DEFAULT NULL");
+    }
+    if (!in_array('text_color', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `text_color` VARCHAR(16) NOT NULL DEFAULT 'purple'");
+    }
+    if (!in_array('drawing_color', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `drawing_color` VARCHAR(16) NOT NULL DEFAULT 'blue'");
+    }
+} catch (Throwable $e) {
+    // Do not break chart viewing when the configuration table has not yet been created.
+    error_log('Programme training annotation-column migration: ' . $e->getMessage());
+}
+
 if (!isset($_SESSION['user_email'])) { header("Location: index.php"); exit; }
 $email = strtolower($_SESSION['user_email']);
 
-$stmt = $pdo->prepare("SELECT * FROM harvhub WHERE email = ?");
+$stmt = $pdo->prepare("SELECT * FROM harvhub WHERE LOWER(email) = ? LIMIT 1");
 $stmt->execute([$email]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$user) { header("Location: index.php"); exit; }
@@ -28,243 +77,539 @@ $fullName = $user['fullname'] ?? 'User';
 $darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
-$devStmt = $pdo->prepare("SELECT * FROM developers WHERE email = ? LIMIT 1");
-$devStmt->execute([$email]);
-$developer = $devStmt->fetch(PDO::FETCH_ASSOC);
-if (!$developer) { header("Location: dev_app.php"); exit; }
+// ---- Resolve active programme (same logic as signals_dashboard.php) ----
+$selectedProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
+if ($selectedProgrammeId <= 0) {
+    $q = $pdo->prepare("SELECT id FROM programme WHERE userid = ? ORDER BY id DESC LIMIT 1");
+    $q->execute([$userId]);
+    $selectedProgrammeId = (int)($q->fetchColumn() ?: 0);
+    if ($selectedProgrammeId > 0) $_SESSION['selected_programme_id'] = $selectedProgrammeId;
+}
 
-$programmeId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if (isset($_GET['id']) && (int)$_GET['id'] > 0) {
+    $selectedProgrammeId = (int)$_GET['id'];
+}
+
 $programme = null;
-if ($programmeId > 0) {
-    $pStmt = $pdo->prepare("SELECT id, program_name, visibility, advertisement FROM programme WHERE id = ? AND userid = ? LIMIT 1");
-    $pStmt->execute([$programmeId, $userId]);
-    $programme = $pStmt->fetch(PDO::FETCH_ASSOC);
+if ($selectedProgrammeId > 0) {
+    $pStmt = $pdo->prepare("SELECT * FROM programme WHERE id = ? AND userid = ? LIMIT 1");
+    $pStmt->execute([$selectedProgrammeId, $userId]);
+    $programme = $pStmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
-$programmeName = $programme ? $programme['program_name'] : 'Programme';
 
-$selectedSymbols = [];
-try {
-    $sStmt = $pdo->prepare("
-        SELECT symbol FROM broker_symbols
-        WHERE userid = ? AND symbol_selected = 1 AND symbol <> '__GLOBAL_TF__'
-        ORDER BY symbol ASC
-    ");
-    $sStmt->execute([$userId]);
-    while ($row = $sStmt->fetch(PDO::FETCH_ASSOC)) $selectedSymbols[] = $row['symbol'];
-} catch (PDOException $e) { $selectedSymbols = []; }
+$programmeId   = $programme ? (int)$programme['id'] : 0;
+$programmeName = $programme ? ($programme['program_name'] ?? 'Programme') : 'Programme';
 
-function parseList($str) {
-    if (!is_string($str) || trim($str) === '') return [];
-    $str = trim($str);
-    if ($str[0] === '[') {
-        $decoded = json_decode($str, true);
+// ==================== LIST PARSER ====================
+function parseCleanList($raw) {
+    if ($raw === null || $raw === '') return [];
+    $raw = (string)$raw;
+    $trimmed = trim($raw);
+    if ($trimmed !== '' && ($trimmed[0] === '[' || $trimmed[0] === '{')) {
+        $decoded = json_decode($trimmed, true);
         if (is_array($decoded)) {
-            $out = [];
-            foreach ($decoded as $v) { $v = trim((string)$v); if ($v !== '') $out[] = $v; }
-            return array_values(array_unique($out));
-        }
+            $flat = [];
+            array_walk_recursive($decoded, function($v) use (&$flat) { $flat[] = $v; });
+            $decoded = $flat;
+        } else { $decoded = null; }
+    } else { $decoded = null; }
+    if (!is_array($decoded)) {
+        $raw = str_replace(['[', ']', '{', '}', '"', "'"], '', $raw);
+        $decoded = explode(',', $raw);
     }
-    $parts = array_map('trim', explode(',', $str));
-    $parts = array_filter($parts, function ($v) { return $v !== ''; });
-    return array_values(array_unique($parts));
+    $out = [];
+    foreach ($decoded as $item) {
+        $item = trim((string)$item);
+        $item = str_replace(['[', ']', '{', '}', '"', "'"], '', $item);
+        $item = trim($item);
+        if ($item === '') continue;
+        $out[] = $item;
+    }
+    return array_values(array_unique($out));
 }
+
+// ==================== TIMEFRAME DURATION ====================
+function tfToMs($tf) {
+    if (!$tf) return PHP_INT_MAX;
+    $s = strtolower(trim((string)$tf));
+    if (!preg_match('/^(\d+)\s*([mhdw])$/', $s, $m)) return PHP_INT_MAX;
+    $n    = (int)$m[1];
+    $unit = $m[2];
+    if ($unit === 'm') return $n * 60 * 1000;
+    if ($unit === 'h') return $n * 60 * 60 * 1000;
+    if ($unit === 'd') return $n * 24 * 60 * 60 * 1000;
+    if ($unit === 'w') return $n * 7 * 24 * 60 * 60 * 1000;
+    return PHP_INT_MAX;
+}
+
+// ==================== PROGRAMME OWNERSHIP CHECK ====================
+function ptResolveOwnedProgramme($pdo, $userId, $programmeId) {
+    static $cache = [];
+    $programmeId = (int)$programmeId;
+    if ($programmeId <= 0) return null;
+    if (array_key_exists($programmeId, $cache)) return $cache[$programmeId];
+
+    $q = $pdo->prepare("SELECT id, program_name, broker, server, login,
+                               selected_symbols, selected_timeframes
+                          FROM programme
+                         WHERE id = ? AND userid = ?
+                         LIMIT 1");
+    $q->execute([$programmeId, $userId]);
+    $row = $q->fetch(PDO::FETCH_ASSOC) ?: null;
+    $cache[$programmeId] = $row;
+    return $row;
+}
+
+// ==================== BROKER CONNECTION CHECK ====================
+$hasBroker = false;
+if ($programme) {
+    $hasBroker = (!empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']));
+}
+
+// ==================== SYMBOL + TIMEFRAME RESOLUTION ====================
+// ONLY the programme's selected_symbols / selected_timeframes are
+// consulted. No legacy-table fallbacks.
+$selectedSymbols    = [];
 $selectedTimeframes = [];
-try {
-    $tStmt = $pdo->prepare("
-        SELECT selected_timeframes FROM broker_symbols
-        WHERE userid = ? AND symbol_selected = 1
-          AND selected_timeframes IS NOT NULL
-          AND selected_timeframes <> '' AND selected_timeframes <> '[]'
-        ORDER BY id DESC LIMIT 1
-    ");
-    $tStmt->execute([$userId]);
-    $tRow = $tStmt->fetch(PDO::FETCH_ASSOC);
-    if ($tRow && !empty($tRow['selected_timeframes'])) $selectedTimeframes = parseList($tRow['selected_timeframes']);
-} catch (PDOException $e) { $selectedTimeframes = []; }
 
-// ==================== ACCOUNT MANAGEMENT ====================
-$accountManagement = [
-    'enable_risk_reward_correction' => 0,
-    'minimum_risk_reward'           => '0.00',
-    'fixed_risk_reward'             => '0.00',
-];
-try {
-    $am = $pdo->prepare("
-        SELECT enable_risk_reward_correction, minimum_risk_reward, fixed_risk_reward
-        FROM accountmanagement
-        WHERE developerid = ?
-        ORDER BY id DESC LIMIT 1
-    ");
-    $am->execute([$userId]);
-    $amRow = $am->fetch(PDO::FETCH_ASSOC);
-    if ($amRow) {
-        $accountManagement['enable_risk_reward_correction'] = (int)$amRow['enable_risk_reward_correction'];
-        $accountManagement['minimum_risk_reward']           = (string)$amRow['minimum_risk_reward'];
-        $accountManagement['fixed_risk_reward']             = (string)$amRow['fixed_risk_reward'];
+if ($programme) {
+    $selectedSymbols    = parseCleanList((string)($programme['selected_symbols']    ?? ''));
+    $selectedTimeframes = parseCleanList((string)($programme['selected_timeframes'] ?? ''));
+}
+
+sort($selectedSymbols, SORT_NATURAL | SORT_FLAG_CASE);
+$selectedSymbols = array_values(array_unique($selectedSymbols));
+
+usort($selectedTimeframes, function ($a, $b) {
+    $am = tfToMs($a);
+    $bm = tfToMs($b);
+    if ($am === $bm) return strcmp((string)$a, (string)$b);
+    return ($am < $bm) ? -1 : 1;
+});
+$selectedTimeframes = array_values(array_unique($selectedTimeframes));
+
+// Portable UTF-8-safe truncation: do not require the optional mbstring extension.
+function ptTextSubstr($value, $length) {
+    $value = (string)$value;
+    if (function_exists('mb_substr')) return mb_substr($value, 0, $length, 'UTF-8');
+    if (function_exists('iconv_substr')) {
+        $part = @iconv_substr($value, 0, $length, 'UTF-8');
+        if ($part !== false) return $part;
     }
-} catch (PDOException $e) { /* defaults */ }
+    return substr($value, 0, $length);
+}
 
-// ==================== CONFIGURATION TREES (multi-root) ====================
-$programmeTrees = [];
-try {
-    if ($programmeId > 0) {
-        $cStmt = $pdo->prepare("
-            SELECT id, tree_id, row_role, author_id, parent_id,
-                   candle_name, price_level, timeframe, candle_type,
-                   candle_position, candle_search, operator, order_type,
-                   drawing_id, drawing_tools, draw_from, draw_from_price_level,
-                   draw_to, draw_to_price_level, drawing_color,
-                   entry_from, entry_from_price_level,
-                   exit_at, exit_at_price_level,
-                   target, target_price_level,
-                   authority_source_id, authority_source_role,
-                   root_order, evaluation_priority, is_foundation_root,
-                   root_ref_count, resolved_root_id, triggered_at,
-                   object_kind, object_anchor, object_position,
-                   text_anchor, text_position, text_content
-            FROM programme_configuration
-            WHERE userid = ? AND programmeid = ?
-            ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
-        ");
-        $cStmt->execute([$userId, $programmeId]);
+// ==================== AJAX: LOAD SAVED PROGRAMME CONFIGURATION ====================
+// Reads the exact persisted rows for the signed-in user and selected programme.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($_SESSION['user_email'])) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Not authenticated.', 'rows' => []]);
+        exit;
+    }
 
-        $byTree     = [];
-        while ($r = $cStmt->fetch(PDO::FETCH_ASSOC)) {
-            $tid = (int)$r['tree_id'];
-            if (!isset($byTree[$tid])) {
-                $byTree[$tid] = [
-                    'tree_id'   => $tid,
-                    'roots'     => [],
-                    'drawings'  => [],
-                    'trades'    => [],
-                    '_orphans'  => [],
-                ];
-            }
-            $row = [
-                'id'                       => (int)$r['id'],
-                'tree_id'                  => $tid,
-                'row_role'                 => $r['row_role'],
-                'author_id'                => $r['author_id'] !== null ? (int)$r['author_id'] : null,
-                'parent_id'                => $r['parent_id'] !== null ? (int)$r['parent_id'] : null,
-                'candle_name'              => $r['candle_name'],
-                'price_level'              => $r['price_level'],
-                'timeframe'                => $r['timeframe'],
-                'candle_type'              => $r['candle_type'],
-                'candle_position'          => $r['candle_position'],
-                'candle_search'            => $r['candle_search'],
-                'operator'                 => $r['operator'],
-                'order_type'               => $r['order_type'],
-                'drawing_id'               => $r['drawing_id'] !== null ? (int)$r['drawing_id'] : null,
-                'drawing_tools'            => $r['drawing_tools'],
-                'draw_from'                => $r['draw_from'],
-                'draw_from_price_level'    => $r['draw_from_price_level'],
-                'draw_to'                  => $r['draw_to'],
-                'draw_to_price_level'      => $r['draw_to_price_level'],
-                'drawing_color'            => $r['drawing_color'],
-                'entry_from'               => $r['entry_from'],
-                'entry_from_price_level'   => $r['entry_from_price_level'],
-                'exit_at'                  => $r['exit_at'],
-                'exit_at_price_level'      => $r['exit_at_price_level'],
-                'target'                   => $r['target'],
-                'target_price_level'       => $r['target_price_level'],
-                'authority_source_id'      => $r['authority_source_id'] !== null ? (int)$r['authority_source_id'] : null,
-                'authority_source_role'    => $r['authority_source_role'],
-                'root_order'               => (int)$r['root_order'],
-                'evaluation_priority'      => (int)$r['evaluation_priority'],
-                'is_foundation_root'       => (int)$r['is_foundation_root'],
-                'root_ref_count'           => (int)$r['root_ref_count'],
-                'resolved_root_id'         => $r['resolved_root_id'] !== null ? (int)$r['resolved_root_id'] : null,
-                'triggered_at'             => $r['triggered_at'],
-                'object_kind'              => $r['object_kind'],
-                'object_anchor'            => $r['object_anchor'],
-                'object_position'          => $r['object_position'],
-                'text_anchor'              => $r['text_anchor'],
-                'text_position'            => $r['text_position'],
-                'text_content'             => $r['text_content'],
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    if ($reqProgrammeId <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Programme ID is required.', 'rows' => []]);
+        exit;
+    }
+
+    $ownedStmt = $pdo->prepare('SELECT id FROM programme WHERE id = ? AND userid = ? LIMIT 1');
+    $ownedStmt->execute([$reqProgrammeId, $userId]);
+    if (!$ownedStmt->fetchColumn()) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Programme not found or access denied.', 'rows' => []]);
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT config_id, user_id, programme_id, timeframe, root_id, root_name, tree_id,
+                    main_id, main_candle_name, reference_id, reference_candle_name,
+                    offset_to, offset_id, offset_position, offset_position_point,
+                    offset_candle_name, position, price_level, operator, use_for_trade,
+                    entry_at, entry_price_level, stoploss_at, stoploss_price_level,
+                    take_profit_at, take_profit_type, take_profit_price_level,
+                    risk_reward, order_type, entry_order_type, entry_trigger_after,
+                    draw_from, draw_from_price_level, draw_to,
+                    draw_to_price_level, run_in_python, main_candle_type,
+                    ref_candle_type, offset_candle, candle_text, text_position,
+                    text_color, drawing_color
+               FROM programme_training_configuration
+              WHERE user_id = ? AND programme_id = ?
+              ORDER BY root_id, tree_id, config_id'
+        );
+        $stmt->execute([$userId, $reqProgrammeId]);
+        echo json_encode(['success' => true, 'rows' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Throwable $e) {
+        error_log('Programme training configuration load failed: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Could not load saved configuration.', 'rows' => []]);
+    }
+    exit;
+}
+
+// ==================== AJAX: SAVE PROGRAMME CONFIGURATION ====================
+// Saves normalized configuration rows ONLY to programme_training_configuration.
+// No JSON/config shadow table is created and candle_records is never modified.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (!isset($_SESSION['user_email'])) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Not authenticated.']);
+        exit;
+    }
+
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    $rawPayload = (string)($_POST['payload'] ?? '');
+    if ($reqProgrammeId <= 0 || $rawPayload === '') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Programme and configuration payload are required.']);
+        exit;
+    }
+    if (strlen($rawPayload) > 2 * 1024 * 1024) {
+        http_response_code(413);
+        echo json_encode(['success' => false, 'message' => 'Configuration is too large to save.']);
+        exit;
+    }
+
+    $ownedStmt = $pdo->prepare('SELECT id FROM programme WHERE id = ? AND userid = ? LIMIT 1');
+    $ownedStmt->execute([$reqProgrammeId, $userId]);
+    if (!$ownedStmt->fetchColumn()) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Programme not found or access denied.']);
+        exit;
+    }
+
+    $decodedPayload = json_decode($rawPayload, true);
+    if (!is_array($decodedPayload) || !isset($decodedPayload['roots']) || !is_array($decodedPayload['roots'])) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Invalid configuration payload.']);
+        exit;
+    }
+
+    // Enforce timeframe selection on the server too; never silently skip an unconfigured root.
+    foreach ($decodedPayload['roots'] as $rootIndex => $rootCheck) {
+        if (!is_array($rootCheck)) continue;
+        $rootTimeframes = $rootCheck['timeframes'] ?? null;
+        if (!is_array($rootTimeframes)) {
+            $legacyTimeframe = trim((string)($rootCheck['timeframe'] ?? ''));
+            $decodedTimeframes = $legacyTimeframe !== '' ? json_decode($legacyTimeframe, true) : null;
+            $rootTimeframes = is_array($decodedTimeframes)
+                ? $decodedTimeframes
+                : ($legacyTimeframe !== '' ? [$legacyTimeframe] : []);
+        }
+        $rootTimeframes = array_values(array_unique(array_filter(array_map(
+            static function ($tf) { return trim((string)$tf); },
+            $rootTimeframes
+        ), static function ($tf) { return $tf !== ''; })));
+        if (!$rootTimeframes) {
+            $missingRootId = (int)($rootCheck['id'] ?? ($rootIndex + 1));
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'Root ' . $missingRootId . ': select at least one timeframe before saving.'
+            ]);
+            exit;
+        }
+    }
+
+    try {
+        // Fail clearly if the requested destination table has not been created.
+        $tableCheck = $pdo->query("SHOW TABLES LIKE 'programme_training_configuration'");
+        if (!$tableCheck || !$tableCheck->fetchColumn()) {
+            throw new RuntimeException('The required table programme_training_configuration does not exist. Create it using the supplied SQL first.');
+        }
+
+        $allowedLevels = ['high','low','open','close','candle_center','body_center','high_wick_center','low_wick_center'];
+        $allowedTextPositions = ['high','low','open','close'];
+        $allowedOperators = ['<','>','=<','>=','='];
+        $allowedPositions = ['all','left','right','latest_candle'];
+        $allowedOffsetPoints = ['all','random','fixed'];
+        $allowedCandleTypes = ['bearish','bullish','bearish_or_bullish'];
+        // Persist named CSS colors or the special "custom" theme-aware color.
+        $allowedColors = ['custom','purple','red','blue','green','yellow','orange','pink','white','black','cyan','magenta','lime','teal','navy','gold','coral','violet','indigo','brown','gray','grey'];
+        $rows = [];
+
+        $cleanText = static function ($value, $max = 160) {
+            if ($value === null || $value === '') return null;
+            return ptTextSubstr(trim((string)$value), $max);
+        };
+        $safeChoice = static function ($value, array $allowed, $fallback = null) {
+            $value = (string)($value ?? '');
+            return in_array($value, $allowed, true) ? $value : $fallback;
+        };
+        $toDbTakeProfitType = static function ($value) {
+            $value = strtolower(trim((string)$value));
+            if ($value === 'price_levels' || $value === 'price levels') return 'price levels';
+            return 'risk reward';
+        };
+        $rootFields = static function (array $root) use ($cleanText, $safeChoice, $allowedLevels, $toDbTakeProfitType) {
+            $tpType = $toDbTakeProfitType($root['take_profit_type'] ?? 'risk_reward');
+            return [
+                'root_name' => $cleanText($root['root_name'] ?? '', 160),
+                'use_for_trade' => !empty($root['use_for_trades']) ? 1 : 0,
+                'entry_at' => $cleanText($root['entry_at'] ?? $root['entry_from'] ?? null),
+                'order_type' => $safeChoice($root['order_type'] ?? $root['entry_order_type'] ?? 'buy', ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'], 'buy'),
+                'entry_order_type' => $safeChoice($root['order_type'] ?? $root['entry_order_type'] ?? 'buy', ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'], 'buy'),
+                'entry_trigger_after' => $cleanText($root['entry_trigger_after'] ?? null),
+                'entry_price_level' => $safeChoice($root['entry_price_level'] ?? null, $allowedLevels),
+                'stoploss_at' => $cleanText($root['stoploss_at'] ?? $root['stoploss_from'] ?? null),
+                'stoploss_price_level' => $safeChoice($root['stoploss_price_level'] ?? null, $allowedLevels),
+                'take_profit_at' => $cleanText($root['take_profit_at'] ?? $root['take_profit_from'] ?? null),
+                'take_profit_type' => $tpType,
+                'take_profit_price_level' => $tpType === 'risk reward' ? null : $safeChoice($root['take_profit_price_level'] ?? null, $allowedLevels),
+                'risk_reward' => isset($root['risk_reward']) && $root['risk_reward'] !== '' && is_numeric($root['risk_reward']) ? round((float)$root['risk_reward'], 3) : null,
+                'draw_from' => null,
+                'draw_from_price_level' => null,
+                'draw_to' => null,
+                'draw_to_price_level' => null,
+                'run_in_python' => !empty($root['run_in_python']) ? 1 : 0
             ];
+        };
 
-            if ($row['row_role'] === 'root') {
-                $byTree[$tid]['roots'][] = $row;
-            } elseif ($row['row_role'] === 'drawing') {
-                $byTree[$tid]['drawings'][] = $row;
-            } elseif ($row['row_role'] === 'trade') {
-                $byTree[$tid]['trades'][] = $row;
-            } else {
-                $byTree[$tid]['_orphans'][] = $row;
+        foreach ($decodedPayload['roots'] as $root) {
+            if (!is_array($root)) continue;
+            $rootId = max(1, (int)($root['id'] ?? 1));
+            $rootTimeframes = $root['timeframes'] ?? null;
+            if (!is_array($rootTimeframes)) {
+                $legacyTimeframe = trim((string)($root['timeframe'] ?? ''));
+                $decodedTimeframes = $legacyTimeframe !== '' ? json_decode($legacyTimeframe, true) : null;
+                $rootTimeframes = is_array($decodedTimeframes)
+                    ? $decodedTimeframes
+                    : ($legacyTimeframe !== '' ? [$legacyTimeframe] : []);
+            }
+            $rootTimeframes = array_values(array_unique(array_filter(array_map(
+                static function ($tf) { return trim((string)$tf); },
+                $rootTimeframes
+            ), static function ($tf) { return $tf !== ''; })));
+            if (!$rootTimeframes) {
+                throw new RuntimeException('Root ' . $rootId . ': select at least one timeframe before saving.');
+            }
+            // The schema stores one timeframe string per configuration row.
+            // Keep all selected root timeframes intact as a comma-separated value.
+            $timeframe = implode(',', $rootTimeframes);
+            $common = $rootFields($root);
+            $trees = isset($root['trees']) && is_array($root['trees']) ? $root['trees'] : [];
+
+            foreach ($trees as $treeIndex => $tree) {
+                if (!is_array($tree)) continue;
+                $treeId = max(1, (int)($tree['tree_id'] ?? 1));
+                $main = isset($tree['main']) && is_array($tree['main']) ? $tree['main'] : [];
+                $reference = isset($tree['reference']) && is_array($tree['reference']) ? $tree['reference'] : [];
+                $mainId = isset($main['main_id']) ? (int)$main['main_id'] : (int)($main['id'] ?? 0);
+                $referenceId = isset($reference['reference_id']) ? (int)$reference['reference_id'] : (int)($reference['id'] ?? 0);
+                $mainId = $mainId > 0 ? $mainId : null;
+                $referenceId = $referenceId > 0 ? $referenceId : null;
+                $mainName = $cleanText($main['main_candle_name'] ?? '', 120);
+                $refName = $cleanText($reference['reference_candle_name'] ?? '', 120);
+                $mainType = $safeChoice($main['main_candle_type'] ?? null, $allowedCandleTypes, 'bearish_or_bullish');
+                $refType = $safeChoice($reference['ref_candle_type'] ?? null, $allowedCandleTypes, 'bearish_or_bullish');
+                $mainOffset = isset($main['offset_to']) && $main['offset_to'] !== '' ? (int)$main['offset_to'] : null;
+                $refOffset = $mainId;
+                $mainOffsetPosition = isset($main['offset_position']) && $main['offset_position'] !== '' ? max(1, (int)$main['offset_position']) : 1;
+                $refOffsetPosition = isset($reference['offset_position']) && $reference['offset_position'] !== '' ? max(1, (int)$reference['offset_position']) : 1;
+                $mainPosition = $safeChoice($main['position'] ?? null, $allowedPositions, 'all');
+                $refPosition = $safeChoice($reference['position'] ?? null, ['left','right'], 'left');
+                $mainOffsetPoint = $safeChoice($main['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
+                $refOffsetPoint = $safeChoice($reference['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
+                $mainPrice = $safeChoice($main['price_level'] ?? null, $allowedLevels, 'high');
+                $mainText = $cleanText($main['candle_text'] ?? '', 160);
+                $mainTextPosition = $safeChoice($main['text_position'] ?? null, $allowedTextPositions, 'high');
+                $mainTextColor = $safeChoice($main['text_color'] ?? null, $allowedColors, 'purple');
+                $refPrice = $safeChoice($reference['price_level'] ?? null, $allowedLevels, 'high');
+                // A new offset is its own candle identity in this tree. Its label must
+                // be saved directly to candle_text on this reference/offset row.
+                $isNewOffset = (($reference['referenceMode'] ?? 'existing') === 'new_offset');
+                $refText = (($treeIndex === 0) || $isNewOffset) ? $cleanText($reference['candle_text'] ?? '', 160) : null;
+                $refTextPosition = $safeChoice($reference['text_position'] ?? null, $allowedTextPositions, 'high');
+                $refTextColor = $safeChoice($reference['text_color'] ?? null, $allowedColors, 'purple');
+                $operator = $safeChoice($main['operator'] ?? null, $allowedOperators, '>');
+                $offsetName = $cleanText($main['offset_to_name'] ?? '', 120);
+                $offsetType = $mainOffset !== null ? $safeChoice($main['offset_candle'] ?? null, $allowedCandleTypes, 'bearish_or_bullish') : null;
+
+                // Main-candle row: reference_id is NULL so it is distinguishable from the reference row.
+                $rows[] = array_merge([
+                    'user_id' => $userId, 'programme_id' => $reqProgrammeId, 'timeframe' => ptTextSubstr($timeframe, 32),
+                    'root_id' => $rootId, 'tree_id' => $treeId,
+                    'main_id' => $mainId, 'main_candle_name' => $mainName,
+                    'reference_id' => null, 'reference_candle_name' => null,
+                    'offset_to' => $mainOffset, 'offset_id' => $mainOffset,
+                    'offset_position' => $mainOffsetPosition, 'offset_position_point' => $mainOffsetPoint,
+                    'offset_candle_name' => $offsetName, 'position' => $mainPosition,
+                    'price_level' => $mainPrice, 'operator' => $operator,
+                    'candle_text' => $mainText, 'text_position' => $mainTextPosition,
+                    'text_color' => $mainTextColor, 'drawing_color' => 'blue',
+                    'main_candle_type' => $mainType, 'ref_candle_type' => null, 'offset_candle' => $offsetType
+                ], $common);
+
+                // Reference-candle row: linked to its tree's main through main_id/offset_to.
+                $rows[] = array_merge([
+                    'user_id' => $userId, 'programme_id' => $reqProgrammeId, 'timeframe' => ptTextSubstr($timeframe, 32),
+                    'root_id' => $rootId, 'tree_id' => $treeId,
+                    'main_id' => $mainId, 'main_candle_name' => $mainName,
+                    'reference_id' => $referenceId, 'reference_candle_name' => $refName,
+                    'offset_to' => $refOffset, 'offset_id' => $refOffset,
+                    'offset_position' => $refOffsetPosition, 'offset_position_point' => $refOffsetPoint,
+                    'offset_candle_name' => $mainName, 'position' => $refPosition,
+                    'price_level' => $refPrice, 'operator' => $operator,
+                    'candle_text' => $refText, 'text_position' => $refTextPosition,
+                    'text_color' => $refTextColor, 'drawing_color' => 'blue',
+                    'main_candle_type' => null, 'ref_candle_type' => $refType,
+                    'offset_candle' => $isNewOffset ? $refType : null
+                ], $common);
+            }
+
+            // Drawing entries are rows in the same table; they are identified by draw_from/draw_to being populated.
+            $drawings = isset($root['drawings']) && is_array($root['drawings']) ? $root['drawings'] : [];
+            foreach ($drawings as $draw) {
+                if (!is_array($draw)) continue;
+                $drawTo = $cleanText($draw['draw_to'] ?? '', 160);
+                $drawToLevelRaw = (string)($draw['draw_to_price_level'] ?? 'high');
+                $drawToLevel = $drawToLevelRaw === 'axis' ? 'axis' : (($drawTo === 'any_intercept_candle') ? null : $safeChoice($drawToLevelRaw, $allowedLevels));
+                $drawRow = [
+                    'user_id' => $userId, 'programme_id' => $reqProgrammeId, 'timeframe' => ptTextSubstr($timeframe, 32),
+                    'root_id' => $rootId, 'tree_id' => max(1, (int)($draw['tree_id'] ?? 1)),
+                    'main_id' => null, 'main_candle_name' => null,
+                    'reference_id' => null, 'reference_candle_name' => null,
+                    'offset_to' => null, 'offset_id' => null,
+                    'offset_position' => 1, 'offset_position_point' => 'all', 'offset_candle_name' => null,
+                    'position' => 'all', 'price_level' => null, 'operator' => '>',
+                    'main_candle_type' => null, 'ref_candle_type' => null, 'offset_candle' => null,
+                    'text_color' => 'purple',
+                    'drawing_color' => $safeChoice($draw['drawing_color'] ?? null, $allowedColors, 'blue')
+                ];
+                $drawRow = array_merge($drawRow, $common, [
+                    'draw_from' => $cleanText($draw['draw_from'] ?? '', 160),
+                    'draw_from_price_level' => $safeChoice($draw['draw_from_price_level'] ?? null, $allowedLevels),
+                    'draw_to' => $drawTo,
+                    'draw_to_price_level' => $drawToLevel
+                ]);
+                $rows[] = $drawRow;
             }
         }
 
-        foreach ($byTree as $tid => &$tree) {
-            $roots   = &$tree['roots'];
-            $orphans = isset($tree['_orphans']) ? $tree['_orphans'] : [];
-
-            $refsByRoot = [];
-            foreach ($orphans as $row) {
-                if ($row['row_role'] === 'root_ref') {
-                    $row['re_ref_pairs'] = [];
-                    $refsByRoot[$row['parent_id']][] = $row;
-                }
-            }
-
-            foreach ($orphans as $row) {
-                if ($row['row_role'] === 're_ref_author' && $row['parent_id'] !== null) {
-                    foreach ($refsByRoot as $rootId => &$refList) {
-                        foreach ($refList as &$ref) {
-                            if ($ref['id'] === $row['parent_id']) {
-                                $servant = null;
-                                foreach ($orphans as $cand) {
-                                    if ($cand['row_role'] === 're_ref_servant'
-                                        && $cand['parent_id'] === $row['id']) {
-                                        $servant = $cand; break;
-                                    }
-                                }
-                                if ($servant) {
-                                    $ref['re_ref_pairs'][] = [
-                                        'author'     => $row,
-                                        'referenced' => $servant,
-                                    ];
-                                }
-                            }
-                        }
-                        unset($ref);
-                    }
-                }
-            }
-
-            foreach ($roots as &$root) {
-                $root['root_refs'] = isset($refsByRoot[$root['id']])
-                    ? $refsByRoot[$root['id']] : [];
-            }
-            unset($root);
-
-            unset($tree['_orphans']);
+        $columns = [
+            'user_id','programme_id','timeframe','root_id','root_name','tree_id','main_id','main_candle_name',
+            'reference_id','reference_candle_name','offset_to','offset_id','offset_position',
+            'offset_position_point','offset_candle_name','position','price_level','operator',
+            'use_for_trade','entry_at','entry_price_level','stoploss_at','stoploss_price_level',
+            'take_profit_at','take_profit_type','take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
+            'draw_from','draw_from_price_level','draw_to','draw_to_price_level','run_in_python',
+            'main_candle_type','ref_candle_type','offset_candle','candle_text','text_position',
+            'text_color','drawing_color'
+        ];
+        if (count($rows) === 0) {
+            throw new RuntimeException('Nothing was saved because no configured tree or drawing produced a database row. Configure at least one tree or drawing, then save again. Existing saved rows were left unchanged.');
         }
-        unset($tree);
 
-        foreach ($byTree as &$tree) {
-            usort($tree['roots'], function ($a, $b) {
-                $pa = (int)$a['evaluation_priority']; if ($pa <= 0) $pa = 1;
-                $pb = (int)$b['evaluation_priority']; if ($pb <= 0) $pb = 1;
-                return $pa - $pb;
-            });
+        $columnSql = implode(',', array_map(static function ($c) { return '`' . $c . '`'; }, $columns));
+        $placeholders = implode(',', array_fill(0, count($columns), '?'));
+        $insert = $pdo->prepare("INSERT INTO `programme_training_configuration` ($columnSql) VALUES ($placeholders)");
+
+        $pdo->beginTransaction();
+        // Replace only this user's configuration for this programme in the exact destination table.
+        $delete = $pdo->prepare('DELETE FROM `programme_training_configuration` WHERE user_id = ? AND programme_id = ?');
+        $delete->execute([$userId, $reqProgrammeId]);
+        foreach ($rows as $row) {
+            $values = [];
+            foreach ($columns as $column) $values[] = $row[$column] ?? null;
+            $insert->execute($values);
         }
-        unset($tree);
+        $pdo->commit();
 
-        $programmeTrees = array_values($byTree);
+        $rootCount = count($decodedPayload['roots']);
+        $treeCount = 0;
+        foreach ($decodedPayload['roots'] as $r) $treeCount += isset($r['trees']) && is_array($r['trees']) ? count($r['trees']) : 0;
+        echo json_encode([
+            'success' => true,
+            'message' => 'Configuration saved to programme_training_configuration.',
+            'meta' => ['root_count' => $rootCount, 'tree_count' => $treeCount, 'row_count' => count($rows)]
+        ]);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('Programme training configuration save failed: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => $e instanceof RuntimeException ? $e->getMessage() : ('Could not save configuration: ' . $e->getMessage())]);
     }
-} catch (PDOException $e) { $programmeTrees = []; }
+    exit;
+}
+
+// ==================== AJAX: LIVE STATE (symbols / timeframes / broker) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_live_state'])) {
+    header('Content-Type: application/json');
+    if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit; }
+
+    $liveProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
+    if ($liveProgrammeId <= 0) {
+        echo json_encode(['success'=>false,'message'=>'No programme selected.']); exit;
+    }
+
+    try {
+        $pStmt = $pdo->prepare("SELECT * FROM programme WHERE id = ? AND userid = ? LIMIT 1");
+        $pStmt->execute([$liveProgrammeId, $userId]);
+        $liveProgramme = $pStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+        if (!$liveProgramme) {
+            echo json_encode(['success'=>false,'message'=>'Programme not found.']); exit;
+        }
+
+        $liveHasBroker = (!empty($liveProgramme['broker']) && !empty($liveProgramme['server']) && !empty($liveProgramme['login']));
+
+        $liveSymbols    = parseCleanList((string)($liveProgramme['selected_symbols']    ?? ''));
+        $liveTimeframes = parseCleanList((string)($liveProgramme['selected_timeframes'] ?? ''));
+
+        sort($liveSymbols, SORT_NATURAL | SORT_FLAG_CASE);
+        $liveSymbols = array_values(array_unique($liveSymbols));
+
+        usort($liveTimeframes, function ($a, $b) {
+            $am = tfToMs($a);
+            $bm = tfToMs($b);
+            if ($am === $bm) return strcmp((string)$a, (string)$b);
+            return ($am < $bm) ? -1 : 1;
+        });
+        $liveTimeframes = array_values(array_unique($liveTimeframes));
+
+        echo json_encode([
+            'success'    => true,
+            'has_broker' => $liveHasBroker,
+            'symbols'    => $liveSymbols,
+            'timeframes' => $liveTimeframes,
+            'programme_id'   => (int)$liveProgramme['id'],
+            'programme_name' => (string)($liveProgramme['program_name'] ?? 'Programme'),
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(['success'=>false,'message'=>'Query failed: '.$e->getMessage()]);
+    }
+    exit;
+}
 
 // ==================== AJAX: COUNT CANDLES ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['count_candles'])) {
     header('Content-Type: application/json');
-    $symbol    = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
-    if ($symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'Symbol and timeframe are required.','total'=>0]); exit;
+    if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','total'=>0]); exit; }
+
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    $symbol         = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe      = trim((string)($_POST['timeframe'] ?? ''));
+
+    if ($reqProgrammeId <= 0 || $symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'programme_id, symbol and timeframe are required.','total'=>0]); exit;
     }
+
+    $owned = ptResolveOwnedProgramme($pdo, $userId, $reqProgrammeId);
+    if (!$owned) {
+        echo json_encode(['success'=>false,'message'=>'Programme not found.','total'=>0]); exit;
+    }
+
     try {
-        $q = $pdo->prepare("SELECT COUNT(*) AS total FROM candle_records WHERE userid=? AND symbol=? AND timeframe=?");
-        $q->execute([$userId, $symbol, $timeframe]);
+        $q = $pdo->prepare("SELECT COUNT(*) AS total FROM candle_records
+                             WHERE programmeid = ? AND userid = ?
+                               AND symbol = ? AND timeframe = ?");
+        $q->execute([$reqProgrammeId, $userId, $symbol, $timeframe]);
         $row = $q->fetch(PDO::FETCH_ASSOC);
         echo json_encode(['success'=>true,'symbol'=>$symbol,'timeframe'=>$timeframe,'total'=>(int)($row['total'] ?? 0)]);
     } catch (PDOException $e) {
@@ -273,466 +618,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['count_candles'])) {
     exit;
 }
 
-// ==================== AJAX: CANDLE BOUNDS (min/max time) ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_bounds'])) {
-    header('Content-Type: application/json');
-
-    if (!isset($_SESSION['user_email'])) {
-        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
-    }
-
-    $symbol    = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
-    if ($symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'symbol and timeframe required.']); exit;
-    }
-
-    try {
-        $q = $pdo->prepare("
-            SELECT MIN(candle_time) AS min_time, MAX(candle_time) AS max_time, COUNT(*) AS total
-            FROM candle_records
-            WHERE userid=? AND symbol=? AND timeframe=?
-        ");
-        $q->execute([$userId, $symbol, $timeframe]);
-        $row = $q->fetch(PDO::FETCH_ASSOC);
-        echo json_encode([
-            'success'  => true,
-            'min_time' => $row ? $row['min_time'] : null,
-            'max_time' => $row ? $row['max_time'] : null,
-            'total'    => $row ? (int)$row['total'] : 0,
-        ]);
-    } catch (PDOException $e) {
-        echo json_encode(['success'=>false,'message'=>'Query failed: '.$e->getMessage()]);
-    }
-    exit;
-}
-
-// ==================== AJAX: FETCH RECENT CANDLES (most recent N) ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_recent'])) {
-    header('Content-Type: application/json');
-
-    if (!isset($_SESSION['user_email'])) {
-        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
-    }
-
-    $symbol    = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
-    $limit     = isset($_POST['limit']) ? max(1, min(20000, (int)$_POST['limit'])) : 5000;
-
-    if ($symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'symbol and timeframe required.','candles'=>[]]); exit;
-    }
-
-    try {
-        $q = $pdo->prepare("
-            SELECT id, candle_time, open_time, close_time,
-                   open, high, low, close,
-                   candle_center, body_center,
-                   high_wick_center, low_wick_center, candle_width_center,
-                   volume
-            FROM candle_records
-            WHERE userid=? AND symbol=? AND timeframe=?
-            ORDER BY candle_time DESC LIMIT $limit
-        ");
-        $q->execute([$userId, $symbol, $timeframe]);
-
-        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-        $rowsAsc = array_reverse($rows);
-
-        $candles = [];
-        foreach ($rowsAsc as $r) {
-            $candles[] = [
-                'id'                  => (int)$r['id'],
-                'time'                => $r['candle_time'],
-                'open_time'           => $r['open_time'],
-                'close_time'          => $r['close_time'],
-                'open'                => (float)$r['open'],
-                'high'                => (float)$r['high'],
-                'low'                 => (float)$r['low'],
-                'close'               => (float)$r['close'],
-                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
-                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center']         : null,
-                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
-                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
-                'candle_width_center' => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
-                'volume'              => $r['volume']              !== null ? (float)$r['volume']              : null,
-            ];
-        }
-
-        echo json_encode(['success'=>true, 'candles'=>$candles, 'count'=>count($candles)]);
-    } catch (PDOException $e) {
-        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage(), 'candles'=>[]]);
-    }
-    exit;
-}
-
-// ==================== AJAX: PERSIST MATCHES ====================
-// ==================== AJAX: PERSIST MATCHES ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['persist_matches'])) {
-    header('Content-Type: application/json');
-
-    if (!isset($_SESSION['user_email'])) {
-        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
-    }
-
-    $raw = (string)($_POST['payload'] ?? '');
-    $payload = json_decode($raw, true);
-    if (!is_array($payload)) {
-        echo json_encode(['success'=>false,'message'=>'Invalid payload.']); exit;
-    }
-
-    $programmeId = (int)($payload['programmeId'] ?? 0);
-    $symbol      = trim((string)($payload['symbol'] ?? ''));
-    $timeframe   = trim((string)($payload['timeframe'] ?? ''));
-    $runToken    = trim((string)($payload['run_token'] ?? ''));
-    $trees       = is_array($payload['trees'] ?? null) ? $payload['trees'] : [];
-
-    if ($programmeId <= 0 || $symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'programmeId, symbol and timeframe are required.']); exit;
-    }
-    if ($runToken === '') {
-        $runToken = bin2hex(random_bytes(16));
-    }
-
-    try {
-        $owner = $pdo->prepare("SELECT id FROM programme WHERE id = ? AND userid = ? LIMIT 1");
-        $owner->execute([$programmeId, $userId]);
-        if (!$owner->fetch(PDO::FETCH_ASSOC)) {
-            echo json_encode(['success'=>false,'message'=>'Programme not found for this user.']); exit;
-        }
-    } catch (PDOException $e) {
-        echo json_encode(['success'=>false,'message'=>'Ownership check failed: '.$e->getMessage()]); exit;
-    }
-
-    $totalRows = 0;
-    foreach ($trees as $tree) {
-        $matched = is_array($tree['matched'] ?? null) ? $tree['matched'] : [];
-        $totalRows += count($matched);
-    }
-
-    try {
-        $pdo->beginTransaction();
-
-        $del = $pdo->prepare("
-            DELETE FROM programme_candles_configuration
-            WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
-        ");
-        $del->execute([$userId, $programmeId, $symbol, $timeframe]);
-        $deleted = $del->rowCount();
-
-        $insertedRows = 0;
-
-        if ($totalRows > 0) {
-            $ins = $pdo->prepare("
-                INSERT INTO programme_candles_configuration
-                    (userid, programmeid, tree_id, run_token, row_role, parent_id, author_id, source_row_id,
-                     candle_record_id, symbol, timeframe, candle_time, open_time, close_time,
-                     open, high, low, close,
-                     candle_center, body_center, high_wick_center, low_wick_center, candle_width_center, volume,
-                     candle_name, price_level, candle_type, candle_position, candle_search, operator, order_type,
-                     drawing_id, drawing_tools, draw_from, draw_from_price_level,
-                     draw_to, draw_to_price_level, drawing_color,
-                     draw_from_price, draw_to_price, draw_to_candle_time, draw_to_candle_id,
-                     entry_from, entry_from_price_level, exit_at, exit_at_price_level,
-                     target, target_price_level,
-                     entry_price, exit_price, target_price,
-                     resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
-                     entry_trigger_idx, entry_trigger_candle_time,
-                     entry_trigger_candle_open_time, entry_trigger_candle_close_time,
-                     tp_hit_idx, tp_hit_candle_time,
-                     tp_candle_open_time, tp_candle_close_time,
-                     sl_hit_idx, sl_hit_candle_time,
-                     sl_candle_open_time, sl_candle_close_time,
-                     outcome_status, outcome_candle_time, outcome_price,
-                     is_foundation, evaluation_priority, status,
-                     triggered_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 
-                        ?, ?, ?, ?, ?, ?, 
-                        ?, ?, ?, ?, 
-                        ?, ?, ?, ?, ?, ?, 
-                        ?, ?, ?, ?, ?, ?, ?, 
-                        ?, ?, ?, ?, 
-                        ?, ?, ?, 
-                        ?, ?, ?, ?, 
-                        ?, ?, ?, ?, 
-                        ?, ?, 
-                        ?, ?, ?, 
-                        ?, ?, ?, ?, ?, 
-                        ?, ?, 
-                        ?, ?, 
-                        ?, ?, 
-                        ?, ?, 
-                        ?, ?, 
-                        ?, ?, ?, 
-                        ?, ?, ?, 
-                        ?, ?, ?)
-            ");
-
-            $now = date('Y-m-d H:i:s');
-
-            foreach ($trees as $tree) {
-                $treeId  = (int)($tree['tree_id'] ?? 0);
-                $matched = is_array($tree['matched'] ?? null) ? $tree['matched'] : [];
-
-                foreach ($matched as $m) {
-                    $role = (string)($m['row_role'] ?? 'matched_candle');
-
-                    $ins->execute([
-                        $userId, $programmeId, $treeId, $runToken, $role,
-                        isset($m['parent_id'])     ? (int)$m['parent_id']     : null,
-                        isset($m['author_id'])     ? (int)$m['author_id']     : null,
-                        isset($m['source_row_id']) ? (int)$m['source_row_id'] : null,
-
-                        isset($m['candle_record_id']) ? (int)$m['candle_record_id'] : null,
-                        $symbol, $timeframe,
-                        $m['candle_time']  ?? null,
-                        $m['open_time']    ?? null,
-                        $m['close_time']   ?? null,
-
-                        $m['open']  ?? null,
-                        $m['high']  ?? null,
-                        $m['low']   ?? null,
-                        $m['close'] ?? null,
-
-                        $m['candle_center']       ?? null,
-                        $m['body_center']         ?? null,
-                        $m['high_wick_center']    ?? null,
-                        $m['low_wick_center']     ?? null,
-                        $m['candle_width_center'] ?? null,
-                        $m['volume']              ?? null,
-
-                        $m['candle_name']     ?? null,
-                        $m['price_level']     ?? null,
-                        $m['candle_type']     ?? null,
-                        $m['candle_position'] ?? null,
-                        $m['candle_search']   ?? null,
-                        $m['operator']        ?? null,
-                        $m['order_type']      ?? null,
-
-                        isset($m['drawing_id']) ? (int)$m['drawing_id'] : null,
-                        $m['drawing_tools']         ?? null,
-                        $m['draw_from']             ?? null,
-                        $m['draw_from_price_level'] ?? null,
-                        $m['draw_to']               ?? null,
-                        $m['draw_to_price_level']   ?? null,
-                        $m['drawing_color']         ?? null,
-
-                        $m['draw_from_price']     ?? null,
-                        $m['draw_to_price']       ?? null,
-                        $m['draw_to_candle_time'] ?? null,
-                        isset($m['draw_to_candle_id']) ? (int)$m['draw_to_candle_id'] : null,
-
-                        $m['entry_from']             ?? null,
-                        $m['entry_from_price_level'] ?? null,
-                        $m['exit_at']                ?? null,
-                        $m['exit_at_price_level']    ?? null,
-                        $m['target']                 ?? null,
-                        $m['target_price_level']     ?? null,
-
-                        $m['entry_price']  ?? null,
-                        $m['exit_price']   ?? null,
-                        $m['target_price'] ?? null,
-
-                        $m['resolved_price']     ?? null,
-                        isset($m['resolved_direction']) ? (int)$m['resolved_direction'] : 0,
-                        $m['resolved_risk']      ?? null,
-                        $m['resolved_reward']    ?? null,
-                        $m['resolved_ratio']     ?? null,
-
-                        isset($m['entry_trigger_idx']) ? (int)$m['entry_trigger_idx'] : null,
-                        $m['entry_trigger_candle_time'] ?? null,
-                        $m['entry_trigger_candle_open_time']  ?? null,
-                        $m['entry_trigger_candle_close_time'] ?? null,
-
-                        isset($m['tp_hit_idx']) ? (int)$m['tp_hit_idx'] : null,
-                        $m['tp_hit_candle_time'] ?? null,
-                        $m['tp_candle_open_time']  ?? null,
-                        $m['tp_candle_close_time'] ?? null,
-
-                        isset($m['sl_hit_idx']) ? (int)$m['sl_hit_idx'] : null,
-                        $m['sl_hit_candle_time'] ?? null,
-                        $m['sl_candle_open_time']  ?? null,
-                        $m['sl_candle_close_time'] ?? null,
-
-                        $m['outcome_status']      ?? null,
-                        $m['outcome_candle_time'] ?? null,
-                        $m['outcome_price']       ?? null,
-
-                        !empty($m['is_foundation']) ? 1 : 0,
-                        isset($m['evaluation_priority']) ? (int)$m['evaluation_priority'] : 1,
-                        $m['status'] ?? 'matched',
-
-                        $m['triggered_at'] ?? $now,
-                    ]);
-                    $insertedRows++;
-                }
-            }
-        }
-
-        $pdo->commit();
-
-        echo json_encode([
-            'success'   => true,
-            'run_token' => $runToken,
-            'deleted'   => (int)$deleted,
-            'inserted'  => (int)$insertedRows,
-            'empty'     => ($totalRows === 0),
-        ]);
-    } catch (Exception $ex) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        echo json_encode(['success'=>false, 'message'=>$ex->getMessage()]);
-    }
-    exit;
-}
-
-// ==================== AJAX: FETCH PERSISTED MATCHES ====================
-// ==================== AJAX: FETCH PERSISTED MATCHES ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_persisted_matches'])) {
-    header('Content-Type: application/json');
-
-    if (!isset($_SESSION['user_email'])) {
-        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
-    }
-
-    $programmeId = isset($_POST['programmeid']) ? (int)$_POST['programmeid'] : 0;
-    $symbol      = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe   = trim((string)($_POST['timeframe'] ?? ''));
-
-    if ($programmeId <= 0 || $symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'programmeid, symbol and timeframe required.']); exit;
-    }
-
-    try {
-        $q = $pdo->prepare("
-            SELECT id, tree_id, run_token, row_role, parent_id, author_id, source_row_id,
-                   candle_record_id, symbol, timeframe, candle_time, open_time, close_time,
-                   open, high, low, close,
-                   candle_center, body_center, high_wick_center, low_wick_center, candle_width_center, volume,
-                   candle_name, price_level, candle_type, candle_position, candle_search, operator, order_type,
-                   drawing_id, drawing_tools, draw_from, draw_from_price_level,
-                   draw_to, draw_to_price_level, drawing_color,
-                   draw_from_price, draw_to_price, draw_to_candle_time, draw_to_candle_id,
-                   entry_from, entry_from_price_level, exit_at, exit_at_price_level,
-                   target, target_price_level,
-                   entry_price, exit_price, target_price,
-                   resolved_price, resolved_direction, resolved_risk, resolved_reward, resolved_ratio,
-                   entry_trigger_idx, entry_trigger_candle_time,
-                   entry_trigger_candle_open_time, entry_trigger_candle_close_time,
-                   tp_hit_idx, tp_hit_candle_time,
-                   tp_candle_open_time, tp_candle_close_time,
-                   sl_hit_idx, sl_hit_candle_time,
-                   sl_candle_open_time, sl_candle_close_time,
-                   outcome_status, outcome_candle_time, outcome_price,
-                   is_foundation, evaluation_priority, status,
-                   triggered_at, created_at
-            FROM programme_candles_configuration
-            WHERE userid = ? AND programmeid = ? AND symbol = ? AND timeframe = ?
-            ORDER BY tree_id ASC, evaluation_priority ASC, id ASC
-        ");
-        $q->execute([$userId, $programmeId, $symbol, $timeframe]);
-
-        $rows = [];
-        while ($r = $q->fetch(PDO::FETCH_ASSOC)) {
-            $rows[] = [
-                'id'                    => (int)$r['id'],
-                'tree_id'               => (int)$r['tree_id'],
-                'run_token'             => $r['run_token'],
-                'row_role'              => $r['row_role'],
-                'parent_id'             => $r['parent_id'] !== null ? (int)$r['parent_id'] : null,
-                'author_id'             => $r['author_id'] !== null ? (int)$r['author_id'] : null,
-                'source_row_id'         => $r['source_row_id'] !== null ? (int)$r['source_row_id'] : null,
-                'candle_record_id'      => $r['candle_record_id'] !== null ? (int)$r['candle_record_id'] : null,
-                'symbol'                => $r['symbol'],
-                'timeframe'             => $r['timeframe'],
-                'candle_time'           => $r['candle_time'],
-                'open_time'             => $r['open_time'],
-                'close_time'            => $r['close_time'],
-                'open'                  => $r['open']  !== null ? (float)$r['open']  : null,
-                'high'                  => $r['high']  !== null ? (float)$r['high']  : null,
-                'low'                   => $r['low']   !== null ? (float)$r['low']   : null,
-                'close'                 => $r['close'] !== null ? (float)$r['close'] : null,
-                'candle_center'         => $r['candle_center']       !== null ? (float)$r['candle_center']       : null,
-                'body_center'           => $r['body_center']         !== null ? (float)$r['body_center']         : null,
-                'high_wick_center'      => $r['high_wick_center']    !== null ? (float)$r['high_wick_center']    : null,
-                'low_wick_center'       => $r['low_wick_center']     !== null ? (float)$r['low_wick_center']     : null,
-                'candle_width_center'   => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
-                'volume'                => $r['volume']              !== null ? (float)$r['volume']              : null,
-                'candle_name'           => $r['candle_name'],
-                'price_level'           => $r['price_level'],
-                'candle_type'           => $r['candle_type'],
-                'candle_position'       => $r['candle_position'],
-                'candle_search'         => $r['candle_search'],
-                'operator'              => $r['operator'],
-                'order_type'            => $r['order_type'],
-                'drawing_id'            => $r['drawing_id'] !== null ? (int)$r['drawing_id'] : null,
-                'drawing_tools'         => $r['drawing_tools'],
-                'draw_from'             => $r['draw_from'],
-                'draw_from_price_level' => $r['draw_from_price_level'],
-                'draw_to'               => $r['draw_to'],
-                'draw_to_price_level'   => $r['draw_to_price_level'],
-                'drawing_color'         => $r['drawing_color'],
-                'draw_from_price'       => $r['draw_from_price'] !== null ? (float)$r['draw_from_price'] : null,
-                'draw_to_price'         => $r['draw_to_price']   !== null ? (float)$r['draw_to_price']   : null,
-                'draw_to_candle_time'   => $r['draw_to_candle_time'],
-                'draw_to_candle_id'     => $r['draw_to_candle_id'] !== null ? (int)$r['draw_to_candle_id'] : null,
-                'entry_from'            => $r['entry_from'],
-                'entry_from_price_level'=> $r['entry_from_price_level'],
-                'exit_at'               => $r['exit_at'],
-                'exit_at_price_level'   => $r['exit_at_price_level'],
-                'target'                => $r['target'],
-                'target_price_level'    => $r['target_price_level'],
-                'entry_price'           => $r['entry_price']   !== null ? (float)$r['entry_price']   : null,
-                'exit_price'            => $r['exit_price']    !== null ? (float)$r['exit_price']    : null,
-                'target_price'          => $r['target_price']  !== null ? (float)$r['target_price']  : null,
-                'resolved_price'        => $r['resolved_price']   !== null ? (float)$r['resolved_price']   : null,
-                'resolved_direction'    => (int)$r['resolved_direction'],
-                'resolved_risk'         => $r['resolved_risk']    !== null ? (float)$r['resolved_risk']    : null,
-                'resolved_reward'       => $r['resolved_reward']  !== null ? (float)$r['resolved_reward']  : null,
-                'resolved_ratio'        => $r['resolved_ratio']   !== null ? (float)$r['resolved_ratio']   : null,
-
-                'entry_trigger_idx'                    => $r['entry_trigger_idx'] !== null ? (int)$r['entry_trigger_idx'] : null,
-                'entry_trigger_candle_time'            => $r['entry_trigger_candle_time'],
-                'entry_trigger_candle_open_time'       => $r['entry_trigger_candle_open_time'],
-                'entry_trigger_candle_close_time'      => $r['entry_trigger_candle_close_time'],
-
-                'tp_hit_idx'                           => $r['tp_hit_idx'] !== null ? (int)$r['tp_hit_idx'] : null,
-                'tp_hit_candle_time'                   => $r['tp_hit_candle_time'],
-                'tp_candle_open_time'                  => $r['tp_candle_open_time'],
-                'tp_candle_close_time'                 => $r['tp_candle_close_time'],
-
-                'sl_hit_idx'                           => $r['sl_hit_idx'] !== null ? (int)$r['sl_hit_idx'] : null,
-                'sl_hit_candle_time'                   => $r['sl_hit_candle_time'],
-                'sl_candle_open_time'                  => $r['sl_candle_open_time'],
-                'sl_candle_close_time'                 => $r['sl_candle_close_time'],
-
-                'outcome_status'        => $r['outcome_status'],
-                'outcome_candle_time'   => $r['outcome_candle_time'],
-                'outcome_price'         => $r['outcome_price'] !== null ? (float)$r['outcome_price'] : null,
-                'is_foundation'         => (int)$r['is_foundation'],
-                'evaluation_priority'   => (int)$r['evaluation_priority'],
-                'status'                => $r['status'],
-                'triggered_at'          => $r['triggered_at'],
-                'created_at'            => $r['created_at'],
-            ];
-        }
-
-        echo json_encode(['success'=>true, 'rows'=>$rows]);
-    } catch (PDOException $e) {
-        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage()]);
-    }
-    exit;
-}
-
-// ==================== AJAX: FETCH CANDLES ====================
+// ==================== AJAX: FETCH CANDLES (paginated) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
     header('Content-Type: application/json');
-    $symbol    = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe = trim((string)($_POST['timeframe'] ?? ''));
-    $limit     = isset($_POST['limit'])  ? max(1, min(2000, (int)$_POST['limit'])) : 200;
-    $before    = trim((string)($_POST['before'] ?? ''));
+    if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','candles'=>[],'has_more'=>false]); exit; }
 
-    if ($symbol === '' || $timeframe === '') {
-        echo json_encode(['success'=>false,'message'=>'Symbol and timeframe are required.','candles'=>[],'has_more'=>false]); exit;
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    $symbol         = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe      = trim((string)($_POST['timeframe'] ?? ''));
+    $limit          = isset($_POST['limit'])  ? max(1, min(2000, (int)$_POST['limit'])) : 200;
+    $before         = trim((string)($_POST['before'] ?? ''));
+
+    if ($reqProgrammeId <= 0 || $symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'programme_id, symbol and timeframe are required.','candles'=>[],'has_more'=>false]); exit;
+    }
+    $owned = ptResolveOwnedProgramme($pdo, $userId, $reqProgrammeId);
+    if (!$owned) {
+        echo json_encode(['success'=>false,'message'=>'Programme not found.','candles'=>[],'has_more'=>false]); exit;
     }
 
     try {
@@ -744,10 +646,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
                        high_wick_center, low_wick_center, candle_width_center,
                        volume
                 FROM candle_records
-                WHERE userid=? AND symbol=? AND timeframe=? AND candle_time < ?
+                WHERE programmeid = ? AND userid = ?
+                  AND symbol = ? AND timeframe = ? AND candle_time < ?
                 ORDER BY candle_time DESC LIMIT $limit
             ");
-            $q->execute([$userId, $symbol, $timeframe, $before]);
+            $q->execute([$reqProgrammeId, $userId, $symbol, $timeframe, $before]);
         } else {
             $q = $pdo->prepare("
                 SELECT id, candle_time, open_time, close_time,
@@ -756,10 +659,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
                        high_wick_center, low_wick_center, candle_width_center,
                        volume
                 FROM candle_records
-                WHERE userid=? AND symbol=? AND timeframe=?
+                WHERE programmeid = ? AND userid = ?
+                  AND symbol = ? AND timeframe = ?
                 ORDER BY candle_time DESC LIMIT $limit
             ");
-            $q->execute([$userId, $symbol, $timeframe]);
+            $q->execute([$reqProgrammeId, $userId, $symbol, $timeframe]);
         }
         $rows = $q->fetchAll(PDO::FETCH_ASSOC);
         $rowsAsc = array_reverse($rows);
@@ -800,50 +704,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
     exit;
 }
 
-// ==================== AJAX: FETCH CANDLES IN RANGE (bulk) ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_range'])) {
+// ==================== AJAX: FETCH LATEST CANDLES (live tail) ====================
+// Returns every candle with candle_time > after_time for the given
+// (programme, symbol, timeframe). The browser supplies the newest
+// candle_time it already has; the server returns only the tail.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_latest'])) {
     header('Content-Type: application/json');
+    if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','candles'=>[]]); exit; }
 
-    if (!isset($_SESSION['user_email'])) {
-        echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit;
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    $symbol         = trim((string)($_POST['symbol'] ?? ''));
+    $timeframe      = trim((string)($_POST['timeframe'] ?? ''));
+    $afterTs        = isset($_POST['after_ts']) ? (int)$_POST['after_ts'] : 0;
+    $afterTime      = $afterTs > 0
+                        ? gmdate('Y-m-d H:i:s', $afterTs)
+                        : '';
+    $limit          = isset($_POST['limit']) ? max(1, min(2000, (int)$_POST['limit'])) : 500;
+
+    if ($reqProgrammeId <= 0 || $symbol === '' || $timeframe === '') {
+        echo json_encode(['success'=>false,'message'=>'programme_id, symbol and timeframe are required.','candles'=>[]]); exit;
     }
-
-    $symbol     = trim((string)($_POST['symbol'] ?? ''));
-    $timeframe  = trim((string)($_POST['timeframe'] ?? ''));
-    $fromTime   = trim((string)($_POST['from_time'] ?? ''));
-    $toTime     = trim((string)($_POST['to_time'] ?? ''));
-    $limit      = isset($_POST['limit']) ? max(1, min(100000, (int)$_POST['limit'])) : 100000;
-
-    if ($symbol === '' || $timeframe === '' || $fromTime === '' || $toTime === '') {
-        echo json_encode(['success'=>false,'message'=>'symbol, timeframe, from_time, to_time required.','candles'=>[]]); exit;
+    $owned = ptResolveOwnedProgramme($pdo, $userId, $reqProgrammeId);
+    if (!$owned) {
+        echo json_encode(['success'=>false,'message'=>'Programme not found.','candles'=>[]]); exit;
     }
-
-    function ptNormTime($t) {
-        $s = str_replace('T', ' ', trim((string)$t));
-        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/', $s, $m)) return $m[1];
-        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/', $s, $m)) return $m[1] . ':00';
-        if (preg_match('/^(\d{4}-\d{2}-\d{2})$/', $s, $m)) return $m[1] . ' 00:00:00';
-        return $s;
-    }
-    $fromTime = ptNormTime($fromTime);
-    $toTime   = ptNormTime($toTime);
 
     try {
-        $q = $pdo->prepare("
-            SELECT id, candle_time, open_time, close_time,
-                   open, high, low, close,
-                   candle_center, body_center,
-                   high_wick_center, low_wick_center, candle_width_center,
-                   volume
-            FROM candle_records
-            WHERE userid=? AND symbol=? AND timeframe=?
-              AND candle_time >= ? AND candle_time < ?
-            ORDER BY candle_time ASC LIMIT $limit
-        ");
-        $q->execute([$userId, $symbol, $timeframe, $fromTime, $toTime]);
+        if ($afterTime !== '') {
+            $q = $pdo->prepare("
+                SELECT id, candle_time, open_time, close_time,
+                       open, high, low, close,
+                       candle_center, body_center,
+                       high_wick_center, low_wick_center, candle_width_center,
+                       volume
+                FROM candle_records
+                WHERE programmeid = ? AND userid = ?
+                  AND symbol = ? AND timeframe = ?
+                  AND candle_time > ?
+                ORDER BY candle_time ASC LIMIT $limit
+            ");
+            $q->execute([$reqProgrammeId, $userId, $symbol, $timeframe, $afterTime]);
+        } else {
+            $q = $pdo->prepare("
+                SELECT id, candle_time, open_time, close_time,
+                       open, high, low, close,
+                       candle_center, body_center,
+                       high_wick_center, low_wick_center, candle_width_center,
+                       volume
+                FROM candle_records
+                WHERE programmeid = ? AND userid = ?
+                  AND symbol = ? AND timeframe = ?
+                ORDER BY candle_time ASC LIMIT $limit
+            ");
+            $q->execute([$reqProgrammeId, $userId, $symbol, $timeframe]);
+        }
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
 
         $candles = [];
-        while ($r = $q->fetch(PDO::FETCH_ASSOC)) {
+        foreach ($rows as $r) {
             $candles[] = [
                 'id'                  => (int)$r['id'],
                 'time'                => $r['candle_time'],
@@ -863,66 +781,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_range']
         }
 
         echo json_encode([
-            'success'  => true,
-            'candles'  => $candles,
-            'count'    => count($candles),
-            'from'     => $fromTime,
-            'to'       => $toTime,
+            'success'   => true,
+            'symbol'    => $symbol,
+            'timeframe' => $timeframe,
+            'count'     => count($candles),
+            'candles'   => $candles,
         ]);
     } catch (PDOException $e) {
-        echo json_encode(['success'=>false, 'message'=>'Query failed: '.$e->getMessage(), 'candles'=>[]]);
+        echo json_encode(['success'=>false,'message'=>'Query failed: '.$e->getMessage(),'candles'=>[]]);
     }
     exit;
 }
-
-// ==================== AJAX: FETCH TRADE DETAILS ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details'])) {
-    header('Content-Type: application/json');
-
-    $payload = json_decode((string)($_POST['payload'] ?? ''), true);
-    if (!is_array($payload) || empty($payload['trades'])) {
-        echo json_encode(['success' => false, 'message' => 'Invalid payload.']); exit;
+$providerRiskReward = null;
+try {
+    if ($programmeId > 0) {
+        $rrStmt = $pdo->prepare("SELECT risk_reward FROM signals_provider_interest WHERE programme_id = ? AND interest_status IN ('interested','pending','active') ORDER BY id DESC LIMIT 1");
+        $rrStmt->execute([$programmeId]);
+        $rrValue = $rrStmt->fetchColumn();
+        if ($rrValue !== false && is_numeric($rrValue)) $providerRiskReward = (float)$rrValue;
     }
-
-    $symbol    = trim((string)($payload['symbol'] ?? ''));
-    $timeframe = trim((string)($payload['timeframe'] ?? ''));
-    if ($symbol === '' || $timeframe === '') {
-        echo json_encode(['success' => false, 'message' => 'Symbol/timeframe required.']); exit;
-    }
-
-    try {
-        $q = $pdo->prepare("
-            SELECT candle_time, open, high, low, close,
-                   candle_center, body_center,
-                   high_wick_center, low_wick_center, candle_width_center
-            FROM candle_records
-            WHERE userid=? AND symbol=? AND timeframe=?
-            ORDER BY candle_time DESC LIMIT 500
-        ");
-        $q->execute([$userId, $symbol, $timeframe]);
-        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-
-        $candles = [];
-        foreach ($rows as $r) {
-            $candles[] = [
-                'time'                => $r['candle_time'],
-                'open'                => (float)$r['open'],
-                'high'                => (float)$r['high'],
-                'low'                 => (float)$r['low'],
-                'close'               => (float)$r['close'],
-                'candle_center'       => $r['candle_center']       !== null ? (float)$r['candle_center'] : null,
-                'body_center'         => $r['body_center']         !== null ? (float)$r['body_center'] : null,
-                'high_wick_center'    => $r['high_wick_center']    !== null ? (float)$r['high_wick_center'] : null,
-                'low_wick_center'     => $r['low_wick_center']     !== null ? (float)$r['low_wick_center'] : null,
-                'candle_width_center' => $r['candle_width_center'] !== null ? (float)$r['candle_width_center'] : null,
-            ];
-        }
-        echo json_encode(['success' => true, 'candles' => $candles]);
-    } catch (PDOException $e) {
-        echo json_encode(['success' => false, 'message' => 'Query failed: ' . $e->getMessage()]);
-    }
-    exit;
-}
+} catch (Throwable $e) { $providerRiskReward = null; }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -931,374 +809,1175 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 <title><?= htmlspecialchars($programmeName) ?> - Training</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
-<?php include 'style.php'; ?>
-<?php include 'dev_style.php'; ?>
-<?php include 'dev_dashboard_style.php'; ?>
-<?php include 'programme_training_style.php'; ?>
 <style>
-    .pt-chart-fullscreen { position: fixed; inset: 0; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
-    .pt-chart-canvas { display: block; cursor: crosshair; }
+    :root{
+        --pt-bg:      var(--bg, #ffffff);
+        --pt-card:    var(--bg-card, #ffffff);
+        --pt-text:    var(--text, #12211d);
+        --pt-muted:   var(--text-muted, #60736d);
+        --pt-accent:  var(--accent, #12a36b);
+        --pt-border:  var(--border-color, #dfe9e5);
+        --pt-shadow:  var(--shadow, 0 2px 12px rgba(18,33,29,.06));
+        --pt-radius:  var(--radius, 16px);
+    }
+
+    @media (prefers-color-scheme: dark) {
+        html:not(.force-light) {
+            --pt-bg:      #0c1311;
+            --pt-card:    #0c1311;
+            --pt-text:    #e8f2ee;
+            --pt-muted:   #93a8a1;
+            --pt-border:  #22322d;
+            --pt-shadow:  0 10px 30px rgba(0,0,0,.4);
+        }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+        background: var(--pt-bg) !important;
+        color: var(--pt-text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        line-height: 1.55;
+        -webkit-tap-highlight-color: transparent;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    body.dark-mode {
+        --pt-bg:     #0c1311;
+        --pt-card:   #0c1311;
+        --pt-text:   #e8f2ee;
+        --pt-muted:  #93a8a1;
+        --pt-border: #22322d;
+        --pt-shadow: 0 10px 30px rgba(0,0,0,.4);
+        background: var(--pt-bg) !important;
+    }
+
+    body::-webkit-scrollbar { display: none; }
+
+    .pt-page {
+        position: relative;
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+        background: var(--pt-bg);
+    }
+
+    .pt-controls {
+        position: relative;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px 14px 14px;
+        background: transparent;
+        overflow: hidden;
+    }
+
+    .pt-controls-title-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+
+    .pt-controls-btn-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 2px;
+    }
+    .pt-controls-btn-row::-webkit-scrollbar { height: 0; }
+
+    .pt-controls > * { pointer-events: auto; }
+
+    .pt-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--pt-text);
+        white-space: nowrap;
+        letter-spacing: -0.3px;
+        flex-shrink: 0;
+    }
+    @media (max-width: 480px) { .pt-title { font-size: 1.1rem; } }
+
+    .pt-topbar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        background: var(--pt-card);
+        border: 1px solid var(--pt-border);
+        border-radius: 10px;
+        color: var(--pt-text);
+        font-family: inherit;
+        font-size: 0.9rem;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: var(--pt-shadow);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        max-width: 60vw;
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+    .pt-topbar-btn:hover { border-color: var(--pt-accent); }
+
+    .pt-topbar-symbol {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .pt-topbar-caret {
+        font-size: 0.7rem;
+        color: var(--pt-muted);
+        flex-shrink: 0;
+    }
+
+    .pt-tf-strip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px;
+        background: var(--pt-card);
+        border: 1px solid var(--pt-border);
+        border-radius: 10px;
+        box-shadow: var(--pt-shadow);
+        overflow-x: auto;
+        max-width: 100%;
+        -webkit-overflow-scrolling: touch;
+        flex-shrink: 0;
+    }
+    .pt-tf-strip::-webkit-scrollbar { height: 0; }
+
+    .pt-tf-btn {
+        background: transparent;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--pt-muted);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease, color 0.15s ease;
+    }
+    .pt-tf-btn:hover {
+        color: var(--pt-text);
+        background: rgba(46, 139, 87, 0.08);
+    }
+    .pt-tf-btn.active {
+        background: var(--pt-accent);
+        color: #fff;
+    }
+
+    .pt-tf-empty {
+        font-size: 0.78rem;
+        color: var(--pt-muted);
+        padding: 6px 10px;
+    }
+
+    .pt-fs-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        padding: 0;
+        background: var(--pt-card);
+        border: 1px solid var(--pt-border);
+        border-radius: 10px;
+        color: var(--pt-text);
+        font-size: 0.95rem;
+        cursor: pointer;
+        box-shadow: var(--pt-shadow);
+        transition: border-color 0.2s ease, background 0.2s ease;
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+    .pt-fs-btn i { color: var(--pt-accent); }
+    .pt-fs-btn:hover { border-color: var(--pt-accent); }
+    .pt-fs-btn.is-on { background: var(--pt-accent); border-color: var(--pt-accent); }
+    .pt-fs-btn.is-on i { color: #fff; }
+
+    .pt-tf-strip { display: flex; }
+    #ptTimeframeBtn { display: none; }
+
+    @media (max-width: 600px), (orientation: portrait) {
+        .pt-tf-strip    { display: none !important; }
+        #ptTimeframeBtn { display: inline-flex !important; }
+    }
+
+    @media (min-width: 601px) and (orientation: landscape) {
+        .pt-tf-strip    { display: flex !important; }
+        #ptTimeframeBtn { display: none !important; }
+    }
+
+    .pt-chart-card {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        z-index: 1;
+    }
+
+    .pt-chart-canvas {
+        display: block;
+        position: absolute;
+        inset: 0;
+        cursor: crosshair;
+        max-width: none;
+        width: 100%;
+        height: 100%;
+    }
     .pt-chart-canvas.pt-grabbing { cursor: grabbing; }
-    .pt-scale-bar { position: absolute; top: 0; right: 0; width: 18px; height: 100%; cursor: ns-resize; z-index: 6; background: transparent; }
-    .pt-scale-bar::after { content: ''; position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
-        width: 3px; height: 60px; border-radius: 2px; background: rgba(128,128,128,0.45); }
+
+    .pt-scale-bar {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 18px;
+        height: 100%;
+        cursor: ns-resize;
+        z-index: 6;
+        background: transparent;
+    }
+    .pt-scale-bar::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        right: 6px;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 60px;
+        border-radius: 2px;
+        background: rgba(128,128,128,0.45);
+    }
     .pt-scale-bar.pt-active::after { background: rgba(128,128,128,0.9); }
-    .pt-bg-loading { position: absolute; left: 12px; bottom: 12px; z-index: 7;
-        background: rgba(0,0,0,0.55); color: #fff;
+
+    .pt-bg-loading {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 7;
+        background: rgba(0,0,0,0.55);
+        color: #fff;
         font: 11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        padding: 4px 8px; border-radius: 6px; display: none; }
+        padding: 4px 8px;
+        border-radius: 6px;
+        display: none;
+    }
     .pt-bg-loading.pt-warn { background: rgba(180, 60, 60, 0.85); }
-    .pt-jump-latest { position: absolute; top: 50%; right: 34px; transform: translateY(-50%);
-        width: 40px; height: 40px; border-radius: 50%;
+
+    .pt-jump-latest {
+        position: absolute;
+        top: 50%;
+        right: 34px;
+        transform: translateY(-50%);
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
         border: 1px solid rgba(128,128,128,0.35);
-        background: rgba(40,40,40,0.55); color: #fff;
-        display: none; align-items: center; justify-content: center;
-        cursor: pointer; z-index: 8;
-        backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+        background: rgba(40,40,40,0.55);
+        color: #fff;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        z-index: 8;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+    }
     .pt-jump-latest:hover { background: rgba(60,60,60,0.85); }
     .pt-jump-latest:active { transform: translateY(-50%) scale(0.94); }
     .pt-jump-latest svg { width: 20px; height: 20px; display: block; }
-    body.dark-mode .pt-jump-latest { background: rgba(230,230,230,0.75); color: #222; border-color: rgba(0,0,0,0.25); }
+    body.dark-mode .pt-jump-latest {
+        background: rgba(230,230,230,0.75);
+        color: #222;
+        border-color: rgba(0,0,0,0.25);
+    }
     body.dark-mode .pt-jump-latest:hover { background: rgba(255,255,255,0.95); }
-    .pt-candles-modal { position: fixed; inset: 0; z-index: 9999; display: none;
-        align-items: center; justify-content: center;
-        background: rgba(0,0,0,0.55);
-        backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
-    .pt-candles-modal.active { display: flex; }
-    .pt-candles-modal-box { width: 92%; max-width: 400px; background: #fff; color: #222;
-        border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.35);
-        padding: 20px 20px 16px;
-        font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-    body.dark-mode .pt-candles-modal-box { background: #1f1f1f; color: #eee; }
-    .pt-candles-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
-    .pt-candles-sub { font-size: 12px; opacity: 0.75; margin-bottom: 12px; line-height: 1.4; }
-    .pt-candles-input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 15px;
-        border-radius: 8px; border: 1px solid #ccc; outline: none;
-        background: #fafafa; color: inherit; }
-    body.dark-mode .pt-candles-input { background: #2b2b2b; border-color: #444; }
-    .pt-candles-available { font-size: 12px; margin-top: 8px; color: #2e8b57; font-weight: 600; }
-    body.dark-mode .pt-candles-available { color: #5dd39e; }
-    .pt-candles-info { font-size: 12px; margin-top: 6px; min-height: 16px; color: #b00020; white-space: pre-line; }
-    body.dark-mode .pt-candles-info { color: #ff8080; }
-    .pt-candles-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-    .pt-candles-btn { padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
-        border: 1px solid transparent; }
-    .pt-candles-btn.primary { background: #2e8b57; color: #fff; }
-    .pt-candles-btn.primary:hover { background: #27794b; }
-    .pt-candles-btn.ghost { background: transparent; color: inherit; border-color: #bbb; }
-    body.dark-mode .pt-candles-btn.ghost { border-color: #555; }
-    .pt-candles-btn.ghost:hover { background: rgba(128,128,128,0.15); }
-    .pt-cfg-btn { pointer-events: auto; display: inline-flex; align-items: center; gap: 8px;
-        padding: 9px 14px; background: var(--bg-card, #fff);
-        border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: var(--radius-sm, 8px);
-        color: var(--text, #222);
-        font-family: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-        transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-        white-space: nowrap; }
-    .pt-cfg-btn i { color: var(--accent, #2e8b57); font-size: 0.95rem; }
-    .pt-cfg-btn:hover { border-color: var(--accent, #2e8b57); box-shadow: 0 3px 14px rgba(0,0,0,0.1); }
-    body.dark-mode .pt-cfg-btn { background: var(--bg-card, #1e1e2a);
-        border-color: var(--border-color, #333); color: var(--text, #eee); }
-    @media (max-width: 600px) {
-        .pt-cfg-btn { padding: 8px 11px; font-size: 0.8rem; }
-        .pt-cfg-btn span { display: none; } }
-    #ptDrawCanvas { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
-    .pt-trades-btn { position: relative; }
-    .pt-trades-count { background: #27ae60; color: #fff; border-radius: 10px;
-        font-size: 0.68rem; font-weight: 800; padding: 1px 6px; margin-left: 4px; }
-
-    .pt-trades-modal { position: fixed; inset: 0; z-index: 10002; display: none;
-        align-items: center; justify-content: center;
-        background: rgba(0,0,0,0.6);
-        backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
-        padding: 20px; box-sizing: border-box; }
-    .pt-trades-modal.active { display: flex; }
-    .pt-trades-box { width: 100%; max-width: 640px; max-height: 90vh;
-        background: var(--bg-card, #fff); color: var(--text, #222);
-        border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-        display: flex; flex-direction: column; overflow: hidden;
-        font-family: inherit; }
-    .pt-trades-head { display: flex; align-items: flex-start; justify-content: space-between;
-        padding: 14px 18px 12px; border-bottom: 1px solid var(--border-color, #e0e0e0);
-        background: rgba(39,174,96,0.06); flex-shrink: 0; }
-    .pt-trades-title { margin: 0; font-size: 1rem; font-weight: 700; color: #27ae60; }
-    .pt-trades-sub { margin: 3px 0 0; font-size: 0.78rem; color: var(--text-muted, #888); }
-    .pt-trades-close { border: 1px solid transparent; background: transparent;
-        color: var(--text-muted, #888); width: 32px; height: 32px; border-radius: 8px;
-        cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-    .pt-trades-close:hover { background: rgba(128,128,128,0.15); color: var(--text, #222); }
-    .pt-trades-body { padding: 0; overflow-y: auto; flex: 1; }
-    .pt-trades-results { padding: 12px 16px 16px; }
-    .pt-trades-tree { margin-bottom: 10px; border: 1px solid var(--border-color, #e0e0e0);
-        border-radius: 10px; background: var(--bg, #fafafa); overflow: hidden; }
-    .pt-trades-tree-head { display: flex; align-items: center; gap: 8px;
-        padding: 10px 12px; cursor: pointer; user-select: none;
-        background: rgba(46,139,87,0.06); }
-    .pt-trades-tree-head:hover { background: rgba(46,139,87,0.1); }
-    .pt-trades-tree-caret { font-size: 0.7rem; transition: transform 0.18s ease; color: #27ae60; }
-    .pt-trades-tree[data-open="1"] .pt-trades-tree-caret { transform: rotate(90deg); }
-    .pt-trades-tree-icon { color: #27ae60; font-size: 0.95rem; }
-    .pt-trades-tree-name { font-weight: 800; font-size: 0.85rem; color: var(--accent, #2e8b57);
-        text-transform: uppercase; letter-spacing: 0.4px; }
-    .pt-trades-tree-count { font-size: 0.72rem; color: var(--text-muted, #888); margin-left: auto; font-weight: 700; }
-    .pt-trades-tree-body { display: none; padding: 8px 12px 12px; }
-    .pt-trades-tree[data-open="1"] .pt-trades-tree-body { display: block; }
-    .pt-trade-summary { font-size: 0.8rem; color: var(--text-muted, #666);
-        margin-bottom: 10px; padding: 8px 10px; border-radius: 8px;
-        background: rgba(46,139,87,0.06); line-height: 1.5; }
-    .pt-trade-summary b { color: var(--text, #222); }
-    .pt-trade-card { border: 1px solid var(--border-color, #e0e0e0); border-left: 3px solid #27ae60;
-        border-radius: 10px; background: var(--bg-card, #fff);
-        padding: 10px 12px; margin-bottom: 8px; }
-    .pt-trade-card-head { display: flex; align-items: center; justify-content: space-between;
-        gap: 8px; margin-bottom: 6px; }
-    .pt-trade-card-title { font-weight: 800; font-size: 0.82rem; color: #27ae60; }
-    .pt-trade-order-badge { font-size: 0.65rem; font-weight: 800; text-transform: uppercase;
-        padding: 2px 8px; border-radius: 10px; letter-spacing: 0.4px;
-        background: rgba(39,174,96,0.15); color: #27ae60; }
-    .pt-trade-order-badge.buy { background: rgba(46,204,113,0.15); color: #27ae60; }
-    .pt-trade-order-badge.sell { background: rgba(231,76,60,0.15); color: #c0392b; }
-    .pt-trade-order-badge.buy_stop, .pt-trade-order-badge.buy_limit { background: rgba(46,204,113,0.15); color: #27ae60; }
-    .pt-trade-order-badge.sell_stop, .pt-trade-order-badge.sell_limit { background: rgba(231,76,60,0.15); color: #c0392b; }
-    .pt-trade-kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px;
-        font-size: 0.78rem; margin-bottom: 6px; }
-    .pt-trade-kv .k { color: var(--text-muted, #888); font-weight: 700; font-size: 0.7rem; text-transform: uppercase; }
-    .pt-trade-kv .v { color: var(--text, #222); font-weight: 600; }
-    .pt-trade-candles { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-color, #e0e0e0); }
-    .pt-trade-candles-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase;
-        letter-spacing: 0.4px; color: var(--text-muted, #888); margin-bottom: 4px; }
-    .pt-trade-candle-row { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr);
-        gap: 4px; font-size: 0.74rem; padding: 3px 0; font-variant-numeric: tabular-nums;
-        border-bottom: 1px dotted var(--border-color, #eee); }
-    .pt-trade-candle-row:last-child { border-bottom: none; }
-    .pt-trade-candle-row .head { color: var(--text-muted, #888); font-weight: 700; font-size: 0.68rem; text-transform: uppercase; }
-    .pt-trade-candle-row .up { color: #27ae60; font-weight: 700; }
-    .pt-trade-candle-row .dn { color: #c0392b; font-weight: 700; }
-    .pt-trades-empty { text-align: center; color: var(--text-muted, #888);
-        font-size: 0.85rem; padding: 30px 10px; }
-    body.dark-mode .pt-trades-box { background: var(--bg-card, #1e1e2a); border-color: var(--border-color, #333); }
-    body.dark-mode .pt-trades-head { background: rgba(39,174,96,0.12); border-bottom-color: var(--border-color, #333); }
-    body.dark-mode .pt-trades-tree { background: var(--bg, #171722); border-color: var(--border-color, #333); }
-    body.dark-mode .pt-trades-tree-head { background: rgba(46,139,87,0.12); }
-    body.dark-mode .pt-trade-card { background: var(--bg-card, #1e1e2a); border-color: var(--border-color, #333); }
-    body.dark-mode .pt-trade-kv .v { color: var(--text, #eee); }
-
-    .pt-debug-modal { position: fixed; inset: 0; z-index: 10003; display: none;
-        align-items: center; justify-content: center;
-        background: rgba(0,0,0,0.7);
-        backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
-        padding: 20px; box-sizing: border-box; }
-    .pt-debug-modal.active { display: flex; }
-    .pt-debug-box { width: 100%; max-width: 780px; max-height: 88vh;
-        background: #0e1116; color: #d8e0ea; border-radius: 12px;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        display: flex; flex-direction: column; overflow: hidden;
-        font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace; }
-    .pt-debug-head { display: flex; align-items: center; justify-content: space-between;
-        padding: 10px 14px; background: #161b22; border-bottom: 1px solid #2a3140; flex-shrink: 0; }
-    .pt-debug-title { margin: 0; font-size: 0.9rem; font-weight: 700; color: #58d68d; }
-    .pt-debug-title i { margin-right: 6px; }
-    .pt-debug-actions { display: flex; gap: 6px; align-items: center; }
-    .pt-debug-btn { border: 1px solid #30363d; background: #21262d; color: #c9d1d9;
-        font-family: inherit; font-size: 0.72rem; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
-    .pt-debug-btn:hover { background: #30363d; }
-    .pt-debug-close { border: 1px solid transparent; background: transparent; color: #8b949e;
-        width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
-        display: inline-flex; align-items: center; justify-content: center; }
-    .pt-debug-close:hover { background: #21262d; color: #d8e0ea; }
-    .pt-debug-body { flex: 1; overflow-y: auto; padding: 8px 0; font-size: 0.75rem; line-height: 1.5; }
-    .pt-debug-line { padding: 3px 14px; border-bottom: 1px solid #161b22; white-space: pre-wrap;
-        word-break: break-word; }
-    .pt-debug-line .ts { color: #6e7681; margin-right: 8px; }
-    .pt-debug-line .lvl { font-weight: 800; margin-right: 8px; text-transform: uppercase; font-size: 0.68rem; }
-    .pt-debug-line.lvl-info  .lvl { color: #58a6ff; }
-    .pt-debug-line.lvl-warn  .lvl { color: #e3b341; }
-    .pt-debug-line.lvl-error .lvl { color: #f85149; }
-    .pt-debug-line.lvl-net   .lvl { color: #a371f7; }
-    .pt-debug-line.lvl-cfg   .lvl { color: #58d68d; }
-    .pt-debug-line.lvl-data  .lvl { color: #79c0ff; }
-    .pt-debug-payload { margin: 4px 0 6px 22px; padding: 6px 8px; background: #161b22;
-        border-radius: 6px; border-left: 2px solid #30363d;
-        color: #8b949e; font-size: 0.72rem; overflow-x: auto; white-space: pre-wrap; }
-    .pt-debug-body::-webkit-scrollbar { width: 10px; }
-    .pt-debug-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 6px; }
-    .pt-debug-body::-webkit-scrollbar-track { background: #0e1116; }
-
-    .pt-trades-summary-card {
-        background: linear-gradient(135deg, rgba(39,174,96,0.10), rgba(39,174,96,0.03));
-        border: 1px solid rgba(39,174,96,0.35);
-        border-radius: 12px;
-        padding: 14px 16px;
-        margin-bottom: 14px;
-        box-shadow: 0 2px 10px rgba(39,174,96,0.08);
-    }
-    .pt-tsc-row {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 12px;
-    }
-    .pt-tsc-cell {
+    .pt-chart-empty,
+    .pt-chart-loading {
+        position: absolute;
+        inset: 0;
         display: flex;
         flex-direction: column;
-        gap: 3px;
-        padding: 8px 10px;
-        border-radius: 8px;
-        background: rgba(255,255,255,0.5);
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        text-align: center;
+        color: var(--pt-muted);
+        background: var(--pt-bg);
+        font-size: 0.9rem;
+        padding: 40px 20px;
+        z-index: 400;
     }
-    body.dark-mode .pt-tsc-cell { background: rgba(255,255,255,0.05); }
-    .pt-tsc-label {
-        font-size: 0.68rem;
+    .pt-empty-icon { font-size: 1.6rem; opacity: 0.4; }
+    .pt-chart-empty p,
+    .pt-chart-loading p { margin: 0; }
+
+    .pt-loading-spinner {
+        width: 28px;
+        height: 28px;
+        border: 3px solid var(--pt-border);
+        border-top-color: var(--pt-accent);
+        border-radius: 50%;
+        animation: ptSpin 0.8s linear infinite;
+    }
+    @keyframes ptSpin { to { transform: rotate(360deg); } }
+
+    .pt-floating-readout {
+        position: absolute;
+        right: 16px;
+        bottom: 24px;
+        z-index: 500;
+        background: var(--pt-card);
+        border: 1px solid var(--pt-border);
+        border-radius: 10px;
+        box-shadow: var(--pt-shadow);
+        padding: 10px 14px;
+        min-width: 190px;
+        pointer-events: none;
+    }
+    .pt-fr-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--pt-border);
+    }
+    .pt-fr-time {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--pt-text);
+        font-variant-numeric: tabular-nums;
+    }
+    .pt-fr-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+    }
+    .pt-fr-item { display: flex; flex-direction: column; gap: 2px; }
+    .pt-fr-label {
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--pt-muted);
+        font-weight: 700;
+    }
+    .pt-fr-value {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--pt-text);
+        font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 600px) {
+        .pt-floating-readout {
+            right: 8px;
+            bottom: 14px;
+            min-width: 160px;
+            padding: 8px 11px;
+        }
+        .pt-fr-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    .pt-picker-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100002;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.55);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+        padding: 20px;
+        box-sizing: border-box;
+    }
+    .pt-picker-modal.active { display: flex; }
+    .pt-picker-box {
+        width: 92%;
+        max-width: 380px;
+        max-height: 55vh;
+        background: var(--pt-card);
+        color: var(--pt-text);
+        border: 1px solid var(--pt-border);
+        border-radius: 14px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    .pt-picker-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 16px 10px;
+        border-bottom: 1px solid var(--pt-border);
+        flex-shrink: 0;
+    }
+    .pt-picker-title { font-size: 15px; font-weight: 700; }
+    .pt-picker-close {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 1rem;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .pt-picker-close:hover { background: rgba(128,128,128,0.15); }
+    .pt-picker-search { padding: 10px 14px 6px; flex-shrink: 0; }
+    .pt-picker-search input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 9px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--pt-border);
+        background: var(--pt-bg);
+        color: var(--pt-text);
+        font: inherit;
+        outline: none;
+    }
+    .pt-picker-meta {
+        padding: 0 16px 6px;
+        font-size: 11px;
+        color: var(--pt-muted);
+        flex-shrink: 0;
+    }
+    .pt-picker-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 10px 12px;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+    .pt-picker-list::-webkit-scrollbar { width: 6px; }
+    .pt-picker-list::-webkit-scrollbar-thumb {
+        background: rgba(128,128,128,0.35);
+        border-radius: 999px;
+    }
+    .pt-picker-row {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 10px 12px;
+        border-radius: 9px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 4px;
+    }
+    .pt-picker-row:hover { background: rgba(46,204,143,0.10); }
+    .pt-picker-row.is-active {
+        background: rgba(46,204,143,0.16);
+        border-color: rgba(46,204,143,0.45);
+        color: var(--pt-accent);
+    }
+    .pt-picker-empty {
+        padding: 20px;
+        text-align: center;
+        color: var(--pt-muted);
+        font-size: 13px;
+    }
+
+    .pt-candles-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100002;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.55);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+    }
+    .pt-candles-modal.active { display: flex; }
+    .pt-candles-modal-box {
+        width: 92%;
+        max-width: 400px;
+        background: var(--pt-card);
+        color: var(--pt-text);
+        border: 1px solid var(--pt-border);
+        border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        padding: 20px 20px 16px;
+        font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    .pt-candles-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .pt-candles-sub { font-size: 12px; color: var(--pt-muted); margin-bottom: 12px; line-height: 1.4; }
+    .pt-candles-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        font-size: 15px;
+        border-radius: 8px;
+        border: 1px solid var(--pt-border);
+        outline: none;
+        background: var(--pt-bg);
+        color: inherit;
+    }
+    .pt-candles-available {
+        font-size: 12px;
+        margin-top: 8px;
+        color: var(--pt-accent);
+        font-weight: 600;
+    }
+    .pt-candles-info {
+        font-size: 12px;
+        margin-top: 6px;
+        min-height: 16px;
+        color: #b00020;
+        white-space: pre-line;
+    }
+    body.dark-mode .pt-candles-info { color: #ff8080; }
+    .pt-candles-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 14px;
+    }
+    .pt-candles-btn {
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        cursor: pointer;
+        border: 1px solid transparent;
+    }
+    .pt-candles-btn.primary { background: var(--pt-accent); color: #fff; }
+    .pt-candles-btn.primary:hover { filter: brightness(0.92); }
+    .pt-candles-btn.ghost {
+        background: transparent;
+        color: inherit;
+        border-color: var(--pt-border);
+    }
+    .pt-candles-btn.ghost:hover { background: rgba(128,128,128,0.15); }
+
+    .pt-candle-detail-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100002;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.55);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+        padding: 20px;
+        box-sizing: border-box;
+    }
+    .pt-candle-detail-modal.active { display: flex; }
+    .pt-candle-detail-box {
+        width: 92%;
+        max-width: 460px;
+        max-height: 85vh;
+        background: var(--pt-card);
+        color: var(--pt-text);
+        border: 1px solid var(--pt-border);
+        border-radius: 14px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    .pt-candle-detail-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 16px 18px 12px;
+        border-bottom: 1px solid var(--pt-border);
+        flex-shrink: 0;
+    }
+    .pt-candle-detail-title { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+    .pt-candle-detail-sub   { font-size: 12px; color: var(--pt-muted); }
+    .pt-candle-detail-close {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 1rem;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .pt-candle-detail-close:hover { background: rgba(128,128,128,0.15); }
+    .pt-candle-detail-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 18px 18px;
+        -webkit-overflow-scrolling: touch;
+    }
+    .pt-candle-detail-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--pt-border);
+        font-size: 13px;
+    }
+    .pt-candle-detail-row:last-child { border-bottom: none; }
+    .pt-candle-detail-label { color: var(--pt-muted); font-weight: 600; }
+    .pt-candle-detail-value {
+        color: var(--pt-text);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        word-break: break-word;
+    }
+
+    body.pt-fs-active { overflow: hidden; }
+
+    body.pt-fs-active .pt-controls {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        z-index: 100001;
+        margin: 0;
+        padding: 8px 12px;
+        gap: 8px;
+        flex-direction: column;
+        overflow: hidden;
+        background: transparent;
+        border-bottom: none;
+        box-shadow: none;
+        pointer-events: none;
+    }
+    body.pt-fs-active .pt-controls > * { pointer-events: auto; }
+    body.pt-fs-active .pt-controls-btn-row { overflow-x: auto; }
+    body.pt-fs-active .pt-controls-btn-row::-webkit-scrollbar { height: 0; }
+
+    body.pt-fs-active .pt-chart-card {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100vw;
+        max-width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
+        border-radius: 0;
+        border: none;
+        box-shadow: none;
+        background: transparent;
+        z-index: 99998;
+    }
+
+    /* ==================== CONFIGURATION MODAL ==================== */
+    .pt-cfg-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100003;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.55);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+        padding: 20px;
+        box-sizing: border-box;
+    }
+    .pt-cfg-modal.active { display: flex; }
+
+    .pt-cfg-box {
+        width: 92%;
+        max-width: 1180px;
+        height: 92vh;
+        max-height: 92vh;
+        background: var(--pt-card);
+        color: var(--pt-text);
+        border: 1px solid var(--pt-border);
+        border-radius: 14px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font: 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    .pt-cfg-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px 12px;
+        border-bottom: 1px solid var(--pt-border);
+        flex-shrink: 0;
+        gap: 10px;
+    }
+    .pt-cfg-title {
+        font-size: 16px;
+        font-weight: 800;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .pt-cfg-title i { color: var(--pt-accent); }
+    .pt-cfg-head-actions { display: flex; align-items: center; gap: 8px; }
+    .pt-cfg-close {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 1rem;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .pt-cfg-close:hover { background: rgba(128,128,128,0.15); }
+
+    .pt-cfg-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px 18px 22px;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .pt-cfg-body::-webkit-scrollbar { width: 8px; }
+    .pt-cfg-body::-webkit-scrollbar-thumb {
+        background: rgba(128,128,128,0.35);
+        border-radius: 999px;
+    }
+
+    .pt-cfg-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--pt-border);
+        background: var(--pt-card);
+        flex-shrink: 0;
+    }
+    .pt-cfg-footer-status {
+        color: var(--pt-muted);
+        font-size: 12px;
+        line-height: 1.4;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+    .pt-cfg-footer-status.is-ok { color: var(--pt-accent); }
+    .pt-cfg-footer-status.is-error { color: #e74c3c; }
+    .pt-cfg-save-btn { min-width: 120px; justify-content: center; }
+    .pt-cfg-save-btn:disabled { opacity: .55; cursor: not-allowed; }
+    @media (max-width: 480px) {
+        .pt-cfg-footer { padding: 10px 12px; align-items: stretch; flex-direction: column; }
+        .pt-cfg-save-btn { width: 100%; }
+    }
+
+    .pt-cfg-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+    .pt-cfg-toolbar-hint {
+        font-size: 11.5px;
+        color: var(--pt-muted);
+    }
+
+    .pt-cfg-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 14px;
+        border-radius: 9px;
+        border: 1px solid var(--pt-border);
+        background: var(--pt-card);
+        color: var(--pt-text);
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+        white-space: nowrap;
+    }
+    .pt-cfg-btn i { font-size: 0.85rem; }
+    .pt-cfg-btn:hover { border-color: var(--pt-accent); color: var(--pt-accent); }
+    .pt-cfg-btn:active { transform: scale(0.98); }
+    .pt-cfg-btn.primary {
+        background: var(--pt-accent);
+        border-color: var(--pt-accent);
+        color: #fff;
+    }
+    .pt-cfg-btn.primary:hover { filter: brightness(0.94); color: #fff; }
+    .pt-cfg-btn.danger {
+        background: transparent;
+        border-color: #e74c3c;
+        color: #e74c3c;
+    }
+    .pt-cfg-btn.danger:hover { background: #e74c3c; color: #fff; }
+
+    .pt-cfg-empty {
+        padding: 30px 20px;
+        text-align: center;
+        color: var(--pt-muted);
+        border: 1px dashed var(--pt-border);
+        border-radius: 12px;
+        font-size: 13px;
+    }
+    .pt-cfg-empty i { font-size: 1.4rem; display: block; margin-bottom: 8px; opacity: 0.5; }
+
+.pt-cfg-root.pt-root-validation-error { border: 1px solid #d93025 !important; box-shadow: 0 0 0 2px rgba(217,48,37,.12); }
+    .pt-root-timeframes.pt-timeframe-missing { outline: 1px solid #d93025; outline-offset: 4px; border-radius: 6px; }
+    .pt-cfg-root {
+        border: 1px solid var(--pt-border);
+        border-radius: 12px;
+        background: rgba(128,128,128,0.035);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        flex-shrink: 0;
+    }
+    body.dark-mode .pt-cfg-root { background: rgba(255,255,255,0.03); }
+
+    .pt-cfg-root-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .pt-cfg-root-head { cursor: default; }
+    .pt-cfg-root-toggle {
+        width: 28px; height: 28px; flex: 0 0 28px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: 1px solid var(--pt-border); border-radius: 7px;
+        color: var(--pt-accent); background: var(--pt-card); cursor: pointer;
+    }
+    .pt-cfg-root-content { flex-direction: column; gap: 10px; min-width: 0; }
+    .pt-cfg-root-state { color: var(--pt-muted); font-size: 10px; font-weight: 600; }
+    .pt-cfg-trade-grid { padding: 10px; border: 1px solid var(--pt-border); border-radius: 10px; }
+    .pt-cfg-root-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 800;
+        font-size: 13px;
+        color: var(--pt-accent);
+    }
+    .pt-cfg-root-tag .pt-cfg-chip {
+        background: var(--pt-accent);
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+    }
+
+    .pt-cfg-root-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 10px;
+    }
+
+    .pt-cfg-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .pt-cfg-field > label {
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--pt-muted);
+        font-weight: 800;
+    }
+    .pt-cfg-field > input,
+    .pt-cfg-field > select {
+        width: 100%;
+        padding: 7px 9px;
+        border: 1px solid var(--pt-border);
+        border-radius: 8px;
+        background: var(--pt-bg);
+        color: var(--pt-text);
+        font: inherit;
+        font-size: 12.5px;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .pt-cfg-field > input:focus,
+    .pt-cfg-field > select:focus {
+        border-color: var(--pt-accent);
+        box-shadow: 0 0 0 3px rgba(18,163,107,0.14);
+    }
+    .pt-cfg-field > input:disabled,
+    .pt-cfg-field > select:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+        background: rgba(128,128,128,0.08);
+    }
+
+    .pt-cfg-tree {
+        border: 1px solid var(--pt-border);
+        border-radius: 10px;
+        background: var(--pt-card);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .pt-cfg-tree-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .pt-cfg-tree-tag {
+        font-size: 12px;
+        font-weight: 800;
+        color: var(--pt-muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .pt-cfg-tree-tag .pt-cfg-chip.tree { background: var(--pt-muted); }
+
+    .pt-cfg-row {
+        border: 1px dashed var(--pt-border);
+        border-radius: 9px;
+        padding: 9px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .pt-cfg-row-tag {
+        font-size: 11px;
         font-weight: 800;
         text-transform: uppercase;
         letter-spacing: 0.4px;
-        color: var(--text-muted, #888);
+        color: var(--pt-muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
-    .pt-tsc-value {
-        font-size: 1.15rem;
+    .pt-cfg-row-tag.main { color: var(--pt-accent); }
+
+    .pt-cfg-row-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 8px;
+    }
+
+    .pt-cfg-chip {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10.5px;
         font-weight: 800;
-        color: #27ae60;
-        font-variant-numeric: tabular-nums;
-    }
-    .pt-tsc-win   .pt-tsc-value { color: #2ecc71; }
-    .pt-tsc-loss  .pt-tsc-value { color: #c0392b; }
-    .pt-tsc-pending .pt-tsc-value { color: #e3b341; }
-    .pt-trade-order-badge.missed { background: rgba(149,165,166,0.2); color: #7f8c8d; }
-    body.dark-mode .pt-trades-summary-card {
-        background: linear-gradient(135deg, rgba(39,174,96,0.18), rgba(39,174,96,0.06));
-        border-color: rgba(39,174,96,0.5);
+        letter-spacing: 0.3px;
     }
 
-    .pt-longshort-btn .pt-ls-state {
-        background: rgba(128,128,128,0.25); color: var(--text-muted, #888);
-        border-radius: 10px; font-size: 0.68rem; font-weight: 800;
-        padding: 1px 7px; margin-left: 4px; letter-spacing: 0.5px;
-        transition: background 0.15s ease, color 0.15s ease;
-    }
-    .pt-longshort-btn.pt-ls-on .pt-ls-state {
-        background: #27ae60; color: #fff;
-    }
-    .pt-longshort-btn.pt-ls-on i { color: #27ae60; }
-
-    .pt-tsc-danger .pt-tsc-value { color: #e74c3c; }
-    .pt-tsc-info   .pt-tsc-value { color: #4a7bd8; }
-    .pt-tsc-sub {
-        display: block;
-        font-size: 0.64rem;
-        font-weight: 700;
-        color: var(--text-muted, #888);
-        letter-spacing: 0.2px;
-        margin-top: 2px;
-        line-height: 1.3;
-    }
-    body.dark-mode .pt-tsc-sub { color: var(--text-muted, #aaa); }
-    .pt-tsc-winrate-value { color: #ffffff !important; }
-    body:not(.dark-mode) .pt-tsc-winrate-value { color: #222 !important; }
-    .pt-tsc-days {
-        font-weight: 600;
-        font-style: italic;
-        letter-spacing: 0.15px;
-        opacity: 0.85;
+    .pt-cfg-draws {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
         margin-top: 4px;
     }
-
-    .pt-proj-banner {
-        position: absolute;
-        top: 70px;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 9;
-        display: none;
-        align-items: center;
+    .pt-cfg-draw {
+        border: 1px dashed var(--pt-border);
+        border-radius: 9px;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
         gap: 8px;
-        padding: 6px 14px;
-        border-radius: 20px;
-        background: rgba(39,174,96,0.92);
-        color: #fff;
-        font: 700 0.75rem system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        letter-spacing: 0.3px;
-        box-shadow: 0 3px 14px rgba(0,0,0,0.2);
-        pointer-events: none;
-        white-space: nowrap;
+        position: relative;
     }
-    .pt-proj-banner.active { display: inline-flex; }
-    .pt-proj-banner i { font-size: 0.8rem; }
-    .pt-proj-spinner {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        margin-left: 6px;
-        border: 2px solid rgba(255,255,255,0.4);
-        border-top-color: #fff;
-        border-radius: 50%;
-        animation: pt-proj-spin 0.7s linear infinite;
-        vertical-align: middle;
+    .pt-cfg-draw-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
     }
-    @keyframes pt-proj-spin {
-        to { transform: rotate(360deg); }
+    .pt-cfg-draw-tag {
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--pt-muted);
     }
-    @media (max-width: 768px) {
-        input,
-        select,
-        textarea,
-        .dd-input,
-        .dd-select,
-        .dd-am-input,
-        .dd-inline-input,
-        .dd-req-input,
-        .dd-json-edit-textarea,
-        .pt-modal-input {
-            font-size: 16px !important;
-        }
+    .pt-cfg-draw-remove {
+        border: 0;
+        background: transparent;
+        color: #e74c3c;
+        cursor: pointer;
+        font-size: 0.85rem;
+        padding: 2px 6px;
+        border-radius: 6px;
     }
+    .pt-cfg-draw-remove:hover { background: rgba(231,76,60,0.12); }
+
+    .pt-cfg-tree-foot {
+        display: flex;
+        justify-content: flex-start;
+    }
+    .pt-cfg-btn:disabled {
+        opacity: .45;
+        cursor: not-allowed;
+        filter: grayscale(.25);
+        box-shadow: none;
+    }
+    .pt-cfg-tree-cancel {
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+
+    @media (max-width: 640px) {
+        .pt-cfg-modal { padding: 10px; }
+        .pt-cfg-box { width: 100%; height: 94vh; max-height: 94vh; border-radius: 12px; }
+        .pt-cfg-body { padding: 12px 12px 18px; }
+        .pt-cfg-head { padding: 12px 14px 10px; }
+        .pt-cfg-root-grid { grid-template-columns: 1fr 1fr; }
+        .pt-cfg-row-grid  { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 400px) {
+        .pt-cfg-root-grid { grid-template-columns: 1fr; }
+        .pt-cfg-row-grid  { grid-template-columns: 1fr; }
+    }
+
+    .pt-root-timeframes { min-width: 220px; max-width: 100%; }
+    .pt-root-timeframe-list { display:flex; flex-wrap:wrap; gap:7px; margin-top:7px; }
+    .pt-root-timeframe-option { display:inline-flex; align-items:center; gap:6px; padding:5px 8px; border:1px solid var(--pt-border); border-radius:8px; cursor:pointer; font-size:12px; }
+    .pt-root-timeframe-option input { accent-color:var(--pt-accent); }
+
+
+    /* Destructive root-deletion confirmation */
+    .pt-root-delete-modal {
+        position: fixed; inset: 0; z-index: 100010; display: none;
+        align-items: center; justify-content: center; padding: 18px;
+        background: rgba(0,0,0,.66); backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+    }
+    .pt-root-delete-modal.active { display: flex; }
+    .pt-root-delete-box {
+        width: min(100%, 430px); padding: 24px; border-radius: 16px;
+        background: var(--pt-card); color: var(--pt-text);
+        border: 1px solid var(--pt-border); box-shadow: 0 22px 70px rgba(0,0,0,.38);
+        animation: ptRootDeleteIn .16s ease-out;
+    }
+    @keyframes ptRootDeleteIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .pt-root-delete-icon { width: 46px; height: 46px; display:flex; align-items:center; justify-content:center;
+        border-radius: 13px; background: rgba(220,53,69,.12); color: #dc3545; font-size: 20px; margin-bottom: 14px; }
+    .pt-root-delete-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+    .pt-root-delete-message { color: var(--pt-muted); font-size: 13px; line-height: 1.65; }
+    .pt-root-delete-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:9px; margin-top:22px; }
+    .pt-root-delete-actions button { border-radius:9px; padding:10px 14px; font:inherit; font-weight:750; cursor:pointer; }
+    .pt-root-delete-cancel { background:var(--pt-card); color:var(--pt-text); border:1px solid var(--pt-border); }
+    .pt-root-delete-confirm { background:#dc3545; color:#fff; border:1px solid #dc3545; }
+    .pt-root-delete-confirm:hover { background:#bb2d3b; }
+
+    /* Dynamic diagnostics console */
+    .pt-dynamic-console-modal{position:fixed;inset:0;z-index:100500;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
+    .pt-dynamic-console-modal.active{display:flex}
+    .pt-dynamic-console-box{width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
+    .pt-dynamic-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--pt-border);flex-shrink:0}
+    .pt-dynamic-console-title{font-size:1rem;font-weight:800}
+    .pt-dynamic-console-subtitle{font-size:.78rem;color:var(--pt-muted);margin-top:2px}
+    .pt-dynamic-console-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .pt-dynamic-console-action{border:1px solid var(--pt-border);background:var(--pt-bg);color:var(--pt-text);padding:8px 12px;border-radius:9px;font:inherit;font-size:.8rem;font-weight:700;cursor:pointer}
+    .pt-dynamic-console-action.primary{background:var(--pt-accent);border-color:var(--pt-accent);color:#fff}
+    .pt-dynamic-console-status{padding:10px 18px;background:rgba(18,163,107,.08);border-bottom:1px solid var(--pt-border);font-size:.82rem;white-space:pre-wrap;flex-shrink:0}
+    .pt-dynamic-console-json{flex:1;width:100%;resize:none;border:0;outline:0;padding:16px 18px;background:#0c1117;color:#cde8d7;font:12px/1.55 Consolas,Monaco,'Courier New',monospace;tab-size:2;white-space:pre;overflow:auto}
+    @media(max-width:600px){.pt-dynamic-console-modal{padding:6px}.pt-dynamic-console-box{width:100%;height:94vh;border-radius:12px}.pt-dynamic-console-head{align-items:flex-start;padding:12px}.pt-dynamic-console-actions{gap:5px}.pt-dynamic-console-action{padding:7px 9px}.pt-dynamic-console-json{font-size:11px;padding:12px}}
+
+
+    .pt-rd-dashboard{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+    .pt-rd-stat{display:flex;align-items:center;gap:10px;min-width:0;padding:14px;border:1px solid var(--pt-border);border-radius:13px;background:var(--pt-card, var(--pt-bg));box-shadow:0 5px 18px rgba(0,0,0,.045)}
+    .pt-rd-stat-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:rgba(128,128,128,.12);font-size:15px;flex-shrink:0}
+    .pt-rd-stat.loss .pt-rd-stat-icon,.pt-rd-badge.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-rd-stat.profit .pt-rd-stat-icon,.pt-rd-badge.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-rd-stat.pending .pt-rd-stat-icon,.pt-rd-badge.pending{color:#bd8516;background:rgba(189,133,22,.13)}.pt-rd-stat.active .pt-rd-stat-icon,.pt-rd-badge.active{color:#4388dc;background:rgba(67,136,220,.13)}
+    .pt-rd-stat-label{font-size:.72rem;color:var(--pt-muted);font-weight:650}.pt-rd-stat-value{font-size:1.55rem;line-height:1.2;font-weight:800;margin-top:3px}
+    .pt-rd-root{border:1px solid var(--pt-border);border-radius:14px;margin-bottom:12px;overflow:hidden;background:var(--pt-card,var(--pt-bg))}.pt-rd-root>summary{list-style:none;display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer;background:rgba(128,128,128,.045)}.pt-rd-root>summary::-webkit-details-marker{display:none}.pt-rd-root-title{font-weight:800;display:flex;align-items:center;gap:9px;flex:1}.pt-rd-root-summary{font-size:.78rem;color:var(--pt-muted);display:flex;gap:10px;align-items:center}.pt-rd-root-summary .is-profit{color:#16a36a}.pt-rd-root-summary .is-loss{color:#e05260}.pt-rd-chevron{transition:transform .18s ease;color:var(--pt-muted)}.pt-rd-root[open] .pt-rd-chevron{transform:rotate(180deg)}
+    .pt-rd-root-stats{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid var(--pt-border);border-bottom:1px solid var(--pt-border)}.pt-rd-root-stats span{font-size:.78rem;color:var(--pt-muted);padding:6px 9px;background:rgba(128,128,128,.08);border-radius:8px}.pt-rd-root-stats b{color:var(--pt-text);margin-left:4px}
+    .pt-rd-trade{margin:12px;padding:14px;border:1px solid var(--pt-border);border-radius:12px;background:var(--pt-bg)}.pt-rd-trade-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:13px}.pt-rd-family{font-size:.72rem;letter-spacing:.08em;font-weight:850;color:var(--pt-muted)}.pt-rd-order{margin-left:9px;font-size:.72rem;font-weight:750;padding:4px 7px;border-radius:6px;background:rgba(128,128,128,.12)}.pt-rd-badge{font-size:.72rem;font-weight:800;padding:6px 9px;border-radius:8px;text-transform:capitalize}.pt-rd-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.pt-rd-metrics>div{min-width:0;padding:11px;border-radius:9px;background:rgba(128,128,128,.07)}.pt-rd-metrics span,.pt-rd-details span{display:block;font-size:.7rem;color:var(--pt-muted);margin-bottom:5px}.pt-rd-metrics strong{display:block;font-size:1rem;overflow-wrap:anywhere}.pt-rd-metrics small{display:block;margin-top:5px;font-size:.68rem;color:var(--pt-muted);overflow-wrap:anywhere}.pt-rd-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--pt-border)}.pt-rd-details b{font-size:.8rem;font-weight:700;overflow-wrap:anywhere}.pt-rd-empty{padding:16px;color:var(--pt-muted);font-size:.85rem}
+    @media(max-width:700px){.pt-rd-dashboard{grid-template-columns:repeat(2,minmax(0,1fr))}.pt-rd-root>summary{flex-wrap:wrap}.pt-rd-root-summary{order:3;width:100%;flex-wrap:wrap}.pt-rd-metrics{grid-template-columns:1fr}.pt-rd-details{grid-template-columns:1fr}.pt-rd-trade{margin:9px;padding:11px}}
 </style>
 </head>
-<body class="pt-fullbody <?= htmlspecialchars($darkModeClass) ?>">
+<body class="<?= htmlspecialchars($darkModeClass) ?>">
 
-    <?php include 'dev_tabs.php'; ?>
+<div class="pt-page">
+    <div class="pt-controls">
+        <div class="pt-controls-title-row">
+            <span class="pt-title">Programme Training</span>
+        </div>
 
-    <div class="pt-topbar">
-        <button type="button" class="pt-topbar-btn" id="ptSymbolBtn" onclick="ptOpenSymbolModal()">
-            <span class="pt-topbar-symbol" id="ptSymbolLabel">Symbol</span>
-            <i class="fa-solid fa-chevron-down pt-topbar-caret"></i>
-        </button>
-        <div class="pt-tf-strip" id="ptTfStrip"></div>
+        <div class="pt-controls-btn-row">
+            <button type="button" class="pt-topbar-btn" id="ptSymbolBtn" onclick="ptOpenSymbolModal()">
+                <span class="pt-topbar-symbol" id="ptSymbolLabel">Symbol</span>
+                <i class="fa-solid fa-chevron-down pt-topbar-caret"></i>
+            </button>
 
-        <button type="button" class="pt-cfg-btn" id="ptExploreBtn" title="Explore candles">
-            <span>Candles</span>
-        </button>
+            <button type="button" class="pt-topbar-btn" id="ptTimeframeBtn" onclick="ptOpenTimeframeModal()">
+                <span class="pt-topbar-symbol" id="ptTimeframeLabel">Timeframe</span>
+                <i class="fa-solid fa-chevron-down pt-topbar-caret"></i>
+            </button>
 
-        <button type="button" class="pt-cfg-btn" id="ptCfgBtn" title="Programme Configuration">
-            <i class="fa-solid fa-sliders"></i>
-            <span>Configuration</span>
-        </button>
+            <div class="pt-tf-strip" id="ptTfStrip"></div>
 
-        <button type="button" class="pt-cfg-btn pt-trades-btn" id="ptTradesBtn" title="View Trades" style="display:none;">
-            <i class="fa-solid fa-money-bill-trend-up"></i>
-            <span>Trades</span>
-            <span class="pt-trades-count" id="ptTradesCount">0</span>
-        </button>
+            <button type="button" class="pt-topbar-btn" id="ptConfigBtn" onclick="ptOpenConfigModal()">
+                <i class="fa-solid fa-chart-column" aria-hidden="true"></i>
+                <span>Configuration</span>
+            </button>
 
-        <button type="button" class="pt-cfg-btn pt-longshort-btn" id="ptLongShortBtn" title="Toggle Long/Short drawing" style="display:none;">
-            <i class="fa-solid fa-arrows-up-down"></i>
-            <span>Long/Short</span>
-            <span class="pt-ls-state" id="ptLongShortState">OFF</span>
-        </button>
+            <button type="button" class="pt-topbar-btn" id="ptDynamicConsoleBtn" onclick="ptOpenDynamicConsole()"
+                    title="Inspect candle records, timeframe selection, JSON matching and drawings">
+                <span>Dynamic Console</span>
+            </button>
 
-        <button type="button" class="pt-cfg-btn" id="ptDebugBtn" title="Open Debug Console">
-            <i class="fa-solid fa-bug"></i>
-            <span>Debug</span>
-        </button>
+            <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View trade records for matched root families">
+                <span>Roots Data</span>
+            </button>
+
+            <button type="button" class="pt-fs-btn" id="ptFullscreenBtn" title="Toggle fullscreen" onclick="ptToggleFullscreen()">
+                <i class="fa-solid fa-expand"></i>
+            </button>
+        </div>
     </div>
 
-    <div class="pt-chart-fullscreen" id="ptChartWrap">
+    <div class="pt-chart-card" id="ptChartCard">
         <canvas id="ptChartCanvas" class="pt-chart-canvas"></canvas>
-        <canvas id="ptDrawCanvas"></canvas>
 
         <div class="pt-scale-bar" id="ptScaleBar" title="Drag to change candle height"></div>
 
@@ -1310,14 +1989,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             </svg>
         </button>
 
-        <div class="pt-proj-banner" id="ptProjBanner">
-            <i class="fa-solid fa-layer-group"></i>
-            <span id="ptProjBannerText">Projection mode active</span>
-        </div>
-
         <div id="ptChartEmpty" class="pt-chart-empty" style="display:none;">
             <span class="pt-empty-icon">—</span>
-            <p>No candle records found for this symbol / timeframe.</p>
+            <p>No candle records found for this symbol timeframe.</p>
         </div>
 
         <div id="ptChartLoading" class="pt-chart-loading" style="display:none;">
@@ -1340,83 +2014,152 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         </div>
     </div>
 
-    <div id="ptSymbolModal" class="pt-modal">
-        <div class="pt-modal-content">
-            <h2 class="pt-modal-title">Select Symbol</h2>
-            <div class="pt-modal-search-wrap">
-                <input type="text" id="ptSymbolSearch" class="pt-modal-input" placeholder="Search symbol..."
-                       autocomplete="off" oninput="ptFilterSymbolModal(this.value)">
-            </div>
-            <div class="pt-modal-meta"><span id="ptSymbolModalCount">0 symbols</span></div>
-            <div id="ptSymbolModalList" class="pt-modal-list"></div>
-            <div class="pt-modal-actions">
-                <button type="button" class="pt-btn-ghost" onclick="ptCloseSymbolModal()">Cancel</button>
-            </div>
+</div>
+
+<div id="ptSymbolModal" class="pt-picker-modal">
+    <div class="pt-picker-box">
+        <div class="pt-picker-head">
+            <span class="pt-picker-title">Select Symbol</span>
+            <button type="button" class="pt-picker-close" onclick="ptCloseSymbolModal()" title="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="pt-picker-search">
+            <input type="text" id="ptSymbolSearch" placeholder="Search symbol..." autocomplete="off"
+                   oninput="ptFilterSymbolModal(this.value)">
+        </div>
+        <div class="pt-picker-meta"><span id="ptSymbolModalCount">0 symbols</span></div>
+        <div class="pt-picker-list" id="ptSymbolModalList"></div>
+    </div>
+</div>
+
+<div id="ptTimeframeModal" class="pt-picker-modal">
+    <div class="pt-picker-box">
+        <div class="pt-picker-head">
+            <span class="pt-picker-title">Select Timeframe</span>
+            <button type="button" class="pt-picker-close" onclick="ptCloseTimeframeModal()" title="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="pt-picker-search">
+            <input type="text" id="ptTimeframeSearch" placeholder="Search timeframe..." autocomplete="off"
+                   oninput="ptFilterTimeframeModal(this.value)">
+        </div>
+        <div class="pt-picker-meta"><span id="ptTimeframeModalCount">0 timeframes</span></div>
+        <div class="pt-picker-list" id="ptTimeframeModalList"></div>
+    </div>
+</div>
+
+<div id="ptCandlesModal" class="pt-candles-modal">
+    <div class="pt-candles-modal-box">
+        <div class="pt-candles-title">Explore Candles</div>
+        <div class="pt-candles-sub" id="ptCandlesSub">Enter the number of candles to display.</div>
+        <input type="number" id="ptCandlesInput" class="pt-candles-input"
+               min="1" step="1" placeholder="e.g. 1500" autocomplete="off">
+        <div class="pt-candles-available" id="ptCandlesAvailable">Available Candle: —</div>
+        <div class="pt-candles-info" id="ptCandlesInfo"></div>
+        <div class="pt-candles-actions">
+            <button type="button" class="pt-candles-btn ghost" id="ptCandlesCancel">Cancel</button>
+            <button type="button" class="pt-candles-btn primary" id="ptCandlesConfirm">Load</button>
         </div>
     </div>
+</div>
 
-    <div id="ptCandlesModal" class="pt-candles-modal">
-        <div class="pt-candles-modal-box">
-            <div class="pt-candles-title">Explore Candles</div>
-            <div class="pt-candles-sub" id="ptCandlesSub">Enter the number of candles to display.</div>
-            <input type="number" id="ptCandlesInput" class="pt-candles-input"
-                   min="1" step="1" placeholder="e.g. 1500" autocomplete="off">
-            <div class="pt-candles-available" id="ptCandlesAvailable">Available Candle: —</div>
-            <div class="pt-candles-info" id="ptCandlesInfo"></div>
-            <div class="pt-candles-actions">
-                <button type="button" class="pt-candles-btn ghost" id="ptCandlesCancel">Cancel</button>
-                <button type="button" class="pt-candles-btn primary" id="ptCandlesConfirm">Load</button>
+<div id="ptCandleDetailModal" class="pt-candle-detail-modal">
+    <div class="pt-candle-detail-box">
+        <div class="pt-candle-detail-head">
+            <div>
+                <h3 class="pt-candle-detail-title" id="ptCandleDetailTitle">Candle Details</h3>
+                <p class="pt-candle-detail-sub" id="ptCandleDetailSub">—</p>
             </div>
+            <button type="button" class="pt-candle-detail-close" id="ptCandleDetailClose" title="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
         </div>
+        <div class="pt-candle-detail-body" id="ptCandleDetailBody"></div>
     </div>
+</div>
 
-    <div id="ptCandleDetailModal" class="pt-candle-detail-modal">
-        <div class="pt-candle-detail-box">
-            <div class="pt-candle-detail-head">
-                <div>
-                    <h3 class="pt-candle-detail-title" id="ptCandleDetailTitle">Candle Details</h3>
-                    <p class="pt-candle-detail-sub" id="ptCandleDetailSub">—</p>
-                </div>
-                <button type="button" class="pt-candle-detail-close" id="ptCandleDetailClose" title="Close">
+<!-- ==================== CONFIGURATION MODAL ==================== -->
+<div id="ptConfigModal" class="pt-cfg-modal">
+    <div class="pt-cfg-box">
+        <div class="pt-cfg-head">
+            <div class="pt-cfg-title"><i class="fa-solid fa-chart-candlestick"></i> Configuration</div>
+            <div class="pt-cfg-head-actions">
+                <button type="button" class="pt-cfg-close" onclick="ptCloseConfigModal()" title="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-            <div class="pt-candle-detail-body" id="ptCandleDetailBody"></div>
         </div>
-    </div>
 
-    <div id="ptTradesModal" class="pt-trades-modal">
-        <div class="pt-trades-box">
-            <div class="pt-trades-head">
-                <div>
-                    <h3 class="pt-trades-title"><i class="fa-solid fa-money-bill-trend-up"></i> Trades</h3>
-                    <p class="pt-trades-sub" id="ptTradesSubtitle">—</p>
-                </div>
-                <button type="button" class="pt-trades-close" id="ptTradesClose" title="Close">
-                    <i class="fa-solid fa-xmark"></i>
+        <div class="pt-cfg-body" id="ptCfgBody">
+            <div class="pt-cfg-toolbar">
+                <button type="button" class="pt-cfg-btn primary" onclick="ptCfgAddRoot()">
+                    <i class="fa-solid fa-plus"></i> New Root
                 </button>
+                <span class="pt-cfg-toolbar-hint" id="ptCfgHint">No roots configured yet.</span>
             </div>
-            <div class="pt-trades-body" id="ptTradesBody"></div>
+
+            <div id="ptCfgRoots"></div>
+
+            <div class="pt-cfg-empty" id="ptCfgEmpty">
+                <i class="fa-solid fa-sitemap"></i>
+                Click <strong>New Root</strong> to start building your configuration tree.
+            </div>
+        </div>
+        <div class="pt-cfg-footer">
+            <div class="pt-cfg-footer-status" id="ptCfgFootStatus" role="status" aria-live="polite">
+                Add a root, then save your configuration.
+            </div>
+            <button type="button" class="pt-cfg-btn primary pt-cfg-save-btn" id="ptCfgSaveBtn" onclick="ptCfgSave()" disabled>
+                <i class="fa-solid fa-floppy-disk"></i> Save Configuration
+            </button>
         </div>
     </div>
+</div>
 
-    <div id="ptDebugModal" class="pt-debug-modal">
-        <div class="pt-debug-box">
-            <div class="pt-debug-head">
-                <h3 class="pt-debug-title"><i class="fa-solid fa-bug"></i> Debug Console</h3>
-                <div class="pt-debug-actions">
-                    <button type="button" class="pt-debug-btn" id="ptDebugClear">Clear</button>
-                    <button type="button" class="pt-debug-btn" id="ptDebugCopy">Copy</button>
-                    <button type="button" class="pt-debug-close" id="ptDebugClose" title="Close">
-                        <i class="fa-solid fa-xmark"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="pt-debug-body" id="ptDebugBody"></div>
+<!-- Custom confirmation modal: deleting a root requires an explicit second action. -->
+<div id="ptRootDeleteModal" class="pt-root-delete-modal" role="dialog" aria-modal="true" aria-labelledby="ptRootDeleteTitle" aria-describedby="ptRootDeleteMessage">
+    <div class="pt-root-delete-box">
+        <div class="pt-root-delete-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <h3 class="pt-root-delete-title" id="ptRootDeleteTitle">Delete root configuration?</h3>
+        <p class="pt-root-delete-message" id="ptRootDeleteMessage">Are you sure you want to delete this root configuration? This action will remove the root and its configured trees and drawings from the current configuration. You can cancel to keep it.</p>
+        <div class="pt-root-delete-actions">
+            <button type="button" class="pt-root-delete-cancel" id="ptRootDeleteCancel">Cancel</button>
+            <button type="button" class="pt-root-delete-confirm" id="ptRootDeleteConfirm"><i class="fa-solid fa-trash"></i> Yes, delete root</button>
         </div>
     </div>
+</div>
 
-    <?php include 'programme_configuration.php'; ?>
+
+<div class="pt-dynamic-console-modal" id="ptDynamicConsoleModal" role="dialog" aria-modal="true" aria-labelledby="ptDynamicConsoleTitle">
+    <div class="pt-dynamic-console-box">
+        <div class="pt-dynamic-console-head">
+            <div>
+                <div class="pt-dynamic-console-title" id="ptDynamicConsoleTitle"><i class="fa-solid fa-terminal"></i> Dynamic Programme Console</div>
+                <div class="pt-dynamic-console-subtitle">Live chart candles → root/timeframe checks → tree conditions → drawings → JSON report</div>
+            </div>
+            <div class="pt-dynamic-console-actions">
+                <button type="button" class="pt-dynamic-console-action" onclick="ptRefreshDynamicConsole()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                <button type="button" class="pt-dynamic-console-action primary" onclick="ptCopyDynamicConsole()"><i class="fa-regular fa-copy"></i> Copy all</button>
+                <button type="button" class="pt-dynamic-console-action" onclick="ptCloseDynamicConsole()" aria-label="Close console"><i class="fa-solid fa-xmark"></i> Close</button>
+            </div>
+        </div>
+        <div class="pt-dynamic-console-status" id="ptDynamicConsoleStatus">Console ready. Open to inspect the current symbol, timeframe, loaded candles and programme configuration.</div>
+        <textarea class="pt-dynamic-console-json" id="ptDynamicConsoleJson" spellcheck="false" readonly aria-label="Dynamic console JSON report"></textarea>
+    </div>
+</div>
+
+<div class="pt-dynamic-console-modal" id="ptRootsDataModal" role="dialog" aria-modal="true" aria-labelledby="ptRootsDataTitle">
+    <div class="pt-dynamic-console-box">
+        <div class="pt-dynamic-console-head">
+            <div><div class="pt-dynamic-console-title" id="ptRootsDataTitle"><i class="fa-solid fa-list-check"></i> Roots Data — Trade Families</div><div class="pt-dynamic-console-subtitle">Matched root families and their entry/exit trigger records</div></div>
+            <div class="pt-dynamic-console-actions"><button type="button" class="pt-dynamic-console-action" onclick="ptRefreshRootsData()"><i class="fa-solid fa-rotate"></i> Refresh</button><button type="button" class="pt-dynamic-console-action" onclick="ptCloseRootsData()"><i class="fa-solid fa-xmark"></i> Close</button></div>
+        </div>
+        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Trade analytics are calculated from the currently loaded candles and matched families.</div>
+        <div id="ptRootsDataBody" style="flex:1;overflow:auto;padding:16px 18px"></div>
+    </div>
+</div>
 
 <script>
     // build:<?= time() ?>
@@ -1428,112 +2171,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
     var PT_PROGRAMME_ID      = <?= (int)$programmeId ?>;
     var PT_PROGRAMME_NAME    = <?= json_encode($programmeName) ?>;
-
-    var PT_TREES             = <?= json_encode(array_values($programmeTrees)) ?>;
-
-    var PT_ACCOUNT_MGMT      = <?= json_encode($accountManagement) ?>;
+    var PT_PROVIDER_RISK_REWARD = <?= $providerRiskReward === null ? 'null' : json_encode($providerRiskReward) ?>;
+    var PT_HAS_BROKER        = <?= $hasBroker ? 'true' : 'false' ?>;
+    var PT_USER_ID           = <?= (int)$userId ?>;
+    var PT_DARK_MODE          = <?= $darkMode ? 'true' : 'false' ?>;
+    // Shared by chart rendering and the configuration modal.
+    function ptResolveConfiguredColor(value, fallback) {
+        var color = String(value || fallback || 'purple').toLowerCase();
+        if (color === 'custom') {
+            var dark = document.body
+                ? document.body.classList.contains('dark-mode')
+                : !!PT_DARK_MODE;
+            return dark ? '#ffffff' : '#000000';
+        }
+        return color;
+    }
 
     var PT_DEFAULT_AMOUNT    = 2000;
 
-    // ==================== DEBUG CONSOLE ====================
-    var PT_DEBUG_LINES = [];
-    var PT_DEBUG_MAX   = 800;
+    var PT_IS_FULLSCREEN     = false;
 
-    function ptDebugLine(level, msg, payload) {
-        var ts = new Date().toLocaleTimeString();
-        var entry = { ts: ts, level: level, msg: String(msg == null ? '' : msg), payload: payload };
-        PT_DEBUG_LINES.push(entry);
-        if (PT_DEBUG_LINES.length > PT_DEBUG_MAX) PT_DEBUG_LINES.shift();
-        ptDebugRenderLine(entry);
-    }
-    window.pcDebug = function (level, msg, payload) { ptDebugLine(level, msg, payload); };
+    // ==================== LIVE STATE (config poll) ====================
+    var PT_LIVE_INTERVAL     = null;
+    var PT_LIVE_RUNNING      = false;
+    var PT_LIVE_FAIL_COUNT   = 0;
+    var PT_LIVE_BASE_MS      = 1500;
+    var PT_LIVE_MAX_MS       = 15000;
+    var PT_LAST_STATE_SIG    = null;
 
-    function ptDebugRenderLine(entry) {
-        var body = document.getElementById('ptDebugBody');
-        if (!body) return;
-        if (!document.getElementById('ptDebugModal').classList.contains('active') && PT_DEBUG_LINES.length > 5) {
-            return;
-        }
-        var div = document.createElement('div');
-        div.className = 'pt-debug-line lvl-' + (entry.level || 'info');
-        var ts = '<span class="ts">' + entry.ts + '</span>';
-        var lvl = '<span class="lvl">' + (entry.level || 'info') + '</span>';
-        var msg = document.createElement('span');
-        msg.textContent = entry.msg;
-        div.innerHTML = ts + lvl;
-        div.appendChild(msg);
-        body.appendChild(div);
-        if (entry.payload !== undefined) {
-            try {
-                var pre = document.createElement('div');
-                pre.className = 'pt-debug-payload';
-                pre.textContent = JSON.stringify(entry.payload, null, 2);
-                body.appendChild(pre);
-            } catch (e) { /* ignore */ }
-        }
-        body.scrollTop = body.scrollHeight;
-    }
-    function ptDebugRenderAll() {
-        var body = document.getElementById('ptDebugBody');
-        if (!body) return;
-        body.innerHTML = '';
-        PT_DEBUG_LINES.forEach(function (entry) {
-            var div = document.createElement('div');
-            div.className = 'pt-debug-line lvl-' + (entry.level || 'info');
-            var ts = '<span class="ts">' + entry.ts + '</span>';
-            var lvl = '<span class="lvl">' + (entry.level || 'info') + '</span>';
-            var msg = document.createElement('span');
-            msg.textContent = entry.msg;
-            div.innerHTML = ts + lvl;
-            div.appendChild(msg);
-            body.appendChild(div);
-            if (entry.payload !== undefined) {
-                try {
-                    var pre = document.createElement('div');
-                    pre.className = 'pt-debug-payload';
-                    pre.textContent = JSON.stringify(entry.payload, null, 2);
-                    body.appendChild(pre);
-                } catch (e) {}
-            }
-        });
-        body.scrollTop = body.scrollHeight;
-    }
-    function ptDebugOpen() {
-        var m = document.getElementById('ptDebugModal');
-        if (!m) return;
-        m.classList.add('active');
-        ptDebugRenderAll();
-    }
-    function ptDebugClose() {
-        var m = document.getElementById('ptDebugModal');
-        if (!m) return;
-        m.classList.remove('active');
-    }
+    // ==================== LIVE CANDLE REFRESH (tail poll) ====================
+    var PT_REFRESH_MS        = 2000;
+    var PT_REFRESH_INTERVAL  = null;
+    var PT_REFRESH_RUNNING   = false;
+    var PT_REFRESH_INFLIGHT  = false;
 
     // ==================== CHART STATE ====================
     var PT_CANDLES     = [];
     var PT_CANVAS      = null;
     var PT_CTX         = null;
-    var PT_DRAW_CANVAS = null;
-    var PT_DRAW_CTX    = null;
     var PT_HOVER_INDEX = -1;
     var PT_CURSOR_Y    = null;
-
-    var PT_TRADE_MATCH_COUNT  = 0;
-    var PT_TRADE_SCAN_DIRTY   = true;
-
-    var PT_LONG_SHORT_ON      = false;
-
-    var PT_PERSISTED_MATCHES      = [];
-    var PT_PERSISTED_RUN_TOKEN    = '';
-    var PT_PERSISTED_DIRTY        = true;
-    var PT_PERSISTED_LOADED       = false;
-    var PT_LAST_PERSISTED_SIG     = '';
-
-    var PT_PROJECTION_MODES   = [];
-    var PT_PROJECTED_BY_TF    = {};
-    var PT_PROJECTION_LOADED_TFS = {};
-    var PT_CONFIGURED_ROWS_BY_TF = {};
 
     var PT_LOAD_TOKEN         = 0;
     var PT_IS_LOADING_OLDER   = false;
@@ -1542,7 +2219,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     var PT_REQUESTED_AMOUNT   = PT_DEFAULT_AMOUNT;
     var PT_CONSECUTIVE_ERRORS = 0;
     var PT_MAX_CONSECUTIVE_ERRORS = 4;
-    var PT_FULL_HISTORY_DONE  = false;
 
     var PT_VIEW = {
         candleWidth:    9,
@@ -1599,117 +2275,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         ctx.closePath();
     }
 
-    function ptResolveDrawingColor(token) {
-        var isDark = document.body.classList.contains('dark-mode');
-        switch ((token || '').toLowerCase()) {
-            case 'green':  return '#2e8b57';
-            case 'blue':   return 'rgba(74,123,216,0.95)';
-            case 'red':    return '#e74c3c';
-            case 'purple': return '#8e44ad';
-            case 'custom': return isDark ? '#ffffff' : '#000000';
-            default:       return 'rgba(74,123,216,0.95)';
+    // ==================== SHELL MESSAGING ====================
+    function ptPostShell(msg) {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, '*');
+            }
+        } catch (e) {}
+    }
+
+    // ==================== FULLSCREEN ====================
+    function ptToggleFullscreen() {
+        PT_IS_FULLSCREEN = !PT_IS_FULLSCREEN;
+
+        document.body.classList.toggle('pt-fs-active', PT_IS_FULLSCREEN);
+
+        var btn = document.getElementById('ptFullscreenBtn');
+        if (btn) {
+            btn.classList.toggle('is-on', PT_IS_FULLSCREEN);
+            var icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = PT_IS_FULLSCREEN
+                    ? 'fa-solid fa-compress'
+                    : 'fa-solid fa-expand';
+            }
         }
-    }
 
-    function ptParseTime(ts) {
-        if (!ts) return null;
-        var s = String(ts).replace('T', ' ');
-        if (s.length === 16) s += ':00';
-        var d = new Date(s.replace(' ', 'T') + 'Z');
-        if (isNaN(d.getTime())) return null;
-        return d;
-    }
-
-    function ptTfMs(tf) {
-        if (!tf) return null;
-        var s = String(tf).toLowerCase().trim();
-        var m = /^(\d+)\s*([mhdw])$/.exec(s);
-        if (!m) return null;
-        var n = parseInt(m[1], 10);
-        var unit = m[2];
-        if (unit === 'm') return n * 60 * 1000;
-        if (unit === 'h') return n * 60 * 60 * 1000;
-        if (unit === 'd') return n * 24 * 60 * 60 * 1000;
-        if (unit === 'w') return n * 7 * 24 * 60 * 60 * 1000;
-        return null;
-    }
-
-    function ptIsLowerTF(a, b) {
-        var am = ptTfMs(a), bm = ptTfMs(b);
-        if (am == null || bm == null) return false;
-        return bm < am;
-    }
-
-    function ptSnapshotSignature(treeResults) {
-        var s = PT_CURRENT_SYMBOL + '|' + PT_CURRENT_TIMEFRAME + '|' + PT_CANDLES.length;
-        var total = 0;
-        var tids = [];
-        (treeResults || []).forEach(function (r) {
-            tids.push(r.tree.tree_id + ':' + (r._matchedFlat ? r._matchedFlat.length : 0));
-            total += (r._matchedFlat ? r._matchedFlat.length : 0);
+        ptPostShell({
+            type: 'bodyClass',
+            add:    PT_IS_FULLSCREEN ? ['shell-no-nav'] : [],
+            remove: PT_IS_FULLSCREEN ? [] : ['shell-no-nav']
         });
-        tids.sort();
-        return s + '|' + total + '|' + tids.join(',');
+
+        setTimeout(function () {
+            if (PT_CANDLES.length) {
+                ptFitViewportToCandles();
+                ptScheduleDraw();
+                ptUpdateJumpLatestVisibility();
+            }
+        }, 80);
+        setTimeout(function () {
+            if (PT_CANDLES.length) {
+                ptFitViewportToCandles();
+                ptScheduleDraw();
+                ptUpdateJumpLatestVisibility();
+            }
+        }, 300);
     }
+    window.ptToggleFullscreen = ptToggleFullscreen;
 
     // ==================== INIT ====================
     document.addEventListener('DOMContentLoaded', function () {
-        PT_CANVAS      = document.getElementById('ptChartCanvas');
-        PT_DRAW_CANVAS = document.getElementById('ptDrawCanvas');
+        PT_CANVAS = document.getElementById('ptChartCanvas');
         if (PT_CANVAS) ptAttachCanvasEvents();
-        if (PT_DRAW_CANVAS) PT_DRAW_CTX = PT_DRAW_CANVAS.getContext('2d');
 
         ptAttachScaleBarEvents();
         ptAttachCandlesModalEvents();
         ptAttachCandleDetailModalEvents();
-        ptAttachTradesModalEvents();
-        ptAttachDebugModalEvents();
-
-        ptDebugLine('info', 'Init', { programme: PT_PROGRAMME_NAME, id: PT_PROGRAMME_ID,
-            symbols: PT_ALL_SYMBOLS.length, timeframes: PT_ALL_TIMEFRAMES.length,
-            trees: PT_TREES.length, accountMgmt: PT_ACCOUNT_MGMT });
-
-        var exploreBtn = document.getElementById('ptExploreBtn');
-        if (exploreBtn) {
-            exploreBtn.addEventListener('click', function () {
-                ptOpenCandlesModal(PT_CURRENT_SYMBOL, PT_CURRENT_TIMEFRAME);
-            });
-        }
-
-        var cfgBtn = document.getElementById('ptCfgBtn');
-        if (cfgBtn) {
-            cfgBtn.addEventListener('click', function () {
-                ptDebugLine('cfg', 'Opening configuration modal');
-                if (typeof window.pcSetTimeframes === 'function') {
-                    window.pcSetTimeframes(PT_ALL_TIMEFRAMES, PT_CURRENT_TIMEFRAME);
-                }
-                if (typeof window.pcSetTrees === 'function') {
-                    window.pcSetTrees(PT_TREES);
-                }
-                if (typeof window.pcOpenConfiguration === 'function') {
-                    window.pcOpenConfiguration({
-                        programmeId:      PT_PROGRAMME_ID,
-                        programmeName:    PT_PROGRAMME_NAME,
-                        timeframes:       PT_ALL_TIMEFRAMES,
-                        currentTimeframe: PT_CURRENT_TIMEFRAME,
-                        trees:            PT_TREES,
-                        accountManagement: PT_ACCOUNT_MGMT
-                    });
-                }
-            });
-        }
-
-        var tradesBtn = document.getElementById('ptTradesBtn');
-        if (tradesBtn) tradesBtn.addEventListener('click', ptOpenTradesModal);
-
-        var lsBtn = document.getElementById('ptLongShortBtn');
-        if (lsBtn) lsBtn.addEventListener('click', ptToggleLongShort);
-
-        window.addEventListener('pc:save', function (ev) {
-            if (!ev || !ev.detail) return;
-            ptDebugLine('cfg', 'Received pc:save', ev.detail);
-            ptSaveProgrammeConfiguration(ev.detail);
-        });
 
         var jumpBtn = document.getElementById('ptJumpLatest');
         if (jumpBtn) {
@@ -1719,2713 +2341,356 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
         document.addEventListener('gesturestart', function (e) { e.preventDefault(); }, { passive: false });
 
+        ['ptSymbolModal', 'ptTimeframeModal'].forEach(function (id) {
+            var m = document.getElementById(id);
+            if (!m) return;
+            m.addEventListener('mousedown', function (e) {
+                if (e.target === m) {
+                    if (id === 'ptSymbolModal') ptCloseSymbolModal();
+                    else ptCloseTimeframeModal();
+                }
+            });
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                ptCloseSymbolModal();
+                ptCloseTimeframeModal();
+                ptCloseCandlesModal();
+                ptCloseCandleDetailModal();
+                ptCloseConfigModal();
+            }
+        });
+
         PT_CURRENT_SYMBOL    = PT_ALL_SYMBOLS.length    ? PT_ALL_SYMBOLS[0]    : '';
         PT_CURRENT_TIMEFRAME = PT_ALL_TIMEFRAMES.length ? PT_ALL_TIMEFRAMES[0] : '';
 
         ptRenderTimeframeStrip();
         ptUpdateSymbolLabel();
-        ptRefreshTradesButton();
-        ptUpdateProjBanner();
+        ptUpdateTimeframeLabel();
 
-        if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
+        if (!PT_HAS_BROKER) {
+            ptShowEmpty('Please connect your Broker to see chart.');
+        } else if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
             ptLoadChart();
         } else {
-            ptShowEmpty('No symbol or timeframe selected. Choose one from the top bar.');
+            ptShowEmpty('No symbol or timeframe selected. Configure them in the Signals dashboard.');
         }
 
         window.addEventListener('resize', function () {
-            if (PT_CANDLES.length) ptScheduleDraw();
+            if (PT_CANDLES.length) {
+                ptFitViewportToCandles();
+                ptScheduleDraw();
+            }
         });
+
+        if (PT_PROGRAMME_ID > 0) {
+            ptStartLiveState();
+            ptStartCandleRefresh();
+        }
     });
 
-    // ==================== SIDEBAR NAVIGATION ====================
-    (function () {
-        var sidebar = document.getElementById('sidebarNav');
-        var desktopToggle = document.getElementById('sidebarToggle');
-        var mobileMenuBtn = document.getElementById('mobileMenuBtn');
-        var overlay = document.getElementById('sidebarOverlay');
-        var body = document.body;
+    // ==================== LIVE STATE (config) ====================
+    function ptStateSignature(state) {
+        if (!state) return '';
+        var syms = state.symbols || [];
+        var tfs  = state.timeframes || [];
+        return (state.has_broker ? '1' : '0') + '|' +
+               syms.join(',') + '|' +
+               tfs.join(',');
+    }
 
-        if (!sidebar) return;
+    function ptFetchLiveState() {
+        if (!PT_LIVE_RUNNING) return;
 
-        function isMobile() { return window.innerWidth <= 768; }
+        var body = 'get_live_state=1';
+        fetch(window.location.pathname, {
+            method: 'POST',
+            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
+            body: body
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (!data || !data.success) {
+                PT_LIVE_FAIL_COUNT++;
+                ptScheduleNextLiveState();
+                return;
+            }
+            PT_LIVE_FAIL_COUNT = 0;
 
-        function openMobileSidebar() {
-            sidebar.classList.add('expanded');
-            if (overlay) overlay.classList.add('active');
-            body.style.overflow = 'hidden';
+            var newSig = ptStateSignature(data);
+            if (newSig !== PT_LAST_STATE_SIG) {
+                PT_LAST_STATE_SIG = newSig;
+                ptApplyLiveState(data);
+            }
+            ptScheduleNextLiveState();
+        })
+        .catch(function () {
+            PT_LIVE_FAIL_COUNT++;
+            ptScheduleNextLiveState();
+        });
+    }
+
+    function ptScheduleNextLiveState() {
+        if (!PT_LIVE_RUNNING) return;
+        if (PT_LIVE_INTERVAL) clearTimeout(PT_LIVE_INTERVAL);
+
+        var delay = PT_LIVE_BASE_MS;
+        if (PT_LIVE_FAIL_COUNT === 1) delay = 3000;
+        else if (PT_LIVE_FAIL_COUNT === 2) delay = 5000;
+        else if (PT_LIVE_FAIL_COUNT >= 3) delay = PT_LIVE_MAX_MS;
+
+        PT_LIVE_INTERVAL = setTimeout(ptFetchLiveState, delay);
+    }
+
+    function ptStartLiveState() {
+        PT_LIVE_RUNNING = true;
+        PT_LIVE_FAIL_COUNT = 0;
+        if (PT_LIVE_INTERVAL) clearTimeout(PT_LIVE_INTERVAL);
+        ptFetchLiveState();
+    }
+
+    function ptStopLiveState() {
+        PT_LIVE_RUNNING = false;
+        if (PT_LIVE_INTERVAL) {
+            clearTimeout(PT_LIVE_INTERVAL);
+            PT_LIVE_INTERVAL = null;
         }
-        function closeMobileSidebar() {
-            sidebar.classList.remove('expanded');
-            if (overlay) overlay.classList.remove('active');
-            body.style.overflow = '';
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            ptStopLiveState();
+            ptStopCandleRefresh();
+        } else if (PT_PROGRAMME_ID > 0) {
+            ptStartLiveState();
+            ptStartCandleRefresh();
         }
-        function toggleDesktopSidebar() {
-            var isExpanded = sidebar.classList.contains('expanded');
-            if (isExpanded) {
-                sidebar.classList.remove('expanded');
-                body.classList.remove('sidebar-expanded-desktop');
+    });
+
+    window.addEventListener('focus', function () {
+        if (PT_LIVE_RUNNING) ptFetchLiveState();
+        if (PT_REFRESH_RUNNING) ptFetchLatestCandles();
+    });
+
+    window.addEventListener('beforeunload', function () {
+        ptStopLiveState();
+        ptStopCandleRefresh();
+    });
+
+    function ptApplyLiveState(state) {
+        if (!state) return;
+
+        if (state.has_broker !== PT_HAS_BROKER) {
+            PT_HAS_BROKER = !!state.has_broker;
+
+            if (!PT_HAS_BROKER) {
+                ptStopLiveState();
+                ptStopCandleRefresh();
+                PT_CANDLES = [];
+                ptClearCanvas();
+                ptShowLoading(false);
+                ptShowBgLoading(false);
+                ptShowEmpty('Please connect your Broker to see chart.');
+                return;
             } else {
-                sidebar.classList.add('expanded');
-                body.classList.add('sidebar-expanded-desktop');
+                ptStartLiveState();
+                ptStartCandleRefresh();
             }
         }
 
-        if (mobileMenuBtn) {
-            mobileMenuBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                if (isMobile()) openMobileSidebar();
-            });
-        }
-        if (desktopToggle) {
-            desktopToggle.addEventListener('click', function (e) {
-                e.stopPropagation();
-                if (!isMobile()) toggleDesktopSidebar();
-            });
-        }
-        if (overlay) {
-            overlay.addEventListener('click', function () {
-                if (isMobile()) closeMobileSidebar();
-            });
+        if (!PT_HAS_BROKER) {
+            ptShowEmpty('Please connect your Broker to see chart.');
+            return;
         }
 
-        document.querySelectorAll('.sidebar-menu-item').forEach(function (item) {
-            item.addEventListener('click', function () {
-                if (isMobile()) setTimeout(closeMobileSidebar, 150);
-            });
-        });
+        var newSymbols    = Array.isArray(state.symbols)    ? state.symbols    : [];
+        var newTimeframes = Array.isArray(state.timeframes) ? state.timeframes : [];
 
-        var resizeTimer;
-        window.addEventListener('resize', function () {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(function () {
-                if (isMobile()) {
-                    body.classList.remove('sidebar-expanded-desktop');
-                    sidebar.classList.remove('expanded');
-                    if (overlay) overlay.classList.remove('active');
-                    body.style.overflow = '';
-                } else {
-                    if (overlay) overlay.classList.remove('active');
-                    body.style.overflow = '';
-                    if (sidebar.classList.contains('expanded')) {
-                        body.classList.add('sidebar-expanded-desktop');
-                    }
-                }
-            }, 150);
-        });
+        var symbolsChanged    = !ptArraysEqual(PT_ALL_SYMBOLS, newSymbols);
+        var timeframesChanged = !ptArraysEqual(PT_ALL_TIMEFRAMES, newTimeframes);
 
-        if (isMobile()) {
-            sidebar.classList.remove('expanded');
-            if (overlay) overlay.classList.remove('active');
-            body.style.overflow = '';
-            body.classList.remove('sidebar-expanded-desktop');
-        } else {
-            sidebar.classList.remove('expanded');
-            body.classList.remove('sidebar-expanded-desktop');
-        }
-    })();
+        if (symbolsChanged) PT_ALL_SYMBOLS = newSymbols.slice();
+        if (timeframesChanged) PT_ALL_TIMEFRAMES = newTimeframes.slice();
 
-    // ==================== DEBUG MODAL EVENTS ====================
-    function ptAttachDebugModalEvents() {
-        var modal = document.getElementById('ptDebugModal');
-        var closeBtn = document.getElementById('ptDebugClose');
-        var clearBtn = document.getElementById('ptDebugClear');
-        var copyBtn  = document.getElementById('ptDebugCopy');
-        var btn = document.getElementById('ptDebugBtn');
-        if (btn) btn.addEventListener('click', ptDebugOpen);
-        if (closeBtn) closeBtn.addEventListener('click', ptDebugClose);
-        if (modal) modal.addEventListener('mousedown', function (e) { if (e.target === modal) ptDebugClose(); });
-        if (clearBtn) clearBtn.addEventListener('click', function () {
-            PT_DEBUG_LINES = [];
-            ptDebugRenderAll();
-        });
-        if (copyBtn) copyBtn.addEventListener('click', function () {
-            var text = PT_DEBUG_LINES.map(function (l) {
-                return '[' + l.ts + '] [' + l.level + '] ' + l.msg;
-            }).join('\n');
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(text).then(function () {
-                    ptDebugLine('info', 'Copied ' + PT_DEBUG_LINES.length + ' lines.');
-                }).catch(function () {});
-            }
-        });
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') {
-                if (modal && modal.classList.contains('active')) ptDebugClose();
-            }
-        });
-    }
-
-    // ==================== TRADES MODAL ====================
-    function ptAttachTradesModalEvents() {
-        var modal = document.getElementById('ptTradesModal');
-        var closeBtn = document.getElementById('ptTradesClose');
-        if (closeBtn) closeBtn.addEventListener('click', ptCloseTradesModal);
-        if (modal) modal.addEventListener('mousedown', function (e) { if (e.target === modal) ptCloseTradesModal(); });
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape' && modal && modal.classList.contains('active')) ptCloseTradesModal();
-        });
-    }
-    function ptCloseTradesModal() {
-        var modal = document.getElementById('ptTradesModal');
-        if (modal) modal.classList.remove('active');
-    }
-
-    // ==================== TIMEFRAME SWITCHING (NO MODAL) ====================
-    function ptSwitchToTimeframe(targetTF) {
-        if (!targetTF) return;
-        if (targetTF === PT_CURRENT_TIMEFRAME && !PT_PROJECTION_MODES.length) return;
-
-        ptDebugLine('cfg', 'Switching timeframe (no modal)', { to: targetTF });
-
-        PT_CURRENT_TIMEFRAME = targetTF;
-        PT_REQUESTED_AMOUNT  = PT_DEFAULT_AMOUNT;
-        PT_FULL_HISTORY_DONE = false;
-
-        PT_PERSISTED_MATCHES   = [];
-        PT_PERSISTED_LOADED    = false;
-        PT_PERSISTED_DIRTY     = true;
-        PT_LAST_PERSISTED_SIG  = '';
-
-        PT_PROJECTION_MODES      = [];
-        PT_PROJECTED_BY_TF       = {};
-        PT_PROJECTION_LOADED_TFS = {};
-
-        var higherTFs = [];
-        PT_ALL_TIMEFRAMES.forEach(function (tf) {
-            if (tf === targetTF) return;
-            if (!ptIsLowerTF(tf, targetTF)) return;
-            higherTFs.push(tf);
-        });
-
-        higherTFs.sort(function (a, b) {
-            return (ptTfMs(b) || 0) - (ptTfMs(a) || 0);
-        });
-
-        ptDebugLine('cfg', 'Higher TFs to project', { target: targetTF, sources: higherTFs });
+        if (!symbolsChanged && !timeframesChanged) return;
 
         ptRenderTimeframeStrip();
-        ptUpdateProjBanner();
-        ptRefreshTradesButton();
-        ptLoadChart();
 
-        higherTFs.forEach(function (srcTF) {
-            PT_PROJECTION_MODES.push({ sourceTF: srcTF, targetTF: targetTF });
-            PT_PROJECTION_LOADED_TFS[srcTF] = false;
-            ptEnsureConfiguredRows(srcTF, function () {
-                ptProjectConfiguredRowsOnto(srcTF, targetTF);
-            });
-        });
-
-        ptUpdateProjBanner();
-    }
-
-    function ptCountActiveProjections() {
-        var active = 0;
-        var loaded = 0;
-        PT_PROJECTION_MODES.forEach(function (m) {
-            var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-            if (PT_PROJECTION_LOADED_TFS[m.sourceTF]) loaded++;
-            if (rows.length > 0) active++;
-        });
-        return { active: active, loaded: loaded, total: PT_PROJECTION_MODES.length };
-    }
-
-    function ptUpdateProjBanner() {
-        var b = document.getElementById('ptProjBanner');
-        var t = document.getElementById('ptProjBannerText');
-        if (!b || !t) return;
-
-        if (!PT_PROJECTION_MODES.length) {
-            b.classList.remove('active');
-            t.innerHTML = '';
-            return;
+        if (PT_ALL_SYMBOLS.length && PT_ALL_SYMBOLS.indexOf(PT_CURRENT_SYMBOL) === -1) {
+            PT_CURRENT_SYMBOL = PT_ALL_SYMBOLS[0];
+            ptUpdateSymbolLabel();
+        } else if (!PT_ALL_SYMBOLS.length) {
+            PT_CURRENT_SYMBOL = '';
+            ptUpdateSymbolLabel();
         }
 
-        var sourcesWithData = [];
-        var totalRows = 0;
-        var allLoaded = true;
-
-        PT_PROJECTION_MODES.forEach(function (m) {
-            var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-            if (rows.length > 0) {
-                sourcesWithData.push(m.sourceTF);
-                totalRows += rows.length;
-            }
-            if (!PT_PROJECTION_LOADED_TFS[m.sourceTF]) allLoaded = false;
-        });
-
-        if (!allLoaded) {
-            var pendingLabels = PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ');
-            t.innerHTML = 'Projections: ' + ptEscapeHtml(pendingLabels)
-                        + ' in ' + ptEscapeHtml(PT_CURRENT_TIMEFRAME)
-                        + ' <span class="pt-proj-spinner"></span>';
-            b.classList.add('active');
-            return;
+        if (PT_ALL_TIMEFRAMES.length && PT_ALL_TIMEFRAMES.indexOf(PT_CURRENT_TIMEFRAME) === -1) {
+            PT_CURRENT_TIMEFRAME = PT_ALL_TIMEFRAMES[0];
+            ptUpdateTimeframeLabel();
+        } else if (!PT_ALL_TIMEFRAMES.length) {
+            PT_CURRENT_TIMEFRAME = '';
+            ptUpdateTimeframeLabel();
         }
 
-        if (!sourcesWithData.length) {
-            t.textContent = 'Projections: none in ' + PT_CURRENT_TIMEFRAME;
-            b.classList.add('active');
-            return;
-        }
-
-        var labels = sourcesWithData.join(' + ');
-        t.textContent = 'Projections: ' + labels
-                      + ' in ' + PT_CURRENT_TIMEFRAME
-                      + '  (' + totalRows + ' row' + (totalRows === 1 ? '' : 's') + ')';
-        b.classList.add('active');
-    }
-
-    function ptEnsureConfiguredRows(sourceTF, onReady) {
-        if (PT_CONFIGURED_ROWS_BY_TF[sourceTF]) {
-            onReady();
-            return;
-        }
-
-        var body = 'fetch_persisted_matches=1'
-                 + '&programmeid=' + encodeURIComponent(PT_PROGRAMME_ID)
-                 + '&symbol='      + encodeURIComponent(PT_CURRENT_SYMBOL)
-                 + '&timeframe='   + encodeURIComponent(sourceTF);
-
-        ptDebugLine('net', 'POST fetch_persisted_matches (projection source)', {
-            programmeId: PT_PROGRAMME_ID, symbol: PT_CURRENT_SYMBOL, timeframe: sourceTF
-        });
-
-        fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (data && data.success) {
-                PT_CONFIGURED_ROWS_BY_TF[sourceTF] = data.rows || [];
-            } else {
-                PT_CONFIGURED_ROWS_BY_TF[sourceTF] = [];
-            }
-            ptDebugLine('net', 'Projection source rows fetched', {
-                timeframe: sourceTF, count: PT_CONFIGURED_ROWS_BY_TF[sourceTF].length
-            });
-            onReady();
-        })
-        .catch(function (err) {
-            ptDebugLine('error', 'Projection source fetch failed: ' + (err && err.message ? err.message : 'Unknown'));
-            PT_CONFIGURED_ROWS_BY_TF[sourceTF] = [];
-            onReady();
-        });
-    }
-
-    function ptFetchRange(symbol, timeframe, fromTime, toTime, limit) {
-        var body = 'fetch_candles_range=1'
-                 + '&symbol='    + encodeURIComponent(symbol)
-                 + '&timeframe=' + encodeURIComponent(timeframe)
-                 + '&from_time=' + encodeURIComponent(fromTime)
-                 + '&to_time='   + encodeURIComponent(toTime)
-                 + '&limit='     + (limit || 100000);
-
-        return fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (data && data.success) return data.candles || [];
-            return [];
-        })
-        .catch(function () { return []; });
-    }
-
-    function ptFetchRecent(symbol, timeframe, limit) {
-        var body = 'fetch_candles_recent=1'
-                 + '&symbol='    + encodeURIComponent(symbol)
-                 + '&timeframe=' + encodeURIComponent(timeframe)
-                 + '&limit='     + (limit || 5000);
-
-        return fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (data && data.success) return data.candles || [];
-            return [];
-        })
-        .catch(function () { return []; });
-    }
-
-    function ptFetchBounds(symbol, timeframe) {
-        var body = 'fetch_candles_bounds=1'
-                 + '&symbol='    + encodeURIComponent(symbol)
-                 + '&timeframe=' + encodeURIComponent(timeframe);
-
-        return fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .catch(function () { return { success: false }; });
-    }
-
-    function ptNormTs(t) {
-        if (!t) return '';
-        var s = String(t).replace('T', ' ').trim();
-        var m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/.exec(s);
-        if (m) return m[1];
-        m = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/.exec(s);
-        if (m) return m[1] + ':00';
-        m = /^(\d{4}-\d{2}-\d{2})$/.exec(s);
-        if (m) return m[1] + ' 00:00:00';
-        return s;
-    }
-
-    function ptDateFromTs(ts) {
-        var n = ptNormTs(ts);
-        if (!n) return null;
-        var d = new Date(n.replace(' ', 'T') + 'Z');
-        return isNaN(d.getTime()) ? null : d;
-    }
-
-    function ptTsFromDate(d) {
-        if (!d) return '';
-        function pad(n) { return n < 10 ? '0' + n : '' + n; }
-        return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate())
-             + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
-    }
-
-    function ptProjectConfiguredRowsOnto(sourceTF, targetTF) {
-        var rows = PT_CONFIGURED_ROWS_BY_TF[sourceTF] || [];
-        if (!rows.length) {
-            PT_PROJECTED_BY_TF[sourceTF] = [];
-            PT_PROJECTION_LOADED_TFS[sourceTF] = true;
-            ptUpdateProjBanner();
-            ptRefreshTradesButton();
-            ptScheduleDraw();
-            ptDebugLine('warn', 'No source rows to project', { sourceTF: sourceTF });
-            return;
-        }
-
-        var windows = {};
-        rows.forEach(function (r) {
-            if (!r.open_time || !r.close_time) return;
-            var key = ptNormTs(r.open_time) + '|' + ptNormTs(r.close_time);
-            windows[key] = { open_time: ptNormTs(r.open_time), close_time: ptNormTs(r.close_time) };
-        });
-
-        var winKeys = Object.keys(windows);
-        if (!winKeys.length) {
-            PT_PROJECTED_BY_TF[sourceTF] = [];
-            PT_PROJECTION_LOADED_TFS[sourceTF] = true;
-            ptUpdateProjBanner();
-            ptRefreshTradesButton();
-            ptScheduleDraw();
-            ptDebugLine('warn', 'No windows found in source rows', {});
-            return;
-        }
-
-        var minOpen = null, maxClose = null;
-        winKeys.forEach(function (k) {
-            var w = windows[k];
-            if (minOpen === null || w.open_time < minOpen) minOpen = w.open_time;
-            if (maxClose === null || w.close_time > maxClose) maxClose = w.close_time;
-        });
-
-        ptDebugLine('data', 'Projection: requested span', {
-            sourceTF: sourceTF, targetTF: targetTF,
-            from: minOpen, to: maxClose, windows: winKeys.length
-        });
-
-        ptFetchBounds(PT_CURRENT_SYMBOL, targetTF).then(function (bounds) {
-            var effFrom = minOpen;
-            var effTo   = maxClose;
-
-            if (bounds && bounds.success && bounds.min_time && bounds.max_time) {
-                var bMin = ptNormTs(bounds.min_time);
-                var bMax = ptNormTs(bounds.max_time);
-                if (bMin > effFrom) effFrom = bMin;
-                var bMaxDate = ptDateFromTs(bMax);
-                if (bMaxDate) {
-                    bMaxDate.setUTCSeconds(bMaxDate.getUTCSeconds() + 1);
-                    var bMaxPlus = ptTsFromDate(bMaxDate);
-                    if (bMaxPlus < effTo) effTo = bMaxPlus;
-                }
-                ptDebugLine('data', 'Projection: intersected span', {
-                    boundsMin: bMin, boundsMax: bMax,
-                    effFrom: effFrom, effTo: effTo,
-                    lowerTotal: bounds.total
-                });
-            } else {
-                ptDebugLine('warn', 'Projection: could not fetch lower-TF bounds, using raw span', {});
-            }
-
-            if (effFrom >= effTo) {
-                ptDebugLine('warn', 'Projection: empty intersection — falling back to recent candles', {
-                    rawFrom: minOpen, rawTo: maxClose, effFrom: effFrom, effTo: effTo
-                });
-                ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF);
-                return;
-            }
-
-            var chunks = ptBuildWeeklyChunks(effFrom, effTo);
-            ptDebugLine('data', 'Projection: fetching in chunks', { chunkCount: chunks.length });
-
-            var allSubs = [];
-            var chain = Promise.resolve();
-            chunks.forEach(function (ch) {
-                chain = chain.then(function () {
-                    return ptFetchRange(PT_CURRENT_SYMBOL, targetTF, ch.from, ch.to, 100000)
-                        .then(function (list) {
-                            if (list && list.length) {
-                                allSubs = allSubs.concat(list);
-                            }
-                            return null;
-                        });
-                });
-            });
-
-            chain.then(function () {
-                ptDebugLine('data', 'Projection: chunks fetched', {
-                    totalCandles: allSubs.length, chunks: chunks.length
-                });
-
-                if (!allSubs.length) {
-                    ptDebugLine('warn', 'Projection: chunked fetch returned 0 — falling back to recent', {});
-                    ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF);
-                    return;
-                }
-
-                ptBuildProjectionFromSubs(rows, windows, allSubs, sourceTF, targetTF);
-            });
-        });
-    }
-
-    function ptBuildWeeklyChunks(fromTs, toTs) {
-        var out = [];
-        var cur = ptDateFromTs(fromTs);
-        var end = ptDateFromTs(toTs);
-        if (!cur || !end) return [{ from: fromTs, to: toTs }];
-
-        while (cur < end) {
-            var next = new Date(cur.getTime() + 7 * 24 * 60 * 60 * 1000);
-            if (next > end) next = end;
-            out.push({ from: ptTsFromDate(cur), to: ptTsFromDate(next) });
-            cur = next;
-        }
-        if (!out.length) out.push({ from: fromTs, to: toTs });
-        return out;
-    }
-
-    function ptProjectViaRecentFallback(rows, windows, winKeys, sourceTF, targetTF) {
-        ptFetchRecent(PT_CURRENT_SYMBOL, targetTF, 5000).then(function (recent) {
-            if (!recent.length) {
-                ptDebugLine('error', 'Projection fallback: no recent candles available', {});
-                PT_PROJECTED_BY_TF[sourceTF] = [];
-                PT_PROJECTION_LOADED_TFS[sourceTF] = true;
-                ptUpdateProjBanner();
-                ptRefreshTradesButton();
-                ptScheduleDraw();
-                return;
-            }
-
-            var firstTs = ptNormTs(recent[0].time);
-            var lastTs  = ptNormTs(recent[recent.length - 1].time);
-            ptDebugLine('data', 'Projection fallback: recent range', {
-                count: recent.length, first: firstTs, last: lastTs
-            });
-
-            var overlapping = rows.filter(function (r) {
-                var o = ptNormTs(r.open_time || r.candle_time || '');
-                var c = ptNormTs(r.close_time || r.candle_time || '');
-                if (!o || !c) return false;
-                return !(c < firstTs || o > lastTs);
-            });
-
-            if (!overlapping.length) {
-                ptDebugLine('warn', 'Projection fallback: no source rows overlap the recent window', {});
-                PT_PROJECTED_BY_TF[sourceTF] = [];
-                PT_PROJECTION_LOADED_TFS[sourceTF] = true;
-                ptUpdateProjBanner();
-                ptRefreshTradesButton();
-                ptScheduleDraw();
-                return;
-            }
-
-            ptDebugLine('data', 'Projection fallback: overlapping source rows', {
-                count: overlapping.length
-            });
-
-            ptBuildProjectionFromSubs(overlapping, windows, recent, sourceTF, targetTF);
-        });
-    }
-
-    function ptBuildProjectionFromSubs(rows, windows, subs, sourceTF, targetTF) {
-        var winKeys = Object.keys(windows);
-        var subsByWindow = {};
-        winKeys.forEach(function (k) {
-            var w = windows[k];
-            subsByWindow[k] = subs.filter(function (c) {
-                var t = ptNormTs(c.time);
-                return t >= w.open_time && t < w.close_time;
-            });
-        });
-
-        var projected = [];
-        rows.forEach(function (r) {
-            var o = ptNormTs(r.open_time || '');
-            var c = ptNormTs(r.close_time || '');
-            if (!o || !c) return;
-            var winKey = o + '|' + c;
-            var list = subsByWindow[winKey];
-            if (!list || !list.length) return;
-
-            var level = (r.price_level || r.entry_from_price_level || r.draw_from_price_level || 'close').toLowerCase();
-            var sub = ptPickSubBar(list, level, r);
-            if (!sub) return;
-
-            var projectedRow = ptCloneRowWithSubBar(r, sub, level);
-            projected.push(projectedRow);
-        });
-
-        PT_PROJECTED_BY_TF[sourceTF] = projected;
-        PT_PROJECTION_LOADED_TFS[sourceTF] = true;
-        ptUpdateProjBanner();
-        ptRefreshTradesButton();
-
-        ptReevaluateProjectedTradeOutcomes();
-
-        ptDebugLine('info', 'Projection complete', {
-            sourceTF: sourceTF,
-            sourceRows: rows.length,
-            subsFetched: subs.length,
-            projectedRows: projected.length
-        });
-
-        var modal = document.getElementById('ptTradesModal');
-        if (modal && modal.classList.contains('active')) ptRenderTradesResults();
-
-        ptScheduleDraw();
-    }
-
-    function ptPickSubBar(list, level, sourceRow) {
-        if (!list || !list.length) return null;
-
-        switch (level) {
-            case 'open':
-                return list[0];
-            case 'close':
-                return list[list.length - 1];
-            case 'high': {
-                var best = list[0];
-                for (var i = 1; i < list.length; i++) {
-                    if (list[i].high > best.high) best = list[i];
-                }
-                return best;
-            }
-            case 'low': {
-                var best2 = list[0];
-                for (var j = 1; j < list.length; j++) {
-                    if (list[j].low < best2.low) best2 = list[j];
-                }
-                return best2;
-            }
-            default: {
-                var srcVal = sourceRow ? sourceRow[level] : null;
-                if (srcVal == null) return list[0];
-                var bestIdx = 0;
-                var bestDiff = Infinity;
-                for (var k = 0; k < list.length; k++) {
-                    var v = list[k][level];
-                    if (v == null) continue;
-                    var d = Math.abs(v - srcVal);
-                    if (d < bestDiff) { bestDiff = d; bestIdx = k; }
-                }
-                return list[bestIdx];
-            }
-        }
-    }
-
-    function ptCloneRowWithSubBar(src, sub, level) {
-        var out = {};
-        for (var k in src) {
-            if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
-        }
-
-        if (out._parent_close_time == null) {
-            out._parent_open_time  = src.open_time  != null ? src.open_time  : null;
-            out._parent_close_time = src.close_time != null ? src.close_time : null;
-            out._parent_timeframe  = src.timeframe  != null ? src.timeframe  : (src._projected_from || null);
-        }
-
-        out.candle_record_id    = sub.id;
-        out.candle_time         = sub.time;
-        out.open_time           = sub.open_time;
-        out.close_time          = sub.close_time;
-        out.open                = sub.open;
-        out.high                = sub.high;
-        out.low                 = sub.low;
-        out.close               = sub.close;
-        out.candle_center       = sub.candle_center;
-        out.body_center         = sub.body_center;
-        out.high_wick_center    = sub.high_wick_center;
-        out.low_wick_center     = sub.low_wick_center;
-        out.candle_width_center = sub.candle_width_center;
-        out.volume              = sub.volume;
-
-        out._projected_from      = src.timeframe || null;
-        out._projected_level     = level;
-        out._projected_sub_time  = sub.time;
-        out._projected_is_sub    = true;
-
-        return out;
-    }
-
-    function ptResolveProjectedEntryStartIdx(row, entryIdx) {
-        if (entryIdx == null || entryIdx < 0) return null;
-
-        var closeTs = row && row._parent_close_time
-            ? ptNormTs(row._parent_close_time)
-            : '';
-
-        if (!closeTs && row && row._parent_open_time) {
-            var openTs = ptNormTs(row._parent_open_time);
-            var spanMs = ptTfMs(row._parent_timeframe || row._projected_from || row.timeframe || '');
-            if (openTs && spanMs) {
-                var openDate = ptDateFromTs(openTs);
-                if (openDate) {
-                    var closeDate = new Date(openDate.getTime() + spanMs);
-                    closeTs = ptTsFromDate(closeDate);
-                }
-            }
-        }
-
-        if (!closeTs && row && row.close_time) {
-            closeTs = ptNormTs(row.close_time);
-        }
-        if (!closeTs && row && row.open_time) {
-            var openTs2 = ptNormTs(row.open_time);
-            var spanMs2 = ptTfMs(row._projected_from || row.timeframe || '');
-            if (openTs2 && spanMs2) {
-                var openDate2 = ptDateFromTs(openTs2);
-                if (openDate2) {
-                    var closeDate2 = new Date(openDate2.getTime() + spanMs2);
-                    closeTs = ptTsFromDate(closeDate2);
-                }
-            }
-        }
-
-        if (!closeTs) {
-            return entryIdx + 1;
-        }
-
-        for (var i = entryIdx; i < PT_CANDLES.length; i++) {
-            var t = ptNormTs(PT_CANDLES[i].time);
-            if (t >= closeTs) return i;
-        }
-        return PT_CANDLES.length;
-    }
-
-    // ============================================================
-    // PROJECTED OUTCOME RE-EVALUATION — same markers, resolved on the
-    // lower TF and stored on each projected matched_trade row.
-    // ============================================================
-    function ptReevaluateProjectedTradeOutcomes() {
-        if (!PT_CANDLES.length) return;
-
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
-
-        Object.keys(PT_PROJECTED_BY_TF).forEach(function (srcTF) {
-            var list = PT_PROJECTED_BY_TF[srcTF] || [];
-            list.forEach(function (r) {
-                if (r.row_role !== 'matched_trade') return;
-                if (r.entry_from_price_level == null) return;
-
-                var entryIdx = idxByTime[r.candle_time];
-                if (entryIdx == null) return;
-
-                var direction = r.resolved_direction || 0;
-                if (direction === 0) return;
-
-                var entryPrice = r.entry_price != null ? r.entry_price
-                                : (r.candle_center != null ? r.candle_center
-                                    : (r.entry_from_price_level && r[r.entry_from_price_level] != null
-                                        ? r[r.entry_from_price_level]
-                                        : r.close));
-                var exitPrice = r.exit_price != null ? r.exit_price : null;
-                if (exitPrice == null && r.resolved_risk != null) {
-                    exitPrice = entryPrice - direction * r.resolved_risk;
-                }
-                var targetPrice = r.target_price != null ? r.target_price
-                                : (r.resolved_price != null ? r.resolved_price : null);
-
-                if (exitPrice == null && targetPrice == null) return;
-
-                var startIdx = ptResolveProjectedEntryStartIdx(r, entryIdx);
-                if (startIdx == null || startIdx >= PT_CANDLES.length) {
-                    r.outcome_status              = 'pending';
-                    r.outcome_candle_time         = null;
-                    r.outcome_price               = null;
-                    r._projected_outcome          = true;
-                    r._entry_triggered            = false;
-                    r._entry_trigger_idx          = null;
-                    r._entry_trigger_candle_time  = null;
-                    r._entry_trigger_candle_open_time  = null;
-                    r._entry_trigger_candle_close_time = null;
-                    r._tp_hit_idx                 = null;
-                    r._tp_hit_candle_time         = null;
-                    r._tp_candle_open_time        = null;
-                    r._tp_candle_close_time       = null;
-                    r._sl_hit_idx                 = null;
-                    r._sl_hit_candle_time         = null;
-                    r._sl_candle_open_time        = null;
-                    r._sl_candle_close_time       = null;
-                    return;
-                }
-
-                var hitStatus = 'pending';
-                var hitTime   = null;
-                var hitPrice  = null;
-                var orderType = r.order_type || '';
-                var needsFill = ptOrderNeedsEntryFill(orderType);
-                var entryTriggered = !needsFill;
-                var entryTriggerIdx = needsFill ? null : entryIdx;
-
-                for (var i = startIdx; i < PT_CANDLES.length; i++) {
-                    var c = PT_CANDLES[i];
-                    if (!c) continue;
-
-                    if (!entryTriggered) {
-                        if (targetPrice != null) {
-                            var tgtPre = (direction > 0) ? (c.high >= targetPrice) : (c.low <= targetPrice);
-                            if (tgtPre) {
-                                hitStatus = 'missed';
-                                hitTime  = c.time;
-                                hitPrice = targetPrice;
-                                break;
-                            }
-                        }
-                        if (entryPrice != null && ptEntryIsTriggeredOnCandle(orderType, c, entryPrice)) {
-                            entryTriggered = true;
-                            entryTriggerIdx = i;
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    var hitStop = false;
-                    var hitTarget = false;
-                    if (direction > 0) {
-                        if (exitPrice  != null) hitStop   = (c.low  <= exitPrice);
-                        if (targetPrice != null) hitTarget = (c.high >= targetPrice);
-                    } else {
-                        if (exitPrice  != null) hitStop   = (c.high >= exitPrice);
-                        if (targetPrice != null) hitTarget = (c.low  <= targetPrice);
-                    }
-
-                    if (hitStop)   { hitStatus = 'stop';   hitTime = c.time; hitPrice = exitPrice;   break; }
-                    if (hitTarget) { hitStatus = 'profit'; hitTime = c.time; hitPrice = targetPrice; break; }
-                }
-
-                r.outcome_status       = hitStatus;
-                r.outcome_candle_time  = hitTime;
-                r.outcome_price        = hitPrice;
-                r._entry_triggered     = entryTriggered;
-
-                var trigIdx = null;
-                if (!needsFill) {
-                    trigIdx = entryIdx;
-                } else if (entryTriggerIdx != null && PT_CANDLES[entryTriggerIdx]) {
-                    trigIdx = entryTriggerIdx;
-                } else {
-                    trigIdx = entryIdx;
-                }
-                var trigCandle = PT_CANDLES[trigIdx] || null;
-
-                var tpIdx = null;
-                var tpCandle = null;
-                var slIdx = null;
-                var slCandle = null;
-                if (hitStatus === 'profit' && hitTime != null && idxByTime[hitTime] != null) {
-                    tpIdx = idxByTime[hitTime];
-                    tpCandle = PT_CANDLES[tpIdx] || null;
-                } else if (hitStatus === 'stop' && hitTime != null && idxByTime[hitTime] != null) {
-                    slIdx = idxByTime[hitTime];
-                    slCandle = PT_CANDLES[slIdx] || null;
-                }
-
-                r._entry_trigger_idx          = trigIdx;
-                r._entry_trigger_candle_time  = trigCandle ? trigCandle.time : null;
-                r._entry_trigger_candle_open_time  = trigCandle ? trigCandle.open_time  : null;
-                r._entry_trigger_candle_close_time = trigCandle ? trigCandle.close_time : null;
-
-                r._tp_hit_idx                 = tpIdx;
-                r._tp_hit_candle_time         = tpCandle ? tpCandle.time : null;
-                r._tp_candle_open_time        = tpCandle ? tpCandle.open_time  : null;
-                r._tp_candle_close_time       = tpCandle ? tpCandle.close_time : null;
-
-                r._sl_hit_idx                 = slIdx;
-                r._sl_hit_candle_time         = slCandle ? slCandle.time : null;
-                r._sl_candle_open_time        = slCandle ? slCandle.open_time  : null;
-                r._sl_candle_close_time       = slCandle ? slCandle.close_time : null;
-
-                r._projected_outcome   = true;
-            });
-        });
-    }
-
-    // ============================================================
-    // PROJECTED LONG/SHORT OVERLAY — reads trigger / hit markers
-    // recorded on the projected row by ptReevaluateProjectedTradeOutcomes.
-    // ============================================================
-    // ============================================================
-    // PROJECTED LONG/SHORT OVERLAY — reads trigger / hit markers
-    // recorded on the projected row by ptReevaluateProjectedTradeOutcomes.
-    //
-    // IMPORTANT: the recorded *_idx values live in the SOURCE TF's candle
-    // array (they were produced while scanning the higher-TF series that
-    // was projected down). When drawing on the LOWER TF we must re-map
-    // them via the recorded *_candle_time strings — the *_idx values are
-    // only meaningful against the source TF's own array. Falls back to
-    // the raw index only when the corresponding time string is missing.
-    // ============================================================
-    function ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!PT_CANDLES.length) return;
-        if (!rows.length) return;
-
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
-
-        var projByName = {};
-        var projByTreeRole = {};
-        rows.forEach(function (r) {
-            var nm = (r.candle_name || '').trim();
-            if (nm) {
-                if (!projByName[nm]) projByName[nm] = [];
-                projByName[nm].push(r);
-            }
-            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
-            if (!projByTreeRole[key]) projByTreeRole[key] = [];
-            projByTreeRole[key].push(r);
-        });
-
-        var halfBody = PT_VIEW.candleWidth / 2;
-
-        PT_DRAW_CTX.save();
-
-        rows.forEach(function (entryRow) {
-            if (entryRow.row_role !== 'matched_trade') return;
-            if (!entryRow.resolved_direction) return;
-
-            // No overlay for missed entries — price reached TP without filling entry
-            if (entryRow.outcome_status === 'missed') return;
-            if (entryRow._entry_triggered === false) return;
-
-            var treeId = entryRow.tree_id || 0;
-
-            // Resolve the entry candle index on the CURRENT (lower) TF.
-            var entryIdx = idxByTime[entryRow.candle_time];
-            if (entryIdx == null) return;
-            if (entryIdx > lastVisible) return;
-
-            var entryPrice = (entryRow.entry_price != null)
-                ? entryRow.entry_price
-                : (entryRow.candle_center != null ? entryRow.candle_center : entryRow.close);
-            if (entryPrice == null) return;
-
-            function resolveTo(key) {
-                if (!key) return null;
-                var bare = key.replace(/_(axis|specific_price_level)$/, '');
-                var candidates = projByName[bare] || [];
-                for (var i = 0; i < candidates.length; i++) {
-                    if (candidates[i].tree_id === treeId) {
-                        var ci = idxByTime[candidates[i].candle_time];
-                        if (ci != null) return ci;
-                    }
-                }
-                for (var j = 0; j < candidates.length; j++) {
-                    var cj = idxByTime[candidates[j].candle_time];
-                    if (cj != null) return cj;
-                }
-                if (bare === 'ROOT') {
-                    var roots = projByTreeRole[treeId + '|matched_root'] || [];
-                    for (var k = 0; k < roots.length; k++) {
-                        if (roots[k].is_foundation) {
-                            var rk = idxByTime[roots[k].candle_time];
-                            if (rk != null) return rk;
-                        }
-                    }
-                    if (roots.length) {
-                        var r0 = idxByTime[roots[0].candle_time];
-                        if (r0 != null) return r0;
-                    }
-                }
-                var refMatch = /^REF:(\d+)$/.exec(bare);
-                if (refMatch) {
-                    var n = parseInt(refMatch[1], 10);
-                    var refs = projByTreeRole[treeId + '|matched_ref'] || [];
-                    if (refs[n]) {
-                        var rn = idxByTime[refs[n].candle_time];
-                        if (rn != null) return rn;
-                    }
-                }
-                return null;
-            }
-
-            var exitIdx   = null;
-            var exitPrice = (entryRow.exit_price != null) ? entryRow.exit_price : null;
-            if (entryRow.exit_at) {
-                exitIdx = resolveTo(entryRow.exit_at);
-                if (exitPrice == null && exitIdx != null) {
-                    var ec = PT_CANDLES[exitIdx];
-                    if (ec) {
-                        var lvl = entryRow.exit_at_price_level;
-                        exitPrice = (lvl && ec[lvl] != null) ? ec[lvl] : ec.close;
-                    }
-                }
-            }
-
-            var targetIdx   = null;
-            var targetPrice = (entryRow.target_price != null)
-                ? entryRow.target_price
-                : (entryRow.resolved_price != null ? entryRow.resolved_price : null);
-
-            var isRR = (entryRow.target === 'minimum_risk_reward' ||
-                        entryRow.target === 'fixed_risk_reward');
-
-            if (!isRR && entryRow.target) {
-                targetIdx = resolveTo(entryRow.target);
-                if (targetPrice == null && targetIdx != null) {
-                    var tc = PT_CANDLES[targetIdx];
-                    if (tc) {
-                        var lvl2 = entryRow.target_price_level;
-                        targetPrice = (lvl2 && tc[lvl2] != null) ? tc[lvl2] : tc.close;
-                    }
-                }
-            }
-
-            if (exitPrice == null || targetPrice == null) return;
-
-            // ------------------------------------------------------------
-            // Resolve trigger index on the CURRENT (lower) TF.
-            //
-            // The stored _entry_trigger_idx refers to the position in the
-            // SOURCE TF's array. Re-map by time first; only fall back to
-            // the raw index if the time string is absent.
-            // ------------------------------------------------------------
-            var triggerIdx = null;
-            if (entryRow._entry_trigger_candle_time &&
-                idxByTime[entryRow._entry_trigger_candle_time] != null) {
-                triggerIdx = idxByTime[entryRow._entry_trigger_candle_time];
-            } else if (entryRow.entry_trigger_candle_time &&
-                       idxByTime[entryRow.entry_trigger_candle_time] != null) {
-                triggerIdx = idxByTime[entryRow.entry_trigger_candle_time];
-            } else if (entryRow._entry_trigger_idx != null) {
-                triggerIdx = entryRow._entry_trigger_idx;
-            } else if (entryRow.entry_trigger_idx != null) {
-                triggerIdx = entryRow.entry_trigger_idx;
-            } else {
-                triggerIdx = entryIdx;
-            }
-
-            // ------------------------------------------------------------
-            // Resolve resolution (TP / SL hit) index on the CURRENT TF.
-            // Same reasoning — prefer the recorded *_candle_time strings,
-            // fall back to the recorded indices, then to outcome_candle_time.
-            // ------------------------------------------------------------
-            var resolutionIdx = null;
-
-            if (entryRow.outcome_status === 'profit') {
-                if (entryRow._tp_hit_candle_time && idxByTime[entryRow._tp_hit_candle_time] != null) {
-                    resolutionIdx = idxByTime[entryRow._tp_hit_candle_time];
-                } else if (entryRow.tp_hit_candle_time && idxByTime[entryRow.tp_hit_candle_time] != null) {
-                    resolutionIdx = idxByTime[entryRow.tp_hit_candle_time];
-                } else if (entryRow._tp_hit_idx != null) {
-                    resolutionIdx = entryRow._tp_hit_idx;
-                } else if (entryRow.tp_hit_idx != null) {
-                    resolutionIdx = entryRow.tp_hit_idx;
-                }
-            } else if (entryRow.outcome_status === 'stop') {
-                if (entryRow._sl_hit_candle_time && idxByTime[entryRow._sl_hit_candle_time] != null) {
-                    resolutionIdx = idxByTime[entryRow._sl_hit_candle_time];
-                } else if (entryRow.sl_hit_candle_time && idxByTime[entryRow.sl_hit_candle_time] != null) {
-                    resolutionIdx = idxByTime[entryRow.sl_hit_candle_time];
-                } else if (entryRow._sl_hit_idx != null) {
-                    resolutionIdx = entryRow._sl_hit_idx;
-                } else if (entryRow.sl_hit_idx != null) {
-                    resolutionIdx = entryRow.sl_hit_idx;
-                }
-            }
-
-            if (resolutionIdx == null) {
-                if (entryRow.outcome_candle_time && idxByTime[entryRow.outcome_candle_time] != null) {
-                    resolutionIdx = idxByTime[entryRow.outcome_candle_time];
-                } else if (targetIdx != null && entryRow.outcome_status === 'profit') {
-                    resolutionIdx = targetIdx;
-                } else if (exitIdx != null && entryRow.outcome_status === 'stop') {
-                    resolutionIdx = exitIdx;
-                } else {
-                    resolutionIdx = lastVisible;
-                }
-            }
-
-            var hitSide = '';
-            var st = entryRow.outcome_status || '';
-            if (st === 'profit')    hitSide = 'target';
-            else if (st === 'stop') hitSide = 'stop';
-
-            if (resolutionIdx <= entryIdx) resolutionIdx = entryIdx + 1;
-            if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
-            if (triggerIdx < entryIdx)       triggerIdx = entryIdx;
-            if (triggerIdx > resolutionIdx)  triggerIdx = resolutionIdx;
-
-            if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
-            if (entryIdx > lastVisible) return;
-
-            var entryCenterX      = baseX + entryIdx     * step + step / 2;
-            var triggerCenterX    = baseX + triggerIdx   * step + step / 2;
-            var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
-
-            var x1       = entryCenterX - halfBody;
-            var x2       = resolutionCenterX + halfBody;
-            var xTrigger = triggerCenterX - halfBody;
-            if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
-
-            var yEntry  = pToY(entryPrice);
-            var yStop   = pToY(exitPrice);
-            var yTarget = pToY(targetPrice);
-
-            if (yEntry < chartTop - 4000 || yEntry > chartBottom + 4000) return;
-
-            ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide);
-        });
-
-        PT_DRAW_CTX.restore();
-    }
-
-    function ptRefreshTradeButtonSafe() {
-        try { ptRefreshTradesButton(); } catch (e) {}
-    }
-
-    // ==================== LONG/SHORT TOGGLE ====================
-    function ptToggleLongShort() {
-        PT_LONG_SHORT_ON = !PT_LONG_SHORT_ON;
-        var btn = document.getElementById('ptLongShortBtn');
-        var state = document.getElementById('ptLongShortState');
-        if (btn) btn.classList.toggle('pt-ls-on', PT_LONG_SHORT_ON);
-        if (state) state.textContent = PT_LONG_SHORT_ON ? 'ON' : 'OFF';
-        ptDebugLine('info', 'Long/Short overlay ' + (PT_LONG_SHORT_ON ? 'ON' : 'OFF'));
-        ptScheduleDraw();
-    }
-
-    // ==================== COMBINED MATCH ROWS ====================
-    function ptActiveMatchRows() {
-        if (PT_PROJECTION_MODES.length) {
-            var combined = [];
-            PT_PROJECTION_MODES.forEach(function (m) {
-                var list = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-                for (var i = 0; i < list.length; i++) combined.push(list[i]);
-            });
-            return combined;
-        }
-        return PT_PERSISTED_MATCHES;
-    }
-
-    function ptActiveNativeMatches() {
-        if (PT_PERSISTED_MATCHES.length) return PT_PERSISTED_MATCHES;
-        return [];
-    }
-
-    function ptRenderTradesResults() {
-        var resultsEl = document.getElementById('ptTradesResults');
-        if (!resultsEl) return;
-
-        var treeResults = ptScanTrades();
-
-        var allHits = [];
-        var byTree  = {};
-
-        treeResults.forEach(function (r) {
-            if (!r.hits || !r.hits.length) return;
-            var tid = r.tree.tree_id;
-            if (!byTree[tid]) byTree[tid] = { tree: r.tree, hits: [] };
-            r.hits.forEach(function (h) {
-                byTree[tid].hits.push(h);
-                allHits.push(h);
-            });
-        });
-
-        var srcLabel = PT_PROJECTION_MODES.length
-            ? ('Projected — ' + PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ')
-                + ' → ' + PT_CURRENT_TIMEFRAME + ' view')
-            : ('From live scan — ' + PT_CURRENT_SYMBOL + ' @ ' + PT_CURRENT_TIMEFRAME);
-
-        if (!allHits.length) {
-            resultsEl.innerHTML = '<div class="pt-trades-empty">'
-                + (PT_PROJECTION_MODES.length
-                    ? 'No projected trade matches for this symbol/timeframe.'
-                    : 'No trade matches found for this symbol/timeframe.')
-                + '</div>';
-            return;
-        }
-
-        var html = ptRenderTradeSummaryCard(allHits, 'Global Summary — ' + srcLabel);
-
-        Object.keys(byTree).forEach(function (tid) {
-            var grp = byTree[tid];
-            if (!grp.hits.length) return;
-
-            var rootName = ptFirstRootName(grp.tree);
-
-            html += '<div class="pt-trades-tree" data-open="1" data-tree-idx="' + tid + '">';
-            html += '  <div class="pt-trades-tree-head">';
-            html += '    <i class="fa-solid fa-chevron-right pt-trades-tree-caret"></i>';
-            html += '    <i class="fa-solid fa-sitemap pt-trades-tree-icon"></i>';
-            html += '    <span class="pt-trades-tree-name">' + ptEscapeHtml(rootName) + '</span>';
-            html += '    <span class="pt-trades-tree-count">' + grp.hits.length + ' match'
-                +      (grp.hits.length > 1 ? 'es' : '') + '</span>';
-            html += '  </div>';
-            html += '  <div class="pt-trades-tree-body">';
-
-            html += ptRenderTradeSummaryCard(grp.hits, 'Summary — ' + rootName);
-
-            var sortedHits = grp.hits.slice().sort(function (a, b) {
-                var ta = a.entry && a.entry.candle ? a.entry.candle.time : '';
-                var tb = b.entry && b.entry.candle ? b.entry.candle.time : '';
-                if (ta === tb) {
-                    var xa = a.exit && a.exit.candle ? a.exit.candle.time : '';
-                    var xb = b.exit && b.exit.candle ? b.exit.candle.time : '';
-                    return String(xb).localeCompare(String(xa));
-                }
-                return String(tb).localeCompare(String(ta));
-            });
-
-            sortedHits.forEach(function (hit, idx) {
-                html += ptRenderTradeHitCard(hit, idx);
-            });
-
-            html += '  </div>';
-            html += '</div>';
-        });
-
-        resultsEl.innerHTML = html;
-        ptAttachTradesTreeToggles(resultsEl);
-    }
-
-    function ptAttachTradesTreeToggles(host) {
-        Array.prototype.forEach.call(host.querySelectorAll('.pt-trades-tree-head'), function (head) {
-            head.addEventListener('click', function () {
-                var tree = head.parentNode;
-                var open = tree.getAttribute('data-open') === '1';
-                tree.setAttribute('data-open', open ? '0' : '1');
-            });
-        });
-    }
-
-    function ptRefreshTradesButton() {
-        var btn   = document.getElementById('ptTradesBtn');
-        var lsBtn = document.getElementById('ptLongShortBtn');
-        var cnt   = document.getElementById('ptTradesCount');
-        if (!btn) return;
-
-        var ruleCount = 0;
-        (PT_TREES || []).forEach(function (t) {
-            if (t.trades && t.trades.length) ruleCount += t.trades.length;
-        });
-
-        if (ruleCount === 0) {
-            btn.style.display = 'none';
-            if (lsBtn) lsBtn.style.display = 'none';
-            return;
-        }
-
-        btn.style.display = 'inline-flex';
-        if (lsBtn) lsBtn.style.display = 'inline-flex';
-
-        if (cnt) {
-            if (!PT_CANDLES.length) {
-                cnt.textContent = '…';
-                cnt.title = 'Waiting for candles to load…';
-            } else {
-                var results = ptScanTrades();
-                var total = 0;
-                results.forEach(function (r) { total += r.hits.length; });
-                PT_TRADE_MATCH_COUNT = total;
-
-                cnt.textContent = total;
-                cnt.title = total + ' trade match' + (total === 1 ? '' : 'es')
-                        + (PT_PROJECTION_MODES.length ? ' (projected)' : ' (live scan)');
-            }
-        }
-    }
-
-    function ptRescanTradeMatches(persist) {
-        PT_TRADE_SCAN_DIRTY = true;
-        ptRefreshTradesButton();
-        setTimeout(function () {
-            var results = ptScanTrades();
-            var total = 0;
-            results.forEach(function (r) { total += r.hits.length; });
-            PT_TRADE_MATCH_COUNT = total;
-            PT_TRADE_SCAN_DIRTY  = false;
-            ptDebugLine('info', 'Trade match count updated', { total: total, persist: !!persist });
-            ptRefreshTradesButton();
-
-            if (persist) {
-                ptPersistMatches(results);
-            }
-        }, 0);
-    }
-
-    function ptPersistMatches(results) {
-        var treesPayload = [];
-        (results || []).forEach(function (r) {
-            var flat = r._matchedFlat || [];
-            if (!flat.length) return;
-            treesPayload.push({
-                tree_id: r.tree.tree_id,
-                matched: flat
-            });
-        });
-
-        var sig = ptSnapshotSignature(results);
-        if (sig === PT_LAST_PERSISTED_SIG) {
-            ptDebugLine('data', 'persist_matches skipped (no change)', { sig: sig });
-            ptLoadPersistedMatches();
-            return;
-        }
-
-        var payload = {
-            programmeId: PT_PROGRAMME_ID,
-            symbol:      PT_CURRENT_SYMBOL,
-            timeframe:   PT_CURRENT_TIMEFRAME,
-            run_token:   PT_PERSISTED_RUN_TOKEN || '',
-            trees:       treesPayload
-        };
-
-        ptDebugLine('net', 'POST persist_matches', {
-            trees: treesPayload.length,
-            totalMatched: treesPayload.reduce(function (a, t) { return a + t.matched.length; }, 0),
-            sig: sig
-        });
-
-        var body = 'persist_matches=1&payload=' + encodeURIComponent(JSON.stringify(payload));
-        fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            ptDebugLine('net', 'persist_matches response', data);
-            if (data && data.success) {
-                PT_PERSISTED_RUN_TOKEN = data.run_token || PT_PERSISTED_RUN_TOKEN;
-                PT_LAST_PERSISTED_SIG  = sig;
-            }
-            ptLoadPersistedMatches();
-        })
-        .catch(function (err) {
-            ptDebugLine('error', 'persist_matches network error: ' + (err && err.message ? err.message : 'Unknown'));
-            ptLoadPersistedMatches();
-        });
-    }
-
-    function ptLoadPersistedMatches() {
-        if (!PT_PROGRAMME_ID || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
-            PT_PERSISTED_MATCHES = [];
-            PT_PERSISTED_LOADED  = true;
-            PT_PERSISTED_DIRTY   = false;
-            ptRefreshTradesButton();
-            return;
-        }
-
-        if (PT_PROJECTION_MODES.length) {
-            PT_PROJECTION_MODES.forEach(function (m) {
-                ptEnsureConfiguredRows(m.sourceTF, function () {
-                    ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
-                });
-            });
-            PT_PERSISTED_LOADED = true;
-            return;
-        }
-
-        var body = 'fetch_persisted_matches=1'
-                 + '&programmeid=' + encodeURIComponent(PT_PROGRAMME_ID)
-                 + '&symbol='      + encodeURIComponent(PT_CURRENT_SYMBOL)
-                 + '&timeframe='   + encodeURIComponent(PT_CURRENT_TIMEFRAME);
-
-        ptDebugLine('net', 'POST fetch_persisted_matches', {
-            programmeId: PT_PROGRAMME_ID, symbol: PT_CURRENT_SYMBOL, timeframe: PT_CURRENT_TIMEFRAME
-        });
-
-        fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            ptDebugLine('net', 'fetch_persisted_matches response', {
-                success: data && data.success, count: data && data.rows ? data.rows.length : 0
-            });
-            if (data && data.success) {
-                PT_PERSISTED_MATCHES = data.rows || [];
-                PT_CONFIGURED_ROWS_BY_TF[PT_CURRENT_TIMEFRAME] = PT_PERSISTED_MATCHES;
-            } else {
-                PT_PERSISTED_MATCHES = [];
-            }
-            PT_PERSISTED_LOADED = true;
-            PT_PERSISTED_DIRTY  = false;
-            ptRefreshTradesButton();
-
-            var modal = document.getElementById('ptTradesModal');
-            if (modal && modal.classList.contains('active')) {
-                ptRenderTradesResults();
-            }
-        })
-        .catch(function (err) {
-            ptDebugLine('error', 'fetch_persisted_matches network error: ' + (err && err.message ? err.message : 'Unknown'));
-            PT_PERSISTED_MATCHES = [];
-            PT_PERSISTED_LOADED  = true;
-            PT_PERSISTED_DIRTY   = false;
-            ptRefreshTradesButton();
-        });
-    }
-
-    function ptFirstRootName(tree) {
-        var roots = tree.roots || [];
-        if (roots.length && roots[0].candle_name) return roots[0].candle_name;
-        return 'Tree ' + tree.tree_id;
-    }
-
-    function ptOpenTradesModal() {
-        var modal = document.getElementById('ptTradesModal');
-        var body  = document.getElementById('ptTradesBody');
-        var sub   = document.getElementById('ptTradesSubtitle');
-        if (!modal || !body) return;
-
-        if (sub) {
-            var lbl = PT_PROJECTION_MODES.length
-                ? ('projected ' + PT_PROJECTION_MODES.map(function (m) { return m.sourceTF; }).join(' + ')
-                    + ' → ' + PT_CURRENT_TIMEFRAME)
-                : (PT_CURRENT_SYMBOL + ' @ ' + PT_CURRENT_TIMEFRAME + ' · live scan');
-            sub.textContent = PT_PROGRAMME_NAME + ' · ' + lbl;
-        }
-
-        body.innerHTML = '<div id="ptTradesResults" class="pt-trades-results"></div>';
-        modal.classList.add('active');
-
-        if (!PT_CANDLES.length) {
-            var resultsEl = document.getElementById('ptTradesResults');
-            if (resultsEl) {
-                resultsEl.innerHTML = '<div class="pt-trades-empty">Waiting for candles to load…</div>';
-            }
+        if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
+            PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
+            ptLoadChart();
         } else {
-            ptRenderTradesResults();
+            PT_CANDLES = [];
+            ptClearCanvas();
+            ptShowLoading(false);
+            ptShowEmpty('No symbol or timeframe selected. Configure them in the Signals dashboard.');
         }
-
-        ptDebugLine('info', 'Trades modal opened (live scan, projCount=' + PT_PROJECTION_MODES.length + ')');
     }
 
-    // ==================== TRADE STATS ====================
-    function ptComputeTradeStats(hitsChronological) {
-        var stats = {
-            highestConsecutiveLosses: 0,
-            highestDrawdownPct:       0,
-            peakLiquidity:            100,
-            finalLiquidity:           100,
-            winrate:                  0,
-            wins:                     0,
-            losses:                   0,
-            resolved:                 0,
-            dailyHighest:             0,
-            dailyLowest:              0,
-            dailyAverage:             null,
-            dailyCount:               0,
-            weeklyHighest:            0,
-            weeklyLowest:             0,
-            weeklyAverage:            null,
-            weeklyCount:              0,
-            weeklyDays:               []
-        };
-        if (!hitsChronological || !hitsChronological.length) return stats;
-
-        var liquidity = 100;
-        var peak      = 100;
-        var maxDD     = 0;
-        var consecLosses = 0;
-        var maxConsecLosses = 0;
-
-        var dailyMap = {};
-        var weeklyMap = {};
-        var tradingDayMap = {};
-        var weekdayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-        hitsChronological.forEach(function (hit) {
-            var rr = (hit.targetRR && hit.targetRR.ratio != null) ? hit.targetRR.ratio : 0;
-            var status = hit.outcome ? hit.outcome.status : 'pending';
-
-            // Missed entries never entered — exclude from win/loss, liquidity, consecutive losses
-            if (status === 'missed') {
-                return;
-            }
-
-            if (status === 'stop' || status === 'profit') {
-                stats.resolved++;
-                if (status === 'stop') stats.losses++;
-                else                   stats.wins++;
-            }
-
-            if (status === 'stop') {
-                consecLosses++;
-                if (consecLosses > maxConsecLosses) maxConsecLosses = consecLosses;
-                liquidity = liquidity - (liquidity * (rr / 100));
-            } else if (status === 'profit') {
-                consecLosses = 0;
-                liquidity = liquidity + (liquidity * (rr / 100));
-            }
-            if (liquidity > peak) peak = liquidity;
-            var dd = ((peak - liquidity) / peak) * 100;
-            if (dd > maxDD) maxDD = dd;
-
-            var resCandle = (hit.outcome && hit.outcome.candle) ? hit.outcome.candle : null;
-            if (resCandle && resCandle.time) {
-                var dayKey = String(resCandle.time).slice(0, 10);
-                if (!dailyMap[dayKey]) dailyMap[dayKey] = 0;
-                dailyMap[dayKey]++;
-            }
-
-            var entryCandle = (hit.entry && hit.entry.candle) ? hit.entry.candle : null;
-            if (entryCandle && entryCandle.time) {
-                var weekKey = ptWeekKeyFromTime(entryCandle.time);
-                if (weekKey) {
-                    if (!weeklyMap[weekKey]) weeklyMap[weekKey] = 0;
-                    weeklyMap[weekKey]++;
-                }
-                var dayIdx = ptWeekdayIndexFromTime(entryCandle.time);
-                if (dayIdx >= 0) {
-                    tradingDayMap[dayIdx] = true;
-                }
-            }
-        });
-
-        stats.highestConsecutiveLosses = maxConsecLosses;
-        stats.highestDrawdownPct       = maxDD;
-        stats.peakLiquidity            = peak;
-        stats.finalLiquidity           = liquidity;
-
-        stats.winrate = stats.resolved > 0
-            ? (stats.wins / stats.resolved) * 100
-            : 0;
-
-        var dayKeys = Object.keys(dailyMap);
-        stats.dailyCount = dayKeys.length;
-        if (dayKeys.length) {
-            var dailyCounts = dayKeys.map(function (k) { return dailyMap[k]; });
-            stats.dailyHighest = Math.max.apply(null, dailyCounts);
-            stats.dailyLowest  = Math.min.apply(null, dailyCounts);
-            stats.dailyAverage = ptMedianBetween(dailyCounts);
+    function ptArraysEqual(a, b) {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        if (a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) return false;
         }
-
-        var weekKeys = Object.keys(weeklyMap).sort();
-        stats.weeklyCount = weekKeys.length;
-        if (weekKeys.length) {
-            var weeklyCounts = weekKeys.map(function (k) { return weeklyMap[k]; });
-            stats.weeklyHighest = Math.max.apply(null, weeklyCounts);
-            stats.weeklyLowest  = Math.min.apply(null, weeklyCounts);
-            stats.weeklyAverage = ptMedianBetween(weeklyCounts);
-        }
-
-        var tradingDayIdx = Object.keys(tradingDayMap).map(function (k) { return parseInt(k, 10); });
-        tradingDayIdx.sort(function (a, b) { return a - b; });
-        stats.weeklyDays = tradingDayIdx.map(function (k) { return weekdayNames[k]; });
-
-        return stats;
-    }
-
-    function ptWeekdayIndexFromTime(timeStr) {
-        if (!timeStr) return -1;
-        var s = String(timeStr).replace('T', ' ');
-        var datePart = s.slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return -1;
-        var parts = datePart.split('-');
-        var y = parseInt(parts[0], 10);
-        var m = parseInt(parts[1], 10) - 1;
-        var d = parseInt(parts[2], 10);
-        var dt = new Date(Date.UTC(y, m, d));
-        if (isNaN(dt.getTime())) return -1;
-        return dt.getUTCDay();
-    }
-
-    function ptWeekKeyFromTime(timeStr) {
-        if (!timeStr) return null;
-        var s = String(timeStr).replace('T', ' ');
-        var datePart = s.slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return null;
-        var parts = datePart.split('-');
-        var y = parseInt(parts[0], 10);
-        var m = parseInt(parts[1], 10) - 1;
-        var d = parseInt(parts[2], 10);
-        var dt = new Date(Date.UTC(y, m, d));
-        if (isNaN(dt.getTime())) return null;
-
-        var day = dt.getUTCDay() || 7;
-        dt.setUTCDate(dt.getUTCDate() + 4 - day);
-        var yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
-        var weekNo = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
-        return dt.getUTCFullYear() + '-W' + (weekNo < 10 ? '0' + weekNo : weekNo);
-    }
-
-    function ptMedianBetween(counts) {
-        if (!counts || !counts.length) return null;
-        var uniq = counts.slice().sort(function (a, b) { return a - b; });
-        var unique = [];
-        for (var i = 0; i < uniq.length; i++) {
-            if (i === 0 || uniq[i] !== uniq[i - 1]) unique.push(uniq[i]);
-        }
-        if (unique.length < 3) return null;
-
-        var min = unique[0];
-        var max = unique[unique.length - 1];
-
-        var inner = unique.slice(1, unique.length - 1);
-        if (!inner.length) return null;
-
-        var midIdx = Math.floor((inner.length - 1) / 2);
-        var candidate = inner[midIdx];
-        if (candidate > min && candidate < max) return candidate;
-        return null;
-    }
-
-    function ptRenderTradeSummaryCard(hits, label) {
-        var totalHits   = 0;
-        var sumRR       = 0;
-        var sumWinRR    = 0;
-        var sumLossRR   = 0;
-        var wonCount    = 0;
-        var lostCount   = 0;
-        var pendCount   = 0;
-        var missedCount = 0;
-
-        hits.forEach(function (h) {
-            totalHits++;
-            var rr = (h.targetRR && h.targetRR.ratio != null) ? h.targetRR.ratio : 0;
-            var st = h.outcome ? h.outcome.status : 'pending';
-            // Missed entries do not contribute to R:R totals or win/loss
-            if (st === 'missed') {
-                missedCount++;
-                return;
-            }
-            sumRR += rr;
-            if (st === 'profit')      { sumWinRR  += rr; wonCount++;  }
-            else if (st === 'stop')   { sumLossRR += rr; lostCount++; }
-            else                      { pendCount++; }
-        });
-
-        var chrono = hits.slice().sort(function (a, b) {
-            var ta = a.entry && a.entry.candle ? a.entry.candle.time : '';
-            var tb = b.entry && b.entry.candle ? b.entry.candle.time : '';
-            return String(ta).localeCompare(String(tb));
-        });
-        var stats = ptComputeTradeStats(chrono);
-
-        var html = '';
-        html += '<div class="pt-trades-summary-card">';
-        if (label) {
-            html += '<div style="font-size:0.78rem;font-weight:800;text-transform:uppercase;'
-                 +  'letter-spacing:0.4px;color:#27ae60;margin-bottom:10px;">'
-                 +  ptEscapeHtml(label) + '</div>';
-        }
-        html += '  <div class="pt-tsc-row">';
-
-        html += '    <div class="pt-tsc-cell">';
-        html += '      <span class="pt-tsc-label">Total Trades</span>';
-        html += '      <span class="pt-tsc-value">' + totalHits + '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell">';
-        html += '      <span class="pt-tsc-label">Total R:R</span>';
-        html += '      <span class="pt-tsc-value">' + sumRR.toFixed(2) + '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-win">';
-        html += '      <span class="pt-tsc-label">Won R:R (' + wonCount + ')</span>';
-        html += '      <span class="pt-tsc-value">' + sumWinRR.toFixed(2) + '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-loss">';
-        html += '      <span class="pt-tsc-label">Lost R:R (' + lostCount + ')</span>';
-        html += '      <span class="pt-tsc-value">' + sumLossRR.toFixed(2) + '</span>';
-        html += '    </div>';
-
-        if (missedCount > 0) {
-            html += '    <div class="pt-tsc-cell pt-tsc-danger">';
-            html += '      <span class="pt-tsc-label">Missed Entries</span>';
-            html += '      <span class="pt-tsc-value">' + missedCount + '</span>';
-            html += '    </div>';
-        }
-
-        if (pendCount > 0) {
-            html += '    <div class="pt-tsc-cell pt-tsc-pending">';
-            html += '      <span class="pt-tsc-label">Pending</span>';
-            html += '      <span class="pt-tsc-value">' + pendCount + '</span>';
-            html += '    </div>';
-        }
-
-        html += '    <div class="pt-tsc-cell">';
-        html += '      <span class="pt-tsc-label">Winrate</span>';
-        html += '      <span class="pt-tsc-value pt-tsc-winrate-value">'
-             +          stats.winrate.toFixed(2) + '%</span>';
-        html += '      <span class="pt-tsc-sub">'
-             +          stats.wins + 'W / ' + stats.losses + 'L'
-             +          (stats.resolved ? ' of ' + stats.resolved + ' resolved' : ' — no resolved trades')
-             +      '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-danger">';
-        html += '      <span class="pt-tsc-label">Highest Consecutive Losses</span>';
-        html += '      <span class="pt-tsc-value">' + stats.highestConsecutiveLosses + '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-danger">';
-        html += '      <span class="pt-tsc-label">Highest Drawdown</span>';
-        html += '      <span class="pt-tsc-value">' + stats.highestDrawdownPct.toFixed(2) + '%</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-info">';
-        html += '      <span class="pt-tsc-label">Daily Trades Count</span>';
-        html += '      <span class="pt-tsc-value">' + stats.dailyCount + ' day'
-             +          (stats.dailyCount === 1 ? '' : 's') + '</span>';
-        html += '      <span class="pt-tsc-sub">'
-             +          'Highest: ' + stats.dailyHighest
-             +          ' · Lowest: ' + stats.dailyLowest
-             +          (stats.dailyAverage != null ? ' · Average: ' + stats.dailyAverage : '')
-             +      '</span>';
-        html += '    </div>';
-
-        html += '    <div class="pt-tsc-cell pt-tsc-info">';
-        html += '      <span class="pt-tsc-label">Weekly Trades Count</span>';
-        html += '      <span class="pt-tsc-value">' + stats.weeklyCount + ' week'
-             +          (stats.weeklyCount === 1 ? '' : 's') + '</span>';
-        html += '      <span class="pt-tsc-sub">'
-             +          'Highest: ' + stats.weeklyHighest
-             +          ' · Lowest: ' + stats.weeklyLowest
-             +          (stats.weeklyAverage != null ? ' · Average: ' + stats.weeklyAverage : '')
-             +      '</span>';
-        html += '    </div>';
-
-        if (stats.weeklyDays && stats.weeklyDays.length) {
-            html += '    <div class="pt-tsc-cell pt-tsc-info">';
-            html += '      <span class="pt-tsc-label">Trading Days</span>';
-            html += '      <span class="pt-tsc-value">' + stats.weeklyDays.length + ' day'
-                 +          (stats.weeklyDays.length === 1 ? '' : 's') + '</span>';
-            html += '      <span class="pt-tsc-sub pt-tsc-days">'
-                 +          ptEscapeHtml(stats.weeklyDays.join(' · '))
-                 +      '</span>';
-            html += '    </div>';
-        }
-
-        html += '  </div>';
-        html += '</div>';
-        return html;
-    }
-
-    // ============================================================
-    // SCAN
-    // ============================================================
-    // ============================================================
-    // SCAN — records trigger / TP / SL candle indices on every
-    // matched_trade row so downstream draw code never re-derives them.
-    // ============================================================
-    // ============================================================
-    // SCAN
-    // ============================================================
-    // ============================================================
-    // SCAN — records trigger / TP / SL candle indices on every
-    // matched_trade row so downstream draw code never re-derives them.
-    // Also records the annotation rule fields on every matched row so
-    // the annotation renderer can resolve them later.
-    // ============================================================
-    function ptScanTrades() {
-        var out = [];
-        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return out;
-        if (!PT_CANDLES.length) return out;
-
-        PT_TREES.forEach(function (tree) {
-            var roots = tree.roots || [];
-            if (!roots.length) return;
-            var trades = tree.trades || [];
-            var drawings = tree.drawings || [];
-            if (!trades.length && !drawings.length) return;
-
-            var rootName = ptFirstRootName(tree);
-            var hits = [];
-            var seenEntryByRule = {};
-            var matchedFlat = [];
-
-            for (var origin = 0; origin < PT_CANDLES.length; origin++) {
-                var matched = ptEvaluateTreeAt(tree, origin, 0, PT_CANDLES.length - 1);
-                if (!matched.length) continue;
-
-                var foundationMatch = matched[0];
-                var foundationRoot  = foundationMatch.root;
-                var foundationAbs   = foundationMatch.absIdx;
-
-                if (!foundationRoot.timeframe || foundationRoot.timeframe !== PT_CURRENT_TIMEFRAME) continue;
-                if (foundationAbs < 0 || foundationAbs >= PT_CANDLES.length) continue;
-
-                matched.forEach(function (m, mi) {
-                    var root = m.root;
-                    var rc   = PT_CANDLES[m.absIdx];
-                    if (!rc) return;
-
-                    matchedFlat.push({
-                        row_role:          'matched_root',
-                        source_row_id:     root.id || null,
-                        candle_record_id:  rc.id || null,
-                        candle_time:       rc.time,
-                        open_time:         rc.open_time,
-                        close_time:        rc.close_time,
-                        open:              rc.open,
-                        high:              rc.high,
-                        low:               rc.low,
-                        close:             rc.close,
-                        candle_center:     rc.candle_center,
-                        body_center:       rc.body_center,
-                        high_wick_center:  rc.high_wick_center,
-                        low_wick_center:   rc.low_wick_center,
-                        candle_width_center: rc.candle_width_center,
-                        volume:            rc.volume,
-                        candle_name:       root.candle_name,
-                        price_level:       root.price_level,
-                        candle_type:       root.candle_type,
-                        candle_position:   root.candle_position,
-                        candle_search:     root.candle_search,
-                        operator:          root.operator,
-                        is_foundation:     mi === 0 ? 1 : 0,
-                        evaluation_priority: mi + 1,
-                        object_kind:       root.object_kind     || null,
-                        object_anchor:     root.object_anchor   || null,
-                        object_position:   root.object_position || null,
-                        text_anchor:       root.text_anchor     || null,
-                        text_position:     root.text_position   || null,
-                        text_content:      root.text_content    || null,
-                        status:            'matched'
-                    });
-
-                    (root.root_refs || []).forEach(function (ref) {
-                        if (ref.row_role !== 'root_ref') return;
-                        var refOff = parseInt(ref.candle_position, 10) || 0;
-                        var refAbs = m.absIdx + refOff;
-                        if (refAbs < 0 || refAbs >= PT_CANDLES.length) return;
-                        var rfc = PT_CANDLES[refAbs];
-                        if (!rfc) return;
-
-                        matchedFlat.push({
-                            row_role:          'matched_ref',
-                            source_row_id:     ref.id || null,
-                            candle_record_id:  rfc.id || null,
-                            candle_time:       rfc.time,
-                            open_time:         rfc.open_time,
-                            close_time:        rfc.close_time,
-                            open:              rfc.open,
-                            high:              rfc.high,
-                            low:               rfc.low,
-                            close:             rfc.close,
-                            candle_center:     rfc.candle_center,
-                            body_center:       rfc.body_center,
-                            high_wick_center:  rfc.high_wick_center,
-                            low_wick_center:   rfc.low_wick_center,
-                            candle_width_center: rfc.candle_width_center,
-                            volume:            rfc.volume,
-                            candle_name:       ref.candle_name,
-                            price_level:       ref.price_level,
-                            candle_type:       ref.candle_type,
-                            candle_position:   ref.candle_position,
-                            candle_search:     ref.candle_search,
-                            operator:          root.operator,
-                            evaluation_priority: mi + 1,
-                            object_kind:       ref.object_kind     || null,
-                            object_anchor:     ref.object_anchor   || null,
-                            object_position:   ref.object_position || null,
-                            text_anchor:       ref.text_anchor     || null,
-                            text_position:     ref.text_position   || null,
-                            text_content:      ref.text_content    || null,
-                            status:            'matched'
-                        });
-
-                        (ref.re_ref_pairs || []).forEach(function (pair) {
-                            var a = pair.author, b = pair.referenced;
-                            if (!a || !b) return;
-
-                            matchedFlat.push({
-                                row_role:          'matched_reref_author',
-                                source_row_id:     a.id || null,
-                                candle_record_id:  rfc.id || null,
-                                candle_time:       rfc.time,
-                                open_time:         rfc.open_time,
-                                close_time:        rfc.close_time,
-                                open:              rfc.open,
-                                high:              rfc.high,
-                                low:               rfc.low,
-                                close:             rfc.close,
-                                candle_center:     rfc.candle_center,
-                                body_center:       rfc.body_center,
-                                high_wick_center:  rfc.high_wick_center,
-                                low_wick_center:   rfc.low_wick_center,
-                                candle_width_center: rfc.candle_width_center,
-                                volume:            rfc.volume,
-                                candle_name:       a.candle_name,
-                                price_level:       a.price_level,
-                                candle_type:       a.candle_type,
-                                candle_position:   a.candle_position,
-                                candle_search:     a.candle_search,
-                                operator:          a.operator,
-                                evaluation_priority: mi + 1,
-                                object_kind:       a.object_kind     || null,
-                                object_anchor:     a.object_anchor   || null,
-                                object_position:   a.object_position || null,
-                                text_anchor:       a.text_anchor     || null,
-                                text_position:     a.text_position   || null,
-                                text_content:      a.text_content    || null,
-                                status:            'matched'
-                            });
-                            matchedFlat.push({
-                                row_role:          'matched_reref_servant',
-                                source_row_id:     b.id || null,
-                                candle_record_id:  rfc.id || null,
-                                candle_time:       rfc.time,
-                                open_time:         rfc.open_time,
-                                close_time:        rfc.close_time,
-                                open:              rfc.open,
-                                high:              rfc.high,
-                                low:               rfc.low,
-                                close:             rfc.close,
-                                candle_center:     rfc.candle_center,
-                                body_center:       rfc.body_center,
-                                high_wick_center:  rfc.high_wick_center,
-                                low_wick_center:   rfc.low_wick_center,
-                                candle_width_center: rfc.candle_width_center,
-                                volume:            rfc.volume,
-                                candle_name:       b.candle_name,
-                                price_level:       b.price_level,
-                                candle_type:       b.candle_type,
-                                candle_position:   b.candle_position,
-                                candle_search:     b.candle_search,
-                                operator:          a.operator,
-                                evaluation_priority: mi + 1,
-                                object_kind:       b.object_kind     || null,
-                                object_anchor:     b.object_anchor   || null,
-                                object_position:   b.object_position || null,
-                                text_anchor:       b.text_anchor     || null,
-                                text_position:     b.text_position   || null,
-                                text_content:      b.text_content    || null,
-                                status:            'matched'
-                            });
-                        });
-                    });
-                });
-
-                drawings.forEach(function (dr) {
-                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, origin);
-                    if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
-                    var fc = PT_CANDLES[fromIdx];
-                    if (!fc) return;
-
-                    matchedFlat.push({
-                        row_role:              'matched_drawing',
-                        source_row_id:         dr.id || null,
-                        candle_record_id:      fc.id || null,
-                        candle_time:           fc.time,
-                        open_time:             fc.open_time,
-                        close_time:            fc.close_time,
-                        open:                  fc.open,
-                        high:                  fc.high,
-                        low:                   fc.low,
-                        close:                 fc.close,
-                        candle_center:         fc.candle_center,
-                        body_center:           fc.body_center,
-                        high_wick_center:      fc.high_wick_center,
-                        low_wick_center:       fc.low_wick_center,
-                        candle_width_center:   fc.candle_width_center,
-                        volume:                fc.volume,
-                        drawing_id:            dr.drawing_id,
-                        drawing_tools:         dr.drawing_tools,
-                        draw_from:             dr.draw_from,
-                        draw_from_price_level: dr.draw_from_price_level,
-                        draw_to:               dr.draw_to,
-                        draw_to_price_level:   dr.draw_to_price_level,
-                        drawing_color:         dr.drawing_color,
-                        evaluation_priority:   1,
-                        object_kind:           dr.object_kind     || null,
-                        object_anchor:         dr.object_anchor   || null,
-                        object_position:       dr.object_position || null,
-                        text_anchor:           dr.text_anchor     || null,
-                        text_position:         dr.text_position   || null,
-                        text_content:          dr.text_content    || null,
-                        status:                'matched'
-                    });
-                });
-
-                trades.forEach(function (trade, ti) {
-                    var entry = ptResolveSourceObject(
-                        tree, foundationRoot, foundationAbs,
-                        trade.entry_from, origin,
-                        trade.entry_from_price_level
-                    );
-                    if (!entry) return;
-
-                    var exit = null;
-                    if (trade.exit_at) {
-                        exit = ptResolveSourceObject(
-                            tree, foundationRoot, foundationAbs,
-                            trade.exit_at, origin,
-                            trade.exit_at_price_level
-                        );
-                    }
-
-                    var target          = null;
-                    var targetRR        = null;
-                    var rrMode          = trade.target_rr_mode || trade.target || '';
-
-                    if (rrMode === 'fixed_risk_reward' || rrMode === 'minimum_risk_reward') {
-                        if (exit) {
-                            var computed = ptComputeRiskRewardTarget(trade, entry, exit, rrMode);
-                            if (computed) {
-                                targetRR = computed;
-                            }
-                        }
-                    } else if (trade.target &&
-                            trade.target !== 'fixed_risk_reward' &&
-                            trade.target !== 'minimum_risk_reward') {
-                        target = ptResolveSourceObject(
-                            tree, foundationRoot, foundationAbs,
-                            trade.target, origin,
-                            trade.target_price_level
-                        );
-                        if (target && exit) {
-                            var dyn = ptComputeDynamicRiskReward(trade, entry, exit, target);
-                            if (dyn) targetRR = dyn;
-                        } else if (target) {
-                            targetRR = {
-                                ratio:     null,
-                                price:     target.price,
-                                direction: ptTradeDirection(trade),
-                                risk:      null,
-                                reward:    null,
-                                mode:      'dynamic'
-                            };
-                        }
-                    }
-
-                    var key = ti + '|' + entry.idx;
-                    if (seenEntryByRule[key]) return;
-                    seenEntryByRule[key] = true;
-
-                    var direction = ptTradeDirection(trade);
-                    var targetPrice = (targetRR && targetRR.price != null)
-                        ? targetRR.price
-                        : (target && target.price != null ? target.price : null);
-                    var outcome;
-                    if (direction !== 0 && exit && exit.price != null) {
-                        outcome = ptDetectTradeOutcome(entry, exit, targetPrice, direction, null, trade.order_type);
-                    } else {
-                        outcome = { status: 'pending', candleIdx: null, candle: null, price: null,
-                                    entryTriggered: false, entryTriggerIdx: null };
-                    }
-
-                    var entryCandle = entry.candle;
-                    var entryPrice  = (entry.price != null) ? entry.price : null;
-                    var exitPrice   = (exit && exit.price != null) ? exit.price : null;
-                    var tgtPrice    = (targetRR && targetRR.price != null)
-                                        ? targetRR.price
-                                        : (target && target.price != null ? target.price : null);
-
-                    var entryTriggerIdx = (outcome && outcome.entryTriggerIdx != null)
-                        ? outcome.entryTriggerIdx
-                        : entry.idx;
-                    var entryTriggerCandle = PT_CANDLES[entryTriggerIdx] || entryCandle;
-
-                    var tpHitIdx = null;
-                    var tpHitCandle = null;
-                    var slHitIdx = null;
-                    var slHitCandle = null;
-
-                    if (outcome && outcome.candleIdx != null) {
-                        if (outcome.status === 'profit') {
-                            tpHitIdx = outcome.candleIdx;
-                            tpHitCandle = PT_CANDLES[tpHitIdx] || null;
-                        } else if (outcome.status === 'stop') {
-                            slHitIdx = outcome.candleIdx;
-                            slHitCandle = PT_CANDLES[slHitIdx] || null;
-                        }
-                    }
-
-                    var exitCandle = exit && exit.candle ? exit.candle : null;
-
-                    var matchedTradeRow = {
-                        row_role:          'matched_trade',
-                        source_row_id:     trade.id || null,
-                        candle_record_id:  entryCandle ? (entryCandle.id || null) : null,
-                        candle_time:       entryCandle ? entryCandle.time       : null,
-                        open_time:         entryCandle ? entryCandle.open_time  : null,
-                        close_time:        entryCandle ? entryCandle.close_time : null,
-                        open:              entryCandle ? entryCandle.open       : null,
-                        high:              entryCandle ? entryCandle.high       : null,
-                        low:               entryCandle ? entryCandle.low        : null,
-                        close:             entryCandle ? entryCandle.close      : null,
-                        candle_center:     entryCandle ? entryCandle.candle_center       : null,
-                        body_center:       entryCandle ? entryCandle.body_center         : null,
-                        high_wick_center:  entryCandle ? entryCandle.high_wick_center    : null,
-                        low_wick_center:   entryCandle ? entryCandle.low_wick_center     : null,
-                        candle_width_center: entryCandle ? entryCandle.candle_width_center : null,
-                        volume:            entryCandle ? entryCandle.volume              : null,
-                        candle_name:       foundationRoot.candle_name,
-                        price_level:       trade.entry_from_price_level,
-                        candle_type:       foundationRoot.candle_type,
-                        candle_position:   foundationRoot.candle_position,
-                        candle_search:     foundationRoot.candle_search,
-                        operator:          foundationRoot.operator,
-                        order_type:        trade.order_type,
-                        entry_from:        trade.entry_from,
-                        entry_from_price_level: trade.entry_from_price_level,
-                        exit_at:           trade.exit_at,
-                        exit_at_price_level: trade.exit_at_price_level,
-                        target:            (rrMode === 'minimum_risk_reward' || rrMode === 'fixed_risk_reward')
-                                            ? rrMode
-                                            : (trade.target || ''),
-                        target_price_level: trade.target_price_level || null,
-
-                        entry_price:       entryPrice,
-                        exit_price:        exitPrice,
-                        target_price:      tgtPrice,
-
-                        resolved_price:    tgtPrice,
-                        resolved_direction: direction,
-                        resolved_risk:     targetRR ? targetRR.risk   : null,
-                        resolved_reward:   targetRR ? targetRR.reward : null,
-                        resolved_ratio:    targetRR ? targetRR.ratio  : null,
-
-                        entry_trigger_idx:          entryTriggerIdx,
-                        entry_trigger_candle_time:  entryTriggerCandle ? entryTriggerCandle.time : null,
-                        entry_trigger_candle_open_time:  entryTriggerCandle ? entryTriggerCandle.open_time  : null,
-                        entry_trigger_candle_close_time: entryTriggerCandle ? entryTriggerCandle.close_time : null,
-
-                        tp_hit_idx:                 tpHitIdx,
-                        tp_hit_candle_time:         tpHitCandle ? tpHitCandle.time : null,
-                        tp_candle_open_time:        tpHitCandle ? tpHitCandle.open_time  : null,
-                        tp_candle_close_time:       tpHitCandle ? tpHitCandle.close_time : null,
-
-                        sl_hit_idx:                 slHitIdx,
-                        sl_hit_candle_time:         slHitCandle ? slHitCandle.time : null,
-                        sl_candle_open_time:        slHitCandle ? slHitCandle.open_time  : null,
-                        sl_candle_close_time:       slHitCandle ? slHitCandle.close_time : null,
-
-                        object_kind:       trade.object_kind     || null,
-                        object_anchor:     trade.object_anchor   || null,
-                        object_position:   trade.object_position || null,
-                        text_anchor:       trade.text_anchor     || null,
-                        text_position:     trade.text_position   || null,
-                        text_content:      trade.text_content    || null,
-
-                        outcome_status:    outcome.status,
-                        outcome_candle_time: outcome.candle ? outcome.candle.time : null,
-                        outcome_price:     outcome.price,
-                        evaluation_priority: ti + 1,
-                        status:            outcome.status === 'profit' ? 'resolved_win'
-                                            : outcome.status === 'stop' ? 'resolved_loss'
-                                            : outcome.status === 'missed' ? 'missed_entry'
-                                            : 'pending'
-                    };
-
-                    if (exitCandle) {
-                        matchedTradeRow.exit_candle_open_time  = exitCandle.open_time  || null;
-                        matchedTradeRow.exit_candle_close_time = exitCandle.close_time || null;
-                    }
-
-                    if (target && target.candle) {
-                        matchedTradeRow.target_candle_open_time  = target.candle.open_time  || null;
-                        matchedTradeRow.target_candle_close_time = target.candle.close_time || null;
-                    }
-
-                    matchedFlat.push(matchedTradeRow);
-
-                    hits.push({
-                        trade:            trade,
-                        entry:            entry,
-                        exit:             exit,
-                        target:           target,
-                        targetRR:         targetRR,
-                        direction:        direction,
-                        outcome:          outcome,
-                        i0:               origin,
-                        matched:          matched,
-                        matchedTradeRow:  matchedTradeRow
-                    });
-                });
-            }
-
-            if (hits.length || matchedFlat.length) {
-                hits.sort(function (a, b) {
-                    var ta = a.entry && a.entry.candle ? a.entry.candle.time : '';
-                    var tb = b.entry && b.entry.candle ? b.entry.candle.time : '';
-                    if (ta === tb) {
-                        var xa = a.exit && a.exit.candle ? a.exit.candle.time : '';
-                        var xb = b.exit && b.exit.candle ? b.exit.candle.time : '';
-                        return xb.localeCompare(xa);
-                    }
-                    return String(tb).localeCompare(String(ta));
-                });
-                out.push({
-                    rootName: rootName,
-                    tree: tree,
-                    hits: hits,
-                    _matchedFlat: matchedFlat
-                });
-            }
-        });
-
-        return out;
-    }
-
-    function ptRenderTradeHitCard(hit, idx) {
-        var trade     = hit.trade;
-        var orderType = (trade.order_type || '').toLowerCase();
-        var orderCls  = orderType || 'buy';
-
-        var entryLvl  = trade.entry_from_price_level || '';
-        var exitLvl   = trade.exit_at_price_level || '';
-        var targetLvl = trade.target_price_level || '';
-
-        var entryPrice  = ptResolvedPrice(hit.entry);
-        var exitPrice   = hit.exit ? ptResolvedPrice(hit.exit) : null;
-        var targetPrice = hit.target ? ptResolvedPrice(hit.target) : null;
-
-        var row = hit.matchedTradeRow || {};
-
-        // Resolve the trigger, TP and SL candles for open/close time display.
-        var entryTriggerCandle = null;
-        if (row.entry_trigger_idx != null && PT_CANDLES[row.entry_trigger_idx]) {
-            entryTriggerCandle = PT_CANDLES[row.entry_trigger_idx];
-        } else if (hit.outcome && hit.outcome.entryTriggerIdx != null && PT_CANDLES[hit.outcome.entryTriggerIdx]) {
-            entryTriggerCandle = PT_CANDLES[hit.outcome.entryTriggerIdx];
-        } else {
-            entryTriggerCandle = hit.entry ? hit.entry.candle : null;
-        }
-
-        var tpHitCandle = null;
-        if (row.tp_hit_idx != null && PT_CANDLES[row.tp_hit_idx]) {
-            tpHitCandle = PT_CANDLES[row.tp_hit_idx];
-        } else if (hit.outcome && hit.outcome.status === 'profit' &&
-                   hit.outcome.candleIdx != null && PT_CANDLES[hit.outcome.candleIdx]) {
-            tpHitCandle = PT_CANDLES[hit.outcome.candleIdx];
-        }
-
-        var slHitCandle = null;
-        if (row.sl_hit_idx != null && PT_CANDLES[row.sl_hit_idx]) {
-            slHitCandle = PT_CANDLES[row.sl_hit_idx];
-        } else if (hit.outcome && hit.outcome.status === 'stop' &&
-                   hit.outcome.candleIdx != null && PT_CANDLES[hit.outcome.candleIdx]) {
-            slHitCandle = PT_CANDLES[hit.outcome.candleIdx];
-        }
-
-        var exitCandle   = (hit.exit && hit.exit.candle) ? hit.exit.candle : null;
-        var targetCandle = (hit.target && hit.target.candle) ? hit.target.candle : null;
-
-        var html = '';
-        html += '<div class="pt-trade-card">';
-        html += '  <div class="pt-trade-card-head">';
-        html += '    <span class="pt-trade-card-title">#Match ' + (idx + 1) + '</span>';
-        html += '    <span class="pt-trade-order-badge ' + ptEscapeHtml(orderCls) + '">' + ptEscapeHtml(trade.order_type || '—') + '</span>';
-        html += '  </div>';
-
-        html += '  <div class="pt-trade-kv">';
-
-        html += '    <div><span class="k">Entry</span> <span class="v">' + ptEscapeHtml(hit.entry ? hit.entry.name : '—') + '</span></div>';
-        html += '    <div><span class="k">Entry Lvl ' + ptEscapeHtml(entryLvl || '—') + ':</span> '
-             +        '<span class="v">' + ptFormatPrice(entryPrice) + '</span></div>';
-
-        if (entryTriggerCandle) {
-            html += '    <div><span class="k">Entry Trigger candle open time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(entryTriggerCandle.open_time || '—')) + '</span></div>';
-            html += '    <div><span class="k">Entry Trigger candle close time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(entryTriggerCandle.close_time || '—')) + '</span></div>';
-        }
-
-        html += '    <div><span class="k">Exit</span> <span class="v">' + ptEscapeHtml(hit.exit ? hit.exit.name : '—') + '</span></div>';
-        html += '    <div><span class="k">Exit Lvl ' + ptEscapeHtml(exitLvl || '—') + ':</span> '
-             +        '<span class="v">' + (exitPrice == null ? '—' : ptFormatPrice(exitPrice)) + '</span></div>';
-
-        if (exitCandle) {
-            html += '    <div><span class="k">Exit candle Open time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(exitCandle.open_time || '—')) + '</span></div>';
-            html += '    <div><span class="k">Exit candle close time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(exitCandle.close_time || '—')) + '</span></div>';
-        }
-
-        var targetLabel;
-        var isRR = (trade.target_rr_mode === 'fixed_risk_reward' ||
-                    trade.target_rr_mode === 'minimum_risk_reward' ||
-                    trade.target === 'fixed_risk_reward' ||
-                    trade.target === 'minimum_risk_reward');
-
-        if (isRR) {
-            targetLabel = ptTargetDisplay(trade);
-            html += '    <div><span class="k">Target</span> <span class="v">' + ptEscapeHtml(targetLabel) + '</span></div>';
-
-            if (hit.targetRR) {
-                html += '    <div><span class="k">Target Price' + (hit.targetRR.ratio != null ? ' (1:' + ptEscapeHtml(String(hit.targetRR.ratio)) + ')' : '') + ':</span> '
-                     +        '<span class="v">' + ptFormatPrice(hit.targetRR.price) + '</span></div>';
-                if (hit.targetRR.risk != null) {
-                    html += '    <div><span class="k">Risk Distance:</span> '
-                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
-                }
-                if (hit.targetRR.reward != null) {
-                    html += '    <div><span class="k">Reward Distance:</span> '
-                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
-                }
-            } else {
-                html += '    <div><span class="k">Target Price:</span> '
-                     +        '<span class="v">—</span></div>';
-            }
-        } else {
-            if (hit.target) {
-                targetLabel = hit.target.name;
-            } else {
-                targetLabel = ptSourceFriendlyName(hit.tree, trade.target) || '—';
-            }
-            html += '    <div><span class="k">Target</span> <span class="v">' + ptEscapeHtml(targetLabel) + '</span></div>';
-
-            if (hit.target) {
-                html += '    <div><span class="k">Target Lvl ' + ptEscapeHtml(targetLvl || '—') + ':</span> '
-                     +        '<span class="v">' + ptFormatPrice(targetPrice) + '</span></div>';
-            }
-
-            if (hit.targetRR) {
-                if (hit.targetRR.ratio != null) {
-                    html += '    <div><span class="k">Trade Risk Reward:</span> '
-                         +        '<span class="v">1:' + ptEscapeHtml(hit.targetRR.ratio.toFixed(2)) + '</span></div>';
-                }
-                if (hit.targetRR.risk != null) {
-                    html += '    <div><span class="k">Risk Distance:</span> '
-                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.risk) + '</span></div>';
-                }
-                if (hit.targetRR.reward != null) {
-                    html += '    <div><span class="k">Reward Distance:</span> '
-                         +        '<span class="v">' + ptFormatPrice(hit.targetRR.reward) + '</span></div>';
-                }
-            }
-        }
-
-        // Take profit candle open/close times.
-        if (tpHitCandle) {
-            html += '    <div><span class="k">Take profit candle open time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(tpHitCandle.open_time || '—')) + '</span></div>';
-            html += '    <div><span class="k">Take profit candle close time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(tpHitCandle.close_time || '—')) + '</span></div>';
-        } else if (targetCandle && hit.outcome && hit.outcome.status === 'profit') {
-            html += '    <div><span class="k">Take profit candle open time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(targetCandle.open_time || '—')) + '</span></div>';
-            html += '    <div><span class="k">Take profit candle close time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(targetCandle.close_time || '—')) + '</span></div>';
-        }
-
-        // Stoploss candle open/close times.
-        if (slHitCandle) {
-            html += '    <div><span class="k">Stoploss candle open time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(slHitCandle.open_time || '—')) + '</span></div>';
-            html += '    <div><span class="k">Stoploss candle close time:</span> '
-                 +        '<span class="v">' + ptEscapeHtml(ptFormatTime(slHitCandle.close_time || '—')) + '</span></div>';
-        }
-
-        if (hit.outcome) {
-            var statusText, statusCls;
-            if (hit.outcome.status === 'stop') {
-                statusText = 'Stoploss hit';
-                statusCls  = 'dn';
-            } else if (hit.outcome.status === 'profit') {
-                statusText = 'Profit reached';
-                statusCls  = 'up';
-            } else if (hit.outcome.status === 'missed') {
-                statusText = 'Missed entry';
-                statusCls  = 'dn';
-            } else {
-                statusText = 'Pending';
-                statusCls  = '';
-            }
-            html += '    <div><span class="k">Status:</span> '
-                 +        '<span class="v ' + statusCls + '">' + ptEscapeHtml(statusText)
-                 +        (hit.outcome.candle
-                            ? ' (' + ptEscapeHtml(ptFormatTime(hit.outcome.candle.time)) + ')'
-                            : '')
-                 +        '</span></div>';
-        }
-
-        html += '  </div>';
-
-        html += '  <div class="pt-trade-candles">';
-        html += '    <div class="pt-trade-candles-title">Candle details</div>';
-        html += '    <div class="pt-trade-candle-row">';
-        html += '      <span class="head">Source</span><span class="head">Time</span><span class="head">High</span><span class="head">Low</span><span class="head">Close</span>';
-        html += '    </div>';
-        html += ptTradeCandleRowFromHit('Entry',  hit.entry);
-        html += ptTradeCandleRowFromHit('Exit',   hit.exit);
-        if (hit.target) html += ptTradeCandleRowFromHit('Target', hit.target);
-        html += '  </div>';
-
-        html += '</div>';
-        return html;
-    }
-
-    function ptTradeCandleRowFromHit(label, resolved) {
-        if (!resolved || !resolved.candle) {
-            return '<div class="pt-trade-candle-row">' +
-                '<span>' + ptEscapeHtml(label) + '</span>' +
-                '<span>—</span><span>—</span><span>—</span><span>—</span>' +
-                '</div>';
-        }
-        var c  = resolved.candle;
-        var pl = resolved.priceLevel;
-        var displayPrice = (pl && c[pl] != null) ? c[pl] : c.close;
-        var cls = (c.close >= c.open) ? 'up' : 'dn';
-        return '<div class="pt-trade-candle-row">' +
-            '<span>' + ptEscapeHtml(resolved.name) + '</span>' +
-            '<span>' + ptEscapeHtml(ptFormatTime(c.time)) + '</span>' +
-            '<span class="' + cls + '">' + ptFormatPrice(c.high) + '</span>' +
-            '<span class="' + cls + '">' + ptFormatPrice(c.low)  + '</span>' +
-            '<span class="' + cls + '">' + ptFormatPrice(displayPrice) + '</span>' +
-            '</div>';
-    }
-
-    function ptResolvedPrice(resolved, fallbackLevel) {
-        if (!resolved) return null;
-        if (resolved.price != null) return resolved.price;
-        var c = resolved.candle;
-        if (!c) return null;
-        var lvl = resolved.priceLevel || fallbackLevel;
-        if (lvl && c[lvl] != null) return c[lvl];
-        return c.close;
-    }
-
-    function ptComputeRiskRewardTarget(trade, entry, exitObj, rrMode) {
-        if (!trade || !entry || !exitObj) return null;
-
-        var orderType = (trade.order_type || '').toLowerCase();
-        var direction;
-        if (orderType === 'buy' || orderType === 'buy_stop' || orderType === 'buy_limit') {
-            direction = 1;
-        } else if (orderType === 'sell' || orderType === 'sell_stop' || orderType === 'sell_limit') {
-            direction = -1;
-        } else {
-            return null;
-        }
-
-        var entryPrice = (entry.price != null) ? entry.price : null;
-        var exitPrice  = (exitObj.price != null) ? exitObj.price : null;
-        if (entryPrice == null || exitPrice == null) return null;
-
-        var ratioStr = (rrMode === 'minimum_risk_reward')
-            ? (PT_ACCOUNT_MGMT.minimum_risk_reward || '0')
-            : (PT_ACCOUNT_MGMT.fixed_risk_reward   || '0');
-        var ratio = parseFloat(ratioStr);
-        if (isNaN(ratio) || ratio <= 0) return null;
-
-        var risk   = Math.abs(entryPrice - exitPrice);
-        var reward = risk * ratio;
-        var price  = entryPrice + direction * reward;
-
-        return {
-            ratio:     ratio,
-            price:     price,
-            direction: direction,
-            risk:      risk,
-            reward:    reward,
-            mode:      rrMode
-        };
-    }
-
-    function ptComputeDynamicRiskReward(trade, entry, exitObj, targetObj) {
-        if (!trade || !entry || !exitObj || !targetObj) return null;
-
-        var orderType = (trade.order_type || '').toLowerCase();
-        var direction;
-        if (orderType === 'buy' || orderType === 'buy_stop' || orderType === 'buy_limit') {
-            direction = 1;
-        } else if (orderType === 'sell' || orderType === 'sell_stop' || orderType === 'sell_limit') {
-            direction = -1;
-        } else {
-            return null;
-        }
-
-        var entryPrice  = (entry.price != null)     ? entry.price     : null;
-        var exitPrice   = (exitObj.price != null)   ? exitObj.price   : null;
-        var targetPrice = (targetObj.price != null) ? targetObj.price : null;
-        if (entryPrice == null || exitPrice == null || targetPrice == null) return null;
-
-        var risk   = Math.abs(entryPrice - exitPrice);
-        if (risk <= 0) return null;
-
-        var reward = Math.abs(targetPrice - entryPrice);
-        var ratio  = reward / risk;
-
-        return {
-            ratio:     ratio,
-            price:     targetPrice,
-            direction: direction,
-            risk:      risk,
-            reward:    reward,
-            mode:      'dynamic'
-        };
-    }
-
-    // Returns true when the order-type entry condition is satisfied on candle `c`.
-    // buy_limit / sell_stop  → low must trade through (or at) entry from above
-    // buy_stop  / sell_limit → high must trade through (or at) entry from below
-    // buy / sell (market)    → treated as filled at the signal candle (always true)
-    function ptEntryIsTriggeredOnCandle(orderType, candle, entryPrice) {
-        if (!candle || entryPrice == null || isNaN(entryPrice)) return false;
-        var ot = (orderType || '').toLowerCase();
-        if (ot === 'buy_limit' || ot === 'sell_stop') {
-            return candle.low <= entryPrice;
-        }
-        if (ot === 'buy_stop' || ot === 'sell_limit') {
-            return candle.high >= entryPrice;
-        }
-        // market buy / sell — entry is considered filled at the indicated candle
         return true;
     }
 
-    function ptOrderNeedsEntryFill(orderType) {
-        var ot = (orderType || '').toLowerCase();
-        return (ot === 'buy_limit' || ot === 'sell_stop' ||
-                ot === 'buy_stop'  || ot === 'sell_limit');
+    // ==================== LIVE CANDLE REFRESH (tail) ====================
+    function ptStartCandleRefresh() {
+        if (PT_REFRESH_RUNNING) return;
+        if (!PT_HAS_BROKER) return;
+        if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) return;
+        PT_REFRESH_RUNNING = true;
+        if (PT_REFRESH_INTERVAL) clearTimeout(PT_REFRESH_INTERVAL);
+        PT_REFRESH_INTERVAL = setTimeout(ptFetchLatestCandles, 1200);
     }
 
-    /**
-     * Detect trade outcome with proper entry-fill gate.
-     *
-     * Scanning always starts at the candle AFTER the closed entry-indicated candle
-     * (entryIdx + 1). For limit/stop orders the entry must actually be hit first:
-     *   - buy_limit / sell_stop : low  <= entryPrice
-     *   - buy_stop  / sell_limit: high >= entryPrice
-     * If take-profit is reached on any candle before entry is filled → 'missed'.
-     * Stop-loss is only evaluated after entry has been filled.
-     * Market buy/sell are treated as filled immediately (no fill wait).
-     */
-    function ptDetectTradeOutcome(entry, exitObj, targetPrice, direction, horizonIdx, orderType) {
-        if (!entry || !entry.candle) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null, entryTriggered: false, entryTriggerIdx: null };
+    function ptStopCandleRefresh() {
+        PT_REFRESH_RUNNING = false;
+        if (PT_REFRESH_INTERVAL) {
+            clearTimeout(PT_REFRESH_INTERVAL);
+            PT_REFRESH_INTERVAL = null;
         }
-        var entryIdx = entry.idx;
-        if (entryIdx == null || entryIdx < 0 || entryIdx >= PT_CANDLES.length) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null, entryTriggered: false, entryTriggerIdx: null };
-        }
-        var entryPrice = (entry.price != null) ? entry.price : null;
-        var stopPrice  = (exitObj && exitObj.price != null) ? exitObj.price : null;
-
-        var startIdx = entryIdx + 1;
-        var lastIdx  = (horizonIdx != null) ? Math.min(horizonIdx, PT_CANDLES.length - 1) : (PT_CANDLES.length - 1);
-
-        var needsFill = ptOrderNeedsEntryFill(orderType);
-        var entryTriggered = !needsFill; // market orders are filled at signal
-        var entryTriggerIdx = needsFill ? null : entryIdx;
-
-        // No more candles after signal → pending
-        if (startIdx > lastIdx) {
-            return { status: 'pending', candleIdx: null, candle: null, price: null,
-                     entryTriggered: entryTriggered, entryTriggerIdx: entryTriggerIdx };
-        }
-
-        for (var i = startIdx; i <= lastIdx; i++) {
-            var c = PT_CANDLES[i];
-            if (!c) continue;
-
-            // --- Phase 1: wait for entry fill (limit/stop only) ---
-            if (!entryTriggered) {
-                // Did take-profit print before entry was ever filled?
-                if (targetPrice != null && !isNaN(targetPrice)) {
-                    var tgtHitPre = (direction > 0)
-                        ? (c.high >= targetPrice)
-                        : (c.low  <= targetPrice);
-                    if (tgtHitPre) {
-                        // Target reached without entry → missed entry
-                        return { status: 'missed', candleIdx: i, candle: c, price: targetPrice,
-                                 entryTriggered: false, entryTriggerIdx: null };
-                    }
-                }
-                // Check entry fill condition
-                if (entryPrice != null && ptEntryIsTriggeredOnCandle(orderType, c, entryPrice)) {
-                    entryTriggered = true;
-                    entryTriggerIdx = i;
-                    // Fall through: same candle can also hit stop/target after fill
-                } else {
-                    continue;
-                }
-            }
-
-            // --- Phase 2: entry is filled — evaluate stop then target ---
-            var hitStop   = false;
-            var hitTarget = false;
-
-            if (direction > 0) {
-                if (stopPrice   != null) hitStop   = (c.low  <= stopPrice);
-                if (targetPrice != null && !isNaN(targetPrice)) hitTarget = (c.high >= targetPrice);
-            } else if (direction < 0) {
-                if (stopPrice   != null) hitStop   = (c.high >= stopPrice);
-                if (targetPrice != null && !isNaN(targetPrice)) hitTarget = (c.low  <= targetPrice);
-            }
-
-            // Prefer stop if both print on the same bar (conservative)
-            if (hitStop)   return { status: 'stop',   candleIdx: i, candle: c, price: stopPrice,
-                                    entryTriggered: true, entryTriggerIdx: entryTriggerIdx };
-            if (hitTarget) return { status: 'profit', candleIdx: i, candle: c, price: targetPrice,
-                                    entryTriggered: true, entryTriggerIdx: entryTriggerIdx };
-        }
-
-        return { status: 'pending', candleIdx: null, candle: null, price: null,
-                 entryTriggered: entryTriggered, entryTriggerIdx: entryTriggerIdx };
     }
 
-    function ptTradeDirection(trade) {
-        if (!trade) return 0;
-        var ot = (trade.order_type || '').toLowerCase();
-        if (ot === 'buy' || ot === 'buy_stop' || ot === 'buy_limit') return 1;
-        if (ot === 'sell' || ot === 'sell_stop' || ot === 'sell_limit') return -1;
-        return 0;
-    }
-    function ptTargetDisplay(trade) {
-        if (!trade) return '—';
-        var tgt = trade.target || '';
-        var rr  = trade.target_rr_mode || '';
-        if (tgt === 'fixed_risk_reward' || rr === 'fixed_risk_reward') {
-            return 'Fixed R:R';
-        }
-        if (tgt === 'minimum_risk_reward' || rr === 'minimum_risk_reward') {
-            return 'Minimum R:R';
-        }
-        return tgt || '—';
+    function ptScheduleNextCandleRefresh() {
+        if (!PT_REFRESH_RUNNING) return;
+        if (PT_REFRESH_INTERVAL) clearTimeout(PT_REFRESH_INTERVAL);
+        PT_REFRESH_INTERVAL = setTimeout(ptFetchLatestCandles, PT_REFRESH_MS);
     }
 
-    // ==================== CONFIG PERSISTENCE ====================
-    function ptSaveProgrammeConfiguration(snapshot) {
-        var body = 'save_configuration=1'
-                 + '&programmeid=' + encodeURIComponent(PT_PROGRAMME_ID)
-                 + '&payload='     + encodeURIComponent(JSON.stringify(snapshot));
+    function ptNewestCandleTime() {
+        if (!PT_CANDLES.length) return '';
+        return PT_CANDLES[PT_CANDLES.length - 1].time || '';
+    }
+    function ptNewestCandleEpoch() {
+        if (!PT_CANDLES.length) return '';
+        var t = PT_CANDLES[PT_CANDLES.length - 1].time || '';
+        if (!t) return '';
+        var ms = Date.parse(t.replace(' ', 'T') + 'Z');
+        if (isNaN(ms)) return '';
+        return Math.floor(ms / 1000);
+    }
 
-        ptDebugLine('net', 'POST programme_configuration.php (save_configuration)', snapshot);
+    function ptFetchLatestCandles() {
+        if (!PT_REFRESH_RUNNING) return;
+        if (PT_REFRESH_INFLIGHT) return;
+        if (!PT_HAS_BROKER) { ptScheduleNextCandleRefresh(); return; }
+        if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
+            ptScheduleNextCandleRefresh();
+            return;
+        }
+        if (!PT_INITIAL_LOADED) {
+            ptScheduleNextCandleRefresh();
+            return;
+        }
 
-        fetch('programme_configuration.php', {
+        var afterTs = ptNewestCandleEpoch();
+        var body  = 'fetch_candles_latest=1'
+                + '&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
+                + '&symbol='       + encodeURIComponent(PT_CURRENT_SYMBOL)
+                + '&timeframe='    + encodeURIComponent(PT_CURRENT_TIMEFRAME);
+        if (afterTs !== '') body += '&after_ts=' + encodeURIComponent(afterTs);
+
+        PT_REFRESH_INFLIGHT = true;
+        var myToken = PT_LOAD_TOKEN;
+        var mySym   = PT_CURRENT_SYMBOL;
+        var myTf    = PT_CURRENT_TIMEFRAME;
+
+        fetch('programme_training.php', {
             method: 'POST',
             headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            ptDebugLine('net', 'save_configuration response', data);
-            if (!data || !data.success) {
-                if (typeof window.pcShowError === 'function') {
-                    window.pcShowError((data && data.message) ? data.message : 'Unknown error while saving configuration.');
-                }
+            PT_REFRESH_INFLIGHT = false;
+            if (!PT_REFRESH_RUNNING) return;
+            if (myToken !== PT_LOAD_TOKEN) { ptScheduleNextCandleRefresh(); return; }
+            if (mySym !== PT_CURRENT_SYMBOL || myTf !== PT_CURRENT_TIMEFRAME) {
+                ptScheduleNextCandleRefresh();
                 return;
             }
+            if (!data || !data.success) { ptScheduleNextCandleRefresh(); return; }
 
-            if (data.accountManagement) {
-                PT_ACCOUNT_MGMT = data.accountManagement;
-                ptDebugLine('cfg', 'Account Management updated', PT_ACCOUNT_MGMT);
-            }
-
-            PT_TREES = ptGroupRowsIntoTrees(data.rows || []);
-            if (typeof window.pcSetTrees === 'function') window.pcSetTrees(PT_TREES);
-
-            PT_CONFIGURED_ROWS_BY_TF = {};
-            PT_PERSISTED_MATCHES     = [];
-            PT_PERSISTED_LOADED      = false;
-            PT_PROJECTED_BY_TF       = {};
-            PT_PROJECTION_MODES      = [];
-            PT_PROJECTION_LOADED_TFS = {};
-            PT_LAST_PERSISTED_SIG    = '';
-            ptUpdateProjBanner();
-
-            ptRescanTradeMatches(true);
-            ptScheduleDraw();
-            if (typeof window.pcCloseConfiguration === 'function') window.pcCloseConfiguration();
-            if (typeof window.pcOnSaveSuccess === 'function') window.pcOnSaveSuccess(data);
+            var chunk = Array.isArray(data.candles) ? data.candles : [];
+            if (chunk.length) ptAppendLiveCandles(chunk);
+            ptScheduleNextCandleRefresh();
         })
-        .catch(function (err) {
-            ptDebugLine('error', 'save_configuration network error: ' + (err && err.message ? err.message : 'Unknown'));
-            if (typeof window.pcShowError === 'function') {
-                window.pcShowError('Network error while saving configuration: ' + (err && err.message ? err.message : 'Unknown'));
-            }
+        .catch(function () {
+            PT_REFRESH_INFLIGHT = false;
+            ptScheduleNextCandleRefresh();
         });
     }
 
-    function ptGroupRowsIntoTrees(rows) {
-        var byTree = {};
-        rows.forEach(function (r) {
-            if (!byTree[r.tree_id]) {
-                byTree[r.tree_id] = {
-                    tree_id:   r.tree_id,
-                    roots:     [],
-                    drawings:  [],
-                    trades:    [],
-                    _orphans:  []
-                };
-            }
+    function ptAppendLiveCandles(chunk) {
+        var newest = ptNewestCandleTime();
+        var fresh = [];
+        for (var i = 0; i < chunk.length; i++) {
+            var c = chunk[i];
+            if (!c || !c.time) continue;
+            if (newest && c.time <= newest) continue;
+            fresh.push(c);
+        }
+        if (!fresh.length) return;
 
-            var t = byTree[r.tree_id];
+        var wasFollowing = PT_FOLLOW_LATEST;
+        var atRightEdge  = ptIsViewportAtRightEdge();
 
-            if (r.row_role === 'root')             t.roots.push(r);
-            else if (r.row_role === 'drawing')     t.drawings.push(r);
-            else if (r.row_role === 'trade')       t.trades.push(r);
-            else                                   t._orphans.push(r);
-        });
+        for (var j = 0; j < fresh.length; j++) {
+            PT_CANDLES.push(fresh[j]);
+        }
 
-        Object.keys(byTree).forEach(function (tid) {
-            var t = byTree[tid];
-            var orphans = t._orphans || [];
+        if (wasFollowing || atRightEdge) {
+            ptScrollToLatest();
+            PT_FOLLOW_LATEST = true;
+        }
+        ptScheduleDraw();
+        ptUpdateJumpLatestVisibility();
+    }
 
-            var refsByRoot = {};
-            orphans.forEach(function (row) {
-                if (row.row_role === 'root_ref') {
-                    row.re_ref_pairs = [];
-                    if (!refsByRoot[row.parent_id]) refsByRoot[row.parent_id] = [];
-                    refsByRoot[row.parent_id].push(row);
-                }
-            });
+    function ptIsViewportAtRightEdge() {
+        var card = document.getElementById('ptChartCard');
+        if (!card) return false;
+        if (!PT_CANDLES.length) return true;
+        var vw = card.clientWidth;
+        var step = ptStep();
+        var baseX = PT_PADDING_LEFT + PT_VIRTUAL_PAD - PT_VIEW.offsetX;
+        var newestRight = baseX + (PT_CANDLES.length - 1) * step + step;
+        return newestRight <= (vw - PT_PADDING_RIGHT) + 2;
+    }
 
-            orphans.forEach(function (row) {
-                if (row.row_role === 're_ref_author' && row.parent_id != null) {
-                    Object.keys(refsByRoot).forEach(function (rootId) {
-                        refsByRoot[rootId].forEach(function (ref) {
-                            if (ref.id === row.parent_id) {
-                                var servant = null;
-                                orphans.forEach(function (c) {
-                                    if (c.row_role === 're_ref_servant' && c.parent_id === row.id) servant = c;
-                                });
-                                if (servant) ref.re_ref_pairs.push({ author: row, referenced: servant });
-                            }
-                        });
-                    });
-                }
-            });
+    // ==================== TIMEFRAME SWITCHING ====================
+    function ptSwitchToTimeframe(targetTF) {
+        if (!targetTF) return;
+        if (!PT_HAS_BROKER) { ptShowEmpty('Please connect your Broker to see chart.'); return; }
+        if (targetTF === PT_CURRENT_TIMEFRAME) return;
 
-            t.roots.forEach(function (root) {
-                root.root_refs = refsByRoot[root.id] || [];
-            });
+        PT_CURRENT_TIMEFRAME = targetTF;
+        PT_REQUESTED_AMOUNT  = PT_DEFAULT_AMOUNT;
 
-            t.roots.sort(function (a, b) {
-                var pa = parseInt(a.evaluation_priority, 10) || 1;
-                var pb = parseInt(b.evaluation_priority, 10) || 1;
-                return pa - pb;
-            });
-
-            delete t._orphans;
-        });
-
-        return Object.keys(byTree).map(function (k) { return byTree[k]; });
+        ptRenderTimeframeStrip();
+        ptUpdateTimeframeLabel();
+        ptLoadChart();
     }
 
     // ==================== TOPBAR ====================
@@ -4434,6 +2699,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (!el) return;
         el.textContent = PT_CURRENT_SYMBOL || 'Select Symbol';
     }
+
+    function ptUpdateTimeframeLabel() {
+        var el = document.getElementById('ptTimeframeLabel');
+        if (!el) return;
+        el.textContent = PT_CURRENT_TIMEFRAME || 'Timeframe';
+    }
+
     function ptRenderTimeframeStrip() {
         var strip = document.getElementById('ptTfStrip');
         if (!strip) return;
@@ -4441,46 +2713,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var html = '';
         PT_ALL_TIMEFRAMES.forEach(function (tf) {
             var cls = 'pt-tf-btn' + (tf === PT_CURRENT_TIMEFRAME ? ' active' : '');
-            if (PT_PROJECTION_MODES.some(function (m) { return m.sourceTF === tf; })) {
-                cls += ' pt-tf-proj-src';
-            }
             html += '<button type="button" class="' + cls + '" data-tf="' + ptEscapeHtml(tf) + '" '
                   + 'onclick="ptSelectTimeframe(\'' + tf.replace(/'/g, "\\'") + '\')">'
                   + ptEscapeHtml(tf) + '</button>';
         });
         strip.innerHTML = html;
     }
+
     function ptSelectTimeframe(tf) {
         if (!tf) return;
-        if (tf === PT_CURRENT_TIMEFRAME && !PT_PROJECTION_MODES.length) return;
+        if (!PT_HAS_BROKER) { ptShowEmpty('Please connect your Broker to see chart.'); return; }
+        ptCloseTimeframeModal();
+        if (tf === PT_CURRENT_TIMEFRAME) return;
         ptSwitchToTimeframe(tf);
     }
 
     // ==================== SYMBOL MODAL ====================
-    var PT_MODAL_FILTER = '';
+    var PT_SYMBOL_FILTER = '';
     function ptOpenSymbolModal() {
-        if (!PT_ALL_SYMBOLS.length) { ptShowEmpty('No symbols selected for this developer.'); return; }
-        PT_MODAL_FILTER = '';
+        if (!PT_HAS_BROKER) { ptShowEmpty('Please connect your Broker to see chart.'); return; }
+        if (!PT_ALL_SYMBOLS.length) { ptShowEmpty('No symbols selected. Configure them in the Signals dashboard.'); return; }
+        PT_SYMBOL_FILTER = '';
         var inp = document.getElementById('ptSymbolSearch');
         if (inp) inp.value = '';
         ptRenderSymbolModalList();
         document.getElementById('ptSymbolModal').classList.add('active');
     }
-    function ptCloseSymbolModal() { document.getElementById('ptSymbolModal').classList.remove('active'); }
-    function ptFilterSymbolModal(q) { PT_MODAL_FILTER = (q || '').trim().toUpperCase(); ptRenderSymbolModalList(); }
+    function ptCloseSymbolModal() {
+        var m = document.getElementById('ptSymbolModal');
+        if (m) m.classList.remove('active');
+    }
+    function ptFilterSymbolModal(q) {
+        PT_SYMBOL_FILTER = (q || '').trim().toUpperCase();
+        ptRenderSymbolModalList();
+    }
     function ptRenderSymbolModalList() {
         var list = document.getElementById('ptSymbolModalList');
         var countEl = document.getElementById('ptSymbolModalCount');
         if (!list) return;
         if (countEl) countEl.textContent = PT_ALL_SYMBOLS.length + ' symbols';
         var filtered = PT_ALL_SYMBOLS.filter(function (s) {
-            if (!PT_MODAL_FILTER) return true;
-            return String(s).toUpperCase().indexOf(PT_MODAL_FILTER) !== -1;
+            if (!PT_SYMBOL_FILTER) return true;
+            return String(s).toUpperCase().indexOf(PT_SYMBOL_FILTER) !== -1;
         });
-        if (!filtered.length) { list.innerHTML = '<div class="pt-modal-empty">No symbols match your search.</div>'; return; }
+        if (!filtered.length) {
+            list.innerHTML = '<div class="pt-picker-empty">No symbols match your search.</div>';
+            return;
+        }
         var html = '';
         filtered.forEach(function (sym) {
-            var cls = 'pt-modal-row' + (sym === PT_CURRENT_SYMBOL ? ' is-active' : '');
+            var cls = 'pt-picker-row' + (sym === PT_CURRENT_SYMBOL ? ' is-active' : '');
             html += '<button type="button" class="' + cls + '" '
                   + 'onclick="ptSelectSymbol(\'' + sym.replace(/'/g, "\\'") + '\')">'
                   + ptEscapeHtml(sym) + '</button>';
@@ -4489,28 +2771,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
     }
     function ptSelectSymbol(sym) {
         if (!sym) return;
+        if (!PT_HAS_BROKER) {
+            ptShowEmpty('Please connect your Broker to see chart.');
+            ptCloseSymbolModal();
+            return;
+        }
         PT_CURRENT_SYMBOL = sym;
-        PT_PERSISTED_MATCHES     = [];
-        PT_PERSISTED_LOADED      = false;
-        PT_PERSISTED_DIRTY       = true;
-        PT_PROJECTED_BY_TF       = {};
-        PT_CONFIGURED_ROWS_BY_TF = {};
-        PT_REQUESTED_AMOUNT      = PT_DEFAULT_AMOUNT;
-        PT_LAST_PERSISTED_SIG    = '';
-        PT_FULL_HISTORY_DONE     = false;
-        PT_PROJECTION_LOADED_TFS = {};
+        PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
         ptUpdateSymbolLabel();
         ptCloseSymbolModal();
-        ptRefreshTradesButton();
-        ptUpdateProjBanner();
         ptLoadChart();
+    }
 
-        PT_PROJECTION_MODES.forEach(function (m) {
-            PT_PROJECTION_LOADED_TFS[m.sourceTF] = false;
-            ptEnsureConfiguredRows(m.sourceTF, function () {
-                ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
-            });
+    // ==================== TIMEFRAME MODAL ====================
+    var PT_TIMEFRAME_FILTER = '';
+    function ptOpenTimeframeModal() {
+        if (!PT_HAS_BROKER) { ptShowEmpty('Please connect your Broker to see chart.'); return; }
+        if (!PT_ALL_TIMEFRAMES.length) { ptShowEmpty('No timeframes selected. Configure them in the Signals dashboard.'); return; }
+        PT_TIMEFRAME_FILTER = '';
+        var inp = document.getElementById('ptTimeframeSearch');
+        if (inp) inp.value = '';
+        ptRenderTimeframeModalList();
+        document.getElementById('ptTimeframeModal').classList.add('active');
+    }
+    function ptCloseTimeframeModal() {
+        var m = document.getElementById('ptTimeframeModal');
+        if (m) m.classList.remove('active');
+    }
+    function ptFilterTimeframeModal(q) {
+        PT_TIMEFRAME_FILTER = (q || '').trim().toUpperCase();
+        ptRenderTimeframeModalList();
+    }
+    function ptRenderTimeframeModalList() {
+        var list = document.getElementById('ptTimeframeModalList');
+        var countEl = document.getElementById('ptTimeframeModalCount');
+        if (!list) return;
+        if (countEl) countEl.textContent = PT_ALL_TIMEFRAMES.length + ' timeframes';
+        var filtered = PT_ALL_TIMEFRAMES.filter(function (t) {
+            if (!PT_TIMEFRAME_FILTER) return true;
+            return String(t).toUpperCase().indexOf(PT_TIMEFRAME_FILTER) !== -1;
         });
+        if (!filtered.length) {
+            list.innerHTML = '<div class="pt-picker-empty">No timeframes match your search.</div>';
+            return;
+        }
+        var html = '';
+        filtered.forEach(function (tf) {
+            var cls = 'pt-picker-row' + (tf === PT_CURRENT_TIMEFRAME ? ' is-active' : '');
+            html += '<button type="button" class="' + cls + '" '
+                  + 'onclick="ptPickTimeframe(\'' + tf.replace(/'/g, "\\'") + '\')">'
+                  + ptEscapeHtml(tf) + '</button>';
+        });
+        list.innerHTML = html;
+    }
+    function ptPickTimeframe(tf) {
+        if (!tf) return;
+        if (!PT_HAS_BROKER) {
+            ptShowEmpty('Please connect your Broker to see chart.');
+            ptCloseTimeframeModal();
+            return;
+        }
+        ptCloseTimeframeModal();
+        if (tf === PT_CURRENT_TIMEFRAME) return;
+        ptSwitchToTimeframe(tf);
     }
 
     // ==================== CANDLES-AMOUNT MODAL ====================
@@ -4522,46 +2845,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (cancel)  cancel.addEventListener('click', ptCloseCandlesModal);
         if (input) input.addEventListener('keydown', function (e) { if (e.key === 'Enter') ptConfirmCandlesModal(); });
     }
-    function ptOpenCandlesModal(symbol, timeframe) {
-        var modal = document.getElementById('ptCandlesModal');
-        var sub   = document.getElementById('ptCandlesSub');
-        var info  = document.getElementById('ptCandlesInfo');
-        var inp   = document.getElementById('ptCandlesInput');
-        var avail = document.getElementById('ptCandlesAvailable');
-        if (!modal) return;
-        if (!symbol || !timeframe) { if (info) info.textContent = 'Select a symbol and timeframe first.'; return; }
-        if (info) info.textContent = '';
-        if (inp) inp.value = '';
-        if (avail) avail.textContent = 'Available Candle: …';
-        if (sub) sub.textContent = 'Enter the number of candles to display for ' + symbol + ' / ' + timeframe + '.';
-        modal.classList.add('active');
-        setTimeout(function () { if (inp) inp.focus(); }, 50);
-        var body = 'count_candles=1' + '&symbol=' + encodeURIComponent(symbol) + '&timeframe=' + encodeURIComponent(timeframe);
-        fetch('programme_training.php', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
-            body: body
-        })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-            if (!data || !data.success) { if (avail) avail.textContent = 'Available Candle: —'; return; }
-            var total = parseInt(data.total, 10) || 0;
-            if (avail) avail.textContent = 'Available Candle: ' + total.toLocaleString();
-        })
-        .catch(function () { if (avail) avail.textContent = 'Available Candle: —'; });
-    }
     function ptCloseCandlesModal() {
         var modal = document.getElementById('ptCandlesModal');
         if (modal) modal.classList.remove('active');
     }
     function ptConfirmCandlesModal() {
+        if (!PT_HAS_BROKER) {
+            ptCloseCandlesModal();
+            ptShowEmpty('Please connect your Broker to see chart.');
+            return;
+        }
+
         var inp  = document.getElementById('ptCandlesInput');
         var info = document.getElementById('ptCandlesInfo');
         var raw  = inp ? String(inp.value || '').trim() : '';
         var n    = parseInt(raw, 10);
         if (!raw || isNaN(n) || n <= 0) { if (info) info.textContent = 'Please enter a positive number.'; return; }
         PT_REQUESTED_AMOUNT = n;
-        PT_FULL_HISTORY_DONE = false;
         ptCloseCandlesModal();
         ptLoadChart();
     }
@@ -4576,11 +2876,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 if (e.target === modal) ptCloseCandleDetailModal();
             });
         }
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') ptCloseCandleDetailModal();
-        });
     }
     function ptOpenCandleDetailModal(idx) {
+        if (!PT_HAS_BROKER) { ptShowEmpty('Please connect your Broker to see chart.'); return; }
         if (idx < 0 || idx >= PT_CANDLES.length) return;
         var c = PT_CANDLES[idx];
 
@@ -4590,8 +2888,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (!bodyEl) return;
 
         if (titleEl) titleEl.textContent = 'Candle #' + idx + ' — ' + ptFormatTime(c.time);
-        if (subEl)   subEl.textContent   = PT_CURRENT_SYMBOL + ' · ' + PT_CURRENT_TIMEFRAME
-            + (PT_PROJECTION_MODES.length ? '  (projected)' : '');
+        if (subEl)   subEl.textContent   = PT_CURRENT_SYMBOL + ' · ' + PT_CURRENT_TIMEFRAME;
 
         var rows = [
             ['Timestamp',            c.time],
@@ -4629,11 +2926,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
     // ==================== LOAD CHART ====================
     function ptLoadChart() {
+        if (!PT_HAS_BROKER) {
+            ptShowEmpty('Please connect your Broker to see chart.');
+            return;
+        }
         if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) { ptShowEmpty('Select a symbol and timeframe.'); return; }
-        ptDebugLine('data', 'Loading chart', {
-            symbol: PT_CURRENT_SYMBOL, timeframe: PT_CURRENT_TIMEFRAME,
-            projections: PT_PROJECTION_MODES.map(function (m) { return m.sourceTF + '→' + m.targetTF; })
-        });
         PT_LOAD_TOKEN++;
         PT_CANDLES = [];
         PT_HOVER_INDEX = -1;
@@ -4642,19 +2939,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_IS_LOADING_OLDER = false;
         PT_INITIAL_LOADED = false;
         PT_CONSECUTIVE_ERRORS = 0;
-        PT_FULL_HISTORY_DONE = false;
         PT_VIEW.offsetX = 0; PT_VIEW.offsetY = 0; PT_VIEW.priceScale = 1.0; PT_VIEW.candleWidth = 9;
         ptShowLoading(true); ptShowEmpty(null); ptClearCanvas();
         ptFetchChunk(null, PT_LOAD_TOKEN, true);
     }
 
     function ptFetchChunk(before, token, isInitial) {
+        if (!PT_HAS_BROKER) {
+            PT_HAS_MORE_OLDER = false;
+            PT_IS_LOADING_OLDER = false;
+            PT_CANDLES = [];
+            ptShowLoading(false);
+            ptShowBgLoading(false);
+            ptClearCanvas();
+            ptShowEmpty('Please connect your Broker to see chart.');
+            return;
+        }
+
         var pageSize = PT_PAGE_SIZE;
         if (PT_REQUESTED_AMOUNT !== null) {
             var remaining = PT_REQUESTED_AMOUNT - PT_CANDLES.length;
             if (remaining > 0 && remaining < pageSize) pageSize = remaining;
         }
         var body = 'fetch_candles=1'
+                 + '&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
                  + '&symbol='    + encodeURIComponent(PT_CURRENT_SYMBOL)
                  + '&timeframe=' + encodeURIComponent(PT_CURRENT_TIMEFRAME)
                  + '&limit='     + pageSize;
@@ -4668,8 +2976,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         .then(function (r) { return r.json(); })
         .then(function (data) {
             if (token !== PT_LOAD_TOKEN) return;
+            if (!PT_HAS_BROKER) {
+                PT_CANDLES = [];
+                ptClearCanvas();
+                ptShowLoading(false);
+                ptShowBgLoading(false);
+                ptShowEmpty('Please connect your Broker to see chart.');
+                return;
+            }
             if (!data.success) {
-                ptDebugLine('error', 'fetch_candles failed: ' + (data.message || ''));
                 PT_CONSECUTIVE_ERRORS++;
                 ptShowLoading(false); ptShowBgLoading(false);
                 PT_HAS_MORE_OLDER = false;
@@ -4696,9 +3011,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 }
             } else if (isInitial) {
                 ptClearCanvas();
-                ptShowEmpty('No candle records found for this symbol / timeframe.');
+                ptShowEmpty('No candle records found for this symbol timeframe.');
                 PT_HAS_MORE_OLDER = false;
-                ptRescanTradeMatches(true);
                 return;
             }
             PT_HAS_MORE_OLDER = !!data.has_more && chunk.length > 0;
@@ -4710,9 +3024,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 ptAutoLoadUpToTarget(token);
             }
         })
-        .catch(function (err) {
+        .catch(function () {
             if (token !== PT_LOAD_TOKEN) return;
-            ptDebugLine('error', 'fetch_candles network error: ' + (err && err.message ? err.message : ''));
             PT_CONSECUTIVE_ERRORS++;
             ptShowLoading(false);
             PT_IS_LOADING_OLDER = false;
@@ -4723,22 +3036,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 return;
             }
             if (PT_CANDLES.length) setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
-            else ptShowEmpty('Network error: ' + (err && err.message ? err.message : 'Unknown'));
+            else ptShowEmpty('Network error loading candles.');
         });
     }
 
     function ptAutoLoadUpToTarget(token) {
+        if (!PT_HAS_BROKER) {
+            PT_HAS_MORE_OLDER = false;
+            PT_IS_LOADING_OLDER = false;
+            ptShowBgLoading(false);
+            return;
+        }
+
         if (token !== PT_LOAD_TOKEN) return;
         if (PT_REQUESTED_AMOUNT !== null && PT_CANDLES.length >= PT_REQUESTED_AMOUNT) {
             ptShowBgLoading(false); ptFitViewportToCandles(); ptScheduleDraw();
             ptCenterOnLatest(); ptScheduleDraw(); ptUpdateJumpLatestVisibility();
-            ptAfterChartLoaded();
             return;
         }
         if (!PT_HAS_MORE_OLDER) {
             ptShowBgLoading(false); ptFitViewportToCandles(); ptScheduleDraw();
             ptCenterOnLatest(); ptScheduleDraw(); ptUpdateJumpLatestVisibility();
-            ptAfterChartLoaded();
             return;
         }
         if (!PT_CANDLES.length) { ptShowBgLoading(false); return; }
@@ -4759,6 +3077,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (remaining > 0 && remaining < pageSize) pageSize = remaining;
         }
         var body = 'fetch_candles=1'
+                 + '&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
                  + '&symbol='    + encodeURIComponent(PT_CURRENT_SYMBOL)
                  + '&timeframe=' + encodeURIComponent(PT_CURRENT_TIMEFRAME)
                  + '&limit='     + pageSize
@@ -4773,6 +3092,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         .then(function (data) {
             PT_IS_LOADING_OLDER = false;
             if (token !== PT_LOAD_TOKEN) return;
+            if (!PT_HAS_BROKER) {
+                PT_CANDLES = [];
+                ptClearCanvas();
+                ptShowLoading(false);
+                ptShowBgLoading(false);
+                ptShowEmpty('Please connect your Broker to see chart.');
+                return;
+            }
             if (!data.success) {
                 PT_CONSECUTIVE_ERRORS++;
                 if (PT_CONSECUTIVE_ERRORS >= PT_MAX_CONSECUTIVE_ERRORS) {
@@ -4797,7 +3124,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                 ptFitViewportToCandles(); ptScheduleDraw();
                 ptCenterOnLatest(); ptScheduleDraw();
                 ptShowBgLoading(false);
-                ptAfterChartLoaded();
                 return;
             }
             setTimeout(function () { ptAutoLoadUpToTarget(token); }, 25);
@@ -4813,63 +3139,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         });
     }
 
-    function ptAfterChartLoaded() {
-        if (!PT_CANDLES.length) return;
-
-        if (PT_PROJECTION_MODES.length) {
-            ptReevaluateProjectedTradeOutcomes();
-
-            var timeSet = {};
-            PT_CANDLES.forEach(function (c) { timeSet[c.time] = true; });
-
-            PT_PROJECTION_MODES.forEach(function (m) {
-                var list = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-                var missing = !list.length;
-                if (!missing) {
-                    for (var i = 0; i < list.length; i++) {
-                        if (!timeSet[list[i].candle_time]) { missing = true; break; }
-                    }
-                }
-                if (missing) {
-                    PT_PROJECTION_LOADED_TFS[m.sourceTF] = false;
-                    ptEnsureConfiguredRows(m.sourceTF, function () {
-                        ptProjectConfiguredRowsOnto(m.sourceTF, m.targetTF);
-                    });
-                }
-            });
-
-            ptUpdateProjBanner();
-            ptRefreshTradesButton();
-            ptScheduleDraw();
-
-            if (!PT_HAS_MORE_OLDER || PT_CANDLES.length >= PT_REQUESTED_AMOUNT) {
-                ptDebugLine('data', 'Post-load scan (projection mode, native persist)', {
-                    symbol: PT_CURRENT_SYMBOL,
-                    timeframe: PT_CURRENT_TIMEFRAME,
-                    candles: PT_CANDLES.length
-                });
-                ptRescanTradeMatches(true);
-            }
-            return;
-        }
-
-        if (PT_HAS_MORE_OLDER && !PT_FULL_HISTORY_DONE) {
-            ptDebugLine('data', 'Chart loaded — deferring persist until full history', {
-                candles: PT_CANDLES.length, hasMore: PT_HAS_MORE_OLDER
-            });
-            return;
-        }
-
-        if (!PT_FULL_HISTORY_DONE) PT_FULL_HISTORY_DONE = true;
-
-        ptDebugLine('data', 'Post-load scan (native)', {
-            symbol: PT_CURRENT_SYMBOL,
-            timeframe: PT_CURRENT_TIMEFRAME,
-            candles: PT_CANDLES.length
-        });
-        ptRescanTradeMatches(true);
-    }
-
     function ptShowBgLoading(on, warn) {
         var el = document.getElementById('ptBgLoading');
         if (!el) return;
@@ -4883,8 +3152,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
     // ==================== FIT VIEWPORT ====================
     function ptFitViewportToCandles() {
-        var wrap = document.getElementById('ptChartWrap');
-        var vw = wrap.clientWidth;
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vw = card.clientWidth;
         var target = PT_CANDLES.length;
         if (target < 2) return;
         var avail = vw - PT_PADDING_LEFT - PT_PADDING_RIGHT;
@@ -4895,8 +3165,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_VIEW.candleSpacing = Math.max(0.4, cw * gapRatio);
     }
     function ptCenterOnLatest() {
-        var wrap = document.getElementById('ptChartWrap');
-        var vw = wrap.clientWidth; var step = ptStep();
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vw = card.clientWidth; var step = ptStep();
         var n = PT_CANDLES.length; if (!n) return;
         var newestCenterX = PT_PADDING_LEFT + PT_VIRTUAL_PAD + (n - 1) * step + step / 2;
         PT_VIEW.offsetX = newestCenterX - (vw / 2);
@@ -4904,8 +3175,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_FOLLOW_LATEST = false;
     }
     function ptScrollToLatest() {
-        var wrap = document.getElementById('ptChartWrap');
-        var vw = wrap.clientWidth; var step = ptStep();
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vw = card.clientWidth; var step = ptStep();
         var n = PT_CANDLES.length; if (!n) return;
         var newestRight = PT_PADDING_LEFT + PT_VIRTUAL_PAD + (n - 1) * step + step;
         var targetRightEdge = vw - PT_PADDING_RIGHT - PT_VIEW.candleSpacing;
@@ -4919,8 +3191,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var btn = document.getElementById('ptJumpLatest');
         if (!btn) return;
         if (!PT_CANDLES.length) { btn.style.display = 'none'; return; }
-        var wrap = document.getElementById('ptChartWrap');
-        var vw = wrap.clientWidth; var step = ptStep();
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vw = card.clientWidth; var step = ptStep();
         var baseX = PT_PADDING_LEFT + PT_VIRTUAL_PAD - PT_VIEW.offsetX;
         var newestLeft  = baseX + (PT_CANDLES.length - 1) * step + step / 2 - PT_VIEW.candleWidth / 2;
         var newestRight = newestLeft + PT_VIEW.candleWidth;
@@ -4933,6 +3206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
     // ==================== LAZY LOAD OLDER ====================
     function ptMaybeLoadOlder() {
+        if (!PT_HAS_BROKER) return;
         if (!PT_INITIAL_LOADED) return;
         if (!PT_HAS_MORE_OLDER) return;
         if (PT_IS_LOADING_OLDER) return;
@@ -4964,14 +3238,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (!PT_CANVAS) return;
         PT_CTX = PT_CANVAS.getContext('2d');
 
-        if (!PT_DRAW_CANVAS) PT_DRAW_CANVAS = document.getElementById('ptDrawCanvas');
-        if (PT_DRAW_CANVAS) PT_DRAW_CTX = PT_DRAW_CANVAS.getContext('2d');
-
-        var wrap = document.getElementById('ptChartWrap');
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
         var dpr = window.devicePixelRatio || 1;
 
-        var viewportW = wrap.clientWidth;
-        var viewportH = wrap.clientHeight;
+        var viewportW = card.clientWidth;
+        var viewportH = card.clientHeight;
 
         PT_CANVAS.style.width  = viewportW + 'px';
         PT_CANVAS.style.height = viewportH + 'px';
@@ -4980,21 +3252,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         PT_CTX.setTransform(dpr, 0, 0, dpr, 0, 0);
         PT_CTX.clearRect(0, 0, viewportW, viewportH);
 
-        if (PT_DRAW_CANVAS) {
-            PT_DRAW_CANVAS.style.width  = viewportW + 'px';
-            PT_DRAW_CANVAS.style.height = viewportH + 'px';
-            PT_DRAW_CANVAS.width  = Math.floor(viewportW * dpr);
-            PT_DRAW_CANVAS.height = Math.floor(viewportH * dpr);
-            PT_DRAW_CTX.setTransform(dpr, 0, 0, dpr, 0, 0);
-            PT_DRAW_CTX.clearRect(0, 0, viewportW, viewportH);
-        }
-
         if (!PT_CANDLES.length) { ptUpdateJumpLatestVisibility(); return; }
 
         var styles = getComputedStyle(document.body);
-        var accent   = (styles.getPropertyValue('--accent') || '#2e8b57').trim();
-        var textMut  = (styles.getPropertyValue('--text-muted') || '#888').trim();
-        var bg       = (styles.getPropertyValue('--bg') || '').trim() || '#ffffff';
+        var accent   = (styles.getPropertyValue('--pt-accent') || '#12a36b').trim() || '#12a36b';
+        var textMut  = (styles.getPropertyValue('--pt-muted')  || '#60736d').trim() || '#60736d';
+        var bg       = (styles.getPropertyValue('--pt-card')   || '#ffffff').trim() || '#ffffff';
 
         PT_CTX.fillStyle = bg;
         PT_CTX.fillRect(0, 0, viewportW, viewportH);
@@ -5133,768 +3396,536 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_CTX.fillText(priceText, chipX2 + boxW2 / 2, chipY2 + boxH2 / 2 + 0.5);
         }
 
-        ptDrawProgrammeDrawings(pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-
-        if (PT_PROJECTION_MODES.length) {
-            PT_PROJECTION_MODES.forEach(function (m) {
-                var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-                if (!rows.length) return;
-                ptDrawProjectedDrawingRows(rows, pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-            });
-        }
-
-        // ---- Annotations (object & text) ----
-        ptDrawAnnotations(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-
-        if (PT_LONG_SHORT_ON) {
-            ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-            if (PT_PROJECTION_MODES.length) {
-                PT_PROJECTION_MODES.forEach(function (m) {
-                    var rows = PT_PROJECTED_BY_TF[m.sourceTF] || [];
-                    if (!rows.length) return;
-                    ptDrawProjectedLongShortRows(rows, pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible);
-                });
-            }
-        }
-
         PT_CANVAS._ptStep     = step;
         PT_CANVAS._ptBaseX    = baseX;
         PT_CANVAS._ptChartTop = chartTop;
+
         PT_CANVAS._ptChartBot = chartBottom;
+
+        // Virtual programme-training overlay: candle_records is read-only.
+        ptApplyTrainingOverlay({
+            ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
+            firstVisible: firstVisible, lastVisible: lastVisible,
+            pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
+            viewportW: viewportW, viewportH: viewportH
+        });
 
         ptUpdateJumpLatestVisibility();
     }
 
-    // ============================================================
-    // CANDLE TYPE MATCHING
-    // ============================================================
-    function ptCandleTypeMatches(type, candle) {
-        if (!candle) return false;
-        var ct = (type || '').toLowerCase();
-        if (ct === 'bullish') return candle.close > candle.open;
-        if (ct === 'bearish') return candle.close < candle.open;
-        if (ct === 'any')     return candle.close !== candle.open;
-        return true;
+    // ==================== VIRTUAL PROGRAMME MATCHING ====================
+    // Results exist only in memory/localStorage. No matched candle rows are written to MySQL.
+    var PT_VIRTUAL_MATCHES = [];
+    var PT_VIRTUAL_CANDLE_JSON_KEY = 'pt_virtual_candles_v1';
+    var PT_VIRTUAL_CONFIG_KEY = 'pt_virtual_config_v1';
+
+    function ptNormTfList(root) {
+        var tfs = Array.isArray(root.timeframes) ? root.timeframes : [];
+        if (!tfs.length && root.timeframe) {
+            try {
+                var parsed = JSON.parse(root.timeframe);
+                tfs = Array.isArray(parsed) ? parsed : [root.timeframe];
+            } catch (_) { tfs = String(root.timeframe).split(','); }
+        }
+        return tfs.map(function (x) { return String(x).trim().toLowerCase(); }).filter(Boolean);
+    }
+    function ptCandleType(c) {
+        return Number(c.close) > Number(c.open) ? 'bullish'
+             : Number(c.close) < Number(c.open) ? 'bearish' : 'bearish_or_bullish';
+    }
+    function ptTypeMatches(c, type) {
+        return !type || type === 'bearish_or_bullish' || ptCandleType(c) === type;
+    }
+    function ptPrice(c, level) {
+        if (!c) return null;
+        var open = Number(c.open), close = Number(c.close), high = Number(c.high), low = Number(c.low);
+        switch (String(level || 'high').toLowerCase()) {
+            case 'open': return open;
+            case 'close': return close;
+            case 'low': return low;
+            case 'candle_center': return c.candle_center != null ? Number(c.candle_center) : (high + low) / 2;
+            case 'body_center': return c.body_center != null ? Number(c.body_center) : (open + close) / 2;
+            case 'high_wick_center': return c.high_wick_center != null ? Number(c.high_wick_center) : (high + Math.max(open, close)) / 2;
+            case 'low_wick_center': return c.low_wick_center != null ? Number(c.low_wick_center) : (low + Math.min(open, close)) / 2;
+            default: return high;
+        }
     }
     function ptCompare(a, op, b) {
-        if (a == null || b == null) return false;
+        if (a == null || b == null || !isFinite(a) || !isFinite(b)) return false;
         switch (op) {
-            case '<':  return a <  b;
-            case '>':  return a >  b;
-            case '<=': return a <= b;
+            case '<': return a < b;
+            case '>': return a > b;
+            case '=': case '==': return a === b;
+            case '<=': case '=<': return a <= b;
             case '>=': return a >= b;
-            case '=':  return a === b;
-            default:   return true;
+            case '<>': case '!=': return a !== b;
+            default: return a < b;
         }
     }
-
-    function ptResolvePeerIndices(row, rootIdx, firstVisible, lastVisible) {
-        var pos = parseInt(row.candle_position, 10);
-        if (isNaN(pos)) pos = 0;
-        var search = (row.candle_search || '').toLowerCase();
-        if (pos === 0 && search === '') return [rootIdx];
-        if (search === 'all') {
-            var out = [], step = pos >= 0 ? 1 : -1;
-            for (var j = 0; j !== pos + step; j += step) out.push(rootIdx + j);
-            return out;
-        }
-        return [ rootIdx + pos ];
-    }
-
-    function ptRootCandidateIndices(firstVisible, lastVisible) {
-        var out = [];
-        for (var k = firstVisible; k <= lastVisible; k++) out.push(k);
-        return out;
-    }
-
-    function ptRootMatchesAt(root, absIdx, firstVisible, lastVisible) {
-        if (!root) return false;
-        if (!root.timeframe || root.timeframe !== PT_CURRENT_TIMEFRAME) return false;
-        if (absIdx < 0 || absIdx >= PT_CANDLES.length) return false;
-
-        var rootCandle = PT_CANDLES[absIdx];
-        if (!rootCandle) return false;
-        if (!ptCandleTypeMatches(root.candle_type, rootCandle)) return false;
-        if (!root.price_level) return false;
-        var rootVal = rootCandle[root.price_level];
-        if (rootVal == null) return false;
-
-        var refs = root.root_refs || [];
-        for (var r = 0; r < refs.length; r++) {
-            if (refs[r].row_role !== 'root_ref') continue;
-            if (!ptRefMatches(refs[r], root, rootVal, absIdx, firstVisible, lastVisible)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    function ptRefMatches(ref, authorRow, authorVal, absIdx, firstVisible, lastVisible) {
-        if (!ref.price_level) return false;
-        var idxs = ptResolvePeerIndices(ref, absIdx, firstVisible, lastVisible);
-        if (!idxs.length) return false;
-        var authorOp = authorRow.operator;
-        if (!authorOp) return false;
-
-        var checked = 0;
-        for (var k = 0; k < idxs.length; k++) {
-            var idx = idxs[k];
-            if (idx < 0 || idx >= PT_CANDLES.length) return false;
-            var c = PT_CANDLES[idx];
-            if (!c) return false;
-            if (!ptCandleTypeMatches(ref.candle_type, c)) return false;
-            var v = c[ref.price_level];
-            if (v == null) return false;
-            checked++;
-            if (!ptCompare(authorVal, authorOp, v)) return false;
-        }
-        if (checked === 0) return false;
-
-        var pairs = ref.re_ref_pairs || [];
-        for (var p = 0; p < pairs.length; p++) {
-            if (!ptReRefPairMatches(pairs[p], absIdx, firstVisible, lastVisible)) return false;
-        }
-        return true;
-    }
-
-    function ptReRefPairMatches(pair, absIdx, firstVisible, lastVisible) {
-        if (!pair) return true;
-        var a = pair.author;
-        var b = pair.referenced;
-        if (!a || !b) return false;
-        if (!a.price_level || !b.price_level) return false;
-        if (!a.operator) return false;
-
-        var aIdxs = ptResolvePeerIndices(a, absIdx, firstVisible, lastVisible);
-        var bIdxs = ptResolvePeerIndices(b, absIdx, firstVisible, lastVisible);
-        if (!aIdxs.length || !bIdxs.length) return false;
-
-        var checked = 0;
-        for (var ai = 0; ai < aIdxs.length; ai++) {
-            var aIdx = aIdxs[ai];
-            if (aIdx < 0 || aIdx >= PT_CANDLES.length) return false;
-            var ac = PT_CANDLES[aIdx];
-            if (!ac) return false;
-            if (!ptCandleTypeMatches(a.candle_type, ac)) return false;
-            var av = ac[a.price_level];
-            if (av == null) return false;
-            for (var bi = 0; bi < bIdxs.length; bi++) {
-                var bIdx = bIdxs[bi];
-                if (bIdx < 0 || bIdx >= PT_CANDLES.length) return false;
-                var bc = PT_CANDLES[bIdx];
-                if (!bc) return false;
-                if (!ptCandleTypeMatches(b.candle_type, bc)) return false;
-                var bv = bc[b.price_level];
-                if (bv == null) return false;
-                checked++;
-                if (!ptCompare(av, a.operator, bv)) return false;
-            }
-        }
-        return checked > 0;
-    }
-
-    function ptEvaluateTreeAt(tree, i0, firstVisible, lastVisible) {
-        var roots = tree.roots || [];
-        if (!roots.length) return [];
-
-        var sorted = roots.slice().sort(function (a, b) {
-            var pa = parseInt(a.evaluation_priority, 10) || 1;
-            var pb = parseInt(b.evaluation_priority, 10) || 1;
-            return pa - pb;
-        });
-
-        var foundation = sorted[0];
-        var fOff = parseInt(foundation.candle_position, 10);
-        if (isNaN(fOff)) fOff = 0;
-        var fAbs = i0 + fOff;
-
-        if (!ptRootMatchesAt(foundation, fAbs, firstVisible, lastVisible)) {
-            return [];
-        }
-
-        var matched = [{ root: foundation, absIdx: fAbs }];
-
-        for (var r = 1; r < sorted.length; r++) {
-            var hr  = sorted[r];
-            var off = parseInt(hr.candle_position, 10);
-            if (isNaN(off)) off = 0;
-            var hAbs = i0 + off;
-            if (ptRootMatchesAt(hr, hAbs, firstVisible, lastVisible)) {
-                matched.push({ root: hr, absIdx: hAbs });
-            }
-        }
-        return matched;
-    }
-
-    function ptFirstRootRef(root) {
-        var refs = root.root_refs || [];
-        for (var i = 0; i < refs.length; i++) {
-            if (refs[i].row_role === 'root_ref') return refs[i];
-        }
-        return refs[0] || null;
-    }
-
-    function ptResolveSourceIndex(tree, ownerRoot, ownerRootAbs, sourceKey, treeAnchor) {
-        if (!sourceKey) return null;
-
-        var bareKey = sourceKey;
-        var axisMatch = /^(.+)_axis$/.exec(sourceKey);
-        if (axisMatch) bareKey = axisMatch[1];
-        var specMatch = /^(.+)_specific_price_level$/.exec(sourceKey);
-        if (specMatch) bareKey = specMatch[1];
-
-        if (bareKey === 'ROOT') return ownerRootAbs;
-
-        var refMatch = /^ROOT:(\d+):REF:(\d+)$/.exec(bareKey);
-        if (refMatch) {
-            var rIdx   = parseInt(refMatch[1], 10);
-            var refIdx = parseInt(refMatch[2], 10);
-            var tRoot  = (tree.roots || [])[rIdx];
-            if (!tRoot) return null;
-            var ref    = (tRoot.root_refs || [])[refIdx];
-            if (!ref) return null;
-            var rOff   = parseInt(tRoot.candle_position, 10) || 0;
-            var refOff = parseInt(ref.candle_position, 10) || 0;
-            return treeAnchor + rOff + refOff;
-        }
-
-        if (/^REF:\d+$/.test(bareKey)) {
-            var ref2 = ptFirstRootRef(ownerRoot);
-            if (!ref2) return null;
-            var ref2Off = parseInt(ref2.candle_position, 10) || 0;
-            return ownerRootAbs + ref2Off;
-        }
-
-        if ((ownerRoot.candle_name || '').trim() === bareKey) {
-            return ownerRootAbs;
-        }
-
-        var ownerRefs = ownerRoot.root_refs || [];
-        for (var oj = 0; oj < ownerRefs.length; oj++) {
-            var orf = ownerRefs[oj];
-            if (orf.row_role && orf.row_role !== 'root_ref') continue;
-            if ((orf.candle_name || '').trim() === bareKey) {
-                var oRefOff = parseInt(orf.candle_position, 10) || 0;
-                return ownerRootAbs + oRefOff;
-            }
-        }
-
-        var treeRoots = tree.roots || [];
-        for (var r = 0; r < treeRoots.length; r++) {
-            var rt = treeRoots[r];
-            if ((rt.candle_name || '').trim() === bareKey) {
-                var rOff2 = parseInt(rt.candle_position, 10) || 0;
-                return treeAnchor + rOff2;
-            }
-        }
-        for (var r2 = 0; r2 < treeRoots.length; r2++) {
-            var root2 = treeRoots[r2];
-            var ownerOff = parseInt(root2.candle_position, 10) || 0;
-            var refs2 = root2.root_refs || [];
-            for (var j = 0; j < refs2.length; j++) {
-                var rf = refs2[j];
-                if (rf.row_role && rf.row_role !== 'root_ref') continue;
-                if ((rf.candle_name || '').trim() === bareKey) {
-                    var refOff2 = parseInt(rf.candle_position, 10) || 0;
-                    return treeAnchor + ownerOff + refOff2;
-                }
-            }
-        }
-
+    function ptFindNamedCandle(tree, name, role) {
+        if (!tree) return null;
+        var main = tree.main || {}, ref = tree.reference || {};
+        if (role === 'main') return main.name === name ? main : null;
+        if (role === 'reference') return ref.name === name ? ref : null;
+        if (main.name === name) return main;
+        if (ref.name === name) return ref;
         return null;
     }
-
-    function ptResolveSourceObject(tree, ownerRoot, ownerRootAbs, sourceKey, treeAnchor, priceLevel) {
-        var idx = ptResolveSourceIndex(tree, ownerRoot, ownerRootAbs, sourceKey, treeAnchor);
-        if (idx == null || idx < 0 || idx >= PT_CANDLES.length) return null;
-
-        var candle = PT_CANDLES[idx];
-        if (!candle) return null;
-
-        var val = null;
-        if (priceLevel && candle[priceLevel] != null) val = candle[priceLevel];
-        else val = candle.close;
-
-        return {
-            idx:        idx,
-            candle:     candle,
-            name:       ptSourceFriendlyName(tree, sourceKey),
-            priceLevel: priceLevel || '',
-            price:      val
-        };
+    function ptOffsetIndex(index, side, distance, length) {
+        var step = Math.max(1, Number(distance) || 1);
+        var target = index + (side === 'right' ? step : -step);
+        return target >= 0 && target < length ? target : -1;
     }
+    function ptApplyTrainingOverlay(geo) {
+        PT_VIRTUAL_MATCHES = [];
+        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
+        var config = (typeof window.ptGetTrainingConfiguration === 'function')
+            ? window.ptGetTrainingConfiguration() : null;
+        if (!config || !Array.isArray(config.roots)) return;
 
-    function ptSourceFriendlyName(tree, sourceKey) {
-        if (!sourceKey) return '—';
-        if (sourceKey === 'any_candle_intercept') return 'any_candle_intercept';
+        var all = PT_CANDLES.map(function (c, i) {
+            return Object.assign({}, c, {
+                _index: i, _rootTrees: [], _conditionsMet: [],
+                _matchRootIds: [], _matchTreeIds: []
+            });
+        });
+        var activeRoots = [];
+        config.roots.forEach(function (root) {
+            var tfs = ptNormTfList(root);
+            if (!tfs.includes(String(PT_CURRENT_TIMEFRAME).toLowerCase())) return;
+            activeRoots.push(root);
 
-        if (sourceKey === 'ROOT') {
-            var r0 = (tree.roots || [])[0];
-            if (r0 && r0.candle_name) return r0.candle_name;
-            return 'ROOT';
-        }
+            // Each configured candle has one canonical identity. Trees may change its role,
+            // but may not search for a different chart candle with the same display name.
+            var chainStates = [];
+            var configuredTrees = (root.trees || []).slice().sort(function (a, b) { return Number(a.id) - Number(b.id); });
+            var processedTreeCount = 0;
+            configuredTrees.forEach(function (tree, treeIndex) {
+                var main = tree.main || {}, ref = tree.reference || {};
+                if (!main.name || !ref.name) { chainStates = []; return; }
+                processedTreeCount++;
+                var mainKey = String(main.selectedExistingId || main.offsetTo || main.id);
+                var isNewRef = ref.referenceMode === 'new_offset';
+                var refKey = String(!isNewRef && ref.selectedExistingId
+                    ? ref.selectedExistingId
+                    : (!isNewRef && ref.existingCandleId ? ref.existingCandleId : ref.id));
+                var candidates = [];
+                var nextStates = [];
 
-        var m = /^ROOT:(\d+):REF:(\d+)$/.exec(sourceKey);
-        if (m) {
-            var ri = parseInt(m[1], 10);
-            var fi = parseInt(m[2], 10);
-            var rt = (tree.roots || [])[ri];
-            if (rt) {
-                var ref = (rt.root_refs || [])[fi];
-                if (ref && ref.candle_name) return ref.candle_name;
-                if (rt.candle_name) return rt.candle_name + ' (ref #' + (fi + 1) + ')';
-            }
-        }
-        return sourceKey;
-    }
-
-    function ptDrawProgrammeDrawings(pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return;
-        if (!PT_CANDLES.length) return;
-
-        PT_DRAW_CTX.save();
-        PT_DRAW_CTX.lineWidth = 1.6;
-        PT_DRAW_CTX.setLineDash([]);
-
-        PT_TREES.forEach(function (tree) {
-            var roots = tree.roots || [];
-            if (!roots.length) return;
-
-            var drawings = tree.drawings || [];
-            if (!drawings.length) return;
-
-            var origins = ptRootCandidateIndices(firstVisible, lastVisible);
-
-            origins.forEach(function (origin) {
-                if (origin < 0 || origin >= PT_CANDLES.length) return;
-
-                var matched = ptEvaluateTreeAt(tree, origin, firstVisible, lastVisible);
-                if (!matched.length) return;
-
-                var foundationMatch = matched[0];
-                var foundationRoot  = foundationMatch.root;
-                var foundationAbs   = foundationMatch.absIdx;
-
-                if (!foundationRoot.timeframe || foundationRoot.timeframe !== PT_CURRENT_TIMEFRAME) return;
-                if (foundationAbs < 0 || foundationAbs >= PT_CANDLES.length) return;
-
-                drawings.forEach(function (dr) {
-                    if (dr.drawing_tools !== 'trendline') return;
-                    if (!dr.draw_from || !dr.draw_from_price_level) return;
-                    if (!dr.draw_to) return;
-
-                    var fromIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, dr.draw_from, origin);
-                    if (fromIdx == null || fromIdx < 0 || fromIdx >= PT_CANDLES.length) return;
-                    var fromCandle = PT_CANDLES[fromIdx];
-                    if (!fromCandle) return;
-                    var fromVal = fromCandle[dr.draw_from_price_level];
-                    if (fromVal == null) return;
-                    var x1 = baseX + fromIdx * step + step / 2;
-                    var y1 = pToY(fromVal);
-
-                    var stroke = ptResolveDrawingColor(dr.drawing_color);
-                    var toKey = dr.draw_to || '';
-
-                    var specMatch2 = /^(.+)_specific_price_level$/.exec(toKey);
-                    if (specMatch2) {
-                        var targetKey = specMatch2[1];
-                        var toIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, targetKey, origin);
-                        if (toIdx == null || toIdx < 0 || toIdx >= PT_CANDLES.length) return;
-                        var toCandle = PT_CANDLES[toIdx];
-                        if (!toCandle) return;
-                        if (!dr.draw_to_price_level) return;
-                        var toVal = toCandle[dr.draw_to_price_level];
-                        if (toVal == null) return;
-                        drawSegment(x1, y1, baseX + toIdx * step + step / 2, pToY(toVal), stroke);
-                        return;
-                    }
-
-                    var axisMatch2 = /^(.+)_axis$/.exec(toKey);
-                    if (axisMatch2) {
-                        var axisKey = axisMatch2[1];
-                        var axisIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, axisKey, origin);
-                        if (axisIdx == null || axisIdx < 0 || axisIdx >= PT_CANDLES.length) return;
-                        drawSegment(x1, y1, baseX + axisIdx * step + step / 2, y1, stroke);
-                        return;
-                    }
-
-                    if (toKey === 'any_candle_intercept') {
-                        var hitRight = ptFindAnyIntercept(fromIdx, +1, y1, fromVal, baseX, step, firstVisible, lastVisible);
-                        if (hitRight) {
-                            drawSegment(x1, y1, hitRight.x, hitRight.y, stroke);
-                            return;
+                if (treeIndex === 0) {
+                    all.forEach(function (mainCandle, mainIdx) {
+                        if (!ptTypeMatches(mainCandle, main.mainCandleType)) return;
+                        var refIdx = ptOffsetIndex(mainIdx, ref.position || 'right', ref.offsetPosition || 1, all.length);
+                        if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) return;
+                        var leftValue = ptPrice(mainCandle, main.priceLevel || 'high');
+                        var rightValue = ptPrice(all[refIdx], ref.priceLevel || 'high');
+                        if (!ptCompare(leftValue, main.operator || '<', rightValue)) return;
+                        var map = {};
+                        map[mainKey] = mainIdx;
+                        map[refKey] = refIdx;
+                        candidates.push(mainIdx);
+                        nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: [{
+                            rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
+                            mainCandleId: mainCandle.id, referenceCandleId: all[refIdx].id,
+                            offsetCandleId: isNewRef ? all[refIdx].id : null,
+                            mainIdentity: mainKey, referenceIdentity: refKey,
+                            operator: main.operator || '<', mainPriceLevel: main.priceLevel || 'high',
+                            referencePriceLevel: ref.priceLevel || 'high', mainValue: leftValue, referenceValue: rightValue
+                        }] });
+                    });
+                } else {
+                    chainStates.forEach(function (state) {
+                        // A later tree's main must resolve to the exact identity selected earlier.
+                        var mainIdx = Object.prototype.hasOwnProperty.call(state.map, mainKey) ? state.map[mainKey] : -1;
+                        if (mainIdx < 0 || !all[mainIdx] || !ptTypeMatches(all[mainIdx], main.mainCandleType)) return;
+                        var refIdx = -1;
+                        if (isNewRef) {
+                            refIdx = ptOffsetIndex(mainIdx, ref.position || 'left', ref.offsetPosition || 1, all.length);
+                        } else if (Object.prototype.hasOwnProperty.call(state.map, refKey)) {
+                            // Existing reference points at the same candle already defined in the chain.
+                            refIdx = state.map[refKey];
                         }
-                        var hitLeft = ptFindAnyIntercept(fromIdx, -1, y1, fromVal, baseX, step, firstVisible, lastVisible);
-                        if (hitLeft) drawSegment(x1, y1, hitLeft.x, hitLeft.y, stroke);
-                        return;
-                    }
+                        if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) return;
+                        var leftValue = ptPrice(all[mainIdx], main.priceLevel || 'high');
+                        var rightValue = ptPrice(all[refIdx], ref.priceLevel || 'high');
+                        if (!ptCompare(leftValue, main.operator || '<', rightValue)) return;
+                        var map = Object.assign({}, state.map);
+                        if (isNewRef) map[refKey] = refIdx;
+                        candidates.push(mainIdx);
+                        nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: (state.conditions || []).concat([{
+                            rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
+                            mainCandleId: all[mainIdx].id, referenceCandleId: all[refIdx].id,
+                            offsetCandleId: isNewRef ? all[refIdx].id : null,
+                            mainIdentity: mainKey, referenceIdentity: refKey,
+                            operator: main.operator || '<', mainPriceLevel: main.priceLevel || 'high',
+                            referencePriceLevel: ref.priceLevel || 'high', mainValue: leftValue, referenceValue: rightValue
+                        }]) });
+                    });
+                }
+                chainStates = nextStates;
+            });
+            // A root is atomic: every configured tree must be evaluated and pass.
+            // Do not publish partial conditions, labels, or drawings for incomplete families.
+            var rootTrees = configuredTrees;
+            var completeStates = (rootTrees.length > 0 && processedTreeCount === rootTrees.length)
+                ? chainStates.filter(function (state) {
+                    return Array.isArray(state.conditions) && state.conditions.length === rootTrees.length;
+                }) : [];
+            completeStates.forEach(function (state) {
+                (state.conditions || []).forEach(function (condition) {
+                    var mainIdx = all.findIndex(function (c) { return String(c.id) === String(condition.mainCandleId); });
+                    if (mainIdx < 0) return;
+                    all[mainIdx]._rootTrees.push({ rootId: root.id, treeId: condition.treeId });
+                    all[mainIdx]._conditionsMet.push(condition);
+                    all[mainIdx]._matchRootIds.push(root.id);
+                    all[mainIdx]._matchTreeIds.push(condition.treeId);
+                });
+            });
+            root._drawMatches = completeStates.map(function (state) {
+                return { map: Object.assign({}, state.map) };
+            });
+            // Report tree matches only when they belong to a complete 100% root family.
+            rootTrees.forEach(function (tree) {
+                var indices = [];
+                completeStates.forEach(function (state) {
+                    (state.conditions || []).forEach(function (condition) {
+                        if (String(condition.treeId) !== String(tree.id)) return;
+                        var idx = all.findIndex(function (c) { return String(c.id) === String(condition.mainCandleId); });
+                        if (idx >= 0) indices.push(idx);
+                    });
+                });
+                PT_VIRTUAL_MATCHES.push({
+                    rootId: root.id, treeId: tree.id, timeframe: PT_CURRENT_TIMEFRAME,
+                    symbol: PT_CURRENT_SYMBOL, candleIndices: Array.from(new Set(indices))
+                });
+            });
+        });
 
-                    var namedIdx = ptResolveSourceIndex(tree, foundationRoot, foundationAbs, toKey, origin);
-                    if (namedIdx != null && namedIdx >= 0 && namedIdx < PT_CANDLES.length) {
-                        drawSegment(x1, y1, baseX + namedIdx * step + step / 2, y1, stroke);
-                        return;
+        // JSON snapshot is browser-local and is scoped by programme, symbol and timeframe.
+        var snapshotKey = PT_VIRTUAL_CANDLE_JSON_KEY + ':' + PT_PROGRAMME_ID + ':' +
+            PT_CURRENT_SYMBOL + ':' + PT_CURRENT_TIMEFRAME;
+        try {
+            localStorage.setItem(snapshotKey, JSON.stringify({
+                programmeId: PT_PROGRAMME_ID, symbol: PT_CURRENT_SYMBOL,
+                timeframe: PT_CURRENT_TIMEFRAME, generatedAt: new Date().toISOString(),
+                rootsApplied: activeRoots.map(function (r) { return r.id; }),
+                candles: all
+            }));
+            localStorage.setItem(PT_VIRTUAL_CONFIG_KEY + ':' + PT_PROGRAMME_ID, JSON.stringify(config));
+        } catch (storageError) {
+            console.warn('Virtual candle JSON could not be saved in browser storage:', storageError);
+        }
+
+        var ctx = geo.ctx;
+        // Render only user-configured annotation text; no circles or hardcoded labels.
+        activeRoots.forEach(function (root) {
+            (root.trees || []).forEach(function (tree, treeIndex) {
+                var main = tree.main || {}, ref = tree.reference || {};
+                var matched = all.filter(function (c) {
+                    return c._conditionsMet.some(function (m) { return m.rootId === root.id && m.treeId === tree.id; });
+                });
+                matched.forEach(function (c) {
+                    var condition = c._conditionsMet.find(function (m) { return m.rootId === root.id && m.treeId === tree.id; });
+                    if (!condition) return;
+                    var isMainReference = main.selectedExistingId || main.offsetTo;
+                    var label = (main.candleText || '').trim();
+                    var labelLevel = main.textPosition || 'high';
+                    if (label && !isMainReference) {
+                        var mainIdx = c._index;
+                        var mx = geo.baseX + mainIdx * geo.step + geo.step / 2;
+                        var my = geo.pToY(ptPrice(all[mainIdx], labelLevel));
+                        ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(main.textColor, 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
+                        ctx.textAlign = 'center'; ctx.fillText(label, mx, my - 5); ctx.restore();
+                    }
+                    var isTextBearingOffset = ref.referenceMode === 'new_offset' || (tree.offset && tree.offset.id === ref.id);
+                    if ((treeIndex === 0 || isTextBearingOffset) && (ref.candleText || (tree.offset && tree.offset.candleText) || '').trim()) {
+                        var refIdx = all.findIndex(function (z) { return z.id === condition.referenceCandleId; });
+                        if (refIdx >= 0) {
+                            var rx = geo.baseX + refIdx * geo.step + geo.step / 2;
+                            var ry = geo.pToY(ptPrice(all[refIdx], ref.textPosition || 'high'));
+                            ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(ref.textColor || (tree.offset && tree.offset.textColor), 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
+                            ctx.textAlign = 'center'; ctx.fillText(String(ref.candleText || (tree.offset && tree.offset.candleText) || '').trim(), rx, ry - 5); ctx.restore();
+                        }
                     }
                 });
             });
         });
 
-        PT_DRAW_CTX.restore();
+        // Drawings are root-scoped, not tree-scoped. Resolve both endpoints against
+        // each complete root match so Tree 1 can connect to Tree 3 (or any other tree).
+        activeRoots.forEach(function (root) {
+            var trees = (root.trees || []);
+            function endpointIdentity(parts) {
+                if (!parts || parts.length < 3) return null;
+                var treeId = String(parts[0]);
+                var kind = String(parts[1] || 'main');
+                var suppliedId = String(parts[2]);
+                var tree = trees.find(function (t) { return String(t.id) === treeId; });
+                if (!tree) return suppliedId;
+                var candle = kind === 'main' ? (tree.main || {}) :
+                    (kind === 'reference' ? (tree.reference || {}) :
+                    ((tree.offset || (tree.reference && tree.reference.referenceMode === 'new_offset') ? (tree.offset || tree.reference) : {})));
+                if (!candle || !candle.id) return suppliedId;
 
-        function drawSegment(x1, y1, x2, y2, stroke) {
-            if (y1 < chartTop - 500 || y1 > chartBottom + 500) return;
-            if (y2 < chartTop - 500 || y2 > chartBottom + 500) return;
-            PT_DRAW_CTX.strokeStyle = stroke || 'rgba(74,123,216,0.95)';
-            PT_DRAW_CTX.beginPath();
-            PT_DRAW_CTX.moveTo(x1, y1);
-            PT_DRAW_CTX.lineTo(x2, y2);
-            PT_DRAW_CTX.stroke();
-        }
-    }
-
-    function ptDrawProjectedDrawingRows(rows, pToY, yToP, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!rows.length) return;
-        if (!PT_CANDLES.length) return;
-
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
-
-        var projByName = {};
-        var projByTreeRole = {};
-        rows.forEach(function (r) {
-            var nm = (r.candle_name || '').trim();
-            if (nm) {
-                if (!projByName[nm]) projByName[nm] = [];
-                projByName[nm].push(r);
+                // Accept both current canonical identities and older saved option values.
+                if (kind === 'main') return String(candle.selectedExistingId || candle.offsetTo || candle.id);
+                if (kind === 'reference') return String(
+                    candle.referenceMode !== 'new_offset' && (candle.selectedExistingId || candle.existingCandleId)
+                        ? (candle.selectedExistingId || candle.existingCandleId) : candle.id
+                );
+                return String(
+                    candle.referenceMode === 'new_offset'
+                        ? candle.id
+                        : (candle.selectedExistingId || candle.existingCandleId || candle.id)
+                );
             }
-            var key = (r.tree_id || 0) + '|' + (r.row_role || '');
-            if (!projByTreeRole[key]) projByTreeRole[key] = [];
-            projByTreeRole[key].push(r);
-        });
 
-        PT_DRAW_CTX.save();
-        PT_DRAW_CTX.lineWidth = 1.6;
-        PT_DRAW_CTX.setLineDash([]);
+            (root.drawings || []).forEach(function (drawing) {
+                var fromName = drawing.drawFrom || '', toName = drawing.drawTo || '';
+                if (!fromName || !toName) return;
 
-        var drawnCount = 0;
+                var fromParts = fromName.split('|');
+                var toParts = toName.split('|');
+                var fromTreeId = fromParts.length >= 3 ? String(fromParts[0]) : null;
+                var toTreeId = toParts.length >= 3 ? String(toParts[0]) : null;
+                var fromKey = endpointIdentity(fromParts);
+                var toKey = endpointIdentity(toParts);
+                var rootMatches = Array.isArray(root._drawMatches) ? root._drawMatches : [];
 
-        rows.forEach(function (r) {
-            if (r.row_role !== 'matched_drawing') return;
-            if (r.drawing_tools !== 'trendline') return;
-            if (!r.draw_from || !r.draw_from_price_level) return;
-            if (!r.draw_to) return;
+                rootMatches.forEach(function (match) {
+                    var map = match.map || {};
+                    var fromIdx = fromKey != null && Object.prototype.hasOwnProperty.call(map, fromKey)
+                        ? map[fromKey] : -1;
+                    var toIdx = -1;
 
-            var fromIdx = idxByTime[r.candle_time];
-            if (fromIdx == null) {
-                if (r.open_time) fromIdx = idxByTime[r.open_time];
-            }
-            if (fromIdx == null) return;
+                    if (fromIdx < 0 || !all[fromIdx]) return;
 
-            var fromCandle = PT_CANDLES[fromIdx];
-            if (!fromCandle) return;
-            var fromVal = fromCandle[r.draw_from_price_level];
-            if (fromVal == null) return;
+                    var sourcePrice = ptPrice(all[fromIdx], drawing.drawFromPriceLevel || 'high');
+                    var x1 = geo.baseX + fromIdx * geo.step + geo.step / 2;
+                    var y1 = geo.pToY(sourcePrice);
 
-            var x1 = baseX + fromIdx * step + step / 2;
-            var y1 = pToY(fromVal);
-            var stroke = ptResolveDrawingColor(r.drawing_color);
-            var toKey = r.draw_to || '';
+                    if (toName === 'any_intercept_candle') {
+                        /*
+                         * "Any intercept candle" means a horizontal ray at the
+                         * selected source price. Start with the candle immediately
+                         * AFTER the source candle and stop at the first candle whose
+                         * full high-low range contains that price. If no candle
+                         * intersects the ray, do not draw anything.
+                         */
+                        for (var scanIdx = fromIdx + 1; scanIdx < all.length; scanIdx++) {
+                            var candidate = all[scanIdx];
+                            if (!candidate) continue;
 
-            function resolveTo(key) {
-                if (!key) return null;
+                            var candleHigh = Number(candidate.high);
+                            var candleLow = Number(candidate.low);
+                            if (!Number.isFinite(candleHigh) || !Number.isFinite(candleLow)) continue;
 
-                var bare = key.replace(/_(axis|specific_price_level)$/, '');
-                var candidates = projByName[bare] || [];
-                for (var i = 0; i < candidates.length; i++) {
-                    if (candidates[i].tree_id === r.tree_id) {
-                        var ci = idxByTime[candidates[i].candle_time];
-                        if (ci != null) return ci;
-                    }
-                }
-                for (var j = 0; j < candidates.length; j++) {
-                    var cj = idxByTime[candidates[j].candle_time];
-                    if (cj != null) return cj;
-                }
-
-                if (bare === 'ROOT') {
-                    var roots = projByTreeRole[(r.tree_id || 0) + '|matched_root'] || [];
-                    for (var k = 0; k < roots.length; k++) {
-                        if (roots[k].is_foundation) {
-                            var rk = idxByTime[roots[k].candle_time];
-                            if (rk != null) return rk;
+                            if (sourcePrice >= candleLow && sourcePrice <= candleHigh) {
+                                toIdx = scanIdx;
+                                break;
+                            }
                         }
+                        if (toIdx < 0 || !all[toIdx]) return;
+                    } else if (toKey != null && Object.prototype.hasOwnProperty.call(map, toKey)) {
+                        toIdx = map[toKey];
                     }
-                    if (roots.length) {
-                        var r0 = idxByTime[roots[0].candle_time];
-                        if (r0 != null) return r0;
-                    }
-                }
 
-                var refMatch = /^REF:(\d+)$/.exec(bare);
-                if (refMatch) {
-                    var n = parseInt(refMatch[1], 10);
-                    var refs = projByTreeRole[(r.tree_id || 0) + '|matched_ref'] || [];
-                    if (refs[n]) {
-                        var rn = idxByTime[refs[n].candle_time];
-                        if (rn != null) return rn;
-                    }
-                }
-
-                var rrMatch = /^ROOT:(\d+):REF:(\d+)$/.exec(bare);
-                if (rrMatch) {
-                    var m = parseInt(rrMatch[2], 10);
-                    var refs2 = projByTreeRole[(r.tree_id || 0) + '|matched_ref'] || [];
-                    if (refs2[m]) {
-                        var rm = idxByTime[refs2[m].candle_time];
-                        if (rm != null) return rm;
-                    }
-                }
-
-                return null;
-            }
-
-            var specMatch2 = /^(.+)_specific_price_level$/.exec(toKey);
-            if (specMatch2) {
-                var toIdx = resolveTo(specMatch2[1]);
-                if (toIdx != null && r.draw_to_price_level) {
-                    var toCandle = PT_CANDLES[toIdx];
-                    if (toCandle && toCandle[r.draw_to_price_level] != null) {
-                        drawSegment(x1, y1, baseX + toIdx * step + step / 2,
-                            pToY(toCandle[r.draw_to_price_level]), stroke);
-                        drawnCount++;
-                        return;
-                    }
-                }
-                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
-                drawnCount++;
-                return;
-            }
-
-            var axisMatch2 = /^(.+)_axis$/.exec(toKey);
-            if (axisMatch2) {
-                var axisIdx = resolveTo(axisMatch2[1]);
-                if (axisIdx != null) {
-                    drawSegment(x1, y1, baseX + axisIdx * step + step / 2, y1, stroke);
-                    drawnCount++;
-                    return;
-                }
-                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
-                drawnCount++;
-                return;
-            }
-
-            if (toKey === 'any_candle_intercept') {
-                var found = null;
-                for (var q = fromIdx + 1; q < PT_CANDLES.length; q++) {
-                    var cn = PT_CANDLES[q];
-                    if (!cn) continue;
-                    if (fromVal <= cn.high && fromVal >= cn.low) { found = q; break; }
-                }
-                if (found == null) {
-                    for (var q2 = fromIdx - 1; q2 >= 0; q2--) {
-                        var cn2 = PT_CANDLES[q2];
-                        if (!cn2) continue;
-                        if (fromVal <= cn2.high && fromVal >= cn2.low) { found = q2; break; }
-                    }
-                }
-                if (found != null) {
-                    drawSegment(x1, y1, baseX + found * step + step / 2, y1, stroke);
-                    drawnCount++;
-                    return;
-                }
-                drawSegment(x1, y1, x1 + step * 6, y1, stroke);
-                drawnCount++;
-                return;
-            }
-
-            var namedIdx = resolveTo(toKey);
-            if (namedIdx != null) {
-                drawSegment(x1, y1, baseX + namedIdx * step + step / 2, y1, stroke);
-                drawnCount++;
-                return;
-            }
-
-            drawSegment(x1, y1, x1 + step * 6, y1, stroke);
-            drawnCount++;
-        });
-
-        PT_DRAW_CTX.restore();
-
-        function drawSegment(x1, y1, x2, y2, stroke) {
-            if (y1 < chartTop - 2000 || y1 > chartBottom + 2000) return;
-            if (y2 < chartTop - 2000 || y2 > chartBottom + 2000) return;
-            PT_DRAW_CTX.strokeStyle = stroke || 'rgba(74,123,216,0.95)';
-            PT_DRAW_CTX.beginPath();
-            PT_DRAW_CTX.moveTo(x1, y1);
-            PT_DRAW_CTX.lineTo(x2, y2);
-            PT_DRAW_CTX.stroke();
-        }
-    }
-    // Shared renderer: draws the red (risk) and green (reward) zones spanning
-    // from the entry candle body to the resolution candle. The reached side is
-    // split into two segments:
-    //   [x1 .. xTrigger] → light wash (from entry candle to trigger candle)
-    //   [xTrigger .. x2] → dim tone   (from trigger candle to TP/SL hit)
-    // The unreached side keeps a single light wash across the whole span.
-    function ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide) {
-        var RED_LIGHT   = 'rgba(231, 76, 60, 0.12)';
-        var RED_DIM     = 'rgba(231, 76, 60, 0.38)';
-        var GREEN_LIGHT = 'rgba(39, 174, 96, 0.12)';
-        var GREEN_DIM   = 'rgba(39, 174, 96, 0.38)';
-
-        var redTop      = Math.min(yEntry, yStop);
-        var redBottom   = Math.max(yEntry, yStop);
-        var greenTop    = Math.min(yEntry, yTarget);
-        var greenBottom = Math.max(yEntry, yTarget);
-
-        // Clamp the trigger split so it always lives inside [x1, x2].
-        if (xTrigger < x1) xTrigger = x1;
-        if (xTrigger > x2) xTrigger = x2;
-
-        var leftW  = xTrigger - x1;
-        var rightW = x2 - xTrigger;
-
-        if (hitSide === 'stop') {
-            // Unreached (green) — single light wash across the whole span.
-            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
-
-            // Reached (red) — light from entry to trigger, dim from trigger to hit.
-            PT_DRAW_CTX.fillStyle = RED_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, redTop, leftW, redBottom - redTop);
-
-            if (rightW > 0) {
-                PT_DRAW_CTX.fillStyle = RED_DIM;
-                PT_DRAW_CTX.fillRect(xTrigger, redTop, rightW, redBottom - redTop);
-            }
-        } else if (hitSide === 'target') {
-            // Unreached (red) — single light wash across the whole span.
-            PT_DRAW_CTX.fillStyle = RED_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
-
-            // Reached (green) — light from entry to trigger, dim from trigger to hit.
-            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, greenTop, leftW, greenBottom - greenTop);
-
-            if (rightW > 0) {
-                PT_DRAW_CTX.fillStyle = GREEN_DIM;
-                PT_DRAW_CTX.fillRect(xTrigger, greenTop, rightW, greenBottom - greenTop);
-            }
-        } else {
-            // Unresolved / pending — keep both sides in their light state.
-            PT_DRAW_CTX.fillStyle = RED_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, redTop, x2 - x1, redBottom - redTop);
-
-            PT_DRAW_CTX.fillStyle = GREEN_LIGHT;
-            PT_DRAW_CTX.fillRect(x1, greenTop, x2 - x1, greenBottom - greenTop);
-        }
-    }
-
-    // ============================================================
-    // LIVE LONG/SHORT OVERLAY — reads trigger / hit markers directly
-    // from the matched_trade row that ptScanTrades produced.
-    // ============================================================
-    function ptDrawLongShortOverlays(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!PT_CANDLES.length) return;
-
-        var allHits = ptScanTrades();
-        if (!allHits.length) return;
-
-        PT_DRAW_CTX.save();
-
-        var halfBody = PT_VIEW.candleWidth / 2;
-
-        allHits.forEach(function (treeRes) {
-            treeRes.hits.forEach(function (hit) {
-                // No overlay for missed entries — price reached TP without filling entry
-                if (hit.outcome && hit.outcome.status === 'missed') return;
-                if (hit.outcome && hit.outcome.entryTriggered === false) return;
-
-                var entry  = hit.entry;
-                var exitO  = hit.exit;
-                var target = hit.targetRR ? { price: hit.targetRR.price }
-                                          : (hit.target ? { price: hit.target.price } : null);
-
-                if (!entry || !entry.candle) return;
-                if (!exitO || exitO.price == null) return;
-                if (!target || target.price == null) return;
-
-                // LEFT edge anchors on the ENTRY candle body itself.
-                var entryIdx = entry.idx;
-                if (entryIdx == null || entryIdx < 0) return;
-
-                var entryPrice  = entry.price;
-                var stopPrice   = exitO.price;
-                var targetPrice = target.price;
-
-                var row = hit.matchedTradeRow || null;
-
-                // Resolution candle (TP or SL hit). Prefer the recorded hit
-                // index on the row; fall back to the outcome's candle index.
-                var resolutionIdx = (row && row.tp_hit_idx != null)
-                    ? row.tp_hit_idx
-                    : ((row && row.sl_hit_idx != null)
-                        ? row.sl_hit_idx
-                        : ((hit.outcome && hit.outcome.candleIdx != null)
-                            ? hit.outcome.candleIdx
-                            : lastVisible));
-
-                // Entry TRIGGER candle — read from the recorded row.
-                var triggerIdx = (row && row.entry_trigger_idx != null)
-                    ? row.entry_trigger_idx
-                    : ((hit.outcome && hit.outcome.entryTriggerIdx != null)
-                        ? hit.outcome.entryTriggerIdx
-                        : entryIdx);
-
-                var hitSide = '';
-                if (hit.outcome && hit.outcome.status === 'profit')    hitSide = 'target';
-                else if (hit.outcome && hit.outcome.status === 'stop') hitSide = 'stop';
-
-                if (resolutionIdx <= entryIdx) resolutionIdx = entryIdx + 1;
-                if (resolutionIdx > lastVisible) resolutionIdx = lastVisible;
-                if (triggerIdx < entryIdx)       triggerIdx = entryIdx;
-                if (triggerIdx > resolutionIdx)  triggerIdx = resolutionIdx;
-
-                if (resolutionIdx < firstVisible && entryIdx < firstVisible) return;
-                if (entryIdx > lastVisible) return;
-
-                var entryCenterX      = baseX + entryIdx     * step + step / 2;
-                var triggerCenterX    = baseX + triggerIdx   * step + step / 2;
-                var resolutionCenterX = baseX + resolutionIdx * step + step / 2;
-
-                var x1       = entryCenterX - halfBody;
-                var x2       = resolutionCenterX + halfBody;
-                var xTrigger = triggerCenterX - halfBody;
-                if (x2 < x1) { var tmpX = x1; x1 = x2; x2 = tmpX; }
-
-                var yEntry  = pToY(entryPrice);
-                var yStop   = pToY(stopPrice);
-                var yTarget = pToY(targetPrice);
-
-                if (yEntry < chartTop - 2000 || yEntry > chartBottom + 2000) return;
-
-                ptFillTradeZones(x1, xTrigger, x2, yEntry, yStop, yTarget, hitSide);
+                    if (toIdx < 0 || !all[toIdx]) return;
+                    var x2 = geo.baseX + toIdx * geo.step + geo.step / 2;
+                    // Any-intercept lines stay at the source price. Ordinary
+                    // drawings retain their selected destination price level.
+                    var y2 = toName === 'any_intercept_candle'
+                        ? y1
+                        : (drawing.drawToPriceLevel === 'axis'
+                            ? y1
+                            : geo.pToY(ptPrice(all[toIdx], drawing.drawToPriceLevel || 'high')));
+                    if (x1 < -100 || x1 > geo.viewportW + 100 || x2 < -100 || x2 > geo.viewportW + 100) return;
+                    ctx.save();
+                    ctx.strokeStyle = ptResolveConfiguredColor(drawing.drawingColor, 'blue');
+                    ctx.lineWidth = 1.6;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                    ctx.restore();
+                });
             });
         });
 
-        PT_DRAW_CTX.restore();
+        // Trade visualization and deterministic family-level trade records.
+        PT_ROOT_TRADE_DATA = ptBuildRootTradeData(config.roots, PT_CANDLES);
+        var tradeCandleWidth = Number(PT_VIEW.candleWidth || 5);
+        PT_ROOT_TRADE_DATA.forEach(function (trade) {
+            if (trade.timeframe !== String(PT_CURRENT_TIMEFRAME).toLowerCase()) return;
+            if (trade.entryIndex == null) return;
+            // Start exactly at the RIGHT edge of the configured entry candle (candle A).
+            // End at the right edge of the SL/TP exit candle when closed; otherwise at
+            // the entry-trigger candle, or the latest loaded candle while still pending.
+            var firstTradeIndex = trade.entryIndex;
+            if (firstTradeIndex < 0 || firstTradeIndex >= PT_CANDLES.length) return;
+            var firstTradeCenterX = geo.baseX + firstTradeIndex * geo.step + geo.step / 2;
+            var boxStart = firstTradeCenterX + tradeCandleWidth / 2;
+            var exitIndex = trade.outcome === 'take profit reached' ? trade.tpTriggerIndex :
+                (trade.outcome === 'stoploss hit' ? trade.slTriggerIndex : null);
+            var endIndex = exitIndex != null ? exitIndex :
+                (trade.triggerIndex != null ? trade.triggerIndex : PT_CANDLES.length - 1);
+            if (endIndex < firstTradeIndex) endIndex = firstTradeIndex;
+            var endCenterX = geo.baseX + endIndex * geo.step + geo.step / 2;
+            var endBodyRightX = endCenterX + tradeCandleWidth / 2;
+            var boxWidth = Math.max(1, endBodyRightX - boxStart);
+            var entryY = geo.pToY(trade.entryPrice);
+            var slY = geo.pToY(trade.slPrice);
+            var tpY = geo.pToY(trade.tpPrice);
+            if (Math.max(boxStart, endBodyRightX) < -100 || Math.min(boxStart, endBodyRightX) > geo.viewportW + 100) return;
+            ctx.save();
+            // The entry-price guide begins at the configured entry candle's right body edge.
+            ctx.strokeStyle = '#f2c94c'; ctx.lineWidth = 1.5; ctx.setLineDash([5,3]);
+            ctx.beginPath(); ctx.moveTo(boxStart, entryY); ctx.lineTo(endBodyRightX, entryY); ctx.stroke(); ctx.setLineDash([]);
+            // Borderless TradingView-style risk/reward zones; the candle bodies define both endpoints.
+            ctx.fillStyle = 'rgba(235, 64, 75, 0.20)';
+            ctx.fillRect(boxStart, Math.min(entryY, slY), boxWidth, Math.max(1, Math.abs(slY-entryY)));
+            ctx.fillStyle = 'rgba(46, 204, 113, 0.20)';
+            ctx.fillRect(boxStart, Math.min(entryY, tpY), boxWidth, Math.max(1, Math.abs(tpY-entryY)));
+            if (trade.triggerIndex != null) {
+                var triggerCenterX = geo.baseX + trade.triggerIndex * geo.step + geo.step / 2;
+                ctx.fillStyle = '#f2c94c'; ctx.beginPath(); ctx.arc(triggerCenterX, entryY, 3, 0, Math.PI*2); ctx.fill();
+            }
+            ctx.restore();
+        });
     }
 
-    function ptFindAnyIntercept(rootIdx, dir, y1, flatPrice, baseX, step, firstVisible, lastVisible) {
-        var j = rootIdx + dir;
-        var lastIdx = (dir > 0) ? lastVisible : firstVisible;
-        for (; dir > 0 ? j <= lastIdx : j >= lastIdx; j += dir) {
-            var cn = PT_CANDLES[j];
-            if (!cn) continue;
-            if (flatPrice <= cn.high && flatPrice >= cn.low) {
-                var xj = baseX + j * step + step / 2;
-                return { x: xj, y: y1, idx: j };
-            }
+    var PT_ROOT_TRADE_DATA = [];
+    function ptBuildRootTradeData(roots, candles) {
+        var records = [];
+        function targetKey(root, encoded) {
+            if (!encoded) return null;
+            var parts = String(encoded).split('|'); if (parts.length < 3) return null;
+            var tree=(root.trees||[]).find(function(t){return String(t.id)===String(parts[0]);});
+            if(!tree) return null;
+            var c=tree[parts[1]]; if(!c) return null;
+            return String(c.selectedExistingId || (parts[1]==='reference' ? c.existingCandleId : null) || c.offsetTo || c.id || parts[2]);
         }
-        return null;
+        function stamp(c) { if(!c) return '—'; var v=c.time; if(typeof v==='number') return new Date(v < 1e12 ? v*1000 : v).toISOString(); return String(v||'—'); }
+        function targetLabel(root, encoded) { if(!encoded) return '—'; var parts=String(encoded).split('|'); var tree=(root.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); var c=tree&&tree[parts[1]]; return c&&c.name ? c.name : (parts[2]||'—'); }
+        roots.forEach(function(root){
+            if(!root.useForTrades) return;
+            var tfs=ptNormTfList(root); if(tfs.indexOf(String(PT_CURRENT_TIMEFRAME).toLowerCase())<0) return;
+            var entryKey=targetKey(root,root.entryFrom), slKey=targetKey(root,root.stoplossFrom), tpKey=root.takeProfitType==='risk_reward'?null:targetKey(root,root.takeProfitFrom);
+            if(!entryKey || !slKey || (root.takeProfitType!=='risk_reward' && !tpKey)) return;
+            var families=Array.isArray(root._drawMatches)?root._drawMatches:[];
+            families.forEach(function(family, famIndex){
+                var map=family.map||{}, entryIndex=map[entryKey], slIndex=map[slKey], tpIndex=tpKey?map[tpKey]:null;
+                if(entryIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
+                var entryC=candles[entryIndex], slC=candles[slIndex], tpC=tpIndex!=null?candles[tpIndex]:null;
+                if(!entryC||!slC) return;
+                var entryPrice=ptPrice(entryC,root.entryPriceLevel||'high'), slPrice=ptPrice(slC,root.stoplossPriceLevel||'high');
+                var order=String(root.orderType||'buy').toLowerCase();
+                var isLong=['buy','buy-limit','buy-stop'].indexOf(order)>=0;
+                var triggerIndex=null;
+                // Entry candle A is excluded: scan from the immediately following candle.
+                for(var i=entryIndex+1;i<candles.length;i++){
+                    var candle=candles[i];
+                    var triggerHit=['buy','buy-limit','sell-stop'].indexOf(order)>=0 ? Number(candle.low)<entryPrice : Number(candle.high)>entryPrice;
+                    if(triggerHit){triggerIndex=i;break;}
+                }
+                var rr=root.takeProfitType==='risk_reward'?Number(window.PT_PROVIDER_RISK_REWARD || root.riskReward || 0):null;
+                var tpPrice=root.takeProfitType==='risk_reward'
+                    ? (isLong ? entryPrice+Math.abs(entryPrice-slPrice)*(rr>0?rr:1) : entryPrice-Math.abs(entryPrice-slPrice)*(rr>0?rr:1))
+                    : (tpC?ptPrice(tpC,root.takeProfitPriceLevel||'high'):null);
+                var slTrigger=null,tpTrigger=null,outcome=triggerIndex==null?'pending entry':'in trade';
+                if(triggerIndex!=null){
+                    for(var j=triggerIndex;j<candles.length;j++){
+                        var cj=candles[j], slHit=isLong?Number(cj.low)<=slPrice:Number(cj.high)>=slPrice,
+                            tpHit=isLong?Number(cj.high)>=tpPrice:Number(cj.low)<=tpPrice;
+                        if(slHit||tpHit){
+                            if(slHit){outcome='stoploss hit';slTrigger=j;}
+                            else {outcome='take profit reached';tpTrigger=j;}
+                            break;
+                        }
+                    }
+                }
+                var riskDistance=Math.abs(entryPrice-slPrice);
+                var rewardDistance=(tpPrice!==null && Number.isFinite(Number(tpPrice)))?Math.abs(Number(tpPrice)-entryPrice):null;
+                var familyRiskReward=(riskDistance>0 && rewardDistance!==null)?(rewardDistance/riskDistance):null;
+                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:famIndex+1,timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),orderType:order,
+                    entryIndex:entryIndex,entryName:targetLabel(root,root.entryFrom),entryPrice:entryPrice,entryTime:stamp(entryC),
+                    slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
+                    riskReward:familyRiskReward,configuredRiskReward:rr,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
+                    triggerIndex:triggerIndex,entryTriggerTime:triggerIndex!=null?stamp(candles[triggerIndex]):null,slTriggerIndex:slTrigger,tpTriggerIndex:tpTrigger,outcome:outcome,
+                    slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null});
+            });
+        });
+        return records;
     }
+    window.ptOpenRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.add('active');ptRefreshRootsData();};
+    window.ptCloseRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.remove('active');};
+    window.ptRefreshRootsData=function(){
+        if(typeof ptDrawChart==='function')ptDrawChart();
+        var body=document.getElementById('ptRootsDataBody'),status=document.getElementById('ptRootsDataStatus'); if(!body)return;
+        var roots=(window.ptGetTrainingConfiguration&&window.ptGetTrainingConfiguration().roots)||[];
+        var all=PT_ROOT_TRADE_DATA||[];
+        var stopCount=all.filter(function(t){return t.outcome==='stoploss hit';}).length;
+        var profitCount=all.filter(function(t){return t.outcome==='take profit reached';}).length;
+        var pendingCount=all.filter(function(t){return t.outcome==='pending entry';}).length;
+        var inTradeCount=all.filter(function(t){return t.outcome==='in trade';}).length;
+        // Sum the individual risk/reward values for every winning family.
+        // Every stop-loss contributes -1R, so net total R = winning reward units - stop-loss count.
+        var totalRewardR=all.reduce(function(sum,t){
+            if(t.outcome!=='take profit reached') return sum;
+            var familyRR=Number(t.riskReward);
+            return sum+(Number.isFinite(familyRR)?familyRR:0);
+        },0);
+        var lostRiskR=stopCount;
+        var totalTrades=all.length;
+        var closedCount=stopCount+profitCount;
+        var winRate=closedCount>0?(profitCount/closedCount*100):0;
+        function fmtRR(value){return Number(value).toLocaleString(undefined,{maximumFractionDigits:3});}
+        function card(label,value,cls,icon,detail){return '<div class="pt-rd-stat '+cls+'"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+value+'</div>'+(detail?'<div class="pt-rd-stat-label">'+detail+'</div>':'')+'</div></div>';}
+        var html='<div class="pt-rd-dashboard">'+
+            card('Total Trades',totalTrades,'pending','fa-list-check','Total matched families')+
+            card('Stoploss hit',stopCount,'loss','fa-arrow-trend-down')+
+            card('Lost Risks',fmtRR(lostRiskR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+stopCount+' losing families')+
+            card('Profit reached',profitCount,'profit','fa-arrow-trend-up')+
+            card('Risk rewards',(totalRewardR>=0?'+':'')+fmtRR(totalRewardR)+'R','profit','fa-gift','Sum of '+profitCount+' winning families')+
+            card('Win rate',fmtRR(winRate)+'%','active','fa-bullseye',profitCount+' wins / '+closedCount+' closed')+
+            card('Pending entries',pendingCount,'pending','fa-hourglass-half')+
+            card('In trade',inTradeCount,'active','fa-chart-line')+'</div>';
+        roots.forEach(function(root,idx){
+            var items=all.filter(function(t){return String(t.rootId)===String(root.id);});
+            var rootSL=items.filter(function(t){return t.outcome==='stoploss hit';}).length;
+            var rootTP=items.filter(function(t){return t.outcome==='take profit reached';}).length;
+            var rootPending=items.filter(function(t){return t.outcome==='pending entry';}).length;
+            var rootActive=items.filter(function(t){return t.outcome==='in trade';}).length;
+            html+='<details class="pt-rd-root" '+(idx===0?'open':'')+'><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+items.length+' families · <b class="is-profit">'+rootTP+' profit</b> · <b class="is-loss">'+rootSL+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
+            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rootPending+'</b></span><span>In trade <b>'+rootActive+'</b></span><span>Closed <b>'+(rootSL+rootTP)+'</b></span></div>';
+            if(!items.length){html+='<div class="pt-rd-empty">No complete matched trade families for this root in the current timeframe.</div>';}
+            items.forEach(function(t){
+                var stateClass=t.outcome==='stoploss hit'?'loss':(t.outcome==='take profit reached'?'profit':(t.outcome==='in trade'?'active':'pending'));
+                var rrDisplay=(t.riskReward!==null && Number.isFinite(Number(t.riskReward)))?'1 : '+Number(t.riskReward).toLocaleString(undefined,{maximumFractionDigits:3}):'1 : unavailable';
+                html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span></div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
+                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime)+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
+                html+='<div class="pt-rd-details"><div><span>Entry at</span><b>'+ptEscapeHtml(t.entryName)+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
+                if(t.tpType==='risk reward') html+='<div><span>Take profit type</span><b>Risk/reward target</b></div>';
+                else html+='<div><span>Take profit at</span><b>'+ptEscapeHtml(t.tpName||'—')+' · '+ptEscapeHtml(t.tpTime||'—')+'</b></div>';
+                html+='<div><span>Family Risk Reward</span><b>'+ptEscapeHtml(rrDisplay)+'</b></div>';
+                html+='<div><span>Entry trigger</span><b>'+ptEscapeHtml(t.entryTriggerTime||'Waiting for trigger candle')+'</b></div>';
+                if(t.outcome==='stoploss hit')html+='<div><span>Stoploss hit</span><b>'+ptEscapeHtml(t.slTriggerTime||'—')+'</b></div>';
+                if(t.outcome==='take profit reached')html+='<div><span>Profit reached</span><b>'+ptEscapeHtml(t.tpTriggerTime||'—')+'</b></div>';
+                html+='</div></article>';
+            });
+            html+='</details>';
+        });
+        body.innerHTML=html;
+        if(status)status.textContent='Analytics for '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+all.length+' matched families from currently loaded chart candles.';
+    };
+    function ptEscapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+    function ptGetVirtualCandleJson() {
+        var key = PT_VIRTUAL_CANDLE_JSON_KEY + ':' + PT_PROGRAMME_ID + ':' +
+            PT_CURRENT_SYMBOL + ':' + PT_CURRENT_TIMEFRAME;
+        try { return localStorage.getItem(key) || '[]'; } catch (_) { return '[]'; }
+    }
+    window.ptGetVirtualCandleJson = ptGetVirtualCandleJson;
 
     // ==================== HOVER ====================
     function ptHandleMouseMove(e) {
@@ -5957,14 +3988,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             if (PT_DRAG_STATE.mode === 'pan') {
                 var dx = e.clientX - PT_DRAG_STATE.startX;
                 var dy = e.clientY - PT_DRAG_STATE.startY;
-                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) PT_DRAG_STATE.moved = true;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+                    PT_DRAG_STATE.moved = true;
+                    PT_FOLLOW_LATEST = false;
+                }
                 PT_VIEW.offsetX = PT_DRAG_STATE.startOffsetX - dx;
                 PT_VIEW.offsetY = PT_DRAG_STATE.startOffsetY + dy;
                 ptClampOffsetX(); ptClampOffsetY();
                 ptScheduleDraw(); ptMaybeLoadOlder();
             }
         });
-        window.addEventListener('mouseup', function (e) {
+        window.addEventListener('mouseup', function () {
             if (PT_DRAG_STATE.mode === 'pan') {
                 PT_DRAG_STATE.mode = null;
                 PT_CANVAS.classList.remove('pt-grabbing');
@@ -5995,6 +4029,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
             PT_VIEW.candleSpacing = Math.max(0.4, PT_VIEW.candleWidth * 0.35);
             var stepAfter = ptStep();
             PT_VIEW.offsetX = PT_PADDING_LEFT + PT_VIRTUAL_PAD + idxUnderCursor * stepAfter - mx;
+            PT_FOLLOW_LATEST = false;
             ptClampOffsetX(); ptScheduleDraw(); ptMaybeLoadOlder();
         }, { passive: false });
 
@@ -6021,6 +4056,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     var dx = p.x - PT_TOUCH_STATE._lastPan.x;
                     var dy = p.y - PT_TOUCH_STATE._lastPan.y;
                     PT_VIEW.offsetX -= dx; PT_VIEW.offsetY += dy;
+                    PT_FOLLOW_LATEST = false;
                     ptClampOffsetX(); ptClampOffsetY();
                     ptScheduleDraw(); ptMaybeLoadOlder();
                 }
@@ -6047,6 +4083,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
                     PT_VIEW.candleSpacing = Math.max(0.4, newCW * 0.35);
                     var stepAfter = ptStep();
                     PT_VIEW.offsetX = PT_PADDING_LEFT + PT_VIRTUAL_PAD + idxUnder * stepAfter - mx;
+                    PT_FOLLOW_LATEST = false;
                     ptClampOffsetX(); ptScheduleDraw(); ptMaybeLoadOlder();
                 }
                 PT_TOUCH_STATE._lastPan = null;
@@ -6082,8 +4119,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
 
     // ==================== CLAMPING ====================
     function ptClampOffsetX() {
-        var wrap = document.getElementById('ptChartWrap');
-        var vw = wrap.clientWidth;
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vw = card.clientWidth;
         var totalW = PT_PADDING_LEFT + PT_VIRTUAL_PAD + ptContentW() + PT_VIRTUAL_PAD + PT_PADDING_RIGHT;
         var minOffset = 0;
         var maxOffset = Math.max(0, totalW - vw);
@@ -6091,8 +4129,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         if (PT_VIEW.offsetX > maxOffset) PT_VIEW.offsetX = maxOffset;
     }
     function ptClampOffsetY() {
-        var wrap = document.getElementById('ptChartWrap');
-        var vh = wrap.clientHeight;
+        var card = document.getElementById('ptChartCard');
+        if (!card) return;
+        var vh = card.clientHeight;
         var maxY = vh * 1.2, minY = -vh * 1.2;
         if (PT_VIEW.offsetY < minY) PT_VIEW.offsetY = minY;
         if (PT_VIEW.offsetY > maxY) PT_VIEW.offsetY = maxY;
@@ -6104,6 +4143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         var bar = document.getElementById('ptScaleBar');
         if (!bar) return;
         function start(e) {
+            if (PT_SCALE_DRAG.active) return;
             PT_SCALE_DRAG.active = true;
             PT_SCALE_DRAG.startY = (e.touches ? e.touches[0].clientY : e.clientY);
             PT_SCALE_DRAG.startPriceScale = PT_VIEW.priceScale;
@@ -6136,296 +4176,1966 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_trade_details']
         bar.addEventListener('dblclick', function () { PT_VIEW.priceScale = 1.0; ptScheduleDraw(); });
     }
 
-    // ============================================================
-    // ANNOTATION OVERLAY — renders program-configured objects and
-    // texts on the chart, anchored to a specific candle by name.
-    //
-    // Anchor vocabulary (values stored in programme_configuration):
-    //   - any candle name defined in the tree (root / ref / reref)
-    //   - hardcoded apprentice names:
-    //       Entry, Exit, Target,
-    //       Entry Trigger, Stoploss Candle, Take Profit Candle
-    //
-    // The apprentice anchors resolve to whichever candle the matched
-    // trade row recorded for that role on the current chart.
-    // ============================================================
-    function ptCollectAnnotationRules(tree) {
-        var rules = [];
-        if (!tree) return rules;
+    // ==================== THEME SYNC ====================
+    (function () {
+        window.addEventListener('message', function (e) {
+            if (!e.data || typeof e.data !== 'object') return;
+            if (e.data.type === 'theme') {
+                var dark = !!e.data.dark;
+                document.body.classList.toggle('dark-mode', dark);
+                document.documentElement.classList.toggle('force-light', !dark);
+                ptScheduleDraw();
+            }
+        });
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+    })();
 
-        function pushRule(ownerRow, ownerName) {
-            if (!ownerRow) return;
-            var hasObject = ownerRow.object_kind && ownerRow.object_kind !== 'none' && ownerRow.object_anchor && ownerRow.object_position;
-            var hasText   = ownerRow.text_anchor && ownerRow.text_position && ownerRow.text_content;
-            if (!hasObject && !hasText) return;
-            rules.push({
-                ownerName:      ownerName || ownerRow.candle_name || '',
-                object_kind:    hasObject ? ownerRow.object_kind     : null,
-                object_anchor:  hasObject ? ownerRow.object_anchor   : null,
-                object_position:hasObject ? ownerRow.object_position : null,
-                text_anchor:    hasText   ? ownerRow.text_anchor     : null,
-                text_position:  hasText   ? ownerRow.text_position   : null,
-                text_content:   hasText   ? ownerRow.text_content    : null
+    window.ptOpenSymbolModal      = ptOpenSymbolModal;
+    window.ptCloseSymbolModal     = ptCloseSymbolModal;
+    window.ptFilterSymbolModal    = ptFilterSymbolModal;
+    window.ptSelectSymbol         = ptSelectSymbol;
+    window.ptOpenTimeframeModal   = ptOpenTimeframeModal;
+    window.ptCloseTimeframeModal  = ptCloseTimeframeModal;
+    window.ptFilterTimeframeModal = ptFilterTimeframeModal;
+    window.ptPickTimeframe        = ptPickTimeframe;
+    window.ptSelectTimeframe      = ptSelectTimeframe;
+    window.ptOpenCandleDetail     = ptOpenCandleDetailModal;
+    window.ptCloseCandleDetail    = ptCloseCandleDetailModal;
+
+    /* =================================================================
+     * ==================== CONFIGURATION SYSTEM =======================
+     * =================================================================
+     * In-memory model. Nothing is sent to the server, nothing is merged
+     * with candle_records. This simply builds configuration rows for
+     * roots and trees exactly as described.
+     *
+     * FOCUS SAFETY:
+     *   - Structural changes (add/remove root, tree, drawing, or a
+     *     show/hide toggle) call render() which wipes and rebuilds.
+     *   - Plain value changes (typing a name, choosing an option)
+     *     call onValueChange() which only updates the in-memory model
+     *     and the footer status — the DOM is NEVER touched, so focus
+     *     and caret position are preserved across keystrokes.
+     * ================================================================= */
+    (function () {
+        'use strict';
+
+        var PT_CFG = {
+            roots: [],            // array of root objects
+            nextRootId: 1,
+            nextTreeId: 1,
+            nextCandleId: 1,
+            nextMainId: 1, // retained for compatibility with any existing references
+            nextRefId:  1,
+            nextOffsetId: 1
+        };
+
+        var pendingRootDelete = null;
+
+        function openRootDeleteConfirmation(root) {
+            pendingRootDelete = root;
+            var modal = el('ptRootDeleteModal');
+            var message = el('ptRootDeleteMessage');
+            var confirmButton = el('ptRootDeleteConfirm');
+            if (message) {
+                message.textContent = 'Are you sure you want to delete Root ' + root.id + ' configuration? This will remove this root and its configured trees and drawings from the current configuration. This action cannot be undone here.';
+            }
+            if (confirmButton) confirmButton.disabled = false;
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeRootDeleteConfirmation() {
+            var modal = el('ptRootDeleteModal');
+            if (modal) modal.classList.remove('active');
+            pendingRootDelete = null;
+        }
+
+        function confirmRootDelete() {
+            if (!pendingRootDelete) {
+                closeRootDeleteConfirmation();
+                return;
+            }
+            var idx = PT_CFG.roots.indexOf(pendingRootDelete);
+            if (idx >= 0) PT_CFG.roots.splice(idx, 1);
+            closeRootDeleteConfirmation();
+            render();
+            updateFootStatus();
+        }
+
+        var PRICE_LEVELS = [
+            'high','low','open','close',
+            'candle_center','body_center',
+            'high_wick_center','low_wick_center'
+        ];
+        var PRICE_LEVELS_ALL = ['all'].concat(PRICE_LEVELS);
+        var OPERATORS = ['<','>','=<','>=','='];
+        var OFFSET_POS_POINTS = ['all','random','fixed'];
+        var TP_TYPES = ['risk_reward','price_levels'];
+        var DRAW_TO_EXTRA = ['any_intercept_candle'];
+        var TEXT_POSITIONS = ['high','low','open','close'];
+        var COLOR_OPTIONS = [
+            {value:'purple',label:'Purple'}, {value:'red',label:'Red'},
+            {value:'blue',label:'Blue'}, {value:'green',label:'Green'},
+            {value:'yellow',label:'Yellow'}, {value:'orange',label:'Orange'},
+            {value:'pink',label:'Pink'}, {value:'cyan',label:'Cyan'},
+            {value:'magenta',label:'Magenta'}, {value:'lime',label:'Lime'},
+            {value:'teal',label:'Teal'}, {value:'navy',label:'Navy'},
+            {value:'gold',label:'Gold'}, {value:'coral',label:'Coral'},
+            {value:'violet',label:'Violet'}, {value:'indigo',label:'Indigo'},
+            {value:'brown',label:'Brown'}, {value:'gray',label:'Gray'},
+            {value:'white',label:'White'}, {value:'black',label:'Black'},
+            {value:'custom',label:'Custom (white in dark mode, black in light mode)'}
+        ];
+        function ptResolveConfiguredColor(value, fallback) {
+            var color = String(value || fallback || 'purple').toLowerCase();
+            if (color === 'custom') {
+                var dark = document.body
+                    ? document.body.classList.contains('dark-mode')
+                    : !!PT_DARK_MODE;
+                return dark ? '#ffffff' : '#000000';
+            }
+            return color;
+        }
+        var CANDLE_TYPES = [
+            {value:'bearish', label:'bearish'},
+            {value:'bullish', label:'bullish'},
+            {value:'bearish_or_bullish', label:'bearish_or_bullish'}
+        ];
+        var DEFAULT_CANDLE_TYPE = 'bearish_or_bullish';
+
+        // ---------- rendering helpers ----------
+        function el(id) { return document.getElementById(id); }
+
+        function mkSelect(id, options, value, disabled, onchange) {
+            var sel = document.createElement('select');
+            sel.id = id;
+            if (disabled) sel.disabled = true;
+            options.forEach(function (opt) {
+                var o = document.createElement('option');
+                if (opt && typeof opt === 'object') {
+                    o.value = opt.value;
+                    o.textContent = opt.label;
+                } else {
+                    o.value = opt;
+                    o.textContent = opt;
+                }
+                sel.appendChild(o);
+            });
+            if (value != null) sel.value = value;
+            if (onchange) sel.addEventListener('change', onchange);
+            return sel;
+        }
+
+        function mkInput(id, type, value, placeholder, disabled, oninput) {
+            var inp = document.createElement('input');
+            inp.id = id;
+            inp.type = type || 'text';
+            if (value != null) inp.value = value;
+            if (placeholder) inp.placeholder = placeholder;
+            if (disabled) inp.disabled = true;
+            if (oninput) inp.addEventListener('input', oninput);
+            return inp;
+        }
+
+        function mkField(labelText, control) {
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-field';
+            if (labelText) {
+                var lab = document.createElement('label');
+                lab.textContent = labelText;
+                wrap.appendChild(lab);
+            }
+            wrap.appendChild(control);
+            return wrap;
+        }
+
+        // ---------- helpers on the model ----------
+        function rootById(rootId) {
+            for (var i = 0; i < PT_CFG.roots.length; i++) {
+                if (PT_CFG.roots[i].id === rootId) return PT_CFG.roots[i];
+            }
+            return null;
+        }
+
+        function treeById(root, treeId) {
+            if (!root) return null;
+            for (var i = 0; i < root.trees.length; i++) {
+                if (root.trees[i].id === treeId) return root.trees[i];
+            }
+            return null;
+        }
+
+        // A tree is saveable only when its required candle selections/names exist.
+        // Optional settings already have valid defaults in the model.
+        function treeIsConfigured(root, tree, treeIndex) {
+            if (!root || !tree || !tree.main || !tree.reference) return false;
+            var main = tree.main;
+            var ref = tree.reference;
+            if (treeIndex === 0) {
+                return String(main.name || '').trim() !== '' &&
+                       String(ref.name || '').trim() !== '';
+            }
+
+            var mainSelection = main.selectedExistingId || main.offsetTo;
+            if (!mainSelection || !findCandleById(mainSelection, root)) return false;
+
+            var mode = ref.referenceMode || 'existing';
+            if (mode === 'new_offset') {
+                return String(ref.name || '').trim() !== '';
+            }
+            var refSelection = ref.selectedExistingId || ref.existingCandleId;
+            return !!(refSelection && findCandleById(refSelection, root));
+        }
+
+        function updateTreeAddButtons() {
+            document.querySelectorAll('[data-pt-add-tree-root]').forEach(function (button) {
+                var root = rootById(parseInt(button.getAttribute('data-pt-add-tree-root'), 10));
+                if (!root) { button.disabled = true; return; }
+                // Once a root has more than one tree, adding further trees is always allowed.
+                if (root.trees.length >= 2) {
+                    button.disabled = false;
+                    button.title = 'Add another tree';
+                    return;
+                }
+                var firstConfigured = root.trees.length === 1 && treeIsConfigured(root, root.trees[0], 0);
+                button.disabled = !firstConfigured;
+                button.title = firstConfigured ? 'Add another tree' : 'Configure the first tree main and reference candles first';
             });
         }
 
-        (tree.roots || []).forEach(function (root) {
-            pushRule(root, root.candle_name);
-            (root.root_refs || []).forEach(function (ref) {
-                if (ref.row_role !== 'root_ref') return;
-                pushRule(ref, ref.candle_name);
-                (ref.re_ref_pairs || []).forEach(function (pair) {
-                    if (pair.author)  pushRule(pair.author,  pair.author.candle_name || ref.candle_name);
-                    if (pair.referenced) pushRule(pair.referenced, pair.referenced.candle_name || root.candle_name);
+        function findCandleById(candleId, rootOnly) {
+            if (candleId == null || candleId === '') return null;
+            var found = null;
+            var rootsToSearch = rootOnly ? [rootOnly] : PT_CFG.roots;
+            rootsToSearch.some(function (root) {
+                return root.trees.some(function (tree) {
+                    return ['main', 'reference', 'offset'].some(function (kind) {
+                        var candle = tree[kind];
+                        if (candle && String(candle.id) === String(candleId)) {
+                            found = { row: candle, kind: kind, tree: tree, root: root };
+                            return true;
+                        }
+                        return false;
+                    });
+                });
+            });
+            return found;
+        }
+
+        function normalizeCandleType(value) {
+            return CANDLE_TYPES.some(function (item) { return item.value === value; })
+                ? value : DEFAULT_CANDLE_TYPE;
+        }
+
+        function collectOffsetTargets(root, excludeTreeId) {
+            var out = [];
+            var seenIds = Object.create(null);
+            if (!root) return out;
+
+            // A candle referenced by a later tree keeps its original identity.
+            // Do not list the same candle again under every tree that reuses it.
+            root.trees.forEach(function (tree) {
+                if (excludeTreeId && String(tree.id) === String(excludeTreeId)) return;
+                ['main', 'reference', 'offset'].forEach(function (kind) {
+                    var row = tree[kind];
+                    if (!row || row.id == null || !String(row.name || '').trim()) return;
+
+                    var identity = String(row.id);
+                    if (seenIds[identity]) return;
+                    seenIds[identity] = true;
+
+                    out.push({
+                        id: row.id,
+                        name: row.name,
+                        kind: kind,
+                        candleType: normalizeCandleType(
+                            row.mainCandleType || row.refCandleType || row.offsetCandle || DEFAULT_CANDLE_TYPE
+                        ),
+                        treeId: tree.id,
+                        rootId: root.id
+                    });
+                });
+            });
+            return out;
+        }
+
+        // ---------- build one "Main" row ----------
+        function buildMainRow(opts) {
+            var root = opts.root;
+            var tree = opts.tree;
+            var row  = opts.row;
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-row';
+
+            var tag = document.createElement('div');
+            tag.className = 'pt-cfg-row-tag main';
+            tag.innerHTML = '<i class="fa-solid fa-star"></i> Main Candle';
+            wrap.appendChild(tag);
+
+            var grid = document.createElement('div');
+            grid.className = 'pt-cfg-row-grid';
+
+            // Later trees may only register an existing candle as their main.
+            if (!opts.isFirstTree) {
+                var targets = collectOffsetTargets(root, tree.id);
+                var choices = [{value:'', label:'— select existing candle —'}];
+                targets.forEach(function (t) {
+                    choices.push({value:String(t.id), label:t.name + ' (' + t.kind + ' · tree ' + t.treeId + ')'});
+                });
+                var selected = row.selectedExistingId || row.offsetTo || '';
+                var existingSel = mkSelect('cfg_main_existing_' + row.id, choices, String(selected), false, function () {
+                    var found = null;
+                    targets.forEach(function (t) { if (String(t.id) === existingSel.value) found = t; });
+                    row.selectedExistingId = found ? found.id : null;
+                    row.offsetTo = found ? found.id : null;
+                    row.name = found ? found.name : '';
+                    row.offsetToName = found ? found.name : '';
+                    row.offsetToKind = found ? found.kind : '';
+                    if (found) row.mainCandleType = normalizeCandleType(found.candleType || DEFAULT_CANDLE_TYPE);
+                    opts.onChange();
+                });
+                grid.appendChild(mkField('Main candle (existing candle)', existingSel));
+                var pl = mkSelect('cfg_main_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
+                    row.priceLevel = pl.value; opts.onValueChange();
+                });
+                grid.appendChild(mkField('Price level', pl));
+                var operator = mkSelect('cfg_main_op_' + row.id, OPERATORS, row.operator || '>', false, function () {
+                    row.operator = operator.value; opts.onValueChange();
+                });
+                grid.appendChild(mkField('Operator', operator));
+                wrap.appendChild(grid);
+                return wrap;
+            }
+
+            // Main Candle Name
+            var nameInput = mkInput('cfg_main_name_' + row.id, 'text', row.name, 'Main candle name', false, function () {
+                row.name = nameInput.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Main Candle Name', nameInput));
+
+            var mainTextInput = mkInput('cfg_main_text_' + row.id, 'text', row.candleText || '', 'Text shown on matched candles', false, function () {
+                row.candleText = mainTextInput.value; opts.onValueChange();
+            });
+            grid.appendChild(mkField('Candle text', mainTextInput));
+            var mainTextPosition = mkSelect('cfg_main_text_position_' + row.id, TEXT_POSITIONS, row.textPosition || 'high', false, function () {
+                row.textPosition = mainTextPosition.value; opts.onValueChange();
+            });
+            grid.appendChild(mkField('Text position', mainTextPosition));
+            var mainTextColor = mkSelect('cfg_main_text_color_' + row.id, COLOR_OPTIONS, row.textColor || 'purple', false, function () {
+                row.textColor = mainTextColor.value; opts.onValueChange();
+            });
+            grid.appendChild(mkField('Text color', mainTextColor));
+
+            // Main candle type is independently configurable for every main row.
+            var inheritedMain = row.offsetTo != null ? findCandleById(row.offsetTo) : null;
+            row.mainCandleType = normalizeCandleType(row.mainCandleType);
+            var mainTypeSel = mkSelect('cfg_main_type_' + row.id, CANDLE_TYPES,
+                row.mainCandleType, false, function () {
+                    row.mainCandleType = mainTypeSel.value;
+                    opts.onValueChange();
+                });
+            grid.appendChild(mkField('Main Candle Type', mainTypeSel));
+
+            // Offset candle type is its own configurable property and is saved
+            // to programme_training_configuration.offset_candle. It is not
+            // inferred from the selected offset target.
+            if (!opts.isFirstTree) {
+                row.offsetCandle = normalizeCandleType(row.offsetCandle);
+                var offsetTypeSel = mkSelect('cfg_offset_type_' + row.id,
+                    CANDLE_TYPES, row.offsetCandle, false, function () {
+                        row.offsetCandle = offsetTypeSel.value;
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Offset Candle Type', offsetTypeSel));
+            }
+
+            // Position
+            var positionOptions = opts.isFirstTree
+                ? [{value:'all', label:'all'}]
+                : [{value:'left', label:'left'}, {value:'right', label:'right'}];
+            var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions, row.position, opts.isFirstTree, function () {
+                row.position = posSel.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Position', posSel));
+
+            // Offset to (only when not first tree)
+            if (!opts.isFirstTree) {
+                var offsetOptions = [{value:'', label:'— select candle —'}];
+                opts.offsetTargets.forEach(function (t) {
+                    offsetOptions.push({value: String(t.id), label: t.name + ' (' + t.kind + ' · tree ' + t.treeId + ')'});
+                });
+                var offsetSel = mkSelect('cfg_main_offset_' + row.id, offsetOptions, row.offsetTo != null ? String(row.offsetTo) : '', false, function () {
+                    var v = offsetSel.value;
+                    row.offsetTo = v ? parseInt(v, 10) : null;
+                    var found = null;
+                    opts.offsetTargets.forEach(function (t) { if (String(t.id) === v) found = t; });
+                    row.offsetToName = found ? found.name : '';
+                    row.offsetToKind = found ? found.kind : '';
+                    if (found) {
+                        row.mainCandleType = normalizeCandleType(found.candleType || DEFAULT_CANDLE_TYPE);
+                    }
+                    row.offsetCandle = normalizeCandleType(row.offsetCandle);
+                    opts.onChange();
+                });
+                grid.appendChild(mkField('Offset To', offsetSel));
+            }
+
+            // Offset Position + Pos Point (not first tree)
+            if (!opts.isFirstTree) {
+                var opInput = mkInput('cfg_main_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : '', 'e.g. 1', false, function () {
+                    row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
+                    opts.onValueChange();
+                });
+                opInput.min = '1';
+                opInput.step = '1';
+                grid.appendChild(mkField('Offset Position', opInput));
+
+                var oppSel = mkSelect('cfg_main_oppoint_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
+                    row.offsetPosPoint = oppSel.value;
+                    opts.onValueChange();
+                });
+                grid.appendChild(mkField('Offset Pos Point', oppSel));
+            }
+
+            // Price Level
+            var plSel = mkSelect('cfg_main_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
+                row.priceLevel = plSel.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Price Level', plSel));
+
+            // Operator
+            var opSel = mkSelect('cfg_main_op_' + row.id, OPERATORS, row.operator || '<', false, function () {
+                row.operator = opSel.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Operator', opSel));
+
+            wrap.appendChild(grid);
+            return wrap;
+        }
+
+        // ---------- build one "Reference" row ----------
+        function buildReferenceRow(opts) {
+            var tree = opts.tree;
+            var mainRow = tree.main;
+            var row  = opts.row;
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-row';
+
+            var tag = document.createElement('div');
+            tag.className = 'pt-cfg-row-tag';
+            tag.innerHTML = '<i class="fa-solid fa-link"></i> Reference Candle';
+            wrap.appendChild(tag);
+
+            var grid = document.createElement('div');
+            grid.className = 'pt-cfg-row-grid';
+
+            // Later trees choose either an existing candle reference or a new
+            // offset from this tree's main candle.
+            if (opts.tree && opts.root.trees.indexOf(opts.tree) > 0) {
+                row.referenceMode = row.referenceMode || 'existing';
+                var modeSel = mkSelect('cfg_ref_mode_' + row.id, [
+                    {value:'existing',label:'Reference existing tree candle'},
+                    {value:'new_offset',label:'New offset to this tree main'}
+                ], row.referenceMode, false, function () {
+                    row.referenceMode = modeSel.value;
+                    opts.onChange();
+                });
+                grid.appendChild(mkField('Reference type', modeSel));
+                if (row.referenceMode === 'existing') {
+                    var refTargets = collectOffsetTargets(opts.root, opts.tree.id);
+                    var refChoices = [{value:'',label:'— select existing candle —'}];
+                    refTargets.forEach(function (t) {
+                        refChoices.push({value:String(t.id),label:t.name + ' (' + t.kind + ' · tree ' + t.treeId + ')'});
+                    });
+                    var refSel = mkSelect('cfg_ref_existing_' + row.id, refChoices,
+                        String(row.selectedExistingId || row.existingCandleId || ''), false, function () {
+                            var chosen = null;
+                            refTargets.forEach(function (t) { if (String(t.id) === refSel.value) chosen = t; });
+                            row.selectedExistingId = chosen ? chosen.id : null;
+                            row.existingCandleId = chosen ? chosen.id : null;
+                            row.name = chosen ? chosen.name : '';
+                            if (chosen) row.refCandleType = normalizeCandleType(chosen.candleType || DEFAULT_CANDLE_TYPE);
+                            opts.onValueChange();
+                        });
+                    grid.appendChild(mkField('Reference candle', refSel));
+                    var refLevel = mkSelect('cfg_ref_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
+                        row.priceLevel = refLevel.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Price level', refLevel));
+                } else {
+                    var offsetToMain = document.createElement('input');
+                    offsetToMain.type = 'text'; offsetToMain.disabled = true;
+                    offsetToMain.value = (mainRow && mainRow.name ? mainRow.name : 'Selected tree main');
+                    grid.appendChild(mkField('Offset to', offsetToMain));
+                    var offsetName = mkInput('cfg_new_offset_name_' + row.id, 'text', row.name || '', 'Offset candle name', false, function () {
+                        row.name = offsetName.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Offset candle name', offsetName));
+                    var offsetText = mkInput('cfg_new_offset_text_' + row.id, 'text', row.candleText || '', 'Text shown on matched candles', false, function () {
+                        row.candleText = offsetText.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Candle text', offsetText));
+                    var offsetTextPosition = mkSelect('cfg_new_offset_text_position_' + row.id, TEXT_POSITIONS, row.textPosition || 'high', false, function () {
+                        row.textPosition = offsetTextPosition.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Text position', offsetTextPosition));
+                    var offsetTextColor = mkSelect('cfg_new_offset_text_color_' + row.id, COLOR_OPTIONS, row.textColor || 'purple', false, function () {
+                        row.textColor = offsetTextColor.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Text color', offsetTextColor));
+                    var offsetType = mkSelect('cfg_new_offset_type_' + row.id, CANDLE_TYPES, row.refCandleType || DEFAULT_CANDLE_TYPE, false, function () {
+                        row.refCandleType = offsetType.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Offset candle type', offsetType));
+                    var pos = mkSelect('cfg_new_offset_pos_' + row.id, ['left','right'], row.position || 'left', false, function () {
+                        row.position = pos.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Position', pos));
+                    var offsetPos = mkInput('cfg_new_offset_position_' + row.id, 'number', row.offsetPosition || 1, '1', false, function () {
+                        row.offsetPosition = Math.max(1, parseInt(offsetPos.value || '1', 10)); opts.onValueChange();
+                    });
+                    offsetPos.min = '1'; offsetPos.step = '1';
+                    grid.appendChild(mkField('Offset position', offsetPos));
+                    var point = mkSelect('cfg_new_offset_point_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
+                        row.offsetPosPoint = point.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Offset position point', point));
+                    var price = mkSelect('cfg_new_offset_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
+                        row.priceLevel = price.value; opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('Price level', price));
+                }
+                wrap.appendChild(grid);
+                return wrap;
+            }
+
+            // Reference candle name
+            var nameInput = mkInput('cfg_ref_name_' + row.id, 'text', row.name, 'Reference candle name', false, function () {
+                row.name = nameInput.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Reference Candle Name', nameInput));
+
+            // The first tree's reference is independently labelable. Later
+            // references that point to an existing tree candle inherit that
+            // candle's label; a later new-offset reference has its own fields above.
+            if (opts.root.trees.indexOf(opts.tree) === 0) {
+                var firstRefText = mkInput('cfg_ref_text_' + row.id, 'text', row.candleText || '', 'Text shown on matched reference candles', false, function () {
+                    row.candleText = firstRefText.value; opts.onValueChange();
+                });
+                grid.appendChild(mkField('Candle text', firstRefText));
+                var firstRefTextPosition = mkSelect('cfg_ref_text_position_' + row.id, TEXT_POSITIONS, row.textPosition || 'high', false, function () {
+                    row.textPosition = firstRefTextPosition.value; opts.onValueChange();
+                });
+                grid.appendChild(mkField('Text position', firstRefTextPosition));
+                var firstRefTextColor = mkSelect('cfg_ref_text_color_' + row.id, COLOR_OPTIONS, row.textColor || 'purple', false, function () {
+                    row.textColor = firstRefTextColor.value; opts.onValueChange();
+                });
+                grid.appendChild(mkField('Text color', firstRefTextColor));
+            }
+
+            row.refCandleType = normalizeCandleType(row.refCandleType);
+            var refTypeSel = mkSelect('cfg_ref_type_' + row.id, CANDLE_TYPES,
+                row.refCandleType, false, function () {
+                    row.refCandleType = refTypeSel.value;
+                    opts.onValueChange();
+                });
+            grid.appendChild(mkField('Reference Candle Type', refTypeSel));
+
+            // Position — left/right only
+            var posSel = mkSelect('cfg_ref_pos_' + row.id,
+                [{value:'left', label:'left'}, {value:'right', label:'right'}],
+                row.position || 'left', false, function () {
+                    row.position = posSel.value;
+                    opts.onValueChange();
+                });
+            grid.appendChild(mkField('Position', posSel));
+
+            // Offset To — always uneditable, displays main name
+            var offsetLabelText = mainRow && mainRow.name ? mainRow.name + ' (this tree main)' : '(this tree main)';
+            var offsetDisplay = document.createElement('input');
+            offsetDisplay.type = 'text';
+            offsetDisplay.disabled = true;
+            offsetDisplay.value = offsetLabelText;
+            grid.appendChild(mkField('Offset To', offsetDisplay));
+
+            // Offset Position
+            var opInput = mkInput('cfg_ref_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : 1, 'e.g. 1', false, function () {
+                row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
+                opts.onValueChange();
+            });
+            opInput.min = '1';
+            opInput.step = '1';
+            grid.appendChild(mkField('Offset Position', opInput));
+
+            // Offset Pos Point
+            var oppSel = mkSelect('cfg_ref_oppoint_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
+                row.offsetPosPoint = oppSel.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Offset Pos Point', oppSel));
+
+            // Price Level
+            var plSel = mkSelect('cfg_ref_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
+                row.priceLevel = plSel.value;
+                opts.onValueChange();
+            });
+            grid.appendChild(mkField('Price Level', plSel));
+
+            wrap.appendChild(grid);
+            return wrap;
+        }
+
+        // ---------- build one Tree wrapper ----------
+        function buildTree(root, tree, treeIndex, onChange, onValueChange) {
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-tree';
+
+            var head = document.createElement('div');
+            head.className = 'pt-cfg-tree-head';
+
+            var tag = document.createElement('div');
+            tag.className = 'pt-cfg-tree-tag';
+            tag.innerHTML = '<span class="pt-cfg-chip tree">Tree ' + tree.id + '</span>'
+                          + (treeIndex === 0 ? 'First tree (root anchor)' : 'Offset tree');
+            head.appendChild(tag);
+
+            // An unneeded additional tree can be cancelled without affecting the root anchor.
+            if (treeIndex > 0) {
+                var cancelTreeBtn = document.createElement('button');
+                cancelTreeBtn.type = 'button';
+                cancelTreeBtn.className = 'pt-cfg-btn danger pt-cfg-tree-cancel';
+                cancelTreeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel Tree';
+                cancelTreeBtn.title = 'Remove this tree from the configuration';
+                cancelTreeBtn.addEventListener('click', function () {
+                    var idx = root.trees.indexOf(tree);
+                    if (idx > 0) root.trees.splice(idx, 1);
+                    onChange();
+                });
+                head.appendChild(cancelTreeBtn);
+            }
+
+            // Root timeframes are explicitly selected as a set, not inherited
+            // from the currently displayed chart timeframe.
+            if (treeIndex === 0) {
+                var tfWrap = document.createElement('div');
+                tfWrap.className = 'pt-cfg-field pt-root-timeframes';
+                var tfLabel = document.createElement('label');
+                tfLabel.textContent = 'Select timeframes for this root';
+                tfWrap.appendChild(tfLabel);
+                var tfList = document.createElement('div');
+                tfList.className = 'pt-root-timeframe-list';
+                (PT_ALL_TIMEFRAMES || []).forEach(function (tf) {
+                    var item = document.createElement('label');
+                    item.className = 'pt-root-timeframe-option';
+                    var cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.value = tf;
+                    cb.checked = Array.isArray(root.timeframes) && root.timeframes.indexOf(tf) !== -1;
+                    cb.addEventListener('change', function () {
+                        root.timeframes = root.timeframes || [];
+                        if (cb.checked && root.timeframes.indexOf(tf) === -1) root.timeframes.push(tf);
+                        if (!cb.checked) root.timeframes = root.timeframes.filter(function (x) { return x !== tf; });
+                        root.timeframes = (PT_ALL_TIMEFRAMES || []).filter(function (x) { return root.timeframes.indexOf(x) !== -1; });
+                        root.timeframe = root.timeframes[0] || '';
+                        tfWrap.classList.toggle('pt-timeframe-missing', root.timeframes.length === 0);
+                        onChange();
+                    });
+                    item.appendChild(cb);
+                    var text = document.createElement('span');
+                    text.textContent = tf;
+                    item.appendChild(text);
+                    tfList.appendChild(item);
+                });
+                tfWrap.appendChild(tfList);
+                head.appendChild(tfWrap);
+            }
+
+            wrap.appendChild(head);
+
+            // Main row
+            var mainRow = buildMainRow({
+                root: root,
+                tree: tree,
+                row: tree.main,
+                isFirstTree: (treeIndex === 0),
+                offsetTargets: collectOffsetTargets(root, tree.id),
+                onChange: onChange,
+                onValueChange: onValueChange
+            });
+            wrap.appendChild(mainRow);
+
+            // Reference row
+            var refRow = buildReferenceRow({
+                root: root,
+                tree: tree,
+                row: tree.reference,
+                onChange: onChange,
+                onValueChange: onValueChange
+            });
+            wrap.appendChild(refRow);
+
+            return wrap;
+        }
+
+        // ---------- build the Root wrapper ----------
+        function buildRoot(root, onChange, onValueChange) {
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-root' + (root.expanded ? ' is-expanded' : ' is-collapsed');
+            wrap.setAttribute('data-root-id', String(root.id));
+
+            var head = document.createElement('div');
+            head.className = 'pt-cfg-root-head';
+
+            var toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'pt-cfg-root-toggle';
+            toggle.setAttribute('aria-expanded', root.expanded ? 'true' : 'false');
+            toggle.innerHTML = '<i class="fa-solid ' + (root.expanded ? 'fa-chevron-down' : 'fa-chevron-right') + '"></i>';
+            toggle.addEventListener('click', function () {
+                root.expanded = !root.expanded;
+                onChange();
+            });
+            head.appendChild(toggle);
+
+            var tag = document.createElement('div');
+            tag.className = 'pt-cfg-root-tag';
+            tag.innerHTML = '<span class="pt-cfg-chip">Root ' + root.id + '</span>'
+                          + (root.name ? '<span class="pt-cfg-root-name-display"><strong>' + ptEscapeHtml(root.name) + '</strong></span>' : '')
+                          + '<span>Timeframes: <strong>' + ptEscapeHtml((root.timeframes || []).join(', ') || 'Select timeframes') + '</strong></span>'
+                          + '<span class="pt-cfg-root-state">' + (root.expanded ? 'Click to collapse' : 'Click to expand') + '</span>';
+            tag.style.cursor = 'pointer';
+            tag.addEventListener('click', function () { root.expanded = !root.expanded; onChange(); });
+            head.appendChild(tag);
+
+            // Root name is editable inline; saved through the normal configuration save.
+            var rootNameActions = document.createElement('div');
+            rootNameActions.className = 'pt-cfg-root-name-actions';
+            var rootNameBtn = document.createElement('button');
+            rootNameBtn.type = 'button';
+            rootNameBtn.className = 'pt-cfg-btn';
+            rootNameBtn.innerHTML = root.name ? '<i class="fa-solid fa-pen"></i> Edit root name' : '<i class="fa-solid fa-plus"></i> Add root name';
+            rootNameBtn.addEventListener('click', function (event) {
+                event.preventDefault(); event.stopPropagation();
+                if (rootNameActions.querySelector('input')) return;
+                var input = document.createElement('input');
+                input.type = 'text'; input.maxLength = 160; input.value = root.name || '';
+                input.className = 'pt-cfg-input'; input.placeholder = 'Enter root name';
+                var done = document.createElement('button');
+                done.type = 'button'; done.className = 'pt-cfg-btn'; done.textContent = 'Done';
+                done.addEventListener('click', function (ev) {
+                    ev.preventDefault(); ev.stopPropagation();
+                    root.name = input.value.trim();
+                    onChange();
+                });
+                rootNameActions.innerHTML = '';
+                rootNameActions.appendChild(input); rootNameActions.appendChild(done);
+                input.focus();
+            });
+            rootNameActions.appendChild(rootNameBtn);
+            head.appendChild(rootNameActions);
+
+            // The destructive control is not rendered while the root is folded.
+            // It only appears after the user expands the root, and still requires confirmation.
+            if (root.expanded) {
+                var removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'pt-cfg-btn danger';
+                removeBtn.innerHTML = '<i class="fa-solid fa-trash"></i> Remove Root';
+                removeBtn.setAttribute('aria-label', 'Remove Root ' + root.id);
+                removeBtn.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openRootDeleteConfirmation(root);
+                });
+                head.appendChild(removeBtn);
+            }
+            wrap.appendChild(head);
+
+            var content = document.createElement('div');
+            content.className = 'pt-cfg-root-content';
+            content.style.display = root.expanded ? 'flex' : 'none';
+
+            // Root-level settings remain visible regardless of whether trades are enabled.
+            var rootGrid = document.createElement('div');
+            rootGrid.className = 'pt-cfg-root-grid';
+            var runSel = mkSelect('cfg_run_' + root.id,
+                [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
+                String(root.runInPython ? 1 : 0), false, function (e) {
+                    root.runInPython = (e.target.value === '1');
+                    onValueChange();
+                });
+            rootGrid.appendChild(mkField('Run this root in python', runSel));
+            content.appendChild(rootGrid);
+
+            // Trees
+            var treesWrap = document.createElement('div');
+            treesWrap.style.display = 'flex';
+            treesWrap.style.flexDirection = 'column';
+            treesWrap.style.gap = '10px';
+            root.trees.forEach(function (tree, idx) {
+                treesWrap.appendChild(buildTree(root, tree, idx, onChange, onValueChange));
+            });
+            content.appendChild(treesWrap);
+
+            // New Tree button
+            var treeFoot = document.createElement('div');
+            treeFoot.className = 'pt-cfg-tree-foot';
+            var addTreeBtn = document.createElement('button');
+            addTreeBtn.type = 'button';
+            addTreeBtn.className = 'pt-cfg-btn';
+            addTreeBtn.setAttribute('data-pt-add-tree-root', String(root.id));
+            addTreeBtn.innerHTML = '<i class="fa-solid fa-plus"></i> New Tree';
+            addTreeBtn.addEventListener('click', function () {
+                if (root.trees.length < 2 && !(root.trees.length === 1 && treeIsConfigured(root, root.trees[0], 0))) return;
+                root.trees.push(createTree(root));
+                root.expanded = true;
+                onChange();
+            });
+            treeFoot.appendChild(addTreeBtn);
+            content.appendChild(treeFoot);
+
+            // Trade toggle is intentionally placed immediately below the New Tree button.
+            var tradeToggle = document.createElement('div');
+            tradeToggle.className = 'pt-cfg-root-grid';
+            tradeToggle.style.marginTop = '8px';
+            var useSel = mkSelect('cfg_use_' + root.id,
+                [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
+                String(root.useForTrades ? 1 : 0), false, function (e) {
+                    root.useForTrades = (e.target.value === '1');
+                    onChange();
+                });
+            tradeToggle.appendChild(mkField('Use this root for trades', useSel));
+            content.appendChild(tradeToggle);
+
+            // Trade-entry controls are deliberately placed below all trees and above Drawings.
+            // They are not rendered at all unless "Use this root for trades" is Yes.
+            if (root.useForTrades) {
+                var tradeGrid = document.createElement('div');
+                tradeGrid.className = 'pt-cfg-root-grid pt-cfg-trade-grid';
+                function candleTargetsOptions() {
+                    var opts = [{value:'', label:'— select candle —'}];
+                    root.trees.forEach(function (tree) {
+                        ['main','reference','offset'].forEach(function (kind) {
+                            var candle = tree[kind];
+                            if (!candle || !candle.name) return;
+                            opts.push({value:tree.id + '|' + kind + '|' + candle.id,
+                                label:candle.name + ' (' + kind + ' · tree ' + tree.id + ')'});
+                        });
+                    });
+                    return opts;
+                }
+                var orderTypeSel = mkSelect('cfg_ordertype_' + root.id, ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'].map(function(v){return {value:v,label:v};}), root.orderType || 'buy', false, function(e){ root.orderType=e.target.value; onValueChange(); });
+                tradeGrid.appendChild(mkField('Order type', orderTypeSel));
+                var entryFromSel = mkSelect('cfg_entryfrom_' + root.id, candleTargetsOptions(), root.entryFrom || '', false, function (e) { root.entryFrom = e.target.value; onValueChange(); });
+                tradeGrid.appendChild(mkField('Entry at', entryFromSel));
+                var entryPlSel = mkSelect('cfg_entrypl_' + root.id, PRICE_LEVELS, root.entryPriceLevel || 'high', false, function (e) { root.entryPriceLevel = e.target.value; onValueChange(); });
+                tradeGrid.appendChild(mkField('Entry Price level', entryPlSel));
+                var slFromSel = mkSelect('cfg_slfrom_' + root.id, candleTargetsOptions(), root.stoplossFrom || '', false, function (e) { root.stoplossFrom = e.target.value; onValueChange(); });
+                tradeGrid.appendChild(mkField('Stoploss at', slFromSel));
+                var slPlSel = mkSelect('cfg_slpl_' + root.id, PRICE_LEVELS, root.stoplossPriceLevel || 'high', false, function (e) { root.stoplossPriceLevel = e.target.value; onValueChange(); });
+                tradeGrid.appendChild(mkField('Stoploss Price level', slPlSel));
+                var tpTypeSel = mkSelect('cfg_tptype_' + root.id, TP_TYPES, root.takeProfitType || 'risk_reward', false, function (e) { root.takeProfitType = e.target.value; onChange(); });
+                tradeGrid.appendChild(mkField('Take Profit type', tpTypeSel));
+                if (root.takeProfitType !== 'risk_reward') {
+                    var tpFromSel = mkSelect('cfg_tpfrom_' + root.id, candleTargetsOptions(), root.takeProfitFrom || '', false, function (e) { root.takeProfitFrom = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Take profit at', tpFromSel));
+                    var tpPlSel = mkSelect('cfg_tppl_' + root.id, PRICE_LEVELS, root.takeProfitPriceLevel || 'high', false, function (e) { root.takeProfitPriceLevel = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Take Profit Price level', tpPlSel));
+                }
+                content.appendChild(tradeGrid);
+            }
+
+            // Drawings
+            var drawsWrap = document.createElement('div');
+            drawsWrap.className = 'pt-cfg-draws';
+            drawsWrap.id = 'cfg_draws_' + root.id;
+            root.drawings.forEach(function (draw, didx) {
+                drawsWrap.appendChild(buildDrawing(root, draw, didx, onChange, onValueChange));
+            });
+            content.appendChild(drawsWrap);
+
+            var drawFoot = document.createElement('div');
+            drawFoot.className = 'pt-cfg-tree-foot';
+            var addDrawBtn = document.createElement('button');
+            addDrawBtn.type = 'button';
+            addDrawBtn.className = 'pt-cfg-btn';
+            addDrawBtn.innerHTML = '<i class="fa-solid fa-pen-ruler"></i> Add Drawing';
+            addDrawBtn.addEventListener('click', function () {
+                root.drawings.push(createDrawing());
+                root.expanded = true;
+                onChange();
+            });
+            drawFoot.appendChild(addDrawBtn);
+            content.appendChild(drawFoot);
+            wrap.appendChild(content);
+            return wrap;
+        }
+
+        function buildDrawing(root, draw, drawIndex, onChange, onValueChange) {
+            var wrap = document.createElement('div');
+            wrap.className = 'pt-cfg-draw';
+            var head = document.createElement('div');
+            head.className = 'pt-cfg-draw-head';
+            var tag = document.createElement('div');
+            tag.className = 'pt-cfg-draw-tag';
+            tag.textContent = 'Drawing ' + (drawIndex + 1);
+            head.appendChild(tag);
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'pt-cfg-draw-remove';
+            rm.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            rm.addEventListener('click', function () {
+                var idx = root.drawings.indexOf(draw);
+                if (idx >= 0) root.drawings.splice(idx, 1);
+                onChange();
+            });
+            head.appendChild(rm);
+            wrap.appendChild(head);
+
+            var grid = document.createElement('div');
+            grid.className = 'pt-cfg-row-grid';
+
+            function parseTarget(value) {
+                var p = String(value || '').split('|');
+                return p.length >= 3 ? {treeId: p[0], kind: p[1], id: p[2]} : null;
+            }
+
+            /*
+             * Cross-tree drawing is enabled by design: both endpoint selectors
+             * enumerate every configured candle in every tree in this root.
+             * The tree is encoded in each option value (treeId|kind|candleId),
+             * so identically named candles in different trees remain distinct.
+             */
+            function targetOptions(includeIntercept) {
+                var list = [{value: '', label: '— select candle —'}];
+                root.trees.forEach(function (tree, index) {
+                    ['main', 'reference', 'offset'].forEach(function (kind) {
+                        var candle = tree[kind];
+                        // A new offset is represented by the reference model.
+                        if (!candle && kind === 'offset' &&
+                            tree.reference &&
+                            tree.reference.referenceMode === 'new_offset') {
+                            candle = tree.reference;
+                        }
+                        if (!candle || !candle.name) return;
+                        if (kind === 'offset' && tree.reference &&
+                            tree.reference.referenceMode !== 'new_offset' &&
+                            !tree.offset) return;
+
+                        var canonicalId;
+                        if (kind === 'main') {
+                            canonicalId = candle.selectedExistingId || candle.offsetTo || candle.id;
+                        } else if (kind === 'reference') {
+                            canonicalId = (candle.referenceMode !== 'new_offset' &&
+                                (candle.selectedExistingId || candle.existingCandleId))
+                                ? (candle.selectedExistingId || candle.existingCandleId) : candle.id;
+                        } else {
+                            canonicalId = (candle.referenceMode === 'new_offset')
+                                ? candle.id
+                                : (candle.selectedExistingId || candle.existingCandleId || candle.id);
+                        }
+                        var identity = String(tree.id) + '|' + kind + '|' + String(canonicalId);
+                        var kindLabel = kind === 'reference' ? 'reference' : kind;
+                        list.push({
+                            value: identity,
+                            label: candle.name + ' (Tree ' + tree.id + ' · ' + kindLabel + ')'
+                        });
+                    });
+                });
+                if (includeIntercept) {
+                    list.push({value: 'any_intercept_candle', label: 'any_intercept_candle'});
+                }
+                return list;
+            }
+
+            var fromOptions = targetOptions(false);
+            function normalizeSavedTarget(value, options) {
+                value = String(value || '');
+                if (options.some(function (option) { return option.value === value; })) return value;
+                var parts = value.split('|');
+                if (parts.length < 3) return value;
+                var tree = root.trees.find(function (item) { return String(item.id) === String(parts[0]); });
+                if (!tree) return value;
+                var kind = parts[1];
+                var candle = kind === 'main' ? tree.main :
+                    (kind === 'reference' ? tree.reference :
+                    ((tree.offset || (tree.reference && tree.reference.referenceMode === 'new_offset')) ? (tree.offset || tree.reference) : null));
+                if (!candle || String(candle.id) !== String(parts[2])) return value;
+                var normalized = options.find(function (option) {
+                    var optionParts = String(option.value || '').split('|');
+                    return optionParts.length >= 3 &&
+                        String(optionParts[0]) === String(parts[0]) &&
+                        String(optionParts[1]) === String(parts[1]);
+                });
+                return normalized ? normalized.value : value;
+            }
+            draw.drawFrom = normalizeSavedTarget(draw.drawFrom, fromOptions);
+            draw.drawTo = normalizeSavedTarget(draw.drawTo, targetOptions(true));
+            var dFromSel = mkSelect(
+                'cfg_drawfrom_' + draw.id,
+                fromOptions,
+                draw.drawFrom || '',
+                false,
+                function () {
+                    draw.drawFrom = dFromSel.value;
+                    var target = parseTarget(draw.drawFrom);
+                    if (target) draw.drawTreeId = String(target.treeId);
+                    onValueChange();
+                }
+            );
+            grid.appendChild(mkField('Draw from candle', dFromSel));
+
+            var dFromPlSel = mkSelect(
+                'cfg_drawfrompl_' + draw.id,
+                PRICE_LEVELS,
+                draw.drawFromPriceLevel || 'high',
+                false,
+                function () {
+                    draw.drawFromPriceLevel = dFromPlSel.value;
+                    onValueChange();
+                }
+            );
+            grid.appendChild(mkField('Draw from price level', dFromPlSel));
+
+            var dToSel = mkSelect(
+                'cfg_drawto_' + draw.id,
+                targetOptions(true),
+                draw.drawTo || '',
+                false,
+                function () {
+                    draw.drawTo = dToSel.value;
+                    onValueChange();
+                }
+            );
+            grid.appendChild(mkField('Draw to candle', dToSel));
+
+            if (draw.drawTo !== 'any_intercept_candle') {
+                var dToPlSel = mkSelect(
+                    'cfg_drawtopl_' + draw.id,
+                    [{value: 'axis', label: 'axis'}].concat(
+                        PRICE_LEVELS.map(function (v) { return {value: v, label: v}; })
+                    ),
+                    draw.drawToPriceLevel || 'high',
+                    false,
+                    function () {
+                        draw.drawToPriceLevel = dToPlSel.value;
+                        onValueChange();
+                    }
+                );
+                grid.appendChild(mkField('Draw to price level', dToPlSel));
+            }
+
+            var drawingColorSel = mkSelect(
+                'cfg_drawing_color_' + draw.id,
+                COLOR_OPTIONS,
+                draw.drawingColor || 'blue',
+                false,
+                function () {
+                    draw.drawingColor = drawingColorSel.value;
+                    onValueChange();
+                }
+            );
+            grid.appendChild(mkField('Drawing color', drawingColorSel));
+            wrap.appendChild(grid);
+            return wrap;
+        }
+
+        // ---------- model factories ----------
+        function createTree(root) {
+            var treeId = PT_CFG.nextTreeId++;
+            var isFirst = root.trees.length === 0;
+
+            // Candle IDs must be globally unique across main, reference, and offset rows.
+            // Dropdowns store the ID, so separate counters can accidentally select the wrong candle.
+            var mainId = PT_CFG.nextCandleId++;
+            var refId  = PT_CFG.nextCandleId++;
+
+            return {
+                id: treeId,
+                main: {
+                    id: mainId,
+                    name: '',
+                    candleText: '',
+                    textPosition: 'high',
+                    textColor: 'purple',
+                    mainCandleType: DEFAULT_CANDLE_TYPE,
+                    offsetCandle: '',
+                    position: isFirst ? 'all' : 'left',
+                    offsetTo: null,
+                    offsetToName: '',
+                    offsetToKind: '',
+                    offsetPosition: null,
+                    offsetPosPoint: 'all',
+                    priceLevel: 'high',
+                    operator: '<'
+                },
+                reference: {
+                    id: refId,
+                    name: '',
+                    candleText: '',
+                    textPosition: 'high',
+                    textColor: 'purple',
+                    refCandleType: DEFAULT_CANDLE_TYPE,
+                    position: 'left',
+                    offsetPosition: 1,
+                    offsetPosPoint: 'all',
+                    priceLevel: 'high'
+                },
+                offset: null
+            };
+        }
+
+        function createDrawing() {
+            return {
+                id: PT_CFG.nextOffsetId++,
+                drawTreeId: '',
+                drawFrom: '',
+                drawFromPriceLevel: 'high',
+                drawTo: '',
+                drawToPriceLevel: 'high',
+                drawingColor: 'blue'
+            };
+        }
+
+        function createRoot() {
+            var id = PT_CFG.nextRootId++;
+            var root = {
+                id: id,
+                name: '',
+                timeframe: '',
+                timeframes: [],
+                useForTrades: false,
+                expanded: true,
+                entryFrom: '',
+                orderType: 'buy',
+                entryTriggerAfter: '',
+                entryPriceLevel: 'high',
+                stoplossFrom: '',
+                stoplossPriceLevel: 'high',
+                takeProfitFrom: '',
+                takeProfitType: 'risk_reward',
+                takeProfitPriceLevel: 'high',
+                runInPython: false,
+                trees: [],
+                drawings: []
+            };
+            root.trees.push(createTree(root));
+            return root;
+        }
+
+        // ---------- serialization ----------
+        function serializeForSave() {
+            var rootsOut = [];
+            PT_CFG.roots.forEach(function (root) {
+                var rootOut = {
+                    id: root.id,
+                    root_name: root.name || '',
+                    timeframes: Array.isArray(root.timeframes) ? root.timeframes : [],
+                    timeframe: Array.isArray(root.timeframes) ? JSON.stringify(root.timeframes) : '',
+                    use_for_trades: root.useForTrades ? 1 : 0,
+                    run_in_python: root.runInPython ? 1 : 0,
+                    entry_at: root.entryFrom || '',
+                    order_type: root.orderType || 'buy',
+                    entry_order_type: root.orderType || 'buy',
+                    entry_trigger_after: root.entryTriggerAfter || '',
+                    entry_price_level: root.entryPriceLevel || '',
+                    stoploss_at: root.stoplossFrom || '',
+                    stoploss_price_level: root.stoplossPriceLevel || '',
+                    take_profit_at: root.takeProfitFrom || '',
+                    take_profit_type: root.takeProfitType || 'risk_reward',
+                    take_profit_price_level:
+                        root.takeProfitType === 'risk_reward'
+                            ? null
+                            : (root.takeProfitPriceLevel || ''),
+                    trees: [],
+                    drawings: []
+                };
+
+                root.trees.forEach(function (tree, treeIndex) {
+                    // Never serialize an unfinished tree or its placeholder rows.
+                    if (!treeIsConfigured(root, tree, treeIndex)) return;
+                    var mainRow = tree.main;
+                    var refRow  = tree.reference;
+
+                    rootOut.trees.push({
+                        tree_id: tree.id,
+                        main: {
+                            id: mainRow.id,
+                            main_id: (mainRow.selectedExistingId || mainRow.id),
+                            main_candle_name: mainRow.name || '',
+                            candle_text: mainRow.candleText || '',
+                            text_position: mainRow.textPosition || 'high',
+                            text_color: mainRow.textColor || 'purple',
+                            main_candle_type: normalizeCandleType(mainRow.mainCandleType),
+                            offset_candle: mainRow.offsetTo != null
+                                ? normalizeCandleType(mainRow.offsetCandle || (function () {
+                                    var target = findCandleById(mainRow.offsetTo);
+                                    return target ? (target.row.mainCandleType || target.row.refCandleType || target.row.offsetCandle) : DEFAULT_CANDLE_TYPE;
+                                })())
+                                : null,
+                            position: mainRow.position || 'all',
+                            offset_to: mainRow.offsetTo != null ? mainRow.offsetTo : null,
+                            offset_to_name: mainRow.offsetToName || '',
+                            offset_position:
+                                mainRow.offsetPosition != null ? mainRow.offsetPosition : null,
+                            offset_pos_point: mainRow.offsetPosPoint || 'all',
+                            price_level: mainRow.priceLevel || 'high',
+                            operator: mainRow.operator || '<'
+                        },
+                        reference: {
+                            // Persist the selected mode so PHP can distinguish an existing
+                            // reference candle from a newly-created offset candle. Without
+                            // this field, PHP defaults to 'existing' and discards offset text.
+                            referenceMode: refRow.referenceMode || 'existing',
+                            id: (refRow.referenceMode === 'existing' && refRow.selectedExistingId) ? refRow.selectedExistingId : refRow.id,
+                            reference_id: (refRow.referenceMode === 'existing' && refRow.selectedExistingId) ? refRow.selectedExistingId : refRow.id,
+                            reference_candle_name: refRow.name || '',
+                            candle_text: (root.trees.indexOf(tree) === 0 || refRow.referenceMode === 'new_offset')
+                                ? ((refRow.candleText || (tree.offset && tree.offset.candleText) || '') + '')
+                                : '',
+                            text_position: refRow.textPosition || (tree.offset && tree.offset.textPosition) || 'high',
+                            text_color: refRow.textColor || (tree.offset && tree.offset.textColor) || 'purple',
+                            ref_candle_type: normalizeCandleType(refRow.refCandleType),
+                            position: refRow.position || 'left',
+                            offset_to: (refRow.referenceMode === 'new_offset') ? (mainRow.selectedExistingId || mainRow.id) : null,
+                            offset_to_name: (refRow.referenceMode === 'new_offset') ? (mainRow.name || '') : '',
+                            offset_position:
+                                refRow.offsetPosition != null ? refRow.offsetPosition : 1,
+                            offset_pos_point: refRow.offsetPosPoint || 'all',
+                            price_level: refRow.priceLevel || 'high'
+                        }
+                    });
+                });
+
+                root.drawings.forEach(function (draw) {
+                    rootOut.drawings.push({
+                        id: draw.id,
+                        tree_id: parseInt(draw.drawTreeId || (String(draw.drawFrom || '').split('|')[0]) || (root.trees[0] && root.trees[0].id) || 1, 10),
+                        draw_from: draw.drawFrom || '',
+                        draw_from_price_level: draw.drawFromPriceLevel || '',
+                        draw_to: draw.drawTo || '',
+                        draw_to_price_level:
+                            (draw.drawTo === 'any_intercept_candle')
+                                ? null
+                                : (draw.drawToPriceLevel || ''),
+                        drawing_color: draw.drawingColor || 'blue'
+                    });
+                });
+
+                rootsOut.push(rootOut);
+            });
+
+            var treeCount = 0, rowCount = 0;
+            PT_CFG.roots.forEach(function (r) {
+                treeCount += r.trees.length;
+                rowCount  += r.trees.length * 2;
+            });
+
+            return {
+                programme_id: PT_PROGRAMME_ID,
+                user_id: PT_USER_ID,
+                roots: rootsOut,
+                meta: {
+                    root_count: PT_CFG.roots.length,
+                    tree_count: treeCount,
+                    row_count:  rowCount
+                }
+            };
+        }
+
+        // ---------- footer status ----------
+        function setFootStatus(text, kind) {
+            var el2 = el('ptCfgFootStatus');
+            if (!el2) return;
+            el2.textContent = text || '';
+            el2.classList.remove('is-ok', 'is-error');
+            if (kind === 'ok')    el2.classList.add('is-ok');
+            if (kind === 'error') el2.classList.add('is-error');
+        }
+
+        function updateFootStatus() {
+            updateTreeAddButtons();
+            var btn = el('ptCfgSaveBtn');
+            if (!PT_CFG.roots.length) {
+                if (btn) btn.disabled = true;
+                setFootStatus('Nothing to save yet.');
+                return;
+            }
+            if (btn) btn.disabled = false;
+
+            var trees = 0, rows = 0;
+            PT_CFG.roots.forEach(function (r) {
+                trees += r.trees.length;
+                rows  += r.trees.length * 2;
+            });
+            setFootStatus(
+                PT_CFG.roots.length + ' root(s) · ' +
+                trees + ' tree(s) · ' +
+                rows + ' row(s) ready to save.'
+            );
+        }
+
+        // ---------- save ----------
+        window.ptCfgSave = function () {
+            if (!PT_CFG.roots.length) {
+                setFootStatus('Add at least one root before saving.', 'error');
+                return;
+            }
+
+            var btn = el('ptCfgSaveBtn');
+            if (btn) { btn.disabled = true; }
+
+            var missingRoot = PT_CFG.roots.find(function (r) {
+                return !Array.isArray(r.timeframes) ||
+                    !r.timeframes.some(function (tf) { return String(tf || '').trim() !== ''; });
+            });
+            if (missingRoot) {
+                if (btn) btn.disabled = false;
+                setFootStatus('Root ' + missingRoot.id + ': select at least one timeframe before saving.', 'error');
+                var rootCards = document.querySelectorAll('.pt-cfg-root');
+                rootCards.forEach(function (card) {
+                    if (String(card.getAttribute('data-root-id')) === String(missingRoot.id)) {
+                        card.classList.add('pt-root-validation-error');
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else card.classList.remove('pt-root-validation-error');
+                });
+                return;
+            }
+
+            // Drop incomplete tree wrappers before saving. Configured trees alone remain in the payload.
+            PT_CFG.roots.forEach(function (root) {
+                root.trees = root.trees.filter(function (tree, index) {
+                    return treeIsConfigured(root, tree, index);
+                });
+            });
+            render();
+            var payload = serializeForSave();
+
+            setFootStatus('Saving configuration…');
+
+            var body = 'save_configuration=1'
+                     + '&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
+                     + '&payload='      + encodeURIComponent(JSON.stringify(payload));
+
+            fetch('programme_training.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: body
+            })
+            .then(function (r) {
+                return r.text().then(function (text) {
+                    var data;
+                    try { data = JSON.parse(text); }
+                    catch (parseError) {
+                        throw new Error('Server returned a non-JSON response (HTTP ' + r.status + '). Check the PHP error log.');
+                    }
+                    if (!r.ok && (!data || !data.message)) {
+                        throw new Error('Save request failed with HTTP ' + r.status + '.');
+                    }
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (btn) btn.disabled = false;
+                if (data && data.success) {
+                    setFootStatus(
+                        'Saved: ' + data.meta.root_count + ' root(s), ' +
+                        data.meta.tree_count + ' tree(s), ' +
+                        data.meta.row_count + ' row(s).',
+                        'ok'
+                    );
+                    setTimeout(function () {
+                        window.ptCloseConfigModal();
+                    }, 700);
+                } else {
+                    setFootStatus(
+                        (data && data.message) || 'Save failed. Please try again.',
+                        'error'
+                    );
+                }
+            })
+            .catch(function (error) {
+                if (btn) btn.disabled = false;
+                setFootStatus((error && error.message) || 'Network error while saving configuration.', 'error');
+            });
+        };
+
+        // ---------- render ----------
+        // Structural render: wipes and rebuilds the whole config DOM.
+        // Only call this when elements genuinely need to be added/removed.
+        function render() {
+            var host = el('ptCfgRoots');
+            var empty = el('ptCfgEmpty');
+            var hint  = el('ptCfgHint');
+            if (!host) return;
+
+            host.innerHTML = '';
+
+            if (!PT_CFG.roots.length) {
+                if (empty) empty.style.display = 'block';
+                if (hint) hint.textContent = 'No roots configured yet.';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+
+            var onChange      = function () { render(); };
+            var onValueChange = function () { updateFootStatus(); };
+
+            PT_CFG.roots.forEach(function (root) {
+                host.appendChild(buildRoot(root, onChange, onValueChange));
+            });
+
+            if (hint) {
+                var trees = 0;
+                PT_CFG.roots.forEach(function (r) { trees += r.trees.length; });
+                hint.textContent = PT_CFG.roots.length + ' root(s) · ' + trees + ' tree(s)';
+            }
+        }
+
+        // ---------- restore saved database rows into the modal's editable UI ----------
+        var PT_CFG_LOAD_PROMISE = null;
+        var PT_CFG_LOADED = false;
+
+        function ptDbBool(value) {
+            return value === true || value === 1 || value === '1';
+        }
+
+        function ptParseSavedTimeframes(value) {
+            var raw = String(value || '').trim();
+            if (!raw) return [];
+            try {
+                var parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+            } catch (e) {}
+            return raw.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        }
+
+        function ptRestoreSavedRows(rows) {
+            PT_CFG.roots = [];
+            PT_CFG.nextRootId = 1;
+            PT_CFG.nextTreeId = 1;
+            PT_CFG.nextCandleId = 1;
+            PT_CFG.nextOffsetId = 1;
+
+            var rootMap = {};
+            var treeMap = {};
+            (Array.isArray(rows) ? rows : []).forEach(function (row) {
+                var rid = parseInt(row.root_id, 10) || 1;
+                var tid = parseInt(row.tree_id, 10) || 1;
+
+                if (!rootMap[rid]) {
+                    var tfs = ptParseSavedTimeframes(row.timeframe);
+                    var root = {
+                        id: rid, name: row.root_name || '', timeframe: tfs.join(','), timeframes: tfs,
+                        expanded: false,
+                        useForTrades: ptDbBool(row.use_for_trade),
+                        entryFrom: row.entry_at || row.entry_from || '',
+                        orderType: row.order_type || row.entry_order_type || 'buy',
+                        entryTriggerAfter: row.entry_trigger_after || '',
+                        entryPriceLevel: row.entry_price_level || 'high',
+                        stoplossFrom: row.stoploss_at || row.stoploss_from || '',
+                        stoplossPriceLevel: row.stoploss_price_level || 'high',
+                        takeProfitFrom: row.take_profit_at || row.take_profit_from || '',
+                        takeProfitType: (String(row.take_profit_type || '').toLowerCase().replace(/\s+/g, '_') === 'price_levels') ? 'price_levels' : 'risk_reward',
+                        takeProfitPriceLevel: row.take_profit_price_level || 'high',
+                        runInPython: ptDbBool(row.run_in_python),
+                        trees: [], drawings: []
+                    };
+                    rootMap[rid] = root;
+                    PT_CFG.roots.push(root);
+                    PT_CFG.nextRootId = Math.max(PT_CFG.nextRootId, rid + 1);
+                }
+                var currentRoot = rootMap[rid];
+
+                // Drawing rows are stored alongside candle rows in the same table.
+                if (row.draw_from || row.draw_to) {
+                    currentRoot.drawings.push({
+                        id: PT_CFG.nextOffsetId++,
+                        drawTreeId: String(row.tree_id || (String(row.draw_from || '').split('|')[0]) || ''),
+                        drawFrom: row.draw_from || '',
+                        drawFromPriceLevel: row.draw_from_price_level || 'high',
+                        drawTo: row.draw_to || '',
+                        drawToPriceLevel: row.draw_to_price_level || 'high',
+                        drawingColor: row.drawing_color || 'blue'
+                    });
+                    return;
+                }
+
+                var key = rid + ':' + tid;
+                if (!treeMap[key]) {
+                    var mainId = parseInt(row.main_id, 10) || PT_CFG.nextCandleId++;
+                    var refId = parseInt(row.reference_id, 10) || PT_CFG.nextCandleId++;
+                    var tree = {
+                        id: tid,
+                        main: {
+                            id: mainId,
+                            name: row.main_candle_name || '',
+                            candleText: row.candle_text || '',
+                            textPosition: row.text_position || 'high',
+                            textColor: row.text_color || 'purple',
+                            mainCandleType: row.main_candle_type || DEFAULT_CANDLE_TYPE,
+                            offsetCandle: row.offset_candle || '',
+                            position: row.position || (currentRoot.trees.length ? 'left' : 'all'),
+                            offsetTo: row.offset_to || null,
+                            offsetToName: row.offset_candle_name || '',
+                            offsetToKind: '',
+                            offsetPosition: row.offset_position != null ? parseInt(row.offset_position, 10) : null,
+                            offsetPosPoint: row.offset_position_point || 'all',
+                            priceLevel: row.price_level || 'high',
+                            operator: row.operator || '<',
+                            selectedExistingId: null
+                        },
+                        reference: {
+                            id: refId,
+                            name: row.reference_candle_name || '',
+                            // Do not initialize reference/offset text from a main-row text.
+                            // The reference row below owns its own annotation text.
+                            candleText: '',
+                            textPosition: row.text_position || 'high',
+                            textColor: row.text_color || 'purple',
+                            refCandleType: row.ref_candle_type || DEFAULT_CANDLE_TYPE,
+                            position: row.position === 'right' ? 'right' : 'left',
+                            offsetPosition: row.offset_position != null ? parseInt(row.offset_position, 10) : 1,
+                            offsetPosPoint: row.offset_position_point || 'all',
+                            priceLevel: row.price_level || 'high',
+                            referenceMode: 'existing',
+                            selectedExistingId: row.reference_id ? parseInt(row.reference_id, 10) : null,
+                            existingCandleId: row.reference_id ? parseInt(row.reference_id, 10) : null
+                        },
+                        offset: null
+                    };
+                    treeMap[key] = tree;
+                    currentRoot.trees.push(tree);
+                    PT_CFG.nextTreeId = Math.max(PT_CFG.nextTreeId, tid + 1);
+                    PT_CFG.nextCandleId = Math.max(PT_CFG.nextCandleId, mainId + 1, refId + 1);
+                }
+
+                var savedTree = treeMap[key];
+                // A main row has a NULL reference_id; a reference row has a populated reference_id.
+                if (row.reference_id !== null && row.reference_id !== '' && row.reference_candle_name) {
+                    savedTree.reference.id = parseInt(row.reference_id, 10) || savedTree.reference.id;
+                    savedTree.reference.name = row.reference_candle_name || '';
+                    savedTree.reference.refCandleType = row.ref_candle_type || DEFAULT_CANDLE_TYPE;
+                    var savedIsNewOffset = !!row.offset_candle && !!row.offset_to;
+                    savedTree.reference.referenceMode = savedIsNewOffset ? 'new_offset' : 'existing';
+                    savedTree.reference.selectedExistingId = savedIsNewOffset ? null : (parseInt(row.reference_id, 10) || null);
+                    savedTree.reference.existingCandleId = savedTree.reference.selectedExistingId;
+                    savedTree.reference.position = row.position === 'right' ? 'right' : 'left';
+                    savedTree.reference.offsetPosition = row.offset_position != null ? parseInt(row.offset_position, 10) : 1;
+                    savedTree.reference.offsetPosPoint = row.offset_position_point || 'all';
+                    savedTree.reference.priceLevel = row.price_level || 'high';
+                    // Some older saves contain an empty duplicate row after a populated
+                    // offset-text row. Never erase a non-empty saved offset annotation
+                    // just because a later row has candle_text = NULL/empty.
+                    if (row.candle_text !== null && row.candle_text !== undefined &&
+                        String(row.candle_text).trim() !== '') {
+                        savedTree.reference.candleText = String(row.candle_text);
+                    }
+                    savedTree.reference.textPosition = row.text_position || savedTree.reference.textPosition || 'high';
+                    savedTree.reference.textColor = row.text_color || savedTree.reference.textColor || 'purple';
+
+                    // Keep the persisted anchor relationship even when older rows
+                    // failed to persist offset_candle. A drawing endpoint may prove
+                    // that this reference row is also the tree's offset candle.
+                    if (row.offset_to !== null && row.offset_to !== '') {
+                        savedTree.reference.offsetTo = parseInt(row.offset_to, 10) || savedTree.main.id;
+                        savedTree.reference.offsetToName = row.offset_candle_name || savedTree.main.name || '';
+                    }
+
+                    if (savedIsNewOffset) {
+                        savedTree.reference.offsetTo = parseInt(row.offset_to, 10) || savedTree.main.id;
+                        savedTree.reference.offsetToName = row.offset_candle_name || savedTree.main.name || '';
+                        savedTree.offset = savedTree.reference;
+                    }
+                } else {
+                    savedTree.main.id = parseInt(row.main_id, 10) || savedTree.main.id;
+                    savedTree.main.name = row.main_candle_name || '';
+                    savedTree.main.candleText = row.candle_text || savedTree.main.candleText || '';
+                    savedTree.main.textPosition = row.text_position || savedTree.main.textPosition || 'high';
+                    savedTree.main.textColor = row.text_color || savedTree.main.textColor || 'purple';
+                    savedTree.main.mainCandleType = row.main_candle_type || DEFAULT_CANDLE_TYPE;
+                    savedTree.main.offsetTo = row.offset_to || null;
+                    savedTree.main.selectedExistingId = row.offset_to ? parseInt(row.offset_to, 10) : null;
+                    savedTree.main.offsetToName = row.offset_candle_name || '';
+                    savedTree.main.offsetCandle = row.offset_candle || '';
+                    savedTree.main.position = row.position || 'all';
+                    savedTree.main.offsetPosition = row.offset_position != null ? parseInt(row.offset_position, 10) : null;
+                    savedTree.main.offsetPosPoint = row.offset_position_point || 'all';
+                    savedTree.main.priceLevel = row.price_level || 'high';
+                    savedTree.main.operator = row.operator || '<';
+                }
+            });
+
+            // Backward-compatible repair during restoration (no database write):
+            // older rows can have offset_candle = NULL even though a saved drawing
+            // explicitly points to "treeId|offset|candleId". In that case the
+            // offset is the same candle as the tree's reference row. Restore the
+            // new-offset UI mode and its alias so its fields and drawing target
+            // appear in the correct tree when the modal is reopened.
+            PT_CFG.roots.forEach(function (root) {
+                var treesById = Object.create(null);
+                root.trees.forEach(function (tree) {
+                    treesById[String(tree.id)] = tree;
+                });
+
+                function restoreOffsetEndpoint(value) {
+                    var parts = String(value || '').split('|');
+                    if (parts.length < 3 || parts[1] !== 'offset') return;
+
+                    var tree = treesById[String(parts[0])];
+                    if (!tree || !tree.reference) return;
+                    if (String(tree.reference.id) !== String(parts[2])) return;
+
+                    tree.reference.referenceMode = 'new_offset';
+                    tree.reference.selectedExistingId = null;
+                    tree.reference.existingCandleId = null;
+                    tree.reference.offsetTo = tree.reference.offsetTo ||
+                        tree.main.selectedExistingId || tree.main.id;
+                    tree.reference.offsetToName = tree.reference.offsetToName ||
+                        tree.main.name || '';
+                    // The offset and reference are the same configured candle identity.
+                    // Keep the saved text/position on that identity when rebuilding the UI.
+                    if (typeof tree.reference.candleText !== 'string') tree.reference.candleText = '';
+                    tree.reference.textPosition = tree.reference.textPosition || 'high';
+                    tree.offset = tree.reference;
+                }
+
+                root.drawings.forEach(function (drawing) {
+                    restoreOffsetEndpoint(drawing.drawFrom);
+                    restoreOffsetEndpoint(drawing.drawTo);
+                });
+
+                // Ensure the private ID allocator never reuses a positive ID
+                // restored from the database, including IDs on offset aliases.
+                root.trees.forEach(function (tree) {
+                    ['main', 'reference', 'offset'].forEach(function (kind) {
+                        var candle = tree[kind];
+                        if (candle && Number(candle.id) > 0) {
+                            PT_CFG.nextCandleId = Math.max(PT_CFG.nextCandleId, Number(candle.id) + 1);
+                        }
+                    });
+                });
+            });
+
+            PT_CFG.roots.sort(function (a, b) { return a.id - b.id; });
+            PT_CFG.roots.forEach(function (root) {
+                root.trees.sort(function (a, b) { return a.id - b.id; });
+                if (!root.trees.length) root.trees.push(createTree(root));
+            });
+            PT_CFG_LOADED = true;
+        }
+
+        function ptLoadSavedConfiguration(forceReload) {
+            if (PT_CFG_LOAD_PROMISE && !forceReload) return PT_CFG_LOAD_PROMISE;
+            PT_CFG_LOAD_PROMISE = fetch('programme_training.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: 'load_configuration=1&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
+            }).then(function (response) {
+                return response.text().then(function (raw) {
+                    var data;
+                    try { data = JSON.parse(raw); }
+                    catch (e) { throw new Error('Could not read saved configuration from the server.'); }
+                    if (!response.ok || !data.success) throw new Error(data.message || 'Could not load saved configuration.');
+                    ptRestoreSavedRows(data.rows || []);
+                    return data.rows || [];
+                });
+            }).catch(function (error) {
+                PT_CFG_LOAD_PROMISE = null;
+                setFootStatus((error && error.message) || 'Could not load saved configuration.', 'error');
+                throw error;
+            });
+            return PT_CFG_LOAD_PROMISE;
+        }
+
+        // Expose read-only configuration access for the virtual candle matcher.
+        window.ptGetTrainingConfiguration = function () { return PT_CFG; };
+
+        // ---------- public API ----------
+        window.ptOpenConfigModal = function () {
+            var m = el('ptConfigModal');
+            if (!m) return;
+            m.classList.add('active');
+            setFootStatus('Loading saved configuration…');
+            ptLoadSavedConfiguration(true).then(function () {
+                render();
+                updateFootStatus();
+                if (!PT_CFG.roots.length) setFootStatus('No saved configuration yet. Add a root to begin.');
+                else setFootStatus('Loaded saved configuration: ' + PT_CFG.roots.length + ' root(s).', 'ok');
+            }).catch(function () {
+                render();
+                updateFootStatus();
+            });
+        };
+        window.ptCloseConfigModal = function () {
+            var m = el('ptConfigModal');
+            if (m) m.classList.remove('active');
+            setFootStatus('');
+        };
+        window.ptCfgAddRoot = function () {
+            PT_CFG.roots.push(createRoot());
+            render();
+            updateFootStatus();
+        };
+
+        // Keep the footer status in sync whenever render() runs.
+        var _origRender = render;
+        render = function () {
+            _origRender();
+            updateFootStatus();
+        };
+
+        // Click outside closes
+        document.addEventListener('DOMContentLoaded', function () {
+            var m = el('ptConfigModal');
+            if (m) {
+                m.addEventListener('mousedown', function (e) {
+                    if (e.target === m) window.ptCloseConfigModal();
+                });
+            }
+
+            var deleteModal = el('ptRootDeleteModal');
+            var cancelDelete = el('ptRootDeleteCancel');
+            var confirmDelete = el('ptRootDeleteConfirm');
+            if (cancelDelete) cancelDelete.addEventListener('click', closeRootDeleteConfirmation);
+            if (confirmDelete) confirmDelete.addEventListener('click', confirmRootDelete);
+            if (deleteModal) {
+                deleteModal.addEventListener('mousedown', function (e) {
+                    if (e.target === deleteModal) closeRootDeleteConfirmation();
+                });
+            }
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && deleteModal && deleteModal.classList.contains('active')) {
+                    closeRootDeleteConfirmation();
+                }
+            });
+
+            render();
+            updateFootStatus();
+
+            // Load saved roots/trees on page start and re-evaluate the current chart.
+            ptLoadSavedConfiguration(false).then(function () {
+                try { ptScheduleDraw(); } catch (_) {}
+            }).catch(function () {});
+        });
+    })();
+
+    // ==================== DYNAMIC CONSOLE / DIAGNOSTICS ====================
+    function ptDynamicConsoleBuildReport() {
+        var cfg = (typeof window.ptGetTrainingConfiguration === 'function')
+            ? window.ptGetTrainingConfiguration() : null;
+        cfg = cfg && typeof cfg === 'object' ? cfg : {roots:[]};
+        var candles = Array.isArray(PT_CANDLES) ? PT_CANDLES : [];
+        var currentTf = String(PT_CURRENT_TIMEFRAME || '');
+        var currentSymbol = String(PT_CURRENT_SYMBOL || '');
+        var roots = Array.isArray(cfg.roots) ? cfg.roots : [];
+        var snapshot = null;
+        try {
+            var stored = window.ptGetVirtualCandleJson ? window.ptGetVirtualCandleJson() : '[]';
+            snapshot = JSON.parse(stored || 'null');
+        } catch (e) {
+            snapshot = {parseError: String(e)};
+        }
+        var selectedRoots = [];
+        var unselectedRoots = [];
+        roots.forEach(function(root) {
+            var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
+            var item = {
+                rootId: root.id,
+                selectedTimeframes: tfs,
+                timeframeSelected: tfs.indexOf(currentTf.toLowerCase()) !== -1,
+                treeCount: Array.isArray(root.trees) ? root.trees.length : 0,
+                drawingCount: Array.isArray(root.drawings) ? root.drawings.length : 0
+            };
+            (item.timeframeSelected ? selectedRoots : unselectedRoots).push(item);
+        });
+
+        var snapshotCandles = snapshot && Array.isArray(snapshot.candles) ? snapshot.candles : [];
+        var byId = {};
+        snapshotCandles.forEach(function(c) { byId[String(c.id)] = c; });
+        var candleReport = {};
+        candles.forEach(function(c, index) {
+            var virtual = byId[String(c.id)] || null;
+            var rootsForCandle = [];
+            roots.forEach(function(root) {
+                var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
+                var selected = tfs.indexOf(currentTf.toLowerCase()) !== -1;
+                var matched = virtual && Array.isArray(virtual._conditionsMet)
+                    ? virtual._conditionsMet.filter(function(m) { return String(m.rootId) === String(root.id); }) : [];
+                rootsForCandle.push({
+                    rootId: root.id,
+                    status: selected ? (matched.length ? 'TIMEFRAME SELECTED IN ROOT — CONDITION MATCHED' : 'TIMEFRAME SELECTED IN ROOT — NO CONDITION MATCH') : 'THIS TIMEFRAME IS NOT SELECTED IN ROOT',
+                    selectedTimeframes: tfs,
+                    matchedConditions: matched
+                });
+            });
+            candleReport['candle ' + (index + 1)] = {
+                databaseId: c.id,
+                time: c.time,
+                symbol: currentSymbol,
+                timeframe: currentTf,
+                open: c.open, high: c.high, low: c.low, close: c.close,
+                candle_center: c.candle_center,
+                body_center: c.body_center,
+                high_wick_center: c.high_wick_center,
+                low_wick_center: c.low_wick_center,
+                volume: c.volume,
+                programmeTraining: {
+                    rootChecks: rootsForCandle,
+                    matchedRootIds: virtual ? (virtual._matchRootIds || []) : [],
+                    matchedTreeIds: virtual ? (virtual._matchTreeIds || []) : [],
+                    conditionsMet: virtual ? (virtual._conditionsMet || []) : [],
+                    note: virtual ? 'Candle processed by the virtual matcher.' : 'No virtual snapshot entry found for this candle yet.'
+                }
+            };
+        });
+
+        var allDrawings = [];
+        roots.forEach(function(root) {
+            var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
+            (Array.isArray(root.drawings) ? root.drawings : []).forEach(function(drawing, i) {
+                allDrawings.push({
+                    rootId: root.id,
+                    drawingNumber: i + 1,
+                    timeframeSelected: tfs.indexOf(currentTf.toLowerCase()) !== -1,
+                    selectedTimeframes: tfs,
+                    drawFrom: drawing.drawFrom || '',
+                    drawFromPriceLevel: drawing.drawFromPriceLevel || '',
+                    drawTo: drawing.drawTo || '',
+                    drawToPriceLevel: drawing.drawToPriceLevel || '',
+                    status: tfs.indexOf(currentTf.toLowerCase()) === -1
+                        ? 'NOT DRAWN: current timeframe is not selected in this root'
+                        : (snapshotCandles.length ? 'ELIGIBLE: inspect matched candle conditions and chart viewport' : 'NOT CONFIRMED: no virtual candle snapshot yet')
                 });
             });
         });
 
-        (tree.drawings || []).forEach(function (dr) {
-            pushRule(dr, dr.candle_name || '');
+        var messages = [];
+        if (!currentSymbol || !currentTf) messages.push('ERROR: The chart symbol or timeframe is empty.');
+        if (!candles.length) messages.push('NO CANDLES LOADED: PT_CANDLES is empty. The chart has not supplied candle records to the matcher yet, or the candle request failed.');
+        else messages.push('CANDLE DATA: ' + candles.length + ' candle(s) currently loaded in the chart. This is the loaded chart set, not a guarantee that every database row has been fetched.');
+        if (!roots.length) messages.push('NO PROGRAMME ROOTS LOADED: no roots were found in PT_CFG. Open Configuration, allow saved configuration to load, then refresh this console.');
+        if (roots.length && !selectedRoots.length) messages.push('THIS TIMEFRAME IS NOT SELECTED IN ANY ROOT. The current timeframe "' + currentTf + '" will not be evaluated for these roots.');
+        if (selectedRoots.length) messages.push('THIS TIMEFRAME IS SELECTED IN ROOT: ' + selectedRoots.map(function(r) { return 'Root ' + r.rootId; }).join(', ') + '.');
+        if (snapshot && snapshotCandles.length) {
+            var matchedCount = snapshotCandles.filter(function(c) { return Array.isArray(c._conditionsMet) && c._conditionsMet.length; }).length;
+            messages.push('MATCHING RESULT: ' + matchedCount + ' of ' + snapshotCandles.length + ' loaded candles matched at least one configured tree condition.');
+        } else if (selectedRoots.length && candles.length) {
+            messages.push('NO VIRTUAL MATCH JSON FOUND YET. Open Refresh in this console to rerun the chart matcher and rebuild the report.');
+        }
+        if (allDrawings.length) messages.push('DRAWINGS CONFIGURED: ' + allDrawings.length + '. A drawing only renders when its root timeframe is selected and its source tree has matching candles.');
+        else messages.push('NO DRAWINGS CONFIGURED in the loaded root configuration.');
+        return {
+            generatedAt: new Date().toISOString(),
+            status: messages,
+            context: {
+                programmeId: PT_PROGRAMME_ID,
+                symbol: currentSymbol,
+                currentTimeframe: currentTf,
+                loadedChartCandleCount: candles.length,
+                virtualSnapshotFound: !!(snapshot && snapshotCandles.length),
+                virtualSnapshotGeneratedAt: snapshot && snapshot.generatedAt || null,
+                rootsLoaded: roots.length,
+                selectedInCurrentTimeframe: selectedRoots,
+                notSelectedInCurrentTimeframe: unselectedRoots
+            },
+            rootConfiguration: cfg,
+            drawings: allDrawings,
+            candleRecordsConvertedToProgrammeTrainingJSON: candleReport,
+            virtualMatcherSummary: PT_VIRTUAL_MATCHES || [],
+            virtualSnapshot: snapshot || null
+        };
+    }
+
+    window.ptOpenDynamicConsole = function() {
+        var modal = document.getElementById('ptDynamicConsoleModal');
+        if (modal) modal.classList.add('active');
+        var status = document.getElementById('ptDynamicConsoleStatus');
+        if (status) status.textContent = 'Building diagnostics… loading saved programme configuration and inspecting the current chart.';
+        var load = (typeof ptLoadSavedConfiguration === 'function')
+            ? ptLoadSavedConfiguration(false).catch(function() { return null; })
+            : Promise.resolve(null);
+        load.then(function() {
+            // Run the chart renderer synchronously so matching and drawing JSON are fresh
+            // before the report is serialized.
+            if (typeof ptDrawChart === 'function') ptDrawChart();
+            window.ptRefreshDynamicConsole();
         });
-
-        (tree.trades || []).forEach(function (tr) {
-            pushRule(tr, tr.candle_name || '');
-        });
-
-        return rules;
-    }
-
-    function ptResolveAnnotationAnchorTime(anchorName, tradeRow) {
-        if (!anchorName || !tradeRow) return null;
-        switch (anchorName) {
-            case 'Entry':              return tradeRow.open_time || tradeRow.candle_time || null;
-            case 'Exit':               return tradeRow.exit_candle_open_time || null;
-            case 'Target':             return tradeRow.target_candle_open_time || null;
-            case 'Entry Trigger':      return tradeRow.entry_trigger_candle_open_time || tradeRow.entry_trigger_candle_time || null;
-            case 'Stoploss Candle':    return tradeRow.sl_candle_open_time || tradeRow.sl_hit_candle_time || null;
-            case 'Take Profit Candle': return tradeRow.tp_candle_open_time || tradeRow.tp_hit_candle_time || null;
-            default:                   return null;
+    };
+    window.ptRefreshDynamicConsole = function() {
+        var status = document.getElementById('ptDynamicConsoleStatus');
+        var output = document.getElementById('ptDynamicConsoleJson');
+        try {
+            // Force a fresh matcher pass before reading the browser-local JSON snapshot.
+            if (typeof ptDrawChart === 'function' && Array.isArray(PT_CANDLES) && PT_CANDLES.length) {
+                ptDrawChart();
+            }
+            var report = ptDynamicConsoleBuildReport();
+            if (output) output.value = JSON.stringify(report, null, 2);
+            if (status) status.textContent = (report.status || []).join('\n');
+        } catch (error) {
+            var errorReport = {
+                error: 'Dynamic console could not build the report.',
+                message: String(error && error.stack || error),
+                programmeId: typeof PT_PROGRAMME_ID === 'undefined' ? null : PT_PROGRAMME_ID,
+                symbol: typeof PT_CURRENT_SYMBOL === 'undefined' ? null : PT_CURRENT_SYMBOL,
+                timeframe: typeof PT_CURRENT_TIMEFRAME === 'undefined' ? null : PT_CURRENT_TIMEFRAME
+            };
+            if (output) output.value = JSON.stringify(errorReport, null, 2);
+            if (status) status.textContent = 'CONSOLE ERROR: ' + errorReport.message;
         }
-    }
-
-    function ptResolveAnnotationAnchorIndex(anchorName, tradeRow, idxByTime) {
-        if (!idxByTime) return null;
-
-        var direct = ptResolveAnnotationAnchorTime(anchorName, tradeRow);
-        if (direct && idxByTime[direct] != null) return idxByTime[direct];
-
-        return null;
-    }
-
-    function ptDrawObjectShape(kind, cx, cy, size, color) {
-        if (!PT_DRAW_CTX) return;
-        PT_DRAW_CTX.save();
-        PT_DRAW_CTX.fillStyle   = color;
-        PT_DRAW_CTX.strokeStyle = color;
-        PT_DRAW_CTX.lineWidth   = 1.4;
-        PT_DRAW_CTX.setLineDash([]);
-
-        var s = size || 6;
-        switch (kind) {
-            case 'arrow_right':
-                PT_DRAW_CTX.beginPath();
-                PT_DRAW_CTX.moveTo(cx - s, cy);
-                PT_DRAW_CTX.lineTo(cx,     cy);
-                PT_DRAW_CTX.lineTo(cx - s * 0.55, cy - s * 0.6);
-                PT_DRAW_CTX.moveTo(cx,     cy);
-                PT_DRAW_CTX.lineTo(cx - s * 0.55, cy + s * 0.6);
-                PT_DRAW_CTX.stroke();
-                break;
-            case 'arrow_left':
-                PT_DRAW_CTX.beginPath();
-                PT_DRAW_CTX.moveTo(cx + s, cy);
-                PT_DRAW_CTX.lineTo(cx,     cy);
-                PT_DRAW_CTX.lineTo(cx + s * 0.55, cy - s * 0.6);
-                PT_DRAW_CTX.moveTo(cx,     cy);
-                PT_DRAW_CTX.lineTo(cx + s * 0.55, cy + s * 0.6);
-                PT_DRAW_CTX.stroke();
-                break;
-            case 'arrow_up':
-                PT_DRAW_CTX.beginPath();
-                PT_DRAW_CTX.moveTo(cx, cy + s);
-                PT_DRAW_CTX.lineTo(cx, cy);
-                PT_DRAW_CTX.lineTo(cx - s * 0.6, cy + s * 0.55);
-                PT_DRAW_CTX.moveTo(cx, cy);
-                PT_DRAW_CTX.lineTo(cx + s * 0.6, cy + s * 0.55);
-                PT_DRAW_CTX.stroke();
-                break;
-            case 'arrow_down':
-                PT_DRAW_CTX.beginPath();
-                PT_DRAW_CTX.moveTo(cx, cy - s);
-                PT_DRAW_CTX.lineTo(cx, cy);
-                PT_DRAW_CTX.lineTo(cx - s * 0.6, cy - s * 0.55);
-                PT_DRAW_CTX.moveTo(cx, cy);
-                PT_DRAW_CTX.lineTo(cx + s * 0.6, cy - s * 0.55);
-                PT_DRAW_CTX.stroke();
-                break;
-            case 'filled_square':
-                PT_DRAW_CTX.fillRect(cx - s * 0.7, cy - s * 0.7, s * 1.4, s * 1.4);
-                break;
-            case 'filled_star':
-                PT_DRAW_CTX.beginPath();
-                var spikes = 5;
-                var outer  = s * 1.1;
-                var inner  = s * 0.45;
-                var rot    = -Math.PI / 2;
-                for (var i = 0; i < spikes * 2; i++) {
-                    var r = (i % 2 === 0) ? outer : inner;
-                    var a = rot + (Math.PI / spikes) * i;
-                    var px = cx + Math.cos(a) * r;
-                    var py = cy + Math.sin(a) * r;
-                    if (i === 0) PT_DRAW_CTX.moveTo(px, py);
-                    else PT_DRAW_CTX.lineTo(px, py);
-                }
-                PT_DRAW_CTX.closePath();
-                PT_DRAW_CTX.fill();
-                break;
-        }
-
-        PT_DRAW_CTX.restore();
-    }
-
-    function ptComputeAnnotationXY(anchorCandle, position, step, baseX, anchorIdx, pToY, pad) {
-        if (!anchorCandle) return null;
-        var padPx = (pad != null) ? pad : 2;
-        var cx    = baseX + anchorIdx * step + step / 2;
-
-        switch (position) {
-            case 'above':
-                return { x: cx, y: pToY(anchorCandle.high) - padPx };
-            case 'below':
-                return { x: cx, y: pToY(anchorCandle.low)  + padPx };
-            case 'left':
-                return { x: cx - (PT_VIEW.candleWidth / 2) - padPx, y: pToY(anchorCandle.close) };
-            case 'right':
-                return { x: cx + (PT_VIEW.candleWidth / 2) + padPx, y: pToY(anchorCandle.close) };
-            default:
-                return { x: cx, y: pToY(anchorCandle.close) };
-        }
-    }
-
-    function ptDrawAnnotations(pToY, baseX, step, chartTop, chartBottom, firstVisible, lastVisible) {
-        if (!PT_DRAW_CTX) return;
-        if (!PT_CANDLES.length) return;
-        if (!Array.isArray(PT_TREES) || !PT_TREES.length) return;
-
-        var idxByTime = {};
-        PT_CANDLES.forEach(function (c, i) { idxByTime[c.time] = i; });
-
-        var computedMatches = ptScanTrades();
-
-        PT_DRAW_CTX.save();
-        PT_DRAW_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-        PT_DRAW_CTX.textBaseline = 'middle';
-        PT_DRAW_CTX.setLineDash([]);
-
-        var accent = '#e3b341';
-        var textColor = document.body.classList.contains('dark-mode') ? '#f0c95a' : '#b8860b';
-
-        computedMatches.forEach(function (result) {
-            var tree  = result.tree;
-            var rules = ptCollectAnnotationRules(tree);
-            if (!rules.length) return;
-
-            var tradeRow = null;
-            (result._matchedFlat || []).forEach(function (m) {
-                if (m.row_role === 'matched_trade') tradeRow = m;
+    };
+    window.ptCloseDynamicConsole = function() {
+        var modal = document.getElementById('ptDynamicConsoleModal');
+        if (modal) modal.classList.remove('active');
+    };
+    window.ptCopyDynamicConsole = function() {
+        var output = document.getElementById('ptDynamicConsoleJson');
+        var status = document.getElementById('ptDynamicConsoleStatus');
+        if (!output) return;
+        var content = output.value || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(content).then(function() {
+                if (status) status.textContent += '\n\nCOPIED: Entire dynamic console JSON copied to clipboard.';
+            }).catch(function() {
+                output.focus(); output.select();
+                try { document.execCommand('copy'); if (status) status.textContent += '\n\nCOPY ATTEMPTED: use Ctrl+C if the browser blocked clipboard access.'; } catch (_) {}
             });
-
-            rules.forEach(function (rule) {
-                // ------ Resolve the owner candle index ------
-                var ownerIdx = null;
-                if (rule.ownerName) {
-                    var candidate = null;
-                    (result._matchedFlat || []).forEach(function (m) {
-                        if (m.candle_name === rule.ownerName) {
-                            if (candidate == null) candidate = m;
-                        }
-                    });
-                    if (candidate && candidate.candle_time && idxByTime[candidate.candle_time] != null) {
-                        ownerIdx = idxByTime[candidate.candle_time];
-                    }
-                }
-
-                // Owner not on chart → skip
-                if (ownerIdx == null) return;
-                var ownerCandle = PT_CANDLES[ownerIdx];
-                if (!ownerCandle) return;
-
-                // ------ Object ------
-                if (rule.object_kind && rule.object_anchor && rule.object_position) {
-                    var objAnchorIdx = null;
-                    var objAnchorCandle = null;
-
-                    if (idxByTime[rule.object_anchor] != null) {
-                        // Anchor is a literal candle_time
-                        objAnchorIdx = idxByTime[rule.object_anchor];
-                        objAnchorCandle = PT_CANDLES[objAnchorIdx];
-                    } else if (tradeRow) {
-                        // Anchor is an apprentice name
-                        objAnchorIdx = ptResolveAnnotationAnchorIndex(rule.object_anchor, tradeRow, idxByTime);
-                        if (objAnchorIdx != null) objAnchorCandle = PT_CANDLES[objAnchorIdx];
-                    }
-
-                    if (objAnchorCandle && objAnchorIdx != null) {
-                        var posObj = ptComputeAnnotationXY(
-                            objAnchorCandle, rule.object_position,
-                            step, baseX, objAnchorIdx, pToY, 2
-                        );
-                        if (posObj &&
-                            posObj.y >= chartTop - 40 && posObj.y <= chartBottom + 40) {
-                            ptDrawObjectShape(rule.object_kind, posObj.x, posObj.y, 6, accent);
-                        }
-                    }
-                }
-
-                // ------ Text ------
-                if (rule.text_anchor && rule.text_position && rule.text_content) {
-                    var txtAnchorIdx = null;
-                    var txtAnchorCandle = null;
-
-                    if (idxByTime[rule.text_anchor] != null) {
-                        txtAnchorIdx = idxByTime[rule.text_anchor];
-                        txtAnchorCandle = PT_CANDLES[txtAnchorIdx];
-                    } else if (tradeRow) {
-                        txtAnchorIdx = ptResolveAnnotationAnchorIndex(rule.text_anchor, tradeRow, idxByTime);
-                        if (txtAnchorIdx != null) txtAnchorCandle = PT_CANDLES[txtAnchorIdx];
-                    }
-
-                    if (txtAnchorCandle && txtAnchorIdx != null) {
-                        var posTxt = ptComputeAnnotationXY(
-                            txtAnchorCandle, rule.text_position,
-                            step, baseX, txtAnchorIdx, pToY, 2
-                        );
-                        if (posTxt &&
-                            posTxt.y >= chartTop - 40 && posTxt.y <= chartBottom + 40) {
-
-                            PT_DRAW_CTX.fillStyle = textColor;
-                            PT_DRAW_CTX.textAlign = (rule.text_position === 'left') ? 'right'
-                                                  : (rule.text_position === 'right') ? 'left'
-                                                  : 'center';
-                            PT_DRAW_CTX.fillText(
-                                rule.text_content,
-                                posTxt.x, posTxt.y
-                            );
-                        }
-                    }
-                }
+        } else {
+            output.focus(); output.select();
+            try {
+                var ok = document.execCommand('copy');
+                if (status) status.textContent += ok ? '\n\nCOPIED: Entire dynamic console JSON copied to clipboard.' : '\n\nClipboard access is blocked. The JSON is selected; press Ctrl+C.';
+            } catch (_) {
+                if (status) status.textContent += '\n\nClipboard access is blocked. The JSON is selected; press Ctrl+C.';
+            }
+        }
+    };
+    document.addEventListener('DOMContentLoaded', function() {
+        var modal = document.getElementById('ptDynamicConsoleModal');
+        var rootsModal = document.getElementById('ptRootsDataModal');
+        if (rootsModal) rootsModal.addEventListener('mousedown', function(e){ if(e.target===rootsModal) window.ptCloseRootsData(); });
+        if (modal) {
+            modal.addEventListener('mousedown', function(e) {
+                if (e.target === modal) window.ptCloseDynamicConsole();
             });
+        }
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') { window.ptCloseDynamicConsole(); window.ptCloseRootsData(); }
         });
+    });
 
-        PT_DRAW_CTX.restore();
-    }
-    window.ptOpenSymbolModal    = ptOpenSymbolModal;
-    window.ptCloseSymbolModal   = ptCloseSymbolModal;
-    window.ptFilterSymbolModal  = ptFilterSymbolModal;
-    window.ptSelectSymbol       = ptSelectSymbol;
-    window.ptSelectTimeframe    = ptSelectTimeframe;
-    window.ptOpenCandleDetail   = ptOpenCandleDetailModal;
-    window.ptCloseCandleDetail  = ptCloseCandleDetailModal;
-    window.ptOpenTradesModal    = ptOpenTradesModal;
-    window.ptCloseTradesModal   = ptCloseTradesModal;
-    window.ptToggleLongShort    = ptToggleLongShort;
 </script>
 
 </body>
