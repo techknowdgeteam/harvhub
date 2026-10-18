@@ -19,6 +19,15 @@ try {
 // This is a safe, additive migration; candle_records is not modified.
 try {
     $cfgColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_configuration`")->fetchAll(PDO::FETCH_COLUMN);
+    // Rename the root-level chart application flag in the database.
+    if (in_array('run_in_python', $cfgColumns, true) && !in_array('apply_to_chart', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` CHANGE COLUMN `run_in_python` `apply_to_chart` TINYINT(1) NOT NULL DEFAULT 1");
+        $cfgColumns = array_values(array_diff($cfgColumns, ['run_in_python']));
+        $cfgColumns[] = 'apply_to_chart';
+    } elseif (!in_array('apply_to_chart', $cfgColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `apply_to_chart` TINYINT(1) NOT NULL DEFAULT 1");
+        $cfgColumns[] = 'apply_to_chart';
+    }
     // Trade configuration columns: support both legacy *_from and current *_at names.
     if (in_array('entry_from', $cfgColumns, true) && !in_array('entry_at', $cfgColumns, true)) {
         $pdo->exec("ALTER TABLE `programme_training_configuration` CHANGE COLUMN `entry_from` `entry_at` VARCHAR(160) NULL DEFAULT NULL");
@@ -234,7 +243,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
                     take_profit_at, take_profit_type, take_profit_price_level,
                     risk_reward, order_type, entry_order_type, entry_trigger_after,
                     draw_from, draw_from_price_level, draw_to,
-                    draw_to_price_level, run_in_python, main_candle_type,
+                    draw_to_price_level, apply_to_chart, main_candle_type,
                     ref_candle_type, offset_candle, candle_text, text_position,
                     text_color, drawing_color
                FROM programme_training_configuration
@@ -325,7 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         }
 
         $allowedLevels = ['high','low','open','close','candle_center','body_center','high_wick_center','low_wick_center'];
-        $allowedTextPositions = ['high','low','open','close'];
+        $allowedTextPositions = ['high','low'];
         $allowedOperators = ['<','>','=<','>=','='];
         $allowedPositions = ['all','left','right','latest_candle'];
         $allowedOffsetPoints = ['all','random','fixed'];
@@ -367,7 +376,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 'draw_from_price_level' => null,
                 'draw_to' => null,
                 'draw_to_price_level' => null,
-                'run_in_python' => !empty($root['run_in_python']) ? 1 : 0
+                'apply_to_chart' => array_key_exists('apply_to_chart', $root) ? (!empty($root['apply_to_chart']) ? 1 : 0) : (!empty($root['run_in_python']) ? 1 : 0)
             ];
         };
 
@@ -498,7 +507,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             'offset_position_point','offset_candle_name','position','price_level','operator',
             'use_for_trade','entry_at','entry_price_level','stoploss_at','stoploss_price_level',
             'take_profit_at','take_profit_type','take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
-            'draw_from','draw_from_price_level','draw_to','draw_to_price_level','run_in_python',
+            'draw_from','draw_from_price_level','draw_to','draw_to_price_level','apply_to_chart',
             'main_candle_type','ref_candle_type','offset_candle','candle_text','text_position',
             'text_color','drawing_color'
         ];
@@ -1045,6 +1054,9 @@ try {
         height: 100%;
     }
     .pt-chart-canvas.pt-grabbing { cursor: grabbing; }
+    .pt-family-hover-note{position:fixed;z-index:12000;display:none;max-width:min(320px,calc(100vw - 24px));padding:10px 12px;border:1px solid var(--pt-border);border-radius:10px;background:var(--pt-card);color:var(--pt-text);box-shadow:0 8px 28px rgba(0,0,0,.22);font-size:.78rem;line-height:1.45;pointer-events:none}
+    .pt-family-hover-note strong{display:block;margin-bottom:3px;font-size:.8rem}
+
 
     .pt-scale-bar {
         position: absolute;
@@ -1135,7 +1147,7 @@ try {
     .pt-loading-spinner {
         width: 28px;
         height: 28px;
-        border: 3px solid var(--pt-border);
+        border: 1px solid var(--pt-border);
         border-top-color: var(--pt-accent);
         border-radius: 50%;
         animation: ptSpin 0.8s linear infinite;
@@ -1160,8 +1172,7 @@ try {
         justify-content: space-between;
         margin-bottom: 6px;
         padding-bottom: 6px;
-        border-bottom: 1px solid var(--pt-border);
-    }
+        }
     .pt-fr-time {
         font-size: 0.78rem;
         font-weight: 700;
@@ -1231,7 +1242,6 @@ try {
         align-items: center;
         justify-content: space-between;
         padding: 14px 16px 10px;
-        border-bottom: 1px solid var(--pt-border);
         flex-shrink: 0;
     }
     .pt-picker-title { font-size: 15px; font-weight: 700; }
@@ -1411,7 +1421,6 @@ try {
         align-items: flex-start;
         justify-content: space-between;
         padding: 16px 18px 12px;
-        border-bottom: 1px solid var(--pt-border);
         flex-shrink: 0;
     }
     .pt-candle-detail-title { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
@@ -1442,10 +1451,9 @@ try {
         justify-content: space-between;
         gap: 12px;
         padding: 8px 0;
-        border-bottom: 1px solid var(--pt-border);
         font-size: 13px;
     }
-    .pt-candle-detail-row:last-child { border-bottom: none; }
+    .pt-candle-detail-row:last-child { }
     .pt-candle-detail-label { color: var(--pt-muted); font-weight: 600; }
     .pt-candle-detail-value {
         color: var(--pt-text);
@@ -1470,7 +1478,6 @@ try {
         flex-direction: column;
         overflow: hidden;
         background: transparent;
-        border-bottom: none;
         box-shadow: none;
         pointer-events: none;
     }
@@ -1533,7 +1540,6 @@ try {
         align-items: center;
         justify-content: space-between;
         padding: 14px 18px 12px;
-        border-bottom: 1px solid var(--pt-border);
         flex-shrink: 0;
         gap: 10px;
     }
@@ -1583,7 +1589,6 @@ try {
         justify-content: space-between;
         gap: 12px;
         padding: 12px 18px;
-        border-top: 1px solid var(--pt-border);
         background: var(--pt-card);
         flex-shrink: 0;
     }
@@ -1665,12 +1670,15 @@ try {
         border-radius: 12px;
         background: rgba(128,128,128,0.035);
         padding: 12px;
+        margin-bottom: 15px;
         display: flex;
         flex-direction: column;
         gap: 10px;
         flex-shrink: 0;
+        transition: border-color .15s ease, box-shadow .15s ease;
     }
     body.dark-mode .pt-cfg-root { background: rgba(255,255,255,0.03); }
+    .pt-cfg-root.is-collapsed { margin-bottom: 15px; }
 
     .pt-cfg-root-head {
         display: flex;
@@ -1678,8 +1686,16 @@ try {
         justify-content: space-between;
         gap: 10px;
         flex-wrap: wrap;
+        width: 100%;
+        padding: 10px;
+        border-radius: 9px;
+        cursor: pointer;
+        min-width: 0;
+        transition: background .15s ease;
     }
-    .pt-cfg-root-head { cursor: default; }
+    .pt-cfg-root-head:hover { background: rgba(18,163,107,.07); }
+    .pt-cfg-root.is-collapsed .pt-cfg-root-head { min-height: 76px; }
+    .pt-cfg-root-head > .pt-cfg-root-tag { flex: 1 1 360px; min-width: 0; }
     .pt-cfg-root-toggle {
         width: 28px; height: 28px; flex: 0 0 28px;
         display: inline-flex; align-items: center; justify-content: center;
@@ -1690,12 +1706,33 @@ try {
     .pt-cfg-root-state { color: var(--pt-muted); font-size: 10px; font-weight: 600; }
     .pt-cfg-trade-grid { padding: 10px; border: 1px solid var(--pt-border); border-radius: 10px; }
     .pt-cfg-root-tag {
-        display: inline-flex;
+        display: flex;
         align-items: center;
-        gap: 8px;
-        font-weight: 800;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        font-weight: 700;
         font-size: 13px;
         color: var(--pt-accent);
+        min-width: 0;
+        align-content: center;
+    }
+    .pt-cfg-root-name-display {
+        display: block;
+        flex: 1 1 100%;
+        min-width: 0;
+        color: var(--pt-text);
+        font-size: 20px;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+    .pt-cfg-root-name-display strong { font-weight: 850; }
+    .pt-cfg-root-timeframes { color: var(--pt-muted); font-size: 12px; }
+    .pt-cfg-root-name-actions { flex: 0 0 auto; }
+    .pt-cfg-root-toggle { flex-shrink: 0; }
+    @media (max-width: 600px) {
+        .pt-cfg-root-head { gap: 8px; padding: 8px 4px; }
+        .pt-cfg-root-name-display { font-size: 18px; }
+        .pt-cfg-root-head > .pt-cfg-root-tag { flex-basis: calc(100% - 40px); }
     }
     .pt-cfg-root-tag .pt-cfg-chip {
         background: var(--pt-accent);
@@ -1913,13 +1950,13 @@ try {
     .pt-dynamic-console-modal{position:fixed;inset:0;z-index:100500;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
     .pt-dynamic-console-modal.active{display:flex}
     .pt-dynamic-console-box{width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
-    .pt-dynamic-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--pt-border);flex-shrink:0}
+    .pt-dynamic-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;flex-shrink:0}
     .pt-dynamic-console-title{font-size:1rem;font-weight:800}
     .pt-dynamic-console-subtitle{font-size:.78rem;color:var(--pt-muted);margin-top:2px}
     .pt-dynamic-console-actions{display:flex;gap:8px;flex-wrap:wrap}
     .pt-dynamic-console-action{border:1px solid var(--pt-border);background:var(--pt-bg);color:var(--pt-text);padding:8px 12px;border-radius:9px;font:inherit;font-size:.8rem;font-weight:700;cursor:pointer}
     .pt-dynamic-console-action.primary{background:var(--pt-accent);border-color:var(--pt-accent);color:#fff}
-    .pt-dynamic-console-status{padding:10px 18px;background:rgba(18,163,107,.08);border-bottom:1px solid var(--pt-border);font-size:.82rem;white-space:pre-wrap;flex-shrink:0}
+    .pt-dynamic-console-status{padding:10px 18px;background:rgba(18,163,107,.08);font-size:.82rem;white-space:pre-wrap;flex-shrink:0}
     .pt-dynamic-console-json{flex:1;width:100%;resize:none;border:0;outline:0;padding:16px 18px;background:#0c1117;color:#cde8d7;font:12px/1.55 Consolas,Monaco,'Courier New',monospace;tab-size:2;white-space:pre;overflow:auto}
     @media(max-width:600px){.pt-dynamic-console-modal{padding:6px}.pt-dynamic-console-box{width:100%;height:94vh;border-radius:12px}.pt-dynamic-console-head{align-items:flex-start;padding:12px}.pt-dynamic-console-actions{gap:5px}.pt-dynamic-console-action{padding:7px 9px}.pt-dynamic-console-json{font-size:11px;padding:12px}}
 
@@ -1929,10 +1966,79 @@ try {
     .pt-rd-stat-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:rgba(128,128,128,.12);font-size:15px;flex-shrink:0}
     .pt-rd-stat.loss .pt-rd-stat-icon,.pt-rd-badge.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-rd-stat.profit .pt-rd-stat-icon,.pt-rd-badge.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-rd-stat.pending .pt-rd-stat-icon,.pt-rd-badge.pending{color:#bd8516;background:rgba(189,133,22,.13)}.pt-rd-stat.active .pt-rd-stat-icon,.pt-rd-badge.active{color:#4388dc;background:rgba(67,136,220,.13)}
     .pt-rd-stat-label{font-size:.72rem;color:var(--pt-muted);font-weight:650}.pt-rd-stat-value{font-size:1.55rem;line-height:1.2;font-weight:800;margin-top:3px}
+    .pt-dd-cover[hidden],.pt-dd-details[hidden]{display:none!important}.pt-rd-drawdown-card{align-items:stretch;min-height:0;overflow:hidden}.pt-dd-cover,.pt-dd-details{display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0}.pt-dd-content{min-width:0;flex:1}.pt-dd-details{display:block;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.pt-dd-detail-heading{font-size:.78rem;font-weight:800;margin-bottom:10px}.pt-dd-sequence{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}.pt-dd-chip{display:inline-flex;padding:6px 8px;border:0;border-radius:7px;font-size:.78rem;font-weight:800;background:rgba(128,128,128,.1);cursor:pointer;font-family:inherit}.pt-dd-chip:focus-visible,.pt-dd-locate:focus-visible{outline:2px solid var(--pt-accent);outline-offset:2px}.pt-dd-chip.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-dd-chip.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-dd-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 12px}.pt-dd-totals>div{padding:8px;border-radius:8px;background:rgba(128,128,128,.08)}.pt-dd-totals span{display:block;color:var(--pt-muted);font-size:.68rem}.pt-dd-totals strong{font-size:.95rem}.pt-dd-button{display:inline-flex;align-items:center;justify-content:center;margin-top:9px;padding:7px 10px;border:0;border-radius:8px;background:var(--pt-accent);color:#fff;font:inherit;font-size:.75rem;font-weight:800;cursor:pointer}.pt-dd-button.secondary{background:rgba(128,128,128,.16);color:var(--pt-text)}.pt-dd-empty{font-size:.75rem;color:var(--pt-muted);padding:8px 0}
+
     .pt-rd-root{border:1px solid var(--pt-border);border-radius:14px;margin-bottom:12px;overflow:hidden;background:var(--pt-card,var(--pt-bg))}.pt-rd-root>summary{list-style:none;display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer;background:rgba(128,128,128,.045)}.pt-rd-root>summary::-webkit-details-marker{display:none}.pt-rd-root-title{font-weight:800;display:flex;align-items:center;gap:9px;flex:1}.pt-rd-root-summary{font-size:.78rem;color:var(--pt-muted);display:flex;gap:10px;align-items:center}.pt-rd-root-summary .is-profit{color:#16a36a}.pt-rd-root-summary .is-loss{color:#e05260}.pt-rd-chevron{transition:transform .18s ease;color:var(--pt-muted)}.pt-rd-root[open] .pt-rd-chevron{transform:rotate(180deg)}
-    .pt-rd-root-stats{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid var(--pt-border);border-bottom:1px solid var(--pt-border)}.pt-rd-root-stats span{font-size:.78rem;color:var(--pt-muted);padding:6px 9px;background:rgba(128,128,128,.08);border-radius:8px}.pt-rd-root-stats b{color:var(--pt-text);margin-left:4px}
-    .pt-rd-trade{margin:12px;padding:14px;border:1px solid var(--pt-border);border-radius:12px;background:var(--pt-bg)}.pt-rd-trade-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:13px}.pt-rd-family{font-size:.72rem;letter-spacing:.08em;font-weight:850;color:var(--pt-muted)}.pt-rd-order{margin-left:9px;font-size:.72rem;font-weight:750;padding:4px 7px;border-radius:6px;background:rgba(128,128,128,.12)}.pt-rd-badge{font-size:.72rem;font-weight:800;padding:6px 9px;border-radius:8px;text-transform:capitalize}.pt-rd-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.pt-rd-metrics>div{min-width:0;padding:11px;border-radius:9px;background:rgba(128,128,128,.07)}.pt-rd-metrics span,.pt-rd-details span{display:block;font-size:.7rem;color:var(--pt-muted);margin-bottom:5px}.pt-rd-metrics strong{display:block;font-size:1rem;overflow-wrap:anywhere}.pt-rd-metrics small{display:block;margin-top:5px;font-size:.68rem;color:var(--pt-muted);overflow-wrap:anywhere}.pt-rd-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--pt-border)}.pt-rd-details b{font-size:.8rem;font-weight:700;overflow-wrap:anywhere}.pt-rd-empty{padding:16px;color:var(--pt-muted);font-size:.85rem}
+    .pt-rd-root-stats{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;}.pt-rd-root-stats span{font-size:.78rem;color:var(--pt-muted);padding:6px 9px;background:rgba(128,128,128,.08);border-radius:8px}.pt-rd-root-stats b{color:var(--pt-text);margin-left:4px}
+    .pt-rd-trade{margin:12px;padding:14px;border:1px solid var(--pt-border);border-radius:12px;background:var(--pt-bg)}.pt-rd-trade-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:13px}.pt-rd-trade-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}.pt-dd-locate{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--pt-border);border-radius:8px;background:rgba(128,128,128,.08);color:var(--pt-text);font:inherit;font-size:.75rem;font-weight:800;cursor:pointer}.pt-dd-locate:hover{border-color:var(--pt-accent);color:var(--pt-accent)}.pt-rd-family{font-size:.72rem;letter-spacing:.08em;font-weight:850;color:var(--pt-muted)}.pt-rd-order{margin-left:9px;font-size:.72rem;font-weight:750;padding:4px 7px;border-radius:6px;background:rgba(128,128,128,.12)}.pt-rd-badge{font-size:.72rem;font-weight:800;padding:6px 9px;border-radius:8px;text-transform:capitalize}.pt-rd-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.pt-rd-metrics>div{min-width:0;padding:11px;border-radius:9px;background:rgba(128,128,128,.07)}.pt-rd-metrics span,.pt-rd-details span{display:block;font-size:.7rem;color:var(--pt-muted);margin-bottom:5px}.pt-rd-metrics strong{display:block;font-size:1rem;overflow-wrap:anywhere}.pt-rd-metrics small{display:block;margin-top:5px;font-size:.68rem;color:var(--pt-muted);overflow-wrap:anywhere}.pt-rd-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin-top:12px;padding-top:12px;}.pt-rd-details b{font-size:.8rem;font-weight:700;overflow-wrap:anywhere}.pt-rd-empty{padding:16px;color:var(--pt-muted);font-size:.85rem}
     @media(max-width:700px){.pt-rd-dashboard{grid-template-columns:repeat(2,minmax(0,1fr))}.pt-rd-root>summary{flex-wrap:wrap}.pt-rd-root-summary{order:3;width:100%;flex-wrap:wrap}.pt-rd-metrics{grid-template-columns:1fr}.pt-rd-details{grid-template-columns:1fr}.pt-rd-trade{margin:9px;padding:11px}}
+
+    .pt-provision-toggle{margin:0 0 10px}.pt-provision-panel{max-height:420px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--pt-border);border-radius:12px;padding:10px;margin-bottom:14px}
+    .pt-provision-panel[hidden],#pt-summary-global[hidden]{display:none!important}.pt-provision-count{font-size:.78rem;color:var(--pt-muted);font-weight:800;margin:4px 2px 10px}
+    .pt-provision-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 16px;align-items:start;padding:4px 3px 18px}
+    .pt-provision-grid>.pt-provision-period{margin:0 0 10px;min-width:0;max-height:320px;min-height:0;overflow:auto;overscroll-behavior:contain;padding:14px;border:1px solid var(--pt-border);border-radius:12px;background:var(--pt-card);box-shadow:0 4px 14px rgba(0,0,0,.07)}
+    .pt-provision-grid>.pt-provision-period:before{content:'MONTH / PERIOD';display:block;font-size:.62rem;letter-spacing:.12em;font-weight:850;color:var(--pt-accent);margin:-2px 0 7px}
+    .pt-provision-month-grid>.pt-provision-period:before{content:'MONTH';}
+    .pt-provision-month-grid>.pt-provision-period{border:1px solid var(--pt-border);background:var(--pt-card);box-shadow:0 5px 16px rgba(0,0,0,.10);padding:16px;margin:0;min-width:0;border-radius:12px}
+    .pt-provision-period-head{padding-bottom:8px;}
+    .pt-provision-period-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}.pt-provision-period-head strong{font-size:.86rem}.pt-provision-period-head span,.pt-provision-caption{font-size:.68rem;color:var(--pt-muted)}.pt-provision-number{font-size:1rem;font-weight:850}.pt-provision-revenue{font-size:.76rem;margin:8px 0;font-weight:750}.pt-provision-revenue .is-profit{color:#16a36a}.pt-provision-revenue .is-loss{color:#e05260}
+    .pt-provision-nav{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:10px;}.pt-provision-nav strong{font-size:.9rem}.pt-provision-days{display:flex;flex-wrap:wrap;gap:5px}.pt-provision-days .pt-dd-button{margin-top:5px}
+    @media(max-width:700px){.pt-provision-grid{grid-template-columns:1fr;gap:18px;padding:4px 2px 20px}.pt-provision-panel{max-height:420px}.pt-provision-grid>.pt-provision-period{max-height:300px;margin-bottom:8px;padding:14px}}
+
+/* Trades summary/provision layout fixes */
+.pt-rd-stat,
+.pt-rd-stat > div,
+.pt-dd-content,
+.pt-rd-stat-label,
+.pt-rd-stat-value {
+    min-width: 0;
+    max-width: 100%;
+}
+.pt-rd-stat-label,
+.pt-rd-stat-value,
+.pt-rd-stat > div,
+.pt-dd-totals span,
+.pt-dd-totals strong,
+.pt-provision-period-head strong,
+.pt-provision-period-head span,
+.pt-provision-revenue {
+    overflow-wrap: anywhere;
+    word-break: normal;
+    white-space: normal;
+}
+.pt-rd-stat-value {
+    font-size: clamp(1rem, 4vw, 1.55rem);
+    line-height: 1.2;
+}
+.pt-provision-panel {
+    max-height: none !important;
+    height: auto;
+    overflow: visible !important;
+    overscroll-behavior: auto;
+    min-width: 0;
+}
+.pt-provision-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: start;
+}
+.pt-provision-period {
+    max-height: none !important;
+    height: auto;
+    overflow: visible !important;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.pt-provision-period > * { min-width: 0; max-width: 100%; }
+.pt-provision-period .pt-dd-sequence { min-width: 0; }
+.pt-provision-period .pt-dd-chip { max-width: 100%; overflow-wrap: anywhere; }
+@media (max-width: 420px) {
+    .pt-rd-stat { gap: 7px; padding: 10px; }
+    .pt-rd-stat-icon { width: 30px; height: 30px; flex: 0 0 30px; }
+    .pt-rd-stat-value { font-size: clamp(.95rem, 4.2vw, 1.2rem); }
+    .pt-provision-grid { gap: 18px; padding-bottom: 20px; }
+    .pt-provision-grid>.pt-provision-period { padding: 14px; margin-bottom: 8px; }
+    .pt-provision-period-head { flex-direction: column; gap: 2px; }
+}
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
@@ -2229,6 +2335,10 @@ try {
         minCandleWidth: 0.3,
         maxCandleWidth: 40
     };
+
+    // Temporary trade locator overlay. It is drawn over the chart for four seconds.
+    var PT_LOCATE_ARROW = null;
+    var PT_LOCATE_ANIMATION_FRAME = null;
 
     var PT_PAGE_SIZE      = 500;
     var PT_PADDING_LEFT   = 64;
@@ -2714,7 +2824,7 @@ try {
         PT_ALL_TIMEFRAMES.forEach(function (tf) {
             var cls = 'pt-tf-btn' + (tf === PT_CURRENT_TIMEFRAME ? ' active' : '');
             html += '<button type="button" class="' + cls + '" data-tf="' + ptEscapeHtml(tf) + '" '
-                  + 'onclick="ptSelectTimeframe(\'' + tf.replace(/'/g, "\\'") + '\')">'
+                  + 'onclick="ptSelectTimeframe(\'' + tf.replace(/'/g, "\'") + '\')">'
                   + ptEscapeHtml(tf) + '</button>';
         });
         strip.innerHTML = html;
@@ -2764,7 +2874,7 @@ try {
         filtered.forEach(function (sym) {
             var cls = 'pt-picker-row' + (sym === PT_CURRENT_SYMBOL ? ' is-active' : '');
             html += '<button type="button" class="' + cls + '" '
-                  + 'onclick="ptSelectSymbol(\'' + sym.replace(/'/g, "\\'") + '\')">'
+                  + 'onclick="ptSelectSymbol(\'' + sym.replace(/'/g, "\'") + '\')">'
                   + ptEscapeHtml(sym) + '</button>';
         });
         list.innerHTML = html;
@@ -2819,7 +2929,7 @@ try {
         filtered.forEach(function (tf) {
             var cls = 'pt-picker-row' + (tf === PT_CURRENT_TIMEFRAME ? ' is-active' : '');
             html += '<button type="button" class="' + cls + '" '
-                  + 'onclick="ptPickTimeframe(\'' + tf.replace(/'/g, "\\'") + '\')">'
+                  + 'onclick="ptPickTimeframe(\'' + tf.replace(/'/g, "\'") + '\')">'
                   + ptEscapeHtml(tf) + '</button>';
         });
         list.innerHTML = html;
@@ -3279,6 +3389,12 @@ try {
             if (c.high > maxPrice) maxPrice = c.high;
         }
         if (!isFinite(minPrice) || !isFinite(maxPrice)) { ptUpdateJumpLatestVisibility(); return; }
+        // While locating a trade, include its entry, stop-loss and take-profit prices
+        // in the scale calculation so the complete trade area remains visible.
+        if (PT_LOCATE_ARROW) {
+            if (Number.isFinite(Number(PT_LOCATE_ARROW.priceMin))) minPrice = Math.min(minPrice, Number(PT_LOCATE_ARROW.priceMin));
+            if (Number.isFinite(Number(PT_LOCATE_ARROW.priceMax))) maxPrice = Math.max(maxPrice, Number(PT_LOCATE_ARROW.priceMax));
+        }
         if (minPrice === maxPrice) { minPrice -= 1; maxPrice += 1; }
 
         var chartTop    = PT_PADDING_TOP;
@@ -3296,7 +3412,15 @@ try {
         rangeBot = mid - halfRange;
         var range = rangeTop - rangeBot; if (range <= 0) range = 1;
 
+        // During trade location, pan the existing price scale vertically so the
+        // entry/stop-loss area is centred. This changes offset only; priceScale and
+        // chartHeight remain untouched, so locating a trade never zooms vertically.
         var priceShift = (PT_VIEW.offsetY / chartHeight) * range;
+        if (PT_LOCATE_ARROW && Number.isFinite(Number(PT_LOCATE_ARROW.centerPrice))) {
+            var desiredShift = Number(PT_LOCATE_ARROW.centerPrice) - mid;
+            PT_VIEW.offsetY = desiredShift * chartHeight / range;
+            priceShift = desiredShift;
+        }
         var pTop = rangeTop + priceShift;
         var pBot = rangeBot + priceShift;
         var pRange = pTop - pBot;
@@ -3410,6 +3534,13 @@ try {
             viewportW: viewportW, viewportH: viewportH
         });
 
+        // Animated trade locator is deliberately drawn last, above candles and drawings.
+        ptDrawLocateArrow({
+            ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
+            pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
+            viewportW: viewportW, viewportH: viewportH
+        });
+
         ptUpdateJumpLatestVisibility();
     }
 
@@ -3491,6 +3622,12 @@ try {
         });
         var activeRoots = [];
         config.roots.forEach(function (root) {
+            // Disabled roots are configuration-only: they contribute no matches,
+            // annotations, drawings, chart snapshot root IDs, or trade records.
+            if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') {
+                root._drawMatches = [];
+                return;
+            }
             var tfs = ptNormTfList(root);
             if (!tfs.includes(String(PT_CURRENT_TIMEFRAME).toLowerCase())) return;
             activeRoots.push(root);
@@ -3633,18 +3770,24 @@ try {
                     if (label && !isMainReference) {
                         var mainIdx = c._index;
                         var mx = geo.baseX + mainIdx * geo.step + geo.step / 2;
-                        var my = geo.pToY(ptPrice(all[mainIdx], labelLevel));
+                        var my = geo.pToY(ptPrice(all[mainIdx], labelLevel === 'low' ? 'low' : 'high'));
                         ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(main.textColor, 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
-                        ctx.textAlign = 'center'; ctx.fillText(label, mx, my - 5); ctx.restore();
+                        ctx.textAlign = 'center';
+                        // Canvas text baseline: for HIGH, text bottom sits 2px above the high;
+                        // for LOW, text top sits 2px below the low.
+                        ctx.textBaseline = labelLevel === 'low' ? 'top' : 'bottom';
+                        ctx.fillText(label, mx, labelLevel === 'low' ? my + 2 : my - 2); ctx.restore();
                     }
                     var isTextBearingOffset = ref.referenceMode === 'new_offset' || (tree.offset && tree.offset.id === ref.id);
                     if ((treeIndex === 0 || isTextBearingOffset) && (ref.candleText || (tree.offset && tree.offset.candleText) || '').trim()) {
                         var refIdx = all.findIndex(function (z) { return z.id === condition.referenceCandleId; });
                         if (refIdx >= 0) {
                             var rx = geo.baseX + refIdx * geo.step + geo.step / 2;
-                            var ry = geo.pToY(ptPrice(all[refIdx], ref.textPosition || 'high'));
+                            var refLabelPosition = (ref.textPosition || 'high') === 'low' ? 'low' : 'high';
+                            var ry = geo.pToY(ptPrice(all[refIdx], refLabelPosition));
                             ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(ref.textColor || (tree.offset && tree.offset.textColor), 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
-                            ctx.textAlign = 'center'; ctx.fillText(String(ref.candleText || (tree.offset && tree.offset.candleText) || '').trim(), rx, ry - 5); ctx.restore();
+                            ctx.textAlign = 'center'; ctx.textBaseline = refLabelPosition === 'low' ? 'top' : 'bottom';
+                            ctx.fillText(String(ref.candleText || (tree.offset && tree.offset.candleText) || '').trim(), rx, refLabelPosition === 'low' ? ry + 2 : ry - 2); ctx.restore();
                         }
                     }
                 });
@@ -3795,6 +3938,24 @@ try {
     }
 
     var PT_ROOT_TRADE_DATA = [];
+    var PT_FAMILY_HOVER_NOTE = null;
+    function ptShowFamilyHoverNote(trade, clientX, clientY) {
+        if (!trade || !trade.minimumRiskRewardApplied) { if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none'; return; }
+        if (!PT_FAMILY_HOVER_NOTE) {
+            PT_FAMILY_HOVER_NOTE=document.createElement('div');
+            PT_FAMILY_HOVER_NOTE.className='pt-family-hover-note';
+            PT_FAMILY_HOVER_NOTE.setAttribute('role','status');
+            document.body.appendChild(PT_FAMILY_HOVER_NOTE);
+        }
+        var actual=Number(trade.configuredTpPrice), entry=Number(trade.entryPrice), risk=Math.abs(entry-Number(trade.slPrice));
+        var actualRR=(risk>0&&Number.isFinite(actual))?(trade.isLong?(actual-entry)/risk:(entry-actual)/risk):0;
+        PT_FAMILY_HOVER_NOTE.innerHTML='<strong>Minimum risk/reward applied</strong>This trade family\'s configured take-profit provides approximately 1:'+actualRR.toFixed(2)+' reward. The minimum permitted target is 1:1, so the take-profit was adjusted to the minimum allowed level.';
+        PT_FAMILY_HOVER_NOTE.style.display='block';
+        var left=Math.max(8,Math.min((clientX||12)+14,window.innerWidth-PT_FAMILY_HOVER_NOTE.offsetWidth-8));
+        var top=Math.max(8,Math.min((clientY||12)+14,window.innerHeight-PT_FAMILY_HOVER_NOTE.offsetHeight-8));
+        PT_FAMILY_HOVER_NOTE.style.left=left+'px';PT_FAMILY_HOVER_NOTE.style.top=top+'px';
+    }
+
     function ptBuildRootTradeData(roots, candles) {
         var records = [];
         function targetKey(root, encoded) {
@@ -3808,6 +3969,7 @@ try {
         function stamp(c) { if(!c) return '—'; var v=c.time; if(typeof v==='number') return new Date(v < 1e12 ? v*1000 : v).toISOString(); return String(v||'—'); }
         function targetLabel(root, encoded) { if(!encoded) return '—'; var parts=String(encoded).split('|'); var tree=(root.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); var c=tree&&tree[parts[1]]; return c&&c.name ? c.name : (parts[2]||'—'); }
         roots.forEach(function(root){
+            if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
             if(!root.useForTrades) return;
             var tfs=ptNormTfList(root); if(tfs.indexOf(String(PT_CURRENT_TIMEFRAME).toLowerCase())<0) return;
             var entryKey=targetKey(root,root.entryFrom), slKey=targetKey(root,root.stoplossFrom), tpKey=root.takeProfitType==='risk_reward'?null:targetKey(root,root.takeProfitFrom);
@@ -3829,9 +3991,20 @@ try {
                     if(triggerHit){triggerIndex=i;break;}
                 }
                 var rr=root.takeProfitType==='risk_reward'?Number(window.PT_PROVIDER_RISK_REWARD || root.riskReward || 0):null;
-                var tpPrice=root.takeProfitType==='risk_reward'
-                    ? (isLong ? entryPrice+Math.abs(entryPrice-slPrice)*(rr>0?rr:1) : entryPrice-Math.abs(entryPrice-slPrice)*(rr>0?rr:1))
+                var riskDistanceForTarget=Math.abs(entryPrice-slPrice);
+                var configuredTpPrice = root.takeProfitType==='risk_reward'
+                    ? (isLong ? entryPrice+riskDistanceForTarget*(rr>0?rr:1) : entryPrice-riskDistanceForTarget*(rr>0?rr:1))
                     : (tpC?ptPrice(tpC,root.takeProfitPriceLevel||'high'):null);
+                var tpPrice = configuredTpPrice;
+                var minimumRiskRewardApplied = false;
+                // HARD RULE: price-level take profit can never be less than 1:1.
+                // If the configured price is too close, on the wrong side, or gives < 1R,
+                // clamp it to exactly one risk distance from entry in the profitable direction.
+                if(root.takeProfitType!=='risk_reward' && riskDistanceForTarget>0 && tpPrice!==null && Number.isFinite(Number(tpPrice))){
+                    var minimumTarget=isLong ? entryPrice+riskDistanceForTarget : entryPrice-riskDistanceForTarget;
+                    var actualReward=isLong ? Number(tpPrice)-entryPrice : entryPrice-Number(tpPrice);
+                    if(!(actualReward>=riskDistanceForTarget)) { tpPrice=minimumTarget; minimumRiskRewardApplied=true; }
+                }
                 var slTrigger=null,tpTrigger=null,outcome=triggerIndex==null?'pending entry':'in trade';
                 if(triggerIndex!=null){
                     for(var j=triggerIndex;j<candles.length;j++){
@@ -3850,7 +4023,7 @@ try {
                 records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:famIndex+1,timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),orderType:order,
                     entryIndex:entryIndex,entryName:targetLabel(root,root.entryFrom),entryPrice:entryPrice,entryTime:stamp(entryC),
                     slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
-                    riskReward:familyRiskReward,configuredRiskReward:rr,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
+                    riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
                     triggerIndex:triggerIndex,entryTriggerTime:triggerIndex!=null?stamp(candles[triggerIndex]):null,slTriggerIndex:slTrigger,tpTriggerIndex:tpTrigger,outcome:outcome,
                     slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null});
             });
@@ -3859,51 +4032,484 @@ try {
     }
     window.ptOpenRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.add('active');ptRefreshRootsData();};
     window.ptCloseRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.remove('active');};
+    // Resolve a configured candle timestamp to the currently loaded chart index.
+    function ptIndexForTradeTime(value) {
+        if (value == null || value === '' || !Array.isArray(PT_CANDLES)) return -1;
+        var wanted = String(value).replace('T',' ').slice(0,16);
+        for (var i = 0; i < PT_CANDLES.length; i++) {
+            if (String(PT_CANDLES[i].time || '').replace('T',' ').slice(0,16) === wanted) return i;
+        }
+        return -1;
+    }
+
+    function ptStopLocateArrowAnimation() {
+        if (PT_LOCATE_ANIMATION_FRAME !== null) {
+            cancelAnimationFrame(PT_LOCATE_ANIMATION_FRAME);
+            PT_LOCATE_ANIMATION_FRAME = null;
+        }
+    }
+
+    function ptDrawLocateArrow(geo) {
+        var a = PT_LOCATE_ARROW;
+        if (!a) return;
+        var now = Date.now();
+        if (now >= a.expiresAt) {
+            PT_LOCATE_ARROW = null;
+            ptStopLocateArrowAnimation();
+            return;
+        }
+
+        var ctx = geo.ctx;
+        // When a stop-loss was actually triggered, align the arrow with that
+        // trigger candle and target its extreme: sell -> high, buy -> low.
+        // If no trigger candle exists, fall back to the configured stop-loss price
+        // and keep the arrow aligned with the entry-trigger candle.
+        var x = geo.baseX + a.index * geo.step + geo.step / 2;
+        var targetY = geo.pToY(a.targetPrice);
+        var pulse = Math.sin((now - a.startedAt) / 90) * 4;
+        // Trigger candle targets sit 1px beyond the relevant wick; without a
+        // trigger candle the arrowhead sits directly on the stop-loss price level.
+        // The triangle's actual apex is 1px beyond tipY in its pointing
+        // direction, so compensate here to land the apex at the requested pixel.
+        var tipY = targetY + (a.direction === 'up'
+            ? (a.hasStoplossTrigger ? 2 : 1)
+            : (a.hasStoplossTrigger ? -2 : -1));
+        var shaft = 48 + Math.sin((now - a.startedAt) / 130) * 5;
+        var head = 12;
+
+        // Keep the complete pointer inside the plot area without changing its target.
+        tipY = Math.max(geo.chartTop + 8, Math.min(geo.chartBottom - 8, tipY));
+        var shaftStartY = a.direction === 'up'
+            ? Math.min(geo.chartBottom - 5, tipY + shaft)
+            : Math.max(geo.chartTop + 5, tipY - shaft);
+        var shaftEndY = a.direction === 'up' ? tipY + head : tipY - head;
+
+        ctx.save();
+        ctx.globalAlpha = 0.98;
+        ctx.strokeStyle = '#ffd400';
+        ctx.fillStyle = '#ffd400';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.shadowColor = 'rgba(0,0,0,0.75)';
+        ctx.shadowBlur = 7;
+
+        // The arrow stays on the entry-trigger candle's exact vertical axis.
+        ctx.beginPath();
+        ctx.moveTo(x, shaftStartY);
+        ctx.lineTo(x, shaftEndY);
+        ctx.stroke();
+
+        ctx.beginPath();
+        if (a.direction === 'up') {
+            ctx.moveTo(x, tipY - 1);
+            ctx.lineTo(x - head, tipY + head);
+            ctx.lineTo(x + head, tipY + head);
+        } else {
+            ctx.moveTo(x, tipY + 1);
+            ctx.lineTo(x - head, tipY - head);
+            ctx.lineTo(x + head, tipY - head);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // Ring marks the selected target: the stop-loss trigger wick when
+        // available, otherwise the configured stop-loss price.
+        ctx.beginPath();
+        ctx.arc(x, targetY, 7 + Math.abs(pulse) * 0.4, 0, Math.PI * 2);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, targetY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd400';
+        ctx.fill();
+        ctx.restore();
+    }
+
+    function ptRunLocateArrowAnimation() {
+        ptStopLocateArrowAnimation();
+        function frame() {
+            if (!PT_LOCATE_ARROW || Date.now() >= PT_LOCATE_ARROW.expiresAt) {
+                PT_LOCATE_ARROW = null;
+                PT_LOCATE_ANIMATION_FRAME = null;
+                ptScheduleDraw();
+                return;
+            }
+            ptScheduleDraw();
+            PT_LOCATE_ANIMATION_FRAME = requestAnimationFrame(frame);
+        }
+        PT_LOCATE_ANIMATION_FRAME = requestAnimationFrame(frame);
+    }
+
+    // Close the records modal, zoom to the full trade area, and point to its entry trigger.
+    window.ptLocateTrade=function(rootId,familyNumber){
+        var records=Array.isArray(PT_ROOT_TRADE_DATA)?PT_ROOT_TRADE_DATA:[];
+        var trade=records.find(function(t){
+            return String(t.rootId)===String(rootId)&&Number(t.familyNumber)===Number(familyNumber);
+        });
+        if(!trade || !Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
+
+        var entryIndex = Number(trade.triggerIndex != null ? trade.triggerIndex : trade.entryIndex);
+        if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) {
+            entryIndex = Number(trade.entryIndex);
+        }
+        if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) return;
+
+        var slPrice = Number(trade.slPrice);
+        var entryPrice = Number(trade.entryPrice);
+        var tpPrice = Number(trade.tpPrice);
+        if(!Number.isFinite(slPrice)) slPrice = Number(PT_CANDLES[entryIndex].low);
+        if(!Number.isFinite(entryPrice)) entryPrice = Number(PT_CANDLES[entryIndex].close);
+
+        var slIndex = ptIndexForTradeTime(trade.slTime);
+        var tpIndex = ptIndexForTradeTime(trade.tpTime);
+        var slTriggerIndex = trade.slTriggerIndex != null ? Number(trade.slTriggerIndex) : NaN;
+        var hasStoplossTrigger = Number.isFinite(slTriggerIndex) &&
+            slTriggerIndex >= 0 && slTriggerIndex < PT_CANDLES.length;
+        if(slIndex < 0 && trade.slTriggerIndex != null) slIndex = Number(trade.slTriggerIndex);
+        if(tpIndex < 0 && trade.tpTriggerIndex != null) tpIndex = Number(trade.tpTriggerIndex);
+
+        var indices = [entryIndex];
+        if(Number.isFinite(slIndex) && slIndex >= 0 && slIndex < PT_CANDLES.length) indices.push(slIndex);
+        if(Number.isFinite(tpIndex) && tpIndex >= 0 && tpIndex < PT_CANDLES.length) indices.push(tpIndex);
+        var minIndex = Math.min.apply(Math, indices);
+        var maxIndex = Math.max.apply(Math, indices);
+        var span = Math.max(1, maxIndex - minIndex + 1);
+        var card = document.getElementById('ptChartCard');
+        if(!card) return;
+
+        var locateIndex = hasStoplossTrigger ? slTriggerIndex : entryIndex;
+        var vw = card.clientWidth;
+        var avail = Math.max(120, vw - PT_PADDING_LEFT - PT_PADDING_RIGHT - 48);
+        // Adjust zoom horizontally only. Keep candles readable, with a modest cap;
+        // vertical scale is deliberately not enlarged or otherwise zoomed.
+        var fitWidth = avail / (span * 1.35 + 3);
+        PT_VIEW.candleWidth = Math.max(3.5, Math.min(12, fitWidth));
+        PT_VIEW.candleSpacing = Math.max(1, PT_VIEW.candleWidth * 0.35);
+
+        // Centre the arrow's target candle when a stop-loss trigger exists;
+        // otherwise centre the entry-trigger candle as the stop-loss-price fallback.
+        var step = ptStep();
+        var centerX = PT_PADDING_LEFT + PT_VIRTUAL_PAD + locateIndex * step + step / 2;
+        PT_VIEW.offsetX = centerX - vw / 2;
+        ptClampOffsetX();
+        PT_FOLLOW_LATEST = false;
+
+        // Include the trade's price levels and leave breathing room above/below them.
+        var prices = [entryPrice, slPrice];
+        if(Number.isFinite(tpPrice)) prices.push(tpPrice);
+        var finitePrices = prices.filter(function(v){return Number.isFinite(v);});
+        var priceMin = Math.min.apply(Math, finitePrices);
+        var priceMax = Math.max.apply(Math, finitePrices);
+        if(priceMax === priceMin) {
+            var pad = Math.max(Math.abs(priceMax) * 0.002, 0.00001);
+            priceMin -= pad; priceMax += pad;
+        } else {
+            var pricePad = (priceMax - priceMin) * 0.18;
+            priceMin -= pricePad; priceMax += pricePad;
+        }
+
+        // Infer direction from stop-loss versus entry:
+        // SL above entry => sell/down; SL below entry => buy/up.
+        var isSell = slPrice > entryPrice;
+        var isBuy = slPrice < entryPrice;
+        var direction = isSell ? 'down' : (isBuy ? 'up' : (String(trade.orderType || '').toLowerCase().indexOf('sell') === 0 ? 'down' : 'up'));
+        var targetIndex = hasStoplossTrigger ? slTriggerIndex : entryIndex;
+        var targetPrice = slPrice;
+        if (hasStoplossTrigger) {
+            var stoplossTriggerCandle = PT_CANDLES[slTriggerIndex];
+            targetPrice = direction === 'down'
+                ? Number(stoplossTriggerCandle.high)
+                : Number(stoplossTriggerCandle.low);
+            if (!Number.isFinite(targetPrice)) {
+                hasStoplossTrigger = false;
+                targetIndex = entryIndex;
+                targetPrice = slPrice;
+            }
+        }
+        // Keep the full family vertically centred while ensuring the arrow's
+        // selected target price is included in the visible price range.
+        if (Number.isFinite(targetPrice)) {
+            priceMin = Math.min(priceMin, targetPrice);
+            priceMax = Math.max(priceMax, targetPrice);
+        }
+        var centerPrice = (entryPrice + slPrice) / 2;
+        PT_LOCATE_ARROW = {
+            rootId: String(rootId),
+            familyNumber: Number(familyNumber),
+            index: targetIndex,
+            slPrice: slPrice,
+            targetPrice: targetPrice,
+            hasStoplossTrigger: hasStoplossTrigger,
+            entryPrice: entryPrice,
+            centerPrice: centerPrice,
+            priceMin: priceMin,
+            priceMax: priceMax,
+            direction: direction,
+            startedAt: Date.now(),
+            expiresAt: Date.now() + 4000
+        };
+
+        window.ptCloseRootsData();
+        PT_HOVER_INDEX = entryIndex;
+        PT_CURSOR_Y = null;
+        ptStopLocateArrowAnimation();
+
+        window.requestAnimationFrame(function(){
+            // Recalculate the visible price scale after centering the trade's candles.
+            ptScheduleDraw();
+            if(typeof ptUpdateReadout==='function') ptUpdateReadout();
+            if(typeof ptUpdateJumpLatestVisibility==='function') ptUpdateJumpLatestVisibility();
+            ptRunLocateArrowAnimation();
+        });
+    };
     window.ptRefreshRootsData=function(){
         if(typeof ptDrawChart==='function')ptDrawChart();
         var body=document.getElementById('ptRootsDataBody'),status=document.getElementById('ptRootsDataStatus'); if(!body)return;
         var roots=(window.ptGetTrainingConfiguration&&window.ptGetTrainingConfiguration().roots)||[];
         var all=PT_ROOT_TRADE_DATA||[];
-        var stopCount=all.filter(function(t){return t.outcome==='stoploss hit';}).length;
-        var profitCount=all.filter(function(t){return t.outcome==='take profit reached';}).length;
-        var pendingCount=all.filter(function(t){return t.outcome==='pending entry';}).length;
-        var inTradeCount=all.filter(function(t){return t.outcome==='in trade';}).length;
-        // Sum the individual risk/reward values for every winning family.
-        // Every stop-loss contributes -1R, so net total R = winning reward units - stop-loss count.
-        var totalRewardR=all.reduce(function(sum,t){
-            if(t.outcome!=='take profit reached') return sum;
-            var familyRR=Number(t.riskReward);
-            return sum+(Number.isFinite(familyRR)?familyRR:0);
-        },0);
-        var lostRiskR=stopCount;
-        var totalTrades=all.length;
-        var closedCount=stopCount+profitCount;
-        var winRate=closedCount>0?(profitCount/closedCount*100):0;
         function fmtRR(value){return Number(value).toLocaleString(undefined,{maximumFractionDigits:3});}
-        function card(label,value,cls,icon,detail){return '<div class="pt-rd-stat '+cls+'"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+value+'</div>'+(detail?'<div class="pt-rd-stat-label">'+detail+'</div>':'')+'</div></div>';}
-        var html='<div class="pt-rd-dashboard">'+
-            card('Total Trades',totalTrades,'pending','fa-list-check','Total matched families')+
-            card('Stoploss hit',stopCount,'loss','fa-arrow-trend-down')+
-            card('Lost Risks',fmtRR(lostRiskR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+stopCount+' losing families')+
-            card('Profit reached',profitCount,'profit','fa-arrow-trend-up')+
-            card('Risk rewards',(totalRewardR>=0?'+':'')+fmtRR(totalRewardR)+'R','profit','fa-gift','Sum of '+profitCount+' winning families')+
-            card('Win rate',fmtRR(winRate)+'%','active','fa-bullseye',profitCount+' wins / '+closedCount+' closed')+
-            card('Pending entries',pendingCount,'pending','fa-hourglass-half')+
-            card('In trade',inTradeCount,'active','fa-chart-line')+'</div>';
-        roots.forEach(function(root,idx){
+        function closed(items){return items.filter(function(t){return t.outcome==='stoploss hit'||t.outcome==='take profit reached';}).sort(function(a,b){
+            var ai=a.slTriggerIndex!=null?a.slTriggerIndex:(a.tpTriggerIndex!=null?a.tpTriggerIndex:(a.triggerIndex!=null?a.triggerIndex:a.entryIndex));
+            var bi=b.slTriggerIndex!=null?b.slTriggerIndex:(b.tpTriggerIndex!=null?b.tpTriggerIndex:(b.triggerIndex!=null?b.triggerIndex:b.entryIndex));
+            return ai-bi || Number(a.entryIndex||0)-Number(b.entryIndex||0);
+        });}
+        function stats(items){
+            var sl=items.filter(function(t){return t.outcome==='stoploss hit';}).length;
+            var tp=items.filter(function(t){return t.outcome==='take profit reached';}).length;
+            var pending=items.filter(function(t){return t.outcome==='pending entry';}).length;
+            var active=items.filter(function(t){return t.outcome==='in trade';}).length;
+            var winsR=items.reduce(function(sum,t){return sum+(t.outcome==='take profit reached'&&Number.isFinite(Number(t.riskReward))?Number(t.riskReward):0);},0);
+            var netR=winsR-sl, sequence=closed(items), lossRun=0,winRun=0,maxLoss=0,maxWin=0;
+            // Virtual balance starts at 100%. Each stoploss subtracts 1 percentage point
+            // and each profitable trade adds its risk-reward value in percentage points.
+            // Unlike the drawdown display, virtual balance and revenue peak are NOT capped at 100%.
+            var equity=100, currentVirtualBalance=100, highestPeakBalance=100, maxDrawdown=0, accountLostAt=null;
+            var activeDrawdownTrades=[],highestDrawdownTrades=[],highestDrawdownLostRisks=0,highestDrawdownRewards=0;
+            var highestRevenuePeakTrades=[],highestDrawdownEquity=100;
+            sequence.forEach(function(t){
+                var tradeR=t.outcome==='stoploss hit' ? -1 : Math.max(0,Number(t.riskReward)||0);
+                if(t.outcome==='stoploss hit'){
+                    lossRun++;winRun=0;maxLoss=Math.max(maxLoss,lossRun);
+                } else {
+                    winRun++;lossRun=0;maxWin=Math.max(maxWin,winRun);
+                }
+                equity += tradeR;
+                currentVirtualBalance = equity;
+                activeDrawdownTrades.push({label:tradeR<0?'-1R':'+'+fmtRR(tradeR)+'RR',value:tradeR,outcome:t.outcome,rootId:t.rootId,familyNumber:t.familyNumber});
+                // Highest drawdown remains measured against the 100% baseline and can recover.
+                var dd=Math.max(0,100-equity);
+                if(dd>maxDrawdown){
+                    maxDrawdown=dd;
+                    highestDrawdownTrades=activeDrawdownTrades.slice();
+                    highestDrawdownLostRisks=highestDrawdownTrades.reduce(function(sum,tr){return sum+(tr.value<0?1:0);},0);
+                    highestDrawdownRewards=highestDrawdownTrades.reduce(function(sum,tr){return sum+(tr.value>0?tr.value:0);},0);
+                    highestDrawdownEquity=equity;
+                }
+                // Revenue peak is the highest cumulative balance ever reached, even after losses.
+                if(equity>highestPeakBalance){
+                    highestPeakBalance=equity;
+                    highestRevenuePeakTrades=activeDrawdownTrades.slice();
+                }
+                if(equity<=0 && accountLostAt===null){
+                    accountLostAt='Root '+String(t.rootId!=null?t.rootId:'?')+' · Trade '+String(t.familyNumber!=null?t.familyNumber:'?');
+                }
+                if(equity>=100) activeDrawdownTrades=[];
+            });
+            return {sl:sl,tp:tp,pending:pending,active:active,total:items.length,closed:sl+tp,winRate:(sl+tp)>0?tp/(sl+tp)*100:0,
+                winsR:winsR,lostR:sl,netR:netR,maxLoss:maxLoss,maxWin:maxWin,maxDrawdown:maxDrawdown,accountLostAt:accountLostAt,
+                currentVirtualBalance:currentVirtualBalance,highestPeakBalance:highestPeakBalance,
+                highestRevenuePeak:Math.max(0,highestPeakBalance-100),highestRevenuePeakTrades:highestRevenuePeakTrades,
+                highestDrawdownTrades:highestDrawdownTrades,highestDrawdownLostRisks:highestDrawdownLostRisks,highestDrawdownRewards:highestDrawdownRewards};
+        }
+
+                function card(label,value,cls,icon,detail){return '<div class="pt-rd-stat '+cls+'"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+value+'</div>'+(detail?'<div class="pt-rd-stat-label">'+detail+'</div>':'')+'</div></div>';}
+        function drawdownCard(x,scopeKey){
+            var key='pt-dd-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
+            var sequenceHtml=x.highestDrawdownTrades.length
+                ? '<div class="pt-dd-sequence">'+x.highestDrawdownTrades.map(function(t){return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Family '+ptEscapeHtml(t.familyNumber)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';}).join('')+'</div>'
+                : '<div class="pt-dd-empty">No drawdown sequence has been recorded.</div>';
+            var rewards=(x.highestDrawdownRewards>=0?'+':'')+fmtRR(x.highestDrawdownRewards)+'R';
+            return '<div class="pt-rd-stat loss pt-rd-drawdown-card" id="'+key+'">'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-chart-line"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Drawdown</div><div class="pt-rd-stat-value">'+fmtRR(x.maxDrawdown)+'%</div><div class="pt-rd-stat-label">'+ptEscapeHtml(x.accountLostAt?'Account exhausted at '+x.accountLostAt:'Fixed 100% balance ceiling · wins restore balance but never exceed 100%')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-details" hidden><div class="pt-dd-detail-heading">Trades making up the highest drawdown</div>'+sequenceHtml+
+                '<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+fmtRR(x.highestDrawdownLostRisks)+'R</strong></div><div><span>Risk rewards</span><strong>'+rewards+'</strong></div></div>'+
+                '<button type="button" class="pt-dd-button secondary" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button></div></div>';
+        }
+        function highestRevenuePeakCard(x,scopeKey){
+            var key='pt-peak-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
+            var sequenceHtml=x.highestRevenuePeakTrades.length
+                ? '<div class="pt-dd-sequence">'+x.highestRevenuePeakTrades.map(function(t){
+                    return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Family '+ptEscapeHtml(t.familyNumber)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
+                  }).join('')+'</div>'
+                : '<div class="pt-dd-empty">No profitable peak above the initial 100% balance has been recorded.</div>';
+            return '<div class="pt-rd-stat profit pt-rd-drawdown-card" id="'+key+'">'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-arrow-trend-up"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Revenue Peak</div><div class="pt-rd-stat-value">+'+fmtRR(x.highestRevenuePeak)+'%</div><div class="pt-rd-stat-label">Highest balance reached: '+fmtRR(x.highestPeakBalance)+'%</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-details" hidden><div class="pt-dd-detail-heading">Trades contributing to the highest revenue peak</div>'+sequenceHtml+
+                '<div class="pt-dd-totals"><div><span>Peak revenue above 100%</span><strong>+'+fmtRR(x.highestRevenuePeak)+'%</strong></div><div><span>Peak balance</span><strong>'+fmtRR(x.highestPeakBalance)+'%</strong></div></div>'+
+                '<button type="button" class="pt-dd-button secondary" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button></div></div>';
+        }
+        window.ptToggleDrawdown=function(key,showDetails){
+            var card=document.getElementById(key); if(!card)return;
+            var cover=card.querySelector('.pt-dd-cover'),details=card.querySelector('.pt-dd-details');
+            if(showDetails){
+                if(!card.dataset.ptOriginalHeight){
+                    card.dataset.ptOriginalHeight=String(Math.max(1,Math.round(card.getBoundingClientRect().height)));
+                }
+                card.style.height=card.dataset.ptOriginalHeight+'px';
+                card.style.maxHeight=card.dataset.ptOriginalHeight+'px';
+                card.style.minHeight='0';
+                if(details){details.hidden=false;details.style.maxHeight='calc('+card.dataset.ptOriginalHeight+'px - 24px)';details.scrollTop=0;}
+                if(cover)cover.hidden=true;
+            }else{
+                if(cover)cover.hidden=false;
+                if(details){details.hidden=true;details.style.maxHeight='';details.scrollTop=0;}
+                card.style.height='';
+                card.style.maxHeight='';
+                card.style.minHeight='';
+                delete card.dataset.ptOriginalHeight;
+            }
+        };
+        function ptTradeDate(t){
+            var idx=t.slTriggerIndex!=null?t.slTriggerIndex:(t.tpTriggerIndex!=null?t.tpTriggerIndex:(t.triggerIndex!=null?t.triggerIndex:t.entryIndex));
+            var c=(idx!=null&&PT_CANDLES[idx])?PT_CANDLES[idx]:null;
+            var raw=c?(c.time||c.open_time): (t.slTriggerTime||t.tpTriggerTime||t.entryTriggerTime||t.entryTime);
+            if(!raw)return null;
+            var d=new Date(String(raw).replace(' ','T'));
+            return Number.isNaN(d.getTime())?null:d;
+        }
+        function ptTradeValue(t){return t.outcome==='stoploss hit'?-1:(t.outcome==='take profit reached'?Math.max(0,Number(t.riskReward)||0):0);}
+        function ptPeriodStats(items){
+            var closedItems=items.filter(function(t){return t.outcome==='stoploss hit'||t.outcome==='take profit reached';});
+            var lost=closedItems.filter(function(t){return t.outcome==='stoploss hit';}).length;
+            var rewards=closedItems.reduce(function(a,t){return a+(t.outcome==='take profit reached'?Math.max(0,Number(t.riskReward)||0):0);},0);
+            return {trades:closedItems,lost:lost,rewards:rewards,net:rewards-lost};
+        }
+        function ptTradeList(items){
+            if(!items.length)return '<div class="pt-dd-empty">No closed trades in this period.</div>';
+            return '<div class="pt-dd-sequence">'+items.map(function(t){
+                var v=ptTradeValue(t),label=v<0?'-1R':'+'+fmtRR(v)+'R';
+                return '<button type="button" class="pt-dd-chip '+(v<0?'loss':'profit')+'" title="Locate trade '+t.familyNumber+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(label)+' <span>#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
+            }).join('')+'</div>';
+        }
+        function ptPeriodCard(title,items,rangeLabel,buttonHtml){
+            var st=ptPeriodStats(items),net=(st.net>=0?'+':'')+fmtRR(st.net)+'R';
+            return '<article class="pt-provision-period"><div class="pt-provision-period-head"><strong>'+ptEscapeHtml(title)+'</strong><span>'+ptEscapeHtml(rangeLabel||'')+'</span></div>'+
+                '<div class="pt-provision-number">'+st.trades.length+' total trades</div><div class="pt-provision-caption">Trades</div>'+ptTradeList(st.trades)+
+                '<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+st.lost+'R</strong></div><div><span>Risk rewards</span><strong>+'+fmtRR(st.rewards)+'R</strong></div></div>'+
+                '<div class="pt-provision-revenue">Risk reward revenue: <b class="'+(st.net<0?'is-loss':'is-profit')+'">'+net+'</b></div>'+(buttonHtml||'')+'</article>';
+        }
+        function ptProvisionMonths(items,scopeKey){
+            var candles=PT_CANDLES||[],groups={};
+            candles.forEach(function(c){var d=new Date(String(c.time||c.open_time||'').replace(' ','T'));if(Number.isNaN(d.getTime()))return;var k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');if(!groups[k])groups[k]={key:k,dates:[],candleCount:0};groups[k].dates.push(d);groups[k].candleCount++;});
+            items.forEach(function(t){var d=ptTradeDate(t);if(!d)return;var k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');if(groups[k]){if(!groups[k].items)groups[k].items=[];groups[k].items.push(t);}});
+            var months=Object.keys(groups).sort().reverse();
+            var count=months.length, label=count>1?count+' months':(count===1?'1 month':'current month');
+            var html='<div class="pt-provision-nav"><strong>Trades Provision</strong><button type="button" class="pt-dd-button secondary" onclick="ptProvisionToggle(\''+scopeKey+'\',false)">Back to summary</button></div><div class="pt-provision-count">'+ptEscapeHtml(label)+' available from loaded chart candles</div>';
+            if(!count)return html+'<div class="pt-rd-empty">No dated candle data is loaded for this timeframe.</div>';
+            html+='<div class="pt-provision-grid pt-provision-month-grid">';
+            months.forEach(function(k){
+                var g=groups[k],dates=g.dates.sort(function(a,b){return a-b;}),first=dates[0],last=dates[dates.length-1];
+                var monthName=first.toLocaleString(undefined,{month:'short',year:'numeric'});
+                var range=first.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})+' — '+last.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+                var id='pt-provision-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
+                html+=ptPeriodCard(monthName,g.items||[],range,'<button class="pt-dd-button" type="button" onclick="ptProvisionShowWeeks(\''+id+'\',\''+k+'\',\''+scopeKey+'\')">See the weeks</button>');
+            });
+            html+='</div>';
+            return html;
+        }
+        window.ptProvisionShowWeeks=function(id,monthKey,scopeKey){
+            var panel=document.getElementById(id);if(!panel)return;
+            var items=window.PT_PROVISION_ITEMS&&window.PT_PROVISION_ITEMS[scopeKey]||[];
+            var parts=monthKey.split('-'),year=Number(parts[0]),month=Number(parts[1])-1;
+            var monthStart=new Date(year,month,1),monthEnd=new Date(year,month+1,0,23,59,59,999);
+            var candles=PT_CANDLES||[],hasCandle=function(a,b){return candles.some(function(c){var d=new Date(String(c.time||c.open_time||'').replace(' ','T'));return !Number.isNaN(d.getTime())&&d>=a&&d<=b;});};
+            var html='<div class="pt-provision-nav"><button class="pt-dd-button secondary" onclick="ptProvisionBack(\''+id+'\',\''+scopeKey+'\')">← Back</button><strong>'+monthStart.toLocaleString(undefined,{month:'long',year:'numeric'})+' · Weeks</strong></div><div class="pt-provision-grid">';
+            var cursor=new Date(monthStart);cursor.setDate(cursor.getDate()-cursor.getDay());var weekNo=1;
+            while(cursor<=monthEnd){
+                var a=new Date(cursor),b=new Date(cursor);b.setDate(b.getDate()+6);b.setHours(23,59,59,999);
+                var inMonth=a<=monthEnd&&b>=monthStart;
+                if(inMonth){
+                    var weekItems=items.filter(function(t){var d=ptTradeDate(t);return d&&d>=a&&d<=b;});
+                    var title='Week '+weekNo,range=a.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' — '+b.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+                    var weekStats=ptPeriodStats(weekItems);
+                    html+='<article class="pt-provision-period"><div class="pt-provision-period-head"><strong>'+title+'</strong><span>'+range+'</span></div>'+
+                        '<div class="pt-provision-number">'+weekStats.trades.length+' total trades</div>';
+                    if(!hasCandle(a,b))html+='<div class="pt-dd-empty">No data for this week.</div>';
+                    else {
+                        html+='<div class="pt-provision-caption">Trades</div>'+ptTradeList(weekStats.trades);
+                        var st=weekStats;html+='<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+st.lost+'R</strong></div><div><span>Risk rewards</span><strong>+'+fmtRR(st.rewards)+'R</strong></div></div><div class="pt-provision-revenue">Risk reward revenue: <b class="'+(st.net<0?'is-loss':'is-profit')+'">'+(st.net>=0?'+':'')+fmtRR(st.net)+'R</b></div>';
+                        html+='<button class="pt-dd-button" onclick="ptProvisionShowDays(\''+id+'\',\''+scopeKey+'\',\''+monthKey+'\','+a.getFullYear()+','+a.getMonth()+','+a.getDate()+')">See days</button>';
+                    }
+                    html+='</article>';weekNo++;
+                }
+                cursor.setDate(cursor.getDate()+7);
+            }
+            html+='</div>';panel.innerHTML=html;panel.scrollTop=0;
+        };
+        window.ptProvisionShowDays=function(id,scopeKey,monthKey,y,m,d){
+            var panel=document.getElementById(id);if(!panel)return;var items=window.PT_PROVISION_ITEMS&&window.PT_PROVISION_ITEMS[scopeKey]||[];
+            var weekStart=new Date(y,m,d);weekStart.setHours(0,0,0,0);
+            var html='<div class="pt-provision-nav"><button class="pt-dd-button secondary" onclick="ptProvisionShowWeeks(\''+id+'\',\''+monthKey+'\',\''+scopeKey+'\')">← Back to weeks</button><strong>Week days · Sun–Sat</strong></div><div class="pt-provision-grid">';
+            ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(function(dayName,i){
+                var day=new Date(weekStart);day.setDate(weekStart.getDate()+i);
+                var a=new Date(day);a.setHours(0,0,0,0);var b=new Date(day);b.setHours(23,59,59,999);
+                var list=items.filter(function(t){var dt=ptTradeDate(t);return dt&&dt>=a&&dt<=b;});
+                var st=ptPeriodStats(list),title=day.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+                var candleExists=(PT_CANDLES||[]).some(function(c){var dt=new Date(String(c.time||c.open_time||'').replace(' ','T'));return !Number.isNaN(dt.getTime())&&dt>=a&&dt<=b;});
+                html+='<article class="pt-provision-period"><div class="pt-provision-period-head"><strong>'+dayName+'</strong><span>'+ptEscapeHtml(title)+'</span></div>';
+                if(!candleExists)html+='<div class="pt-dd-empty">No data for this day.</div>';
+                else html+='<div class="pt-provision-number">'+st.trades.length+' total trades</div><div class="pt-provision-caption">Trades</div>'+ptTradeList(st.trades)+
+                    '<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+st.lost+'R</strong></div><div><span>Risk rewards</span><strong>+'+fmtRR(st.rewards)+'R</strong></div></div><div class="pt-provision-revenue">Risk reward revenue: <b class="'+(st.net<0?'is-loss':'is-profit')+'">'+(st.net>=0?'+':'')+fmtRR(st.net)+'R</b></div>';
+                html+='</article>';
+            });
+            html+='</div>';panel.innerHTML=html;panel.scrollTop=0;
+        };
+        window.ptProvisionBack=function(id,scopeKey){var panel=document.getElementById(id);if(!panel)return;panel.innerHTML=ptProvisionMonths(window.PT_PROVISION_ITEMS&&window.PT_PROVISION_ITEMS[scopeKey]||[],scopeKey);panel.scrollTop=0;};
+        window.ptProvisionToggle=function(scopeKey,show){
+            var summary=document.getElementById('pt-summary-'+scopeKey),panel=document.getElementById('pt-provision-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-'));
+            if(summary)summary.hidden=!!show;if(panel){panel.hidden=!show;if(show){panel.innerHTML=ptProvisionMonths(window.PT_PROVISION_ITEMS&&window.PT_PROVISION_ITEMS[scopeKey]||[],scopeKey);panel.scrollTop=0;}}
+        };
+        function dashboard(items,scopeKey){
+            var x=stats(items),key=String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
+            window.PT_PROVISION_ITEMS=window.PT_PROVISION_ITEMS||{};window.PT_PROVISION_ITEMS[scopeKey]=items.slice();
+            return '<button type="button" class="pt-dd-button pt-provision-toggle" onclick="ptProvisionToggle(\''+scopeKey+'\',true)">Trades Provision</button>'+
+                '<div id="pt-summary-'+key+'"><div class="pt-rd-dashboard">'+
+                card('Total Trades',x.total,'pending','fa-list-check','Total matched families')+
+                card('Stoploss hit',x.sl,'loss','fa-arrow-trend-down')+
+                card('Lost Risks',fmtRR(x.lostR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+x.sl+' losing families')+
+                card('Profit reached',x.tp,'profit','fa-arrow-trend-up')+
+                card('Risk rewards',(x.winsR>=0?'+':'')+fmtRR(x.winsR)+'R','profit','fa-gift','Sum of '+x.tp+' winning families')+
+                card('Win rate',fmtRR(x.winRate)+'%','active','fa-bullseye',x.tp+' wins / '+x.closed+' closed')+
+                card('Consecutive Loss',x.maxLoss,'loss','fa-arrow-trend-down','Longest losing streak before a profitable trade')+
+                card('Consecutive Win',x.maxWin,'profit','fa-trophy','Longest winning streak without a stoploss')+
+                drawdownCard(x,scopeKey)+highestRevenuePeakCard(x,scopeKey)+
+                card('Current virtual balance',fmtRR(x.currentVirtualBalance)+'%',x.currentVirtualBalance>=100?'profit':'loss','fa-scale-balanced','100% baseline − all lost risks + all profitable risk rewards')+
+                card('Pending entries',x.pending,'pending','fa-hourglass-half')+
+                card('In trade',x.active,'active','fa-chart-line')+'</div></div>'+
+                '<div class="pt-provision-panel" id="pt-provision-'+key+'" hidden><div class="pt-provision-nav"><strong>Trades Provision</strong><button type="button" class="pt-dd-button secondary" onclick="ptProvisionToggle(\''+scopeKey+'\',false)">Back to summary</button></div></div>';
+        }
+        // Global summary remains at the top and aggregates all roots.
+        var html=dashboard(all,'global');
+        roots.forEach(function(root){
             var items=all.filter(function(t){return String(t.rootId)===String(root.id);});
-            var rootSL=items.filter(function(t){return t.outcome==='stoploss hit';}).length;
-            var rootTP=items.filter(function(t){return t.outcome==='take profit reached';}).length;
-            var rootPending=items.filter(function(t){return t.outcome==='pending entry';}).length;
-            var rootActive=items.filter(function(t){return t.outcome==='in trade';}).length;
-            html+='<details class="pt-rd-root" '+(idx===0?'open':'')+'><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+items.length+' families · <b class="is-profit">'+rootTP+' profit</b> · <b class="is-loss">'+rootSL+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
-            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rootPending+'</b></span><span>In trade <b>'+rootActive+'</b></span><span>Closed <b>'+(rootSL+rootTP)+'</b></span></div>';
+            var rs=stats(items);
+            // Each root's detailed summary lives inside its foldable content.
+            html+='<details class="pt-rd-root"><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+items.length+' families · <b class="is-profit">'+rs.tp+' profit</b> · <b class="is-loss">'+rs.sl+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
+            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rs.pending+'</b></span><span>In trade <b>'+rs.active+'</b></span><span>Closed <b>'+rs.closed+'</b></span></div>';
+            html+=dashboard(items,'root-'+root.id);
             if(!items.length){html+='<div class="pt-rd-empty">No complete matched trade families for this root in the current timeframe.</div>';}
-            items.forEach(function(t){
+            // Render individual trade families newest-first; analytics above retain their own chronological order.
+            var displayItems=items.slice().sort(function(a,b){
+                var ai=a.triggerIndex!=null?a.triggerIndex:(a.slTriggerIndex!=null?a.slTriggerIndex:(a.tpTriggerIndex!=null?a.tpTriggerIndex:a.entryIndex));
+                var bi=b.triggerIndex!=null?b.triggerIndex:(b.slTriggerIndex!=null?b.slTriggerIndex:(b.tpTriggerIndex!=null?b.tpTriggerIndex:b.entryIndex));
+                return Number(bi||0)-Number(ai||0);
+            });
+            displayItems.forEach(function(t){
                 var stateClass=t.outcome==='stoploss hit'?'loss':(t.outcome==='take profit reached'?'profit':(t.outcome==='in trade'?'active':'pending'));
                 var rrDisplay=(t.riskReward!==null && Number.isFinite(Number(t.riskReward)))?'1 : '+Number(t.riskReward).toLocaleString(undefined,{maximumFractionDigits:3}):'1 : unavailable';
                 html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span></div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
-                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime)+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
+                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime)+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level · minimum 1:1 enforced')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
                 html+='<div class="pt-rd-details"><div><span>Entry at</span><b>'+ptEscapeHtml(t.entryName)+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
                 if(t.tpType==='risk reward') html+='<div><span>Take profit type</span><b>Risk/reward target</b></div>';
                 else html+='<div><span>Take profit at</span><b>'+ptEscapeHtml(t.tpName||'—')+' · '+ptEscapeHtml(t.tpTime||'—')+'</b></div>';
@@ -3911,12 +4517,12 @@ try {
                 html+='<div><span>Entry trigger</span><b>'+ptEscapeHtml(t.entryTriggerTime||'Waiting for trigger candle')+'</b></div>';
                 if(t.outcome==='stoploss hit')html+='<div><span>Stoploss hit</span><b>'+ptEscapeHtml(t.slTriggerTime||'—')+'</b></div>';
                 if(t.outcome==='take profit reached')html+='<div><span>Profit reached</span><b>'+ptEscapeHtml(t.tpTriggerTime||'—')+'</b></div>';
-                html+='</div></article>';
+                html+='</div><div class="pt-rd-trade-actions"><button type="button" class="pt-dd-locate" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')"><i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Locate on chart</button></div></article>';
             });
             html+='</details>';
         });
         body.innerHTML=html;
-        if(status)status.textContent='Analytics for '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+all.length+' matched families from currently loaded chart candles.';
+        if(status)status.textContent='Analytics for '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+all.length+' matched families from currently loaded chart candles. Price-level take profit is hard-enforced to at least 1:1.';
     };
     function ptEscapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 
@@ -3938,12 +4544,24 @@ try {
         var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
         var idx = Math.floor((x - baseX) / step);
         if (idx < 0 || idx >= PT_CANDLES.length) idx = -1;
+        var hoveredFamily = null;
+        if (idx >= 0 && Array.isArray(PT_ROOT_TRADE_DATA)) {
+            hoveredFamily = PT_ROOT_TRADE_DATA.find(function(t) {
+                if (!t.minimumRiskRewardApplied) return false;
+                var endIndex = Math.max(Number(t.slTriggerIndex == null ? t.entryIndex : t.slTriggerIndex),
+                                        Number(t.tpTriggerIndex == null ? t.entryIndex : t.tpTriggerIndex),
+                                        Number(t.triggerIndex == null ? t.entryIndex : t.triggerIndex));
+                return idx >= Math.min(Number(t.entryIndex), Number(t.triggerIndex == null ? t.entryIndex : t.triggerIndex)) && idx <= endIndex;
+            }) || null;
+        }
+        ptShowFamilyHoverNote(hoveredFamily,e.clientX,e.clientY);
         var inPlotHorizontally = (x >= PT_PADDING_LEFT && x <= (PT_CANVAS.clientWidth - PT_PADDING_RIGHT));
         var newCursorY = inPlotHorizontally ? y : null;
         var changed = (idx !== PT_HOVER_INDEX) || (newCursorY !== PT_CURSOR_Y);
         if (changed) { PT_HOVER_INDEX = idx; PT_CURSOR_Y = newCursorY; ptScheduleDraw(); ptUpdateReadout(); }
     }
     function ptHandleMouseLeave() {
+        if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none';
         if (PT_HOVER_INDEX !== -1 || PT_CURSOR_Y !== null) {
             PT_HOVER_INDEX = -1; PT_CURSOR_Y = null;
             ptScheduleDraw(); ptUpdateReadout();
@@ -3968,7 +4586,8 @@ try {
 
     // ==================== PAN + PINCH + DOUBLE-CLICK ====================
     var PT_DRAG_STATE = { mode: null, startX: 0, startY: 0, startOffsetX: 0, startOffsetY: 0, moved: false, downAt: 0 };
-    var PT_TOUCH_STATE = { pointers: {}, pinchStartDist: 0, pinchStartCandleWidth: 0, pinchMidX: 0, _lastPan: null };
+    var PT_TOUCH_STATE = { pointers: {}, pinchStartDist: 0, pinchStartCandleWidth: 0, pinchMidX: 0, _lastPan: null,
+        crosshairTimer:null, crosshairActive:false, touchStartX:0, touchStartY:0, latestTouchX:0, latestTouchY:0 };
 
     function ptAttachCanvasEvents() {
         PT_CANVAS.addEventListener('mousedown', function (e) {
@@ -4034,6 +4653,26 @@ try {
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchstart', function (e) {
+            if (e.touches.length === 1) {
+                var firstTouch=e.touches[0];
+                PT_TOUCH_STATE.touchStartX=PT_TOUCH_STATE.latestTouchX=firstTouch.clientX;
+                PT_TOUCH_STATE.touchStartY=PT_TOUCH_STATE.latestTouchY=firstTouch.clientY;
+                PT_TOUCH_STATE.crosshairActive=false;
+                if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                PT_TOUCH_STATE.crosshairTimer=setTimeout(function(){
+                    if (!PT_TOUCH_STATE.pointers || Object.keys(PT_TOUCH_STATE.pointers).length!==1) return;
+                    PT_TOUCH_STATE.crosshairActive=true;
+                    var rect=PT_CANVAS.getBoundingClientRect();
+                    var x=PT_TOUCH_STATE.latestTouchX-rect.left,y=PT_TOUCH_STATE.latestTouchY-rect.top;
+                    var step=PT_CANVAS._ptStep||ptStep(),baseX=PT_CANVAS._ptBaseX||(PT_PADDING_LEFT+PT_VIRTUAL_PAD);
+                    var idx=Math.floor((x-baseX)/step);PT_HOVER_INDEX=(idx>=0&&idx<PT_CANDLES.length)?idx:-1;
+                    PT_CURSOR_Y=(x>=PT_PADDING_LEFT&&x<=PT_CANVAS.clientWidth-PT_PADDING_RIGHT)?y:null;
+                    ptScheduleDraw();ptUpdateReadout();
+                },5000);
+            } else {
+                if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                PT_TOUCH_STATE.crosshairActive=false;
+            }
             for (var i = 0; i < e.changedTouches.length; i++) {
                 var t = e.changedTouches[i];
                 PT_TOUCH_STATE.pointers[t.identifier] = { x: t.clientX, y: t.clientY };
@@ -4044,6 +4683,21 @@ try {
 
         PT_CANVAS.addEventListener('touchmove', function (e) {
             e.preventDefault();
+            if (e.touches.length===1) { PT_TOUCH_STATE.latestTouchX=e.touches[0].clientX; PT_TOUCH_STATE.latestTouchY=e.touches[0].clientY; }
+            if (PT_TOUCH_STATE.crosshairActive && e.touches.length===1) {
+                var touch=e.touches[0],rect=PT_CANVAS.getBoundingClientRect(),x=touch.clientX-rect.left,y=touch.clientY-rect.top;
+                var step=PT_CANVAS._ptStep||ptStep(),baseX=PT_CANVAS._ptBaseX||(PT_PADDING_LEFT+PT_VIRTUAL_PAD);
+                var idx=Math.floor((x-baseX)/step);PT_HOVER_INDEX=(idx>=0&&idx<PT_CANDLES.length)?idx:-1;
+                PT_CURSOR_Y=(x>=PT_PADDING_LEFT&&x<=PT_CANVAS.clientWidth-PT_PADDING_RIGHT)?y:null;
+                ptScheduleDraw();ptUpdateReadout();
+                return;
+            }
+            if (PT_TOUCH_STATE.crosshairTimer && e.touches.length===1) {
+                var moving=e.touches[0];
+                if (Math.hypot(moving.clientX-PT_TOUCH_STATE.touchStartX,moving.clientY-PT_TOUCH_STATE.touchStartY)>18) {
+                    clearTimeout(PT_TOUCH_STATE.crosshairTimer);PT_TOUCH_STATE.crosshairTimer=null;
+                }
+            }
             for (var i = 0; i < e.changedTouches.length; i++) {
                 var t = e.changedTouches[i];
                 PT_TOUCH_STATE.pointers[t.identifier] = { x: t.clientX, y: t.clientY };
@@ -4091,6 +4745,11 @@ try {
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchend', function (e) {
+            if (PT_TOUCH_STATE.crosshairTimer) { clearTimeout(PT_TOUCH_STATE.crosshairTimer); PT_TOUCH_STATE.crosshairTimer=null; }
+            if (PT_TOUCH_STATE.crosshairActive) {
+                PT_TOUCH_STATE.crosshairActive=false;PT_HOVER_INDEX=-1;PT_CURSOR_Y=null;
+                ptScheduleDraw();ptUpdateReadout();
+            }
             for (var i = 0; i < e.changedTouches.length; i++) {
                 var t = e.changedTouches[i];
                 delete PT_TOUCH_STATE.pointers[t.identifier];
@@ -4100,6 +4759,8 @@ try {
             ptUpdatePinchBaseline();
         });
         PT_CANVAS.addEventListener('touchcancel', function () {
+            if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+            PT_TOUCH_STATE.crosshairTimer=null;PT_TOUCH_STATE.crosshairActive=false;PT_HOVER_INDEX=-1;PT_CURSOR_Y=null;
             PT_TOUCH_STATE.pointers = {};
             PT_TOUCH_STATE.pinchStartDist = 0;
             PT_TOUCH_STATE._lastPan = null;
@@ -4272,7 +4933,7 @@ try {
         var OFFSET_POS_POINTS = ['all','random','fixed'];
         var TP_TYPES = ['risk_reward','price_levels'];
         var DRAW_TO_EXTRA = ['any_intercept_candle'];
-        var TEXT_POSITIONS = ['high','low','open','close'];
+        var TEXT_POSITIONS = ['high','low'];
         var COLOR_OPTIONS = [
             {value:'purple',label:'Purple'}, {value:'red',label:'Red'},
             {value:'blue',label:'Blue'}, {value:'green',label:'Green'},
@@ -4896,21 +5557,33 @@ try {
             toggle.className = 'pt-cfg-root-toggle';
             toggle.setAttribute('aria-expanded', root.expanded ? 'true' : 'false');
             toggle.innerHTML = '<i class="fa-solid ' + (root.expanded ? 'fa-chevron-down' : 'fa-chevron-right') + '"></i>';
-            toggle.addEventListener('click', function () {
+            function toggleRootExpanded() {
                 root.expanded = !root.expanded;
                 onChange();
+            }
+            toggle.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleRootExpanded();
             });
             head.appendChild(toggle);
 
             var tag = document.createElement('div');
             tag.className = 'pt-cfg-root-tag';
-            tag.innerHTML = '<span class="pt-cfg-chip">Root ' + root.id + '</span>'
-                          + (root.name ? '<span class="pt-cfg-root-name-display"><strong>' + ptEscapeHtml(root.name) + '</strong></span>' : '')
-                          + '<span>Timeframes: <strong>' + ptEscapeHtml((root.timeframes || []).join(', ') || 'Select timeframes') + '</strong></span>'
-                          + '<span class="pt-cfg-root-state">' + (root.expanded ? 'Click to collapse' : 'Click to expand') + '</span>';
-            tag.style.cursor = 'pointer';
-            tag.addEventListener('click', function () { root.expanded = !root.expanded; onChange(); });
+            tag.innerHTML = '<span class="pt-cfg-root-name-display"><strong>'
+                          + ptEscapeHtml(root.name || 'Unnamed root') + '</strong></span>'
+                          + '<span class="pt-cfg-root-timeframes">Timeframes: <strong>'
+                          + ptEscapeHtml((root.timeframes || []).join(', ') || 'Select timeframes')
+                          + '</strong></span>'
+                          + '<span class="pt-cfg-root-state">' + (root.expanded ? 'Click to collapse' : 'Click anywhere here to expand') + '</span>';
             head.appendChild(tag);
+
+            // The complete root header is an accordion trigger. Controls inside it
+            // (such as Edit root name and its input) keep their own click behavior.
+            head.addEventListener('click', function (event) {
+                if (event.target.closest('button, input, select, textarea, a, label')) return;
+                toggleRootExpanded();
+            });
 
             // Root name is editable inline; saved through the normal configuration save.
             var rootNameActions = document.createElement('div');
@@ -4965,11 +5638,11 @@ try {
             rootGrid.className = 'pt-cfg-root-grid';
             var runSel = mkSelect('cfg_run_' + root.id,
                 [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
-                String(root.runInPython ? 1 : 0), false, function (e) {
-                    root.runInPython = (e.target.value === '1');
+                String(root.applyToChart ? 1 : 0), false, function (e) {
+                    root.applyToChart = (e.target.value === '1');
                     onValueChange();
                 });
-            rootGrid.appendChild(mkField('Run this root in python', runSel));
+            rootGrid.appendChild(mkField('Apply this root to the chart', runSel));
             content.appendChild(rootGrid);
 
             // Trees
@@ -4999,18 +5672,23 @@ try {
             treeFoot.appendChild(addTreeBtn);
             content.appendChild(treeFoot);
 
-            // Trade toggle is intentionally placed immediately below the New Tree button.
+            // Trade settings are grouped inside one green outer border.
+            var tradeSection = document.createElement('section');
+            tradeSection.className = 'pt-cfg-trade-section';
+            tradeSection.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:16px;padding:14px;border:1px solid rgba(18,163,107,.48);border-radius:12px;background:rgba(18,163,107,.07);min-width:0;';
             var tradeToggle = document.createElement('div');
-            tradeToggle.className = 'pt-cfg-root-grid';
-            tradeToggle.style.marginTop = '8px';
+            tradeToggle.className = 'pt-cfg-root-grid pt-cfg-trade-toggle-section';
+            tradeToggle.style.cssText = 'margin:0;padding:0;border:0;background:transparent;';
             var useSel = mkSelect('cfg_use_' + root.id,
                 [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
                 String(root.useForTrades ? 1 : 0), false, function (e) {
                     root.useForTrades = (e.target.value === '1');
                     onChange();
                 });
-            tradeToggle.appendChild(mkField('Use this root for trades', useSel));
-            content.appendChild(tradeToggle);
+            var tradeToggleLabel = mkField('SET TRADES — Use this root for trades', useSel);
+            tradeToggleLabel.style.fontWeight = '800';
+            tradeToggle.appendChild(tradeToggleLabel);
+            tradeSection.appendChild(tradeToggle);
 
             // Trade-entry controls are deliberately placed below all trees and above Drawings.
             // They are not rendered at all unless "Use this root for trades" is Yes.
@@ -5047,17 +5725,22 @@ try {
                     var tpPlSel = mkSelect('cfg_tppl_' + root.id, PRICE_LEVELS, root.takeProfitPriceLevel || 'high', false, function (e) { root.takeProfitPriceLevel = e.target.value; onValueChange(); });
                     tradeGrid.appendChild(mkField('Take Profit Price level', tpPlSel));
                 }
-                content.appendChild(tradeGrid);
+                tradeSection.appendChild(tradeGrid);
             }
+            content.appendChild(tradeSection);
 
-            // Drawings
-            var drawsWrap = document.createElement('div');
+            // Drawings title, entries and add button are all inside one blue outer border.
+            var drawsWrap = document.createElement('section');
             drawsWrap.className = 'pt-cfg-draws';
+            drawsWrap.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:18px;padding:14px;border:1px solid rgba(67,136,220,.5);border-radius:12px;background:rgba(67,136,220,.07);min-width:0;';
             drawsWrap.id = 'cfg_draws_' + root.id;
+            var drawingsHeading = document.createElement('div');
+            drawingsHeading.textContent = 'SET DRAWINGS';
+            drawingsHeading.style.cssText = 'margin:0;font-size:.82rem;font-weight:900;letter-spacing:.08em;color:#4388dc;';
+            drawsWrap.appendChild(drawingsHeading);
             root.drawings.forEach(function (draw, didx) {
                 drawsWrap.appendChild(buildDrawing(root, draw, didx, onChange, onValueChange));
             });
-            content.appendChild(drawsWrap);
 
             var drawFoot = document.createElement('div');
             drawFoot.className = 'pt-cfg-tree-foot';
@@ -5071,7 +5754,8 @@ try {
                 onChange();
             });
             drawFoot.appendChild(addDrawBtn);
-            content.appendChild(drawFoot);
+            drawsWrap.appendChild(drawFoot);
+            content.appendChild(drawsWrap);
             wrap.appendChild(content);
             return wrap;
         }
@@ -5320,7 +6004,7 @@ try {
                 takeProfitFrom: '',
                 takeProfitType: 'risk_reward',
                 takeProfitPriceLevel: 'high',
-                runInPython: false,
+                applyToChart: true,
                 trees: [],
                 drawings: []
             };
@@ -5338,7 +6022,7 @@ try {
                     timeframes: Array.isArray(root.timeframes) ? root.timeframes : [],
                     timeframe: Array.isArray(root.timeframes) ? JSON.stringify(root.timeframes) : '',
                     use_for_trades: root.useForTrades ? 1 : 0,
-                    run_in_python: root.runInPython ? 1 : 0,
+                    apply_to_chart: root.applyToChart ? 1 : 0,
                     entry_at: root.entryFrom || '',
                     order_type: root.orderType || 'buy',
                     entry_order_type: root.orderType || 'buy',
@@ -5646,7 +6330,7 @@ try {
                         takeProfitFrom: row.take_profit_at || row.take_profit_from || '',
                         takeProfitType: (String(row.take_profit_type || '').toLowerCase().replace(/\s+/g, '_') === 'price_levels') ? 'price_levels' : 'risk_reward',
                         takeProfitPriceLevel: row.take_profit_price_level || 'high',
-                        runInPython: ptDbBool(row.run_in_python),
+                        applyToChart: ptDbBool(row.apply_to_chart != null ? row.apply_to_chart : row.run_in_python),
                         trees: [], drawings: []
                     };
                     rootMap[rid] = root;
