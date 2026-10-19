@@ -1053,8 +1053,17 @@ try {
         -webkit-overflow-scrolling: touch;
         padding-bottom: 2px;
     }
-    .pt-controls-btn-row::-webkit-scrollbar { height: 0; }
-
+    .pt-controls-btn-row::-webkit-scrollbar { display:none; width:0; height:0; }
+    .pt-controls-btn-row { scrollbar-width:none; -ms-overflow-style:none; padding-left:34px; padding-right:34px; }
+    .pt-controls { position:relative; }
+    .pt-control-scroll-arrow { position:absolute; top:50%; transform:translateY(-50%); z-index:30; width:34px; height:42px; display:grid; place-items:center; border:1px solid var(--pt-border); border-radius:10px; background:var(--pt-card); color:var(--pt-text); box-shadow:0 3px 12px rgba(0,0,0,.18); cursor:pointer; }
+    .pt-control-scroll-arrow.left { left:4px; }
+    .pt-control-scroll-arrow.right { right:4px; }
+    .pt-control-scroll-arrow[hidden] { display:none !important; }
+    .pt-crosshair-toggle { gap:6px; }
+    .pt-crosshair-toggle[aria-pressed="true"] { background:var(--pt-accent); color:#fff; border-color:var(--pt-accent); }
+    .pt-crosshair-state { font-size:11px; opacity:.8; }
+    .pt-crosshair-toggle[aria-pressed="true"] .pt-crosshair-state { display:none; }
     .pt-controls > * { pointer-events: auto; }
     .pt-projection-status{display:none;align-items:center;gap:9px;align-self:flex-start;max-width:100%;padding:6px 11px;border:1px solid var(--pt-border);border-radius:9px;background:var(--pt-card);color:var(--pt-muted);font-size:.78rem;box-shadow:var(--pt-shadow)}
     .pt-projection-status.active{display:inline-flex}
@@ -1642,7 +1651,7 @@ try {
     }
     body.pt-fs-active .pt-controls > * { pointer-events: auto; }
     body.pt-fs-active .pt-controls-btn-row { overflow-x: auto; }
-    body.pt-fs-active .pt-controls-btn-row::-webkit-scrollbar { height: 0; }
+    body.pt-fs-active .pt-controls-btn-row::-webkit-scrollbar { display:none; width:0; height:0; }
 
     body.pt-fs-active .pt-chart-card {
         position: fixed;
@@ -2208,7 +2217,9 @@ try {
             <span class="pt-title">Programme Training</span>
         </div>
 
-        <div class="pt-controls-btn-row">
+        <button type="button" class="pt-control-scroll-arrow left" id="ptControlsScrollLeft" aria-label="Scroll controls left" title="Scroll controls left" hidden><i class="fa-solid fa-chevron-left"></i></button>
+        <button type="button" class="pt-control-scroll-arrow right" id="ptControlsScrollRight" aria-label="Scroll controls right" title="Scroll controls right" hidden><i class="fa-solid fa-chevron-right"></i></button>
+        <div class="pt-controls-btn-row" id="ptControlsButtonRow">
             <button type="button" class="pt-topbar-btn" id="ptSymbolBtn" onclick="ptOpenSymbolModal()">
                 <span class="pt-topbar-symbol" id="ptSymbolLabel">Symbol</span>
                 <i class="fa-solid fa-chevron-down pt-topbar-caret"></i>
@@ -2217,6 +2228,10 @@ try {
             <button type="button" class="pt-topbar-btn" id="ptTimeframeBtn" onclick="ptOpenTimeframeModal()">
                 <span class="pt-topbar-symbol" id="ptTimeframeLabel">Timeframe</span>
                 <i class="fa-solid fa-chevron-down pt-topbar-caret"></i>
+            </button>
+            <button type="button" class="pt-topbar-btn pt-crosshair-toggle" id="ptMobileCrosshairToggle"
+                    title="Toggle mobile crosshair mode" aria-pressed="false" onclick="ptToggleMobileCrosshair()">
+                <i class="fa-solid fa-crosshairs" aria-hidden="true"></i><span></i>
             </button>
 
             <div class="pt-tf-strip" id="ptTfStrip"></div>
@@ -2228,11 +2243,6 @@ try {
 
             <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View trade records for matched root families">
                 <span>Roots Data</span>
-            </button>
-
-            <button type="button" class="pt-topbar-btn" id="ptDynamicConsoleBtn" onclick="ptOpenDynamicConsole()"
-                    title="Inspect candle records, timeframe selection, JSON matching and drawings">
-                <span>Dynamic Console</span>
             </button>
 
             <button type="button" class="pt-fs-btn" id="ptFullscreenBtn" title="Toggle fullscreen" onclick="ptToggleFullscreen()">
@@ -2401,24 +2411,6 @@ try {
 </div>
 
 
-<div class="pt-dynamic-console-modal" id="ptDynamicConsoleModal" role="dialog" aria-modal="true" aria-labelledby="ptDynamicConsoleTitle">
-    <div class="pt-dynamic-console-box">
-        <div class="pt-dynamic-console-head">
-            <div>
-                <div class="pt-dynamic-console-title" id="ptDynamicConsoleTitle"><i class="fa-solid fa-terminal"></i> Dynamic Programme Console</div>
-                <div class="pt-dynamic-console-subtitle">Live chart candles → root/timeframe checks → tree conditions → drawings → JSON report</div>
-            </div>
-            <div class="pt-dynamic-console-actions">
-                <button type="button" class="pt-dynamic-console-action" onclick="ptRefreshDynamicConsole()"><i class="fa-solid fa-rotate"></i> Refresh</button>
-                <button type="button" class="pt-dynamic-console-action primary" onclick="ptCopyDynamicConsole()"><i class="fa-regular fa-copy"></i> Copy all</button>
-                <button type="button" class="pt-dynamic-console-action" onclick="ptCloseDynamicConsole()" aria-label="Close console"><i class="fa-solid fa-xmark"></i> Close</button>
-            </div>
-        </div>
-        <div class="pt-dynamic-console-status" id="ptDynamicConsoleStatus">Console ready. Open to inspect the current symbol, timeframe, loaded candles and programme configuration.</div>
-        <textarea class="pt-dynamic-console-json" id="ptDynamicConsoleJson" spellcheck="false" readonly aria-label="Dynamic console JSON report"></textarea>
-    </div>
-</div>
-
 <div class="pt-dynamic-console-modal" id="ptRootsDataModal" role="dialog" aria-modal="true" aria-labelledby="ptRootsDataTitle">
     <div class="pt-dynamic-console-box">
         <div class="pt-dynamic-console-head">
@@ -2486,6 +2478,7 @@ try {
     var PT_CTX         = null;
     var PT_HOVER_INDEX = -1;
     var PT_CURSOR_Y    = null;
+    var PT_MOBILE_CROSSHAIR_MODE = false;
 
     var PT_LOAD_TOKEN         = 0;
     var PT_IS_LOADING_OLDER   = false;
@@ -4659,14 +4652,56 @@ try {
         function targetKey(root, encoded) {
             if (!encoded) return null;
             var parts = String(encoded).split('|'); if (parts.length < 3) return null;
-            var source = tradeSource(root);
-            var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parts[0]);});
+            var parentTarget = parts[0] === 'parent';
+            var source = parentTarget ? root : tradeSource(root);
+            var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parentTarget ? parts[1] : parts[0]);});
             if(!tree) return null;
-            var c=tree[parts[1]]; if(!c) return null;
-            return String(c.selectedExistingId || (parts[1]==='reference' ? c.existingCandleId : null) || c.offsetTo || c.id || parts[2]);
+            var kind = parentTarget ? parts[2] : parts[1];
+            var fallbackId = parentTarget ? parts[3] : parts[2];
+            var c=tree[kind]; if(!c) return null;
+            var identity = String(c.selectedExistingId || (kind==='reference' ? c.existingCandleId : null) || c.offsetTo || c.id || fallbackId);
+            return parentTarget ? 'parent:' + identity : identity;
         }
         function stamp(c) { if(!c) return '—'; var v=c.time; if(typeof v==='number') return new Date(v < 1e12 ? v*1000 : v).toISOString(); return String(v||'—'); }
-        function targetLabel(root, encoded) { if(!encoded) return '—'; var parts=String(encoded).split('|'); var source=tradeSource(root); var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); var c=tree&&tree[parts[1]]; return c&&c.name ? c.name : (parts[2]||'—'); }
+        function targetLabel(root, encoded) {
+            if(!encoded) return '—';
+            var parts=String(encoded).split('|'), parentTarget=parts[0]==='parent';
+            var source=parentTarget ? root : tradeSource(root);
+            var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parentTarget ? parts[1] : parts[0]);});
+            var c=tree&&tree[parentTarget ? parts[2] : parts[1]];
+            return (c&&c.name ? c.name : (parentTarget ? parts[3] : parts[2])||'—') + (parentTarget ? ' (root)' : '');
+        }
+        function resolveTradeTargetIndex(key, family, candles, level) {
+            if (key == null) return null;
+            if (String(key).indexOf('parent:') !== 0) {
+                var direct = (family.map || {})[key];
+                return direct == null ? null : Number(direct);
+            }
+            var parentFamily = family.parentFamily;
+            if (!parentFamily || !parentFamily.map) return null;
+            var parentIdentity = String(key).slice(7);
+            var parentIndex = parentFamily.map[parentIdentity];
+            if (parentIndex == null) return null;
+            var piece = PT_PROJECTION_MAP && PT_PROJECTION_MAP[Number(parentIndex)];
+            if (!piece || piece.first < 0 || piece.last < 0) return null;
+            var lower = Array.isArray(PT_PROJECTION_LOWER_CANDLES) ? PT_PROJECTION_LOWER_CANDLES : candles;
+            var normalizedLevel = String(level || 'high').toLowerCase();
+            if (normalizedLevel === 'open') return piece.first;
+            if (normalizedLevel === 'close') return piece.last;
+            var best = piece.first;
+            var extreme = normalizedLevel === 'low' ? Infinity : -Infinity;
+            for (var li=piece.first; li<=piece.last; li++) {
+                var candidate = lower[li];
+                if (!candidate) continue;
+                var value = normalizedLevel === 'low' ? Number(candidate.low) :
+                    normalizedLevel === 'high' ? Number(candidate.high) : Number(ptPrice(candidate, normalizedLevel));
+                if (!Number.isFinite(value)) continue;
+                if ((normalizedLevel === 'low' && value < extreme) || (normalizedLevel !== 'low' && value > extreme)) {
+                    extreme = value; best = li;
+                }
+            }
+            return best;
+        }
         roots.forEach(function(root){
             if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
             if(!root.useForTrades) return;
@@ -4677,7 +4712,10 @@ try {
             if(!entryKey || !slKey || (root.takeProfitType!=='risk_reward' && !tpKey)) return;
             var families=source === root ? (Array.isArray(root._drawMatches)?root._drawMatches:[]) : (Array.isArray(root._confirmationDrawMatches)?root._confirmationDrawMatches:[]);
             families.forEach(function(family, famIndex){
-                var map=family.map||{}, entryIndex=map[entryKey], slIndex=map[slKey], tpIndex=tpKey?map[tpKey]:null;
+                var map=family.map||{};
+                var entryIndex=resolveTradeTargetIndex(entryKey,family,candles,root.entryPriceLevel||'high');
+                var slIndex=resolveTradeTargetIndex(slKey,family,candles,root.stoplossPriceLevel||'high');
+                var tpIndex=tpKey?resolveTradeTargetIndex(tpKey,family,candles,root.takeProfitPriceLevel||'high'):null;
                 if(entryIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
                 var entryC=candles[entryIndex], slC=candles[slIndex], tpC=tpIndex!=null?candles[tpIndex]:null;
                 if(!entryC||!slC) return;
@@ -4845,7 +4883,20 @@ try {
 
     // Close the records modal, zoom to the full trade area, and point to its entry trigger.
     window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe){
-        var records=(PT_MAIN_TRADE_DATA||PT_ROOT_TRADE_DATA||[]).filter(function(t){return String(t.timeframe||'').toLowerCase()===String(PT_CURRENT_TIMEFRAME||'').toLowerCase() && t.dataMode!=='projected';});
+        // Native trades live in PT_MAIN_TRADE_DATA. Root-confirmation trades are
+        // generated while projecting their parent root onto the lower timeframe and
+        // stored separately in PT_PROJECTED_TRADE_DATA with dataMode='confirmation'.
+        // Search both collections so a Roots Data click can locate the exact
+        // confirmation family on the currently displayed lower-timeframe chart.
+        var nativeRecords = Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA :
+            (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []);
+        var confirmationRecords = (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function(t){
+            return t && t.dataMode === 'confirmation';
+        });
+        var records = nativeRecords.concat(confirmationRecords).filter(function(t){
+            return String(t.timeframe||'').toLowerCase()===String(PT_CURRENT_TIMEFRAME||'').toLowerCase() &&
+                t.dataMode !== 'projected';
+        });
         var trade=records.find(function(t){
             return String(t.rootId)===String(rootId)&&Number(t.familyNumber)===Number(familyNumber)&&(!sourceTimeframe||String(t.sourceTimeframe||'')===String(sourceTimeframe));
         });
@@ -5425,11 +5476,29 @@ try {
             }
             ptUpdatePinchBaseline();
             e.preventDefault();
+            if (PT_MOBILE_CROSSHAIR_MODE && e.touches.length === 1) {
+                var selectedTouch = e.touches[0];
+                PT_TOUCH_STATE.crosshairActive = true;
+                PT_TOUCH_STATE.latestTouchX = selectedTouch.clientX;
+                PT_TOUCH_STATE.latestTouchY = selectedTouch.clientY;
+                ptSetMobileCrosshairAt(selectedTouch.clientX, selectedTouch.clientY);
+                PT_TOUCH_STATE._lastPan = null;
+                return;
+            }
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchmove', function (e) {
             e.preventDefault();
             ptBeginFastInteraction();
+            if (PT_MOBILE_CROSSHAIR_MODE && e.touches.length === 1) {
+                var crosshairTouch = e.touches[0];
+                PT_TOUCH_STATE.crosshairActive = true;
+                PT_TOUCH_STATE.latestTouchX = crosshairTouch.clientX;
+                PT_TOUCH_STATE.latestTouchY = crosshairTouch.clientY;
+                ptSetMobileCrosshairAt(crosshairTouch.clientX, crosshairTouch.clientY);
+                PT_TOUCH_STATE._lastPan = null;
+                return;
+            }
             if (e.touches.length===1) { PT_TOUCH_STATE.latestTouchX=e.touches[0].clientX; PT_TOUCH_STATE.latestTouchY=e.touches[0].clientY; }
             if (PT_TOUCH_STATE.crosshairActive && e.touches.length===1) {
                 var touch=e.touches[0],rect=PT_CANVAS.getBoundingClientRect(),x=touch.clientX-rect.left,y=touch.clientY-rect.top;
@@ -6577,33 +6646,46 @@ try {
             if (root.useForTrades) {
                 var tradeGrid = document.createElement('div');
                 tradeGrid.className = 'pt-cfg-root-grid pt-cfg-trade-grid';
-                function candleTargetsOptions() {
+                function candleTargetsOptions(includeParentRoot) {
                     var opts = [{value:'', label:'— select candle —'}];
-                    var sourceRoot = (root.tradeFor === 'root_confirmation' && root.confirmationRoot) ? root.confirmationRoot : root;
+                    var confirmationMode = root.tradeFor === 'root_confirmation' && root.confirmationRoot;
+                    var sourceRoot = confirmationMode ? root.confirmationRoot : root;
                     sourceRoot.trees.forEach(function (tree) {
                         ['main','reference','offset'].forEach(function (kind) {
                             var candle = tree[kind];
                             if (!candle || !candle.name) return;
                             opts.push({value:tree.id + '|' + kind + '|' + candle.id,
-                                label:candle.name + ' (' + kind + ' · tree ' + tree.id + ')'});
+                                label:candle.name + ' (' + (confirmationMode ? 'confirmation · ' : '') + kind + ' · tree ' + tree.id + ')'});
                         });
                     });
+                    // Entry must be anchored to a lower-timeframe confirmation candle only.
+                    // SL/TP can also reference the parent/root candle's projected price level.
+                    if (confirmationMode && includeParentRoot) {
+                        root.trees.forEach(function (tree) {
+                            ['main','reference','offset'].forEach(function (kind) {
+                                var candle = tree[kind];
+                                if (!candle || !candle.name) return;
+                                opts.push({value:'parent|' + tree.id + '|' + kind + '|' + candle.id,
+                                    label:candle.name + ' (root · ' + kind + ' · tree ' + tree.id + ')'});
+                            });
+                        });
+                    }
                     return opts;
                 }
                 var orderTypeSel = mkSelect('cfg_ordertype_' + root.id, ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'].map(function(v){return {value:v,label:v};}), root.orderType || 'buy', false, function(e){ root.orderType=e.target.value; onValueChange(); });
                 tradeGrid.appendChild(mkField('Order type', orderTypeSel));
-                var entryFromSel = mkSelect('cfg_entryfrom_' + root.id, candleTargetsOptions(), root.entryFrom || '', false, function (e) { root.entryFrom = e.target.value; onValueChange(); });
+                var entryFromSel = mkSelect('cfg_entryfrom_' + root.id, candleTargetsOptions(false), root.entryFrom || '', false, function (e) { root.entryFrom = e.target.value; onValueChange(); });
                 tradeGrid.appendChild(mkField('Entry at', entryFromSel));
                 var entryPlSel = mkSelect('cfg_entrypl_' + root.id, PRICE_LEVELS, root.entryPriceLevel || 'high', false, function (e) { root.entryPriceLevel = e.target.value; onValueChange(); });
                 tradeGrid.appendChild(mkField('Entry Price level', entryPlSel));
-                var slFromSel = mkSelect('cfg_slfrom_' + root.id, candleTargetsOptions(), root.stoplossFrom || '', false, function (e) { root.stoplossFrom = e.target.value; onValueChange(); });
+                var slFromSel = mkSelect('cfg_slfrom_' + root.id, candleTargetsOptions(true), root.stoplossFrom || '', false, function (e) { root.stoplossFrom = e.target.value; onValueChange(); });
                 tradeGrid.appendChild(mkField('Stoploss at', slFromSel));
                 var slPlSel = mkSelect('cfg_slpl_' + root.id, PRICE_LEVELS, root.stoplossPriceLevel || 'high', false, function (e) { root.stoplossPriceLevel = e.target.value; onValueChange(); });
                 tradeGrid.appendChild(mkField('Stoploss Price level', slPlSel));
                 var tpTypeSel = mkSelect('cfg_tptype_' + root.id, TP_TYPES, root.takeProfitType || 'risk_reward', false, function (e) { root.takeProfitType = e.target.value; onChange(); });
                 tradeGrid.appendChild(mkField('Take Profit type', tpTypeSel));
                 if (root.takeProfitType !== 'risk_reward') {
-                    var tpFromSel = mkSelect('cfg_tpfrom_' + root.id, candleTargetsOptions(), root.takeProfitFrom || '', false, function (e) { root.takeProfitFrom = e.target.value; onValueChange(); });
+                    var tpFromSel = mkSelect('cfg_tpfrom_' + root.id, candleTargetsOptions(true), root.takeProfitFrom || '', false, function (e) { root.takeProfitFrom = e.target.value; onValueChange(); });
                     tradeGrid.appendChild(mkField('Take profit at', tpFromSel));
                     var tpPlSel = mkSelect('cfg_tppl_' + root.id, PRICE_LEVELS, root.takeProfitPriceLevel || 'high', false, function (e) { root.takeProfitPriceLevel = e.target.value; onValueChange(); });
                     tradeGrid.appendChild(mkField('Take Profit Price level', tpPlSel));
@@ -7628,208 +7710,70 @@ try {
         });
     })();
 
-    // ==================== DYNAMIC CONSOLE / DIAGNOSTICS ====================
-    function ptDynamicConsoleBuildReport() {
-        var cfg = (typeof window.ptGetTrainingConfiguration === 'function')
-            ? window.ptGetTrainingConfiguration() : null;
-        cfg = cfg && typeof cfg === 'object' ? cfg : {roots:[]};
-        var candles = Array.isArray(PT_CANDLES) ? PT_CANDLES : [];
-        var currentTf = String(PT_CURRENT_TIMEFRAME || '');
-        var currentSymbol = String(PT_CURRENT_SYMBOL || '');
-        var roots = Array.isArray(cfg.roots) ? cfg.roots : [];
-        var snapshot = null;
-        try {
-            var stored = window.ptGetVirtualCandleJson ? window.ptGetVirtualCandleJson() : '[]';
-            snapshot = JSON.parse(stored || 'null');
-        } catch (e) {
-            snapshot = {parseError: String(e)};
+    // Dynamic console diagnostics have been removed.
+    // Horizontally scrollable control strip with floating edge arrows.
+    function ptUpdateControlsScrollButtons() {
+        var row = document.getElementById('ptControlsButtonRow');
+        var left = document.getElementById('ptControlsScrollLeft');
+        var right = document.getElementById('ptControlsScrollRight');
+        if (!row || !left || !right) return;
+        var max = Math.max(0, row.scrollWidth - row.clientWidth);
+        var hasOverflow = max > 2;
+        left.hidden = !hasOverflow || row.scrollLeft <= 2;
+        right.hidden = !hasOverflow || row.scrollLeft >= max - 2;
+    }
+    function ptScrollControls(direction) {
+        var row = document.getElementById('ptControlsButtonRow');
+        if (!row) return;
+        var distance = Math.max(180, Math.floor(row.clientWidth * 0.78));
+        row.scrollBy({left: direction * distance, behavior:'smooth'});
+        window.setTimeout(ptUpdateControlsScrollButtons, 350);
+    }
+    window.ptToggleMobileCrosshair = function() {
+        var button = document.getElementById('ptMobileCrosshairToggle');
+        PT_MOBILE_CROSSHAIR_MODE = !PT_MOBILE_CROSSHAIR_MODE;
+        if (button) {
+            button.setAttribute('aria-pressed', PT_MOBILE_CROSSHAIR_MODE ? 'true' : 'false');
+            button.title = PT_MOBILE_CROSSHAIR_MODE
+                ? 'Crosshair mode is on. Touch or move on the chart to position it; toggle off to pan.'
+                : 'Toggle mobile crosshair mode';
         }
-        var selectedRoots = [];
-        var unselectedRoots = [];
-        roots.forEach(function(root) {
-            var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
-            var item = {
-                rootId: root.id,
-                selectedTimeframes: tfs,
-                timeframeSelected: tfs.indexOf(currentTf.toLowerCase()) !== -1,
-                treeCount: Array.isArray(root.trees) ? root.trees.length : 0,
-                drawingCount: Array.isArray(root.drawings) ? root.drawings.length : 0
-            };
-            (item.timeframeSelected ? selectedRoots : unselectedRoots).push(item);
-        });
-
-        var snapshotCandles = snapshot && Array.isArray(snapshot.candles) ? snapshot.candles : [];
-        var byId = {};
-        snapshotCandles.forEach(function(c) { byId[String(c.id)] = c; });
-        var candleReport = {};
-        candles.forEach(function(c, index) {
-            var virtual = byId[String(c.id)] || null;
-            var rootsForCandle = [];
-            roots.forEach(function(root) {
-                var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
-                var selected = tfs.indexOf(currentTf.toLowerCase()) !== -1;
-                var matched = virtual && Array.isArray(virtual._conditionsMet)
-                    ? virtual._conditionsMet.filter(function(m) { return String(m.rootId) === String(root.id); }) : [];
-                rootsForCandle.push({
-                    rootId: root.id,
-                    status: selected ? (matched.length ? 'TIMEFRAME SELECTED IN ROOT — CONDITION MATCHED' : 'TIMEFRAME SELECTED IN ROOT — NO CONDITION MATCH') : 'THIS TIMEFRAME IS NOT SELECTED IN ROOT',
-                    selectedTimeframes: tfs,
-                    matchedConditions: matched
-                });
-            });
-            candleReport['candle ' + (index + 1)] = {
-                databaseId: c.id,
-                time: c.time,
-                symbol: currentSymbol,
-                timeframe: currentTf,
-                open: c.open, high: c.high, low: c.low, close: c.close,
-                candle_center: c.candle_center,
-                body_center: c.body_center,
-                high_wick_center: c.high_wick_center,
-                low_wick_center: c.low_wick_center,
-                volume: c.volume,
-                programmeTraining: {
-                    rootChecks: rootsForCandle,
-                    matchedRootIds: virtual ? (virtual._matchRootIds || []) : [],
-                    matchedTreeIds: virtual ? (virtual._matchTreeIds || []) : [],
-                    conditionsMet: virtual ? (virtual._conditionsMet || []) : [],
-                    note: virtual ? 'Candle processed by the virtual matcher.' : 'No virtual snapshot entry found for this candle yet.'
-                }
-            };
-        });
-
-        var allDrawings = [];
-        roots.forEach(function(root) {
-            var tfs = typeof ptNormTfList === 'function' ? ptNormTfList(root) : [];
-            (Array.isArray(root.drawings) ? root.drawings : []).forEach(function(drawing, i) {
-                allDrawings.push({
-                    rootId: root.id,
-                    drawingNumber: i + 1,
-                    timeframeSelected: tfs.indexOf(currentTf.toLowerCase()) !== -1,
-                    selectedTimeframes: tfs,
-                    drawFrom: drawing.drawFrom || '',
-                    drawFromPriceLevel: drawing.drawFromPriceLevel || '',
-                    drawTo: drawing.drawTo || '',
-                    drawToPriceLevel: drawing.drawToPriceLevel || '',
-                    status: tfs.indexOf(currentTf.toLowerCase()) === -1
-                        ? 'NOT DRAWN: current timeframe is not selected in this root'
-                        : (snapshotCandles.length ? 'ELIGIBLE: inspect matched candle conditions and chart viewport' : 'NOT CONFIRMED: no virtual candle snapshot yet')
-                });
-            });
-        });
-
-        var messages = [];
-        if (!currentSymbol || !currentTf) messages.push('ERROR: The chart symbol or timeframe is empty.');
-        if (!candles.length) messages.push('NO CANDLES LOADED: PT_CANDLES is empty. The chart has not supplied candle records to the matcher yet, or the candle request failed.');
-        else messages.push('CANDLE DATA: ' + candles.length + ' candle(s) currently loaded in the chart. This is the loaded chart set, not a guarantee that every database row has been fetched.');
-        if (!roots.length) messages.push('NO PROGRAMME ROOTS LOADED: no roots were found in PT_CFG. Open Configuration, allow saved configuration to load, then refresh this console.');
-        if (roots.length && !selectedRoots.length) messages.push('THIS TIMEFRAME IS NOT SELECTED IN ANY ROOT. The current timeframe "' + currentTf + '" will not be evaluated for these roots.');
-        if (selectedRoots.length) messages.push('THIS TIMEFRAME IS SELECTED IN ROOT: ' + selectedRoots.map(function(r) { return 'Root ' + r.rootId; }).join(', ') + '.');
-        if (snapshot && snapshotCandles.length) {
-            var matchedCount = snapshotCandles.filter(function(c) { return Array.isArray(c._conditionsMet) && c._conditionsMet.length; }).length;
-            messages.push('MATCHING RESULT: ' + matchedCount + ' of ' + snapshotCandles.length + ' loaded candles matched at least one configured tree condition.');
-        } else if (selectedRoots.length && candles.length) {
-            messages.push('NO VIRTUAL MATCH JSON FOUND YET. Open Refresh in this console to rerun the chart matcher and rebuild the report.');
+        if (!PT_MOBILE_CROSSHAIR_MODE) {
+            PT_TOUCH_STATE.crosshairActive = false;
+        } else if (PT_CANVAS && PT_CANDLES.length) {
+            var rect = PT_CANVAS.getBoundingClientRect();
+            ptSetMobileCrosshairAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
         }
-        if (allDrawings.length) messages.push('DRAWINGS CONFIGURED: ' + allDrawings.length + '. A drawing only renders when its root timeframe is selected and its source tree has matching candles.');
-        else messages.push('NO DRAWINGS CONFIGURED in the loaded root configuration.');
-        return {
-            generatedAt: new Date().toISOString(),
-            status: messages,
-            context: {
-                programmeId: PT_PROGRAMME_ID,
-                symbol: currentSymbol,
-                currentTimeframe: currentTf,
-                loadedChartCandleCount: candles.length,
-                virtualSnapshotFound: !!(snapshot && snapshotCandles.length),
-                virtualSnapshotGeneratedAt: snapshot && snapshot.generatedAt || null,
-                rootsLoaded: roots.length,
-                selectedInCurrentTimeframe: selectedRoots,
-                notSelectedInCurrentTimeframe: unselectedRoots
-            },
-            rootConfiguration: cfg,
-            drawings: allDrawings,
-            candleRecordsConvertedToProgrammeTrainingJSON: candleReport,
-            virtualMatcherSummary: PT_VIRTUAL_MATCHES || [],
-            virtualSnapshot: snapshot || null
-        };
+    };
+    function ptSetMobileCrosshairAt(clientX, clientY) {
+        if (!PT_CANVAS || !PT_CANDLES.length) return;
+        var rect = PT_CANVAS.getBoundingClientRect();
+        var x = clientX - rect.left, y = clientY - rect.top;
+        var step = PT_CANVAS._ptStep || ptStep();
+        var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
+        var idx = Math.floor((x - baseX) / step);
+        PT_HOVER_INDEX = (idx >= 0 && idx < PT_CANDLES.length) ? idx : -1;
+        PT_CURSOR_Y = (x >= PT_PADDING_LEFT && x <= PT_CANVAS.clientWidth - PT_PADDING_RIGHT) ? y : null;
+        ptScheduleDraw();
+        ptUpdateReadout();
     }
 
-    window.ptOpenDynamicConsole = function() {
-        var modal = document.getElementById('ptDynamicConsoleModal');
-        if (modal) modal.classList.add('active');
-        var status = document.getElementById('ptDynamicConsoleStatus');
-        if (status) status.textContent = 'Building diagnostics… loading saved programme configuration and inspecting the current chart.';
-        var load = (typeof ptLoadSavedConfiguration === 'function')
-            ? ptLoadSavedConfiguration(false).catch(function() { return null; })
-            : Promise.resolve(null);
-        load.then(function() {
-            // Run the chart renderer synchronously so matching and drawing JSON are fresh
-            // before the report is serialized.
-            if (typeof ptDrawChart === 'function') ptDrawChart();
-            window.ptRefreshDynamicConsole();
-        });
-    };
-    window.ptRefreshDynamicConsole = function() {
-        var status = document.getElementById('ptDynamicConsoleStatus');
-        var output = document.getElementById('ptDynamicConsoleJson');
-        try {
-            // Force a fresh matcher pass before reading the browser-local JSON snapshot.
-            if (typeof ptDrawChart === 'function' && Array.isArray(PT_CANDLES) && PT_CANDLES.length) {
-                ptDrawChart();
-            }
-            var report = ptDynamicConsoleBuildReport();
-            if (output) output.value = JSON.stringify(report, null, 2);
-            if (status) status.textContent = (report.status || []).join('\n');
-        } catch (error) {
-            var errorReport = {
-                error: 'Dynamic console could not build the report.',
-                message: String(error && error.stack || error),
-                programmeId: typeof PT_PROGRAMME_ID === 'undefined' ? null : PT_PROGRAMME_ID,
-                symbol: typeof PT_CURRENT_SYMBOL === 'undefined' ? null : PT_CURRENT_SYMBOL,
-                timeframe: typeof PT_CURRENT_TIMEFRAME === 'undefined' ? null : PT_CURRENT_TIMEFRAME
-            };
-            if (output) output.value = JSON.stringify(errorReport, null, 2);
-            if (status) status.textContent = 'CONSOLE ERROR: ' + errorReport.message;
-        }
-    };
-    window.ptCloseDynamicConsole = function() {
-        var modal = document.getElementById('ptDynamicConsoleModal');
-        if (modal) modal.classList.remove('active');
-    };
-    window.ptCopyDynamicConsole = function() {
-        var output = document.getElementById('ptDynamicConsoleJson');
-        var status = document.getElementById('ptDynamicConsoleStatus');
-        if (!output) return;
-        var content = output.value || '';
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(content).then(function() {
-                if (status) status.textContent += '\n\nCOPIED: Entire dynamic console JSON copied to clipboard.';
-            }).catch(function() {
-                output.focus(); output.select();
-                try { document.execCommand('copy'); if (status) status.textContent += '\n\nCOPY ATTEMPTED: use Ctrl+C if the browser blocked clipboard access.'; } catch (_) {}
-            });
-        } else {
-            output.focus(); output.select();
-            try {
-                var ok = document.execCommand('copy');
-                if (status) status.textContent += ok ? '\n\nCOPIED: Entire dynamic console JSON copied to clipboard.' : '\n\nClipboard access is blocked. The JSON is selected; press Ctrl+C.';
-            } catch (_) {
-                if (status) status.textContent += '\n\nClipboard access is blocked. The JSON is selected; press Ctrl+C.';
-            }
-        }
-    };
     document.addEventListener('DOMContentLoaded', function() {
-        var modal = document.getElementById('ptDynamicConsoleModal');
+        var controlRow = document.getElementById('ptControlsButtonRow');
+        var scrollLeftButton = document.getElementById('ptControlsScrollLeft');
+        var scrollRightButton = document.getElementById('ptControlsScrollRight');
+        if (scrollLeftButton) scrollLeftButton.addEventListener('click', function(){ ptScrollControls(-1); });
+        if (scrollRightButton) scrollRightButton.addEventListener('click', function(){ ptScrollControls(1); });
+        if (controlRow) {
+            controlRow.addEventListener('scroll', ptUpdateControlsScrollButtons, {passive:true});
+            window.addEventListener('resize', ptUpdateControlsScrollButtons);
+            if (window.ResizeObserver) new ResizeObserver(ptUpdateControlsScrollButtons).observe(controlRow);
+            window.setTimeout(ptUpdateControlsScrollButtons, 0);
+        }
         var rootsModal = document.getElementById('ptRootsDataModal');
         if (rootsModal) rootsModal.addEventListener('mousedown', function(e){ if(e.target===rootsModal) window.ptCloseRootsData(); });
-        if (modal) {
-            modal.addEventListener('mousedown', function(e) {
-                if (e.target === modal) window.ptCloseDynamicConsole();
-            });
-        }
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') { window.ptCloseDynamicConsole(); window.ptCloseRootsData(); }
+            if (e.key === 'Escape') window.ptCloseRootsData();
         });
     });
 
