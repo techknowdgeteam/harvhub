@@ -234,8 +234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
     }
 
     try {
-        $stmt = $pdo->prepare(
-            'SELECT config_id, user_id, programme_id, timeframe, root_id, root_name, tree_id,
+        $baseSelect = 'SELECT config_id, user_id, programme_id, timeframe, root_id, root_name, tree_id,
                     main_id, main_candle_name, reference_id, reference_candle_name,
                     offset_to, offset_id, offset_position, offset_position_point,
                     offset_candle_name, position, price_level, operator, use_for_trade,
@@ -245,13 +244,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
                     draw_from, draw_from_price_level, draw_to,
                     draw_to_price_level, apply_to_chart, main_candle_type,
                     ref_candle_type, offset_candle, candle_text, text_position,
-                    text_color, drawing_color
-               FROM programme_training_configuration
-              WHERE user_id = ? AND programme_id = ?
-              ORDER BY root_id, tree_id, config_id'
-        );
+                    text_color, drawing_color, confirmation_root_id, confirmation_tree_id,
+                    confirmation_timeframes, confirmation_anchor_candle_id,
+                    confirmation_anchor_candle_name, confirmation_anchor_time, draw_for, trade_for';
+        $stmt = $pdo->prepare($baseSelect . ' FROM programme_training_configuration WHERE user_id = ? AND programme_id = ? ORDER BY root_id, tree_id, config_id');
         $stmt->execute([$userId, $reqProgrammeId]);
-        echo json_encode(['success' => true, 'rows' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $confirmationRows = [];
+        try {
+            // The dedicated confirmation table intentionally has a slightly different schema
+            // from the parent configuration table (it uses parent_root_id and may not have
+            // confirmation_tree_id). Build the SELECT from columns that actually exist.
+            $confirmationDbColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_confirmation_configuration`")->fetchAll(PDO::FETCH_COLUMN);
+            $loadFields = [
+                'config_id','user_id','programme_id','timeframe','root_id','root_name','tree_id',
+                'main_id','main_candle_name','reference_id','reference_candle_name',
+                'offset_to','offset_id','offset_position','offset_position_point','offset_candle_name',
+                'position','price_level','operator','use_for_trade','entry_at','entry_price_level',
+                'stoploss_at','stoploss_price_level','take_profit_at','take_profit_type',
+                'take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
+                'draw_from','draw_from_price_level','draw_to','draw_to_price_level','apply_to_chart',
+                'main_candle_type','ref_candle_type','offset_candle','candle_text','text_position',
+                'text_color','drawing_color','confirmation_root_id','confirmation_tree_id',
+                'confirmation_timeframes','confirmation_anchor_candle_id','confirmation_anchor_candle_name',
+                'confirmation_anchor_time','draw_for','trade_for'
+            ];
+            $confirmSelect = [];
+            foreach ($loadFields as $field) {
+                if (in_array($field, $confirmationDbColumns, true)) {
+                    $confirmSelect[] = '`' . $field . '`';
+                } elseif ($field === 'confirmation_tree_id') {
+                    $confirmSelect[] = 'NULL AS `confirmation_tree_id`';
+                }
+            }
+            if (in_array('parent_root_id', $confirmationDbColumns, true)) {
+                $confirmSelect[] = '`parent_root_id`';
+            } else {
+                $confirmSelect[] = 'NULL AS `parent_root_id`';
+            }
+            $confirmOrder = [];
+            foreach (['parent_root_id','confirmation_root_id','tree_id','config_id'] as $field) {
+                if (in_array($field, $confirmationDbColumns, true)) $confirmOrder[] = '`' . $field . '`';
+            }
+            $confirmSql = 'SELECT ' . implode(', ', $confirmSelect) .
+                ' FROM `programme_training_confirmation_configuration` WHERE user_id = ? AND programme_id = ?' .
+                ($confirmOrder ? ' ORDER BY ' . implode(', ', $confirmOrder) : '');
+            $cs = $pdo->prepare($confirmSql);
+            $cs->execute([$userId, $reqProgrammeId]);
+            $confirmationRows = $cs->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $ignored) {
+            error_log('Programme confirmation configuration load skipped: ' . $ignored->getMessage());
+        }
+        echo json_encode(['success' => true, 'rows' => $rows, 'confirmation_rows' => $confirmationRows]);
     } catch (Throwable $e) {
         error_log('Programme training configuration load failed: ' . $e->getMessage());
         http_response_code(500);
@@ -300,28 +344,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         exit;
     }
 
-    // Enforce timeframe selection on the server too; never silently skip an unconfigured root.
+    // Expand confirmation roots into the same validated tree-row pipeline, but route their
+    // normalized rows to the dedicated confirmation table below.
+    $parentRoots = $decodedPayload['roots'];
+    foreach ($parentRoots as $parentRoot) {
+        if (!is_array($parentRoot) || empty($parentRoot['confirmation_root']) || !is_array($parentRoot['confirmation_root'])) continue;
+        $cr = $parentRoot['confirmation_root'];
+
+        // The UI's authoritative confirmation-timeframe selector is serialized on the
+        // parent as confirmation_timeframes. Prefer it when building the dedicated
+        // confirmation-root payload; fall back to the nested object's timeframes only
+        // for older clients.
+        $selectedConfirmationTimeframes = $parentRoot['confirmation_timeframes'] ?? [];
+        if (!is_array($selectedConfirmationTimeframes)) {
+            $rawConfirmationTimeframes = trim((string)$selectedConfirmationTimeframes);
+            $decodedConfirmationTimeframes = $rawConfirmationTimeframes !== '' ? json_decode($rawConfirmationTimeframes, true) : null;
+            $selectedConfirmationTimeframes = is_array($decodedConfirmationTimeframes)
+                ? $decodedConfirmationTimeframes
+                : ($rawConfirmationTimeframes !== '' ? explode(',', $rawConfirmationTimeframes) : []);
+        }
+        $nestedConfirmationTimeframes = $cr['timeframes'] ?? [];
+        if (!is_array($nestedConfirmationTimeframes)) $nestedConfirmationTimeframes = [];
+        $cleanConfirmationTimeframes = static function ($values) {
+            return array_values(array_unique(array_filter(array_map(
+                static function ($tf) { return trim((string)$tf); },
+                is_array($values) ? $values : []
+            ), static function ($tf) { return $tf !== ''; })));
+        };
+        $selectedConfirmationTimeframes = $cleanConfirmationTimeframes($selectedConfirmationTimeframes);
+        $nestedConfirmationTimeframes = $cleanConfirmationTimeframes($nestedConfirmationTimeframes);
+        $cr['timeframes'] = $selectedConfirmationTimeframes ?: $nestedConfirmationTimeframes;
+
+        $cr['_is_confirmation'] = true;
+        $cr['_parent_root_id'] = (int)($parentRoot['id'] ?? 1);
+        $cr['_anchor_candle_id'] = (int)($cr['anchor_candle_id'] ?? 0) ?: null;
+        $cr['_anchor_candle_name'] = (string)($cr['anchor_candle_name'] ?? '');
+        $cr['_anchor_time'] = (string)($cr['anchor_time'] ?? 'open_time');
+        $cr['_confirmation_timeframes'] = $cr['timeframes'];
+        $cr['id'] = max(1, (int)($cr['id'] ?? ((int)($parentRoot['id'] ?? 1) * 1000 + 1)));
+        $cr['root_name'] = (string)($cr['root_name'] ?? ('Confirmation for root ' . (int)($parentRoot['id'] ?? 1)));
+        $decodedPayload['roots'][] = $cr;
+    }
+
+    // Validate parent roots and confirmation roots against their respective selectors.
+    // For confirmation roots, confirmation_timeframes is the priority source because it
+    // is the dedicated selector labelled "Select confirmation timeframes (parent-root timeframes are excluded)".
     foreach ($decodedPayload['roots'] as $rootIndex => $rootCheck) {
         if (!is_array($rootCheck)) continue;
-        $rootTimeframes = $rootCheck['timeframes'] ?? null;
-        if (!is_array($rootTimeframes)) {
-            $legacyTimeframe = trim((string)($rootCheck['timeframe'] ?? ''));
-            $decodedTimeframes = $legacyTimeframe !== '' ? json_decode($legacyTimeframe, true) : null;
-            $rootTimeframes = is_array($decodedTimeframes)
-                ? $decodedTimeframes
-                : ($legacyTimeframe !== '' ? [$legacyTimeframe] : []);
+        $isConfirmationCheck = !empty($rootCheck['_is_confirmation']);
+        // Confirmation timeframes are optional: an empty selection means this confirmation
+        // root is saved but is not applied to any chart timeframe.
+        if ($isConfirmationCheck) {
+            continue;
+        } else {
+            $rootTimeframes = $rootCheck['timeframes'] ?? null;
+            if (!is_array($rootTimeframes)) {
+                $legacyTimeframe = trim((string)($rootCheck['timeframe'] ?? ''));
+                $decodedTimeframes = $legacyTimeframe !== '' ? json_decode($legacyTimeframe, true) : null;
+                $rootTimeframes = is_array($decodedTimeframes)
+                    ? $decodedTimeframes
+                    : ($legacyTimeframe !== '' ? [$legacyTimeframe] : []);
+            }
         }
+        if (!is_array($rootTimeframes)) $rootTimeframes = [];
         $rootTimeframes = array_values(array_unique(array_filter(array_map(
             static function ($tf) { return trim((string)$tf); },
             $rootTimeframes
         ), static function ($tf) { return $tf !== ''; })));
         if (!$rootTimeframes) {
             $missingRootId = (int)($rootCheck['id'] ?? ($rootIndex + 1));
+            $message = $isConfirmationCheck
+                ? 'Confirmation root ' . $missingRootId . ': select at least one timeframe in "Select confirmation timeframes (parent-root timeframes are excluded)" before saving.'
+                : 'Root ' . $missingRootId . ': select at least one timeframe before saving.';
             http_response_code(400);
-            echo json_encode([
-                'success' => false,
-                'message' => 'Root ' . $missingRootId . ': select at least one timeframe before saving.'
-            ]);
+            echo json_encode(['success' => false, 'message' => $message]);
             exit;
         }
     }
@@ -376,7 +472,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 'draw_from_price_level' => null,
                 'draw_to' => null,
                 'draw_to_price_level' => null,
-                'apply_to_chart' => array_key_exists('apply_to_chart', $root) ? (!empty($root['apply_to_chart']) ? 1 : 0) : (!empty($root['run_in_python']) ? 1 : 0)
+                'apply_to_chart' => array_key_exists('apply_to_chart', $root) ? (!empty($root['apply_to_chart']) ? 1 : 0) : (!empty($root['run_in_python']) ? 1 : 0),
+                'confirmation_root_id' => !empty($root['_is_confirmation']) ? (int)($root['id'] ?? 0) : (isset($root['confirmation_root_id']) ? (int)$root['confirmation_root_id'] : null),
+                'confirmation_tree_id' => isset($root['confirmation_tree_id']) ? (int)$root['confirmation_tree_id'] : null,
+                'confirmation_timeframes' => !empty($root['_is_confirmation']) ? json_encode($root['_confirmation_timeframes'] ?? []) : (isset($root['confirmation_timeframes']) ? (is_array($root['confirmation_timeframes']) ? json_encode($root['confirmation_timeframes']) : (string)$root['confirmation_timeframes']) : null),
+                'confirmation_anchor_candle_id' => !empty($root['_is_confirmation']) ? ($root['_anchor_candle_id'] ?? null) : (isset($root['confirmation_anchor_candle_id']) ? (int)$root['confirmation_anchor_candle_id'] : null),
+                'confirmation_anchor_candle_name' => !empty($root['_is_confirmation']) ? $cleanText($root['_anchor_candle_name'] ?? '', 160) : $cleanText($root['confirmation_anchor_candle_name'] ?? '', 160),
+                'confirmation_anchor_time' => !empty($root['_is_confirmation']) ? $safeChoice($root['_anchor_time'] ?? 'open_time', ['open_time','close_time'], 'open_time') : $safeChoice($root['confirmation_anchor_time'] ?? null, ['open_time','close_time']),
+                'draw_for' => !empty($root['_is_confirmation']) ? 'root_confirmation' : $safeChoice($root['draw_for'] ?? 'root', ['root','root_confirmation'], 'root'),
+                'trade_for' => $safeChoice($root['trade_for'] ?? 'root', ['root','root_confirmation'], 'root'),
+                '__is_confirmation' => !empty($root['_is_confirmation']) ? 1 : 0,
+                '__parent_root_id' => !empty($root['_is_confirmation']) ? (int)($root['_parent_root_id'] ?? 0) : null
             ];
         };
 
@@ -395,8 +501,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 static function ($tf) { return trim((string)$tf); },
                 $rootTimeframes
             ), static function ($tf) { return $tf !== ''; })));
-            if (!$rootTimeframes) {
-                throw new RuntimeException('Root ' . $rootId . ': select at least one timeframe before saving.');
+            if (!$rootTimeframes && empty($root['_is_confirmation'])) {
+                $displayRootName = trim((string)($root['root_name'] ?? $root['name'] ?? ''));
+                if ($displayRootName === '') $displayRootName = 'Root ' . $rootId;
+                throw new RuntimeException($displayRootName . ' (Root ' . $rootId . '): select at least one timeframe before saving.');
             }
             // The schema stores one timeframe string per configuration row.
             // Keep all selected root timeframes intact as a comma-separated value.
@@ -509,34 +617,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             'take_profit_at','take_profit_type','take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
             'draw_from','draw_from_price_level','draw_to','draw_to_price_level','apply_to_chart',
             'main_candle_type','ref_candle_type','offset_candle','candle_text','text_position',
-            'text_color','drawing_color'
+            'text_color','drawing_color','confirmation_root_id','confirmation_tree_id',
+            'confirmation_timeframes','confirmation_anchor_candle_id','confirmation_anchor_candle_name',
+            'confirmation_anchor_time','draw_for','trade_for'
         ];
         if (count($rows) === 0) {
             throw new RuntimeException('Nothing was saved because no configured tree or drawing produced a database row. Configure at least one tree or drawing, then save again. Existing saved rows were left unchanged.');
         }
 
+        // Prepare INSERT statements against each table's real schema. The confirmation
+        // table differs from the parent table: parent_root_id exists there, while
+        // confirmation_tree_id may not. Never INSERT a column the target table lacks.
+        $mainDbColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_configuration`")->fetchAll(PDO::FETCH_COLUMN);
+        $columns = array_values(array_filter($columns, static function ($column) use ($mainDbColumns) {
+            return in_array($column, $mainDbColumns, true);
+        }));
+        foreach (['user_id','programme_id','timeframe','root_id','tree_id'] as $requiredColumn) {
+            if (!in_array($requiredColumn, $columns, true)) {
+                throw new RuntimeException('The programme_training_configuration table is missing required column: ' . $requiredColumn);
+            }
+        }
         $columnSql = implode(',', array_map(static function ($c) { return '`' . $c . '`'; }, $columns));
         $placeholders = implode(',', array_fill(0, count($columns), '?'));
         $insert = $pdo->prepare("INSERT INTO `programme_training_configuration` ($columnSql) VALUES ($placeholders)");
 
+        $confirmationDbColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_confirmation_configuration`")->fetchAll(PDO::FETCH_COLUMN);
+        $confirmationColumns = array_values(array_filter(array_merge($columns, ['parent_root_id']), static function ($column) use ($confirmationDbColumns) {
+            return in_array($column, $confirmationDbColumns, true);
+        }));
+        foreach (['user_id','programme_id','timeframe','root_id','tree_id','parent_root_id'] as $requiredColumn) {
+            if (!in_array($requiredColumn, $confirmationColumns, true)) {
+                throw new RuntimeException('The programme_training_confirmation_configuration table is missing required column: ' . $requiredColumn);
+            }
+        }
+        $confirmationColumnSql = implode(',', array_map(static function ($c) { return '`' . $c . '`'; }, $confirmationColumns));
+        $confirmationInsert = $pdo->prepare("INSERT INTO `programme_training_confirmation_configuration` ($confirmationColumnSql) VALUES (" . implode(',', array_fill(0, count($confirmationColumns), '?')) . ")");
+
         $pdo->beginTransaction();
-        // Replace only this user's configuration for this programme in the exact destination table.
         $delete = $pdo->prepare('DELETE FROM `programme_training_configuration` WHERE user_id = ? AND programme_id = ?');
         $delete->execute([$userId, $reqProgrammeId]);
+        $deleteConfirmation = $pdo->prepare('DELETE FROM `programme_training_confirmation_configuration` WHERE user_id = ? AND programme_id = ?');
+        $deleteConfirmation->execute([$userId, $reqProgrammeId]);
+        $savedMainRows = 0; $savedConfirmationRows = 0;
         foreach ($rows as $row) {
-            $values = [];
-            foreach ($columns as $column) $values[] = $row[$column] ?? null;
-            $insert->execute($values);
+            $isConfirmationRow = !empty($row['__is_confirmation']);
+            $parentRootId = (int)($row['__parent_root_id'] ?? 0);
+            unset($row['__is_confirmation'], $row['__parent_root_id']);
+            if ($isConfirmationRow) {
+                $values = [];
+                foreach ($confirmationColumns as $column) {
+                    $values[] = ($column === 'parent_root_id') ? $parentRootId : ($row[$column] ?? null);
+                }
+                $confirmationInsert->execute($values);
+                $savedConfirmationRows++;
+            } else {
+                $values = [];
+                foreach ($columns as $column) $values[] = $row[$column] ?? null;
+                $insert->execute($values);
+                $savedMainRows++;
+            }
         }
         $pdo->commit();
 
-        $rootCount = count($decodedPayload['roots']);
+        $rootCount = count($parentRoots);
         $treeCount = 0;
-        foreach ($decodedPayload['roots'] as $r) $treeCount += isset($r['trees']) && is_array($r['trees']) ? count($r['trees']) : 0;
+        foreach ($parentRoots as $r) $treeCount += isset($r['trees']) && is_array($r['trees']) ? count($r['trees']) : 0;
         echo json_encode([
             'success' => true,
-            'message' => 'Configuration saved to programme_training_configuration.',
-            'meta' => ['root_count' => $rootCount, 'tree_count' => $treeCount, 'row_count' => count($rows)]
+            'message' => 'Parent and confirmation configuration saved.',
+            'meta' => ['root_count' => $rootCount, 'tree_count' => $treeCount, 'row_count' => $savedMainRows, 'confirmation_row_count' => $savedConfirmationRows]
         ]);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -907,6 +1056,16 @@ try {
     .pt-controls-btn-row::-webkit-scrollbar { height: 0; }
 
     .pt-controls > * { pointer-events: auto; }
+    .pt-projection-status{display:none;align-items:center;gap:9px;align-self:flex-start;max-width:100%;padding:6px 11px;border:1px solid var(--pt-border);border-radius:9px;background:var(--pt-card);color:var(--pt-muted);font-size:.78rem;box-shadow:var(--pt-shadow)}
+    .pt-projection-status.active{display:inline-flex}
+    .pt-projection-status .pt-projection-spinner{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:ptProjectionSpin .75s linear infinite;flex-shrink:0}
+    @keyframes ptProjectionSpin{to{transform:rotate(360deg)}}
+    .pt-projection-status.done{color:var(--pt-accent)}
+    .pt-projection-status.error{color:#d9534f}
+    .pt-roots-data-tabs{display:flex;gap:8px;padding:10px 18px 0;flex-shrink:0}
+    .pt-roots-data-tab{border:1px solid var(--pt-border);border-radius:9px;padding:9px 16px;background:var(--pt-card);color:var(--pt-text);font:inherit;font-weight:700;cursor:pointer}
+    .pt-roots-data-tab.active{background:var(--pt-accent);border-color:var(--pt-accent);color:#fff}
+
 
     .pt-title {
         font-size: 1.25rem;
@@ -2067,18 +2226,22 @@ try {
                 <span>Configuration</span>
             </button>
 
+            <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View trade records for matched root families">
+                <span>Roots Data</span>
+            </button>
+
             <button type="button" class="pt-topbar-btn" id="ptDynamicConsoleBtn" onclick="ptOpenDynamicConsole()"
                     title="Inspect candle records, timeframe selection, JSON matching and drawings">
                 <span>Dynamic Console</span>
             </button>
 
-            <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View trade records for matched root families">
-                <span>Roots Data</span>
-            </button>
-
             <button type="button" class="pt-fs-btn" id="ptFullscreenBtn" title="Toggle fullscreen" onclick="ptToggleFullscreen()">
                 <i class="fa-solid fa-expand"></i>
             </button>
+        </div>
+        <div class="pt-projection-status" id="ptProjectionStatus" role="status" aria-live="polite">
+            <span class="pt-projection-spinner" id="ptProjectionSpinner"></span>
+            <span id="ptProjectionStatusText">Preparing higher-timeframe projections…</span>
         </div>
     </div>
 
@@ -2262,7 +2425,7 @@ try {
             <div><div class="pt-dynamic-console-title" id="ptRootsDataTitle"><i class="fa-solid fa-list-check"></i> Roots Data — Trade Families</div><div class="pt-dynamic-console-subtitle">Matched root families and their entry/exit trigger records</div></div>
             <div class="pt-dynamic-console-actions"><button type="button" class="pt-dynamic-console-action" onclick="ptRefreshRootsData()"><i class="fa-solid fa-rotate"></i> Refresh</button><button type="button" class="pt-dynamic-console-action" onclick="ptCloseRootsData()"><i class="fa-solid fa-xmark"></i> Close</button></div>
         </div>
-        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Trade analytics are calculated from the currently loaded candles and matched families.</div>
+        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Only native data for roots configured on the currently viewed timeframe is shown here. Higher-timeframe projection data is not included.</div>
         <div id="ptRootsDataBody" style="flex:1;overflow:auto;padding:16px 18px"></div>
     </div>
 </div>
@@ -2313,6 +2476,12 @@ try {
 
     // ==================== CHART STATE ====================
     var PT_CANDLES     = [];
+    // Higher-timeframe source candles are cached separately; they never replace the visible chart series.
+    var PT_BG_TF_DATA = Object.create(null);
+    var PT_BG_TF_PROMISES = Object.create(null);
+    var PT_PROJECTION_MAP = null;
+    var PT_PROJECTION_RENDER_PASS = false;
+    var PT_PROJECTION_REQUEST_TOKEN = 0;
     var PT_CANVAS      = null;
     var PT_CTX         = null;
     var PT_HOVER_INDEX = -1;
@@ -2348,6 +2517,21 @@ try {
     var PT_VIRTUAL_PAD    = 2000;
 
     var PT_FOLLOW_LATEST  = true;
+
+    // Fast interaction path: while the user is actively panning/zooming, draw only
+    // candles and crosshairs. Heavy matching/projection overlays are redrawn once after
+    // the gesture settles, instead of blocking every mousemove/wheel frame.
+    var PT_FAST_INTERACTION = false;
+    var PT_FAST_INTERACTION_TIMER = null;
+    function ptBeginFastInteraction() {
+        PT_FAST_INTERACTION = true;
+        if (PT_FAST_INTERACTION_TIMER) clearTimeout(PT_FAST_INTERACTION_TIMER);
+        PT_FAST_INTERACTION_TIMER = setTimeout(function () {
+            PT_FAST_INTERACTION = false;
+            PT_FAST_INTERACTION_TIMER = null;
+            ptScheduleDraw();
+        }, 140);
+    }
 
     var PT_DRAW_SCHEDULED = false;
     function ptScheduleDraw() {
@@ -2646,6 +2830,7 @@ try {
         if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
             PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
             ptLoadChart();
+            ptRefreshHigherTimeframeProjection();
         } else {
             PT_CANDLES = [];
             ptClearCanvas();
@@ -2789,6 +2974,191 @@ try {
         return newestRight <= (vw - PT_PADDING_RIGHT) + 2;
     }
 
+    // ==================== HIGHER-TIMEFRAME BACKGROUND PROJECTION ====================
+    function ptTfMilliseconds(tf) {
+        var m = String(tf || '').trim().toLowerCase().match(/^(\d+)\s*([mhdw])$/);
+        if (!m) return Number.MAX_SAFE_INTEGER;
+        var n = Number(m[1]), u = m[2];
+        return n * ({m:60000,h:3600000,d:86400000,w:604800000}[u] || Number.MAX_SAFE_INTEGER);
+    }
+    function ptProjectionStatus(text, state) {
+        var box = document.getElementById('ptProjectionStatus');
+        var label = document.getElementById('ptProjectionStatusText');
+        var spinner = document.getElementById('ptProjectionSpinner');
+        if (!box || !label) return;
+        if (!text) { box.className = 'pt-projection-status'; return; }
+        box.className = 'pt-projection-status active' + (state ? ' ' + state : '');
+        label.textContent = text;
+        if (spinner) spinner.style.display = state === 'done' || state === 'error' ? 'none' : '';
+    }
+    function ptParseRootTimeframes(root) {
+        var tfs = Array.isArray(root && root.timeframes) ? root.timeframes.slice() : [];
+        if (!tfs.length && root && root.timeframe) {
+            try { var parsed = JSON.parse(root.timeframe); tfs = Array.isArray(parsed) ? parsed : [root.timeframe]; }
+            catch (_) { tfs = String(root.timeframe).split(','); }
+        }
+        return tfs.map(function (tf) { return String(tf).trim(); }).filter(Boolean);
+    }
+    function ptProjectionRootsForCurrentView(config) {
+        if (!config || !Array.isArray(config.roots)) return [];
+        var currentMs = ptTfMilliseconds(PT_CURRENT_TIMEFRAME);
+        var names = [];
+        config.roots.forEach(function (root) {
+            if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
+            ptParseRootTimeframes(root).forEach(function (tf) {
+                // Strictly higher only: never project a lower timeframe onto a higher one.
+                if (ptTfMilliseconds(tf) > currentMs && names.indexOf(tf) < 0) names.push(tf);
+            });
+        });
+        return names.sort(function (a,b) { return ptTfMilliseconds(a)-ptTfMilliseconds(b); });
+    }
+    function ptFetchBackgroundTimeframe(tf, token) {
+        var key = [PT_PROGRAMME_ID, PT_CURRENT_SYMBOL, tf].join('|');
+        if (PT_BG_TF_PROMISES[key]) return PT_BG_TF_PROMISES[key];
+        var result = [], before = '';
+        function page() {
+            var body = 'fetch_candles=1&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
+                + '&symbol=' + encodeURIComponent(PT_CURRENT_SYMBOL)
+                + '&timeframe=' + encodeURIComponent(tf) + '&limit=2000'
+                + (before ? '&before=' + encodeURIComponent(before) : '');
+            return fetch('programme_training.php', {
+                method:'POST',
+                headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
+                body:body
+            }).then(function(r){return r.json();}).then(function(data){
+                if (token !== PT_PROJECTION_REQUEST_TOKEN) return result;
+                if (!data || !data.success) throw new Error((data && data.message) || ('Could not load ' + tf + ' candles'));
+                var chunk = Array.isArray(data.candles) ? data.candles : [];
+                if (!chunk.length) return result;
+                result = chunk.concat(result);
+                before = chunk[0].time;
+                // Bound background history to 50,000 rows per timeframe.
+                if (data.has_more && result.length < 50000) return page();
+                return result;
+            });
+        }
+        PT_BG_TF_PROMISES[key] = page().then(function(candles){
+            if (token === PT_PROJECTION_REQUEST_TOKEN) PT_BG_TF_DATA[tf] = candles || [];
+            delete PT_BG_TF_PROMISES[key];
+            return candles || [];
+        }).catch(function(err){
+            delete PT_BG_TF_PROMISES[key];
+            throw err;
+        });
+        return PT_BG_TF_PROMISES[key];
+    }
+    function ptBuildProjectionMap(higherCandles, lowerCandles) {
+        // Parse candle timestamps once. The old implementation reparsed every
+        // lower-timeframe candle for every higher-timeframe candle (O(H × L)).
+        // Since both candle arrays are chronological, a moving lower-candle
+        // pointer builds the same overlap map in near-linear time.
+        function ts(v) {
+            if (!v) return NaN;
+            var s = String(v).trim();
+            var n = Date.parse(s.indexOf('T') >= 0 ? s : s.replace(' ','T') + 'Z');
+            return Number.isFinite(n) ? n : NaN;
+        }
+        var high = higherCandles || [], low = lowerCandles || [];
+        var lowerIntervals = new Array(low.length);
+        var lowerDuration = ptTfMilliseconds(PT_CURRENT_TIMEFRAME);
+        for (var li = 0; li < low.length; li++) {
+            var lc = low[li], ls = ts(lc.open_time || lc.time), le = ts(lc.close_time);
+            if (!Number.isFinite(le)) le = Number.isFinite(ls) ? ls + lowerDuration : NaN;
+            lowerIntervals[li] = { start: ls, end: le };
+        }
+        var result = new Array(high.length), cursor = 0;
+        for (var hi = 0; hi < high.length; hi++) {
+            var hc = high[hi], hs = ts(hc.open_time || hc.time), he = ts(hc.close_time);
+            if (!Number.isFinite(he)) {
+                var duration = ptTfMilliseconds(hc.timeframe || PT_CURRENT_TIMEFRAME);
+                he = Number.isFinite(hs) ? hs + (Number.isFinite(duration) ? duration : 0) : NaN;
+            }
+            if (!Number.isFinite(hs) || !Number.isFinite(he) || he <= hs) {
+                result[hi] = { first: -1, last: -1 };
+                continue;
+            }
+            while (cursor < lowerIntervals.length &&
+                   (!Number.isFinite(lowerIntervals[cursor].end) || lowerIntervals[cursor].end <= hs)) cursor++;
+            var first = -1, last = -1, scan = cursor;
+            while (scan < lowerIntervals.length) {
+                var interval = lowerIntervals[scan];
+                if (Number.isFinite(interval.start) && interval.start >= he) break;
+                if (Number.isFinite(interval.start) && Number.isFinite(interval.end) &&
+                    interval.start < he && interval.end > hs) {
+                    if (first < 0) first = scan;
+                    last = scan;
+                }
+                scan++;
+            }
+            result[hi] = { first: first, last: last };
+        }
+        return result;
+    }
+    function ptProjectionPieceIndex(index, level) {
+        var map = PT_PROJECTION_MAP && PT_PROJECTION_MAP[index];
+        var lower = PT_PROJECTION_LOWER_CANDLES;
+        if (!map || map.first < 0 || map.last < 0 || !lower) return -1;
+        level = String(level || 'center').toLowerCase();
+        if (level === 'open') return map.first;
+        if (level === 'close') return map.last;
+        if (level !== 'high' && level !== 'low') return Math.floor((map.first + map.last) / 2);
+        var best = -1, extreme = level === 'high' ? -Infinity : Infinity;
+        for (var i = map.first; i <= map.last; i++) {
+            var value = Number(lower[i] && lower[i][level]);
+            if (!Number.isFinite(value)) continue;
+            if ((level === 'high' && value > extreme) || (level === 'low' && value < extreme)) { extreme = value; best = i; }
+        }
+        return best >= 0 ? best : map.first;
+    }
+    function ptOverlayX(geo, index, level) {
+        var map = PT_PROJECTION_MAP && PT_PROJECTION_MAP[index];
+        if (PT_PROJECTION_MAP && (!map || map.first < 0 || map.last < 0)) return NaN;
+        if (!map) return geo.baseX + index * geo.step + geo.step / 2;
+        var pieceIndex = ptProjectionPieceIndex(index, level || 'center');
+        if (pieceIndex < 0) return NaN;
+        return geo.baseX + pieceIndex * geo.step + geo.step / 2;
+    }
+    function ptProjectionPrice(index, level, fallbackCandles) {
+        var lower = PT_PROJECTION_LOWER_CANDLES;
+        var piece = ptProjectionPieceIndex(index, level);
+        if (lower && piece >= 0 && lower[piece]) {
+            if (level === 'open' || level === 'close' || level === 'high' || level === 'low') return Number(lower[piece][level]);
+        }
+        return ptPrice((fallbackCandles || PT_CANDLES)[index], level);
+    }
+    function ptRefreshHigherTimeframeProjection() {
+        if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) return;
+        var token = ++PT_PROJECTION_REQUEST_TOKEN;
+        PT_BG_TF_DATA = Object.create(null);
+        PT_BG_TF_PROMISES = Object.create(null);
+        var configPromise = (typeof ptLoadSavedConfiguration === 'function')
+            ? ptLoadSavedConfiguration(false).catch(function(){ return null; })
+            : Promise.resolve(null);
+        configPromise.then(function(){
+            if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+            var config = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
+            var tfs = ptProjectionRootsForCurrentView(config);
+            if (!tfs.length) { ptProjectionStatus('', ''); return; }
+            var rootNames = [];
+            (config.roots || []).forEach(function(root){
+                if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
+                if (ptParseRootTimeframes(root).some(function(tf){return tfs.indexOf(tf)>=0;}))
+                    rootNames.push(root.name || root.root_name || ('Root ' + root.id));
+            });
+            ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — loading higher-timeframe candles…');
+            return Promise.all(tfs.map(function(tf){ return ptFetchBackgroundTimeframe(tf, token); }))
+                .then(function(){
+                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+                    ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — ready', 'done');
+                    ptScheduleDraw();
+                }).catch(function(err){
+                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+                    ptProjectionStatus('Projection loading failed: ' + (err.message || 'unknown error'), 'error');
+                    console.warn('Higher-timeframe projection load failed', err);
+                });
+        });
+    }
+
     // ==================== TIMEFRAME SWITCHING ====================
     function ptSwitchToTimeframe(targetTF) {
         if (!targetTF) return;
@@ -2801,6 +3171,7 @@ try {
         ptRenderTimeframeStrip();
         ptUpdateTimeframeLabel();
         ptLoadChart();
+        ptRefreshHigherTimeframeProjection();
     }
 
     // ==================== TOPBAR ====================
@@ -2891,6 +3262,7 @@ try {
         ptUpdateSymbolLabel();
         ptCloseSymbolModal();
         ptLoadChart();
+        ptRefreshHigherTimeframeProjection();
     }
 
     // ==================== TIMEFRAME MODAL ====================
@@ -3355,10 +3727,16 @@ try {
         var viewportW = card.clientWidth;
         var viewportH = card.clientHeight;
 
-        PT_CANVAS.style.width  = viewportW + 'px';
-        PT_CANVAS.style.height = viewportH + 'px';
-        PT_CANVAS.width  = Math.floor(viewportW * dpr);
-        PT_CANVAS.height = Math.floor(viewportH * dpr);
+        // Resizing a canvas clears it and reallocates its backing bitmap. Do that
+        // only when its actual pixel dimensions changed, not on every hover/pan frame.
+        var pixelW = Math.max(1, Math.floor(viewportW * dpr));
+        var pixelH = Math.max(1, Math.floor(viewportH * dpr));
+        if (PT_CANVAS.width !== pixelW || PT_CANVAS.height !== pixelH) {
+            PT_CANVAS.style.width = viewportW + 'px';
+            PT_CANVAS.style.height = viewportH + 'px';
+            PT_CANVAS.width = pixelW;
+            PT_CANVAS.height = pixelH;
+        }
         PT_CTX.setTransform(dpr, 0, 0, dpr, 0, 0);
         PT_CTX.clearRect(0, 0, viewportW, viewportH);
 
@@ -3526,20 +3904,24 @@ try {
 
         PT_CANVAS._ptChartBot = chartBottom;
 
-        // Virtual programme-training overlay: candle_records is read-only.
-        ptApplyTrainingOverlay({
-            ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
-            firstVisible: firstVisible, lastVisible: lastVisible,
-            pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
-            viewportW: viewportW, viewportH: viewportH
-        });
+        // Heavy matcher/projection work is intentionally excluded from active gesture
+        // frames. This keeps pointer movement smooth; the complete overlay is restored
+        // once the gesture has been idle for 140ms.
+        if (!PT_FAST_INTERACTION) {
+            ptApplyTrainingOverlay({
+                ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
+                firstVisible: firstVisible, lastVisible: lastVisible,
+                pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
+                viewportW: viewportW, viewportH: viewportH
+            });
 
-        // Animated trade locator is deliberately drawn last, above candles and drawings.
-        ptDrawLocateArrow({
-            ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
-            pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
-            viewportW: viewportW, viewportH: viewportH
-        });
+            // Animated trade locator is deliberately drawn last, above candles and drawings.
+            ptDrawLocateArrow({
+                ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
+                pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
+                viewportW: viewportW, viewportH: viewportH
+            });
+        }
 
         ptUpdateJumpLatestVisibility();
     }
@@ -3754,6 +4136,58 @@ try {
         }
 
         var ctx = geo.ctx;
+
+        // Higher-timeframe candle direction guides:
+        // During a projection pass, draw one independent dashed segment for every
+        // candle identity defined by each complete root family. Never join different
+        // candles or families. Bullish HTF candle: first lower candle LOW -> last
+        // lower candle HIGH. Bearish HTF candle: first lower candle HIGH -> last
+        // lower candle LOW. This is projection-only and does not affect normal charts.
+        if (PT_PROJECTION_RENDER_PASS && PT_PROJECTION_MAP && PT_PROJECTION_LOWER_CANDLES) {
+            activeRoots.forEach(function (root) {
+                (root._drawMatches || []).forEach(function (family) {
+                    var seenIndices = Object.create(null);
+                    Object.keys(family.map || {}).forEach(function (identity) {
+                        var sourceIndex = Number(family.map[identity]);
+                        if (!Number.isInteger(sourceIndex) || sourceIndex < 0 ||
+                            sourceIndex >= PT_CANDLES.length || seenIndices[sourceIndex]) return;
+                        seenIndices[sourceIndex] = true;
+
+                        var piece = PT_PROJECTION_MAP[sourceIndex];
+                        if (!piece || piece.first < 0 || piece.last < 0) return;
+                        var firstLower = PT_PROJECTION_LOWER_CANDLES[piece.first];
+                        var lastLower = PT_PROJECTION_LOWER_CANDLES[piece.last];
+                        var sourceCandle = PT_CANDLES[sourceIndex];
+                        if (!firstLower || !lastLower || !sourceCandle) return;
+
+                        var sourceOpen = Number(sourceCandle.open);
+                        var sourceClose = Number(sourceCandle.close);
+                        if (!Number.isFinite(sourceOpen) || !Number.isFinite(sourceClose)) return;
+                        var bullish = sourceClose >= sourceOpen;
+
+                        var x1 = geo.baseX + piece.first * geo.step + geo.step / 2;
+                        var x2 = geo.baseX + piece.last * geo.step + geo.step / 2;
+                        var startPrice = Number(bullish ? firstLower.low : firstLower.high);
+                        var endPrice = Number(bullish ? lastLower.high : lastLower.low);
+                        if (!Number.isFinite(x1) || !Number.isFinite(x2) ||
+                            !Number.isFinite(startPrice) || !Number.isFinite(endPrice)) return;
+                        if (Math.max(x1, x2) < -100 || Math.min(x1, x2) > geo.viewportW + 100) return;
+
+                        ctx.save();
+                        ctx.strokeStyle = '#888888';
+                        ctx.lineWidth = 0.8;
+                        ctx.setLineDash([3, 3]);
+                        ctx.beginPath();
+                        ctx.moveTo(x1, geo.pToY(startPrice));
+                        ctx.lineTo(x2, geo.pToY(endPrice));
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                        ctx.restore();
+                    });
+                });
+            });
+        }
+
         // Render only user-configured annotation text; no circles or hardcoded labels.
         activeRoots.forEach(function (root) {
             (root.trees || []).forEach(function (tree, treeIndex) {
@@ -3769,8 +4203,8 @@ try {
                     var labelLevel = main.textPosition || 'high';
                     if (label && !isMainReference) {
                         var mainIdx = c._index;
-                        var mx = geo.baseX + mainIdx * geo.step + geo.step / 2;
-                        var my = geo.pToY(ptPrice(all[mainIdx], labelLevel === 'low' ? 'low' : 'high'));
+                        var mx = ptOverlayX(geo, mainIdx, labelLevel);
+                        var my = geo.pToY(PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(mainIdx, labelLevel, all) : ptPrice(all[mainIdx], labelLevel === 'low' ? 'low' : 'high'));
                         ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(main.textColor, 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
                         ctx.textAlign = 'center';
                         // Canvas text baseline: for HIGH, text bottom sits 2px above the high;
@@ -3782,9 +4216,9 @@ try {
                     if ((treeIndex === 0 || isTextBearingOffset) && (ref.candleText || (tree.offset && tree.offset.candleText) || '').trim()) {
                         var refIdx = all.findIndex(function (z) { return z.id === condition.referenceCandleId; });
                         if (refIdx >= 0) {
-                            var rx = geo.baseX + refIdx * geo.step + geo.step / 2;
                             var refLabelPosition = (ref.textPosition || 'high') === 'low' ? 'low' : 'high';
-                            var ry = geo.pToY(ptPrice(all[refIdx], refLabelPosition));
+                            var rx = ptOverlayX(geo, refIdx, refLabelPosition);
+                            var ry = geo.pToY(PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(refIdx, refLabelPosition, all) : ptPrice(all[refIdx], refLabelPosition));
                             ctx.save(); ctx.fillStyle = ptResolveConfiguredColor(ref.textColor || (tree.offset && tree.offset.textColor), 'purple'); ctx.font = 'bold 11px system-ui, sans-serif';
                             ctx.textAlign = 'center'; ctx.textBaseline = refLabelPosition === 'low' ? 'top' : 'bottom';
                             ctx.fillText(String(ref.candleText || (tree.offset && tree.offset.candleText) || '').trim(), rx, refLabelPosition === 'low' ? ry + 2 : ry - 2); ctx.restore();
@@ -3824,6 +4258,7 @@ try {
             }
 
             (root.drawings || []).forEach(function (drawing) {
+                if (drawing.drawFor === 'root_confirmation') return;
                 var fromName = drawing.drawFrom || '', toName = drawing.drawTo || '';
                 if (!fromName || !toName) return;
 
@@ -3843,8 +4278,9 @@ try {
 
                     if (fromIdx < 0 || !all[fromIdx]) return;
 
-                    var sourcePrice = ptPrice(all[fromIdx], drawing.drawFromPriceLevel || 'high');
-                    var x1 = geo.baseX + fromIdx * geo.step + geo.step / 2;
+                    var fromLevel = drawing.drawFromPriceLevel || 'high';
+                    var sourcePrice = PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(fromIdx, fromLevel, all) : ptPrice(all[fromIdx], fromLevel);
+                    var x1 = ptOverlayX(geo, fromIdx, fromLevel);
                     var y1 = geo.pToY(sourcePrice);
 
                     if (toName === 'any_intercept_candle') {
@@ -3874,14 +4310,10 @@ try {
                     }
 
                     if (toIdx < 0 || !all[toIdx]) return;
-                    var x2 = geo.baseX + toIdx * geo.step + geo.step / 2;
-                    // Any-intercept lines stay at the source price. Ordinary
-                    // drawings retain their selected destination price level.
-                    var y2 = toName === 'any_intercept_candle'
-                        ? y1
-                        : (drawing.drawToPriceLevel === 'axis'
-                            ? y1
-                            : geo.pToY(ptPrice(all[toIdx], drawing.drawToPriceLevel || 'high')));
+                    var toLevel = drawing.drawToPriceLevel || 'high';
+                    var x2 = ptOverlayX(geo, toIdx, toName === 'any_intercept_candle' ? 'center' : toLevel);
+                    // Projected endpoints snap to the exact lower-timeframe candle/price.
+                    var y2 = toName === 'any_intercept_candle' ? y1 : (drawing.drawToPriceLevel === 'axis' ? y1 : geo.pToY(PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(toIdx, toLevel, all) : ptPrice(all[toIdx], toLevel)));
                     if (x1 < -100 || x1 > geo.viewportW + 100 || x2 < -100 || x2 > geo.viewportW + 100) return;
                     ctx.save();
                     ctx.strokeStyle = ptResolveConfiguredColor(drawing.drawingColor, 'blue');
@@ -3895,6 +4327,167 @@ try {
             });
         });
 
+        // Confirmation runtime: evaluate each confirmation pattern on the lower-timeframe
+        // candles at the exact parent-family anchor timestamp. These matches are kept separate
+        // from parent-root matches and are never allowed to satisfy a parent root's own trees.
+        if (PT_PROJECTION_RENDER_PASS && PT_PROJECTION_MAP && Array.isArray(PT_PROJECTION_LOWER_CANDLES)) {
+            var lowerCandlesForConfirmation = PT_PROJECTION_LOWER_CANDLES;
+            var lowerWrappers = lowerCandlesForConfirmation.map(function(c, i) {
+                return Object.assign({}, c, {_index:i, _rootTrees:[], _conditionsMet:[], _matchRootIds:[], _matchTreeIds:[]});
+            });
+            var targetTf = String(PT_PROJECTION_TARGET_TIMEFRAME || '').toLowerCase();
+            function timeMs(v) {
+                if (v == null || v === '') return NaN;
+                if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+                var n = Number(v);
+                if (Number.isFinite(n) && String(v).trim() !== '') return n < 1e12 ? n * 1000 : n;
+                var parsed = Date.parse(String(v).replace(' ', 'T') + (String(v).includes('Z') || /[+-]\d\d:?\d\d$/.test(String(v)) ? '' : 'Z'));
+                return Number.isFinite(parsed) ? parsed : NaN;
+            }
+            function confirmationCanonical(tree, kind) {
+                var c = kind === 'main' ? (tree.main || {}) : kind === 'reference' ? (tree.reference || {}) : (tree.offset || tree.reference || {});
+                if (kind === 'main') return String(c.selectedExistingId || c.offsetTo || c.id || '');
+                if (kind === 'reference') return String(c.referenceMode !== 'new_offset' && (c.selectedExistingId || c.existingCandleId) ? (c.selectedExistingId || c.existingCandleId) : (c.id || ''));
+                return String(c.referenceMode === 'new_offset' ? c.id : (c.selectedExistingId || c.existingCandleId || c.id || ''));
+            }
+            function matchConfirmationAt(root, anchorIdx, parentFamily) {
+                var cr = root.confirmationRoot;
+                if (!cr || !cr.trees || !cr.trees.length || anchorIdx < 0 || anchorIdx >= lowerWrappers.length) return null;
+                var states = [], configured = cr.trees.slice().sort(function(a,b){return Number(a.id)-Number(b.id);});
+                for (var ti=0; ti<configured.length; ti++) {
+                    var tree = configured[ti], main = tree.main || {}, ref = tree.reference || {};
+                    if (!main.name || !ref.name) return null;
+                    var mainKey = confirmationCanonical(tree, 'main');
+                    var isNewRef = ref.referenceMode === 'new_offset';
+                    var refKey = confirmationCanonical(tree, 'reference');
+                    var next = [];
+                    if (ti === 0) {
+                        var mi = anchorIdx;
+                        var ri = ptOffsetIndex(mi, ref.position || 'right', ref.offsetPosition || 1, lowerWrappers.length);
+                        if (ptTypeMatches(lowerWrappers[mi], main.mainCandleType) && ri >= 0 && ptTypeMatches(lowerWrappers[ri], ref.refCandleType) &&
+                            ptCompare(ptPrice(lowerWrappers[mi], main.priceLevel || 'high'), main.operator || '<', ptPrice(lowerWrappers[ri], ref.priceLevel || 'high'))) {
+                            var firstMap = {}; firstMap[mainKey] = mi; firstMap[refKey] = ri;
+                            next.push({map:firstMap, conditions:[{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey}]});
+                        }
+                    } else {
+                        states.forEach(function(st) {
+                            var mi = Object.prototype.hasOwnProperty.call(st.map, mainKey) ? st.map[mainKey] : -1;
+                            if (mi < 0 || !lowerWrappers[mi] || !ptTypeMatches(lowerWrappers[mi], main.mainCandleType)) return;
+                            var ri = -1;
+                            if (isNewRef) ri = ptOffsetIndex(mi, ref.position || 'left', ref.offsetPosition || 1, lowerWrappers.length);
+                            else if (Object.prototype.hasOwnProperty.call(st.map, refKey)) ri = st.map[refKey];
+                            if (ri < 0 || !lowerWrappers[ri] || !ptTypeMatches(lowerWrappers[ri], ref.refCandleType)) return;
+                            if (!ptCompare(ptPrice(lowerWrappers[mi], main.priceLevel || 'high'), main.operator || '<', ptPrice(lowerWrappers[ri], ref.priceLevel || 'high'))) return;
+                            var m = Object.assign({}, st.map); if (isNewRef) m[refKey] = ri;
+                            next.push({map:m, conditions:st.conditions.concat([{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey}])});
+                        });
+                    }
+                    states = next;
+                    if (!states.length) return null;
+                }
+                if (!states.length || states.some(function(st){return st.conditions.length !== configured.length;})) return null;
+                return states.map(function(st){return {map:st.map, anchorIndex:anchorIdx, parentFamily:parentFamily, conditions:st.conditions};});
+            }
+            config.roots.forEach(function(root) {
+                root._confirmationDrawMatches = [];
+                if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
+                var cr = root.confirmationRoot;
+                var crTfs = cr && Array.isArray(cr.timeframes) ? cr.timeframes.map(function(v){return String(v).toLowerCase();}) : [];
+                if (!cr || !cr.enabled || !crTfs.includes(targetTf) || !cr.trees || !cr.trees.length) return;
+                var anchorKey = String(cr.anchorCandleId || '');
+                if (!anchorKey) return;
+                (root._drawMatches || []).forEach(function(parentFamily) {
+                    var parentMap = parentFamily.map || {};
+                    if (!Object.prototype.hasOwnProperty.call(parentMap, anchorKey)) return;
+                    var parentSourceIndex = Number(parentMap[anchorKey]);
+                    var piece = PT_PROJECTION_MAP[parentSourceIndex];
+                    if (!piece || piece.first < 0 || piece.last < 0) return;
+                    var parentCandle = PT_CANDLES[parentSourceIndex];
+                    if (!parentCandle) return;
+                    var stamp = cr.anchorTime === 'close_time' ? (parentCandle.close_time || parentCandle.closeTime || parentCandle.time) : (parentCandle.open_time || parentCandle.openTime || parentCandle.time);
+                    var anchorMs = timeMs(stamp);
+                    if (!Number.isFinite(anchorMs)) return;
+                    var anchorIndex = -1;
+                    for (var li=0; li<lowerCandlesForConfirmation.length; li++) {
+                        var lowerStamp = lowerCandlesForConfirmation[li].open_time || lowerCandlesForConfirmation[li].openTime || lowerCandlesForConfirmation[li].time;
+                        var lowerMs = timeMs(lowerStamp);
+                        if (Number.isFinite(lowerMs) && lowerMs >= anchorMs) { anchorIndex = li; break; }
+                    }
+                    if (anchorIndex < 0) return;
+                    var found = matchConfirmationAt(root, anchorIndex, parentFamily);
+                    if (found) root._confirmationDrawMatches = root._confirmationDrawMatches.concat(found);
+                });
+
+                // Render confirmation labels and drawings in native lower-timeframe coordinates.
+                var directX = function(idx){ return geo.baseX + idx * geo.step + geo.step / 2; };
+                (root._confirmationDrawMatches || []).forEach(function(family) {
+                    (family.conditions || []).forEach(function(cond) {
+                        var tree = (cr.trees || []).find(function(t){return String(t.id)===String(cond.treeId);});
+                        if (!tree) return;
+                        var main = tree.main || {}, ref = tree.reference || {};
+                        var mi = family.map[confirmationCanonical(tree,'main')];
+                        var ri = family.map[confirmationCanonical(tree,'reference')];
+                        if (mi != null && main.candleText) {
+                            ctx.save(); ctx.fillStyle=ptResolveConfiguredColor(main.textColor,'purple'); ctx.font='bold 11px system-ui,sans-serif'; ctx.textAlign='center';
+                            var ml=main.textPosition==='low'?'low':'high'; ctx.textBaseline=ml==='low'?'top':'bottom';
+                            var my=geo.pToY(ptPrice(lowerWrappers[mi],ml)); ctx.fillText(String(main.candleText),directX(mi),ml==='low'?my+2:my-2); ctx.restore();
+                        }
+                        if (ri != null && (ref.candleText || (tree.offset && tree.offset.candleText))) {
+                            var rl=ref.textPosition==='low'?'low':'high'; ctx.save(); ctx.fillStyle=ptResolveConfiguredColor(ref.textColor || (tree.offset&&tree.offset.textColor),'purple'); ctx.font='bold 11px system-ui,sans-serif'; ctx.textAlign='center'; ctx.textBaseline=rl==='low'?'top':'bottom';
+                            var ry=geo.pToY(ptPrice(lowerWrappers[ri],rl)); ctx.fillText(String(ref.candleText || tree.offset.candleText),directX(ri),rl==='low'?ry+2:ry-2); ctx.restore();
+                        }
+                    });
+                });
+                function endpointKey(encoded) {
+                    var parts=String(encoded||'').split('|'); if(parts.length<3) return null;
+                    var tree=(cr.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); if(!tree) return String(parts[2]);
+                    return confirmationCanonical(tree,parts[1]);
+                }
+                (cr.drawings || []).concat((root.drawings || []).filter(function(d){return d.drawFor === 'root_confirmation';})).forEach(function(drawing) {
+                    if (drawing.drawFor && drawing.drawFor !== 'root_confirmation') return;
+                    var fk=endpointKey(drawing.drawFrom), tk=endpointKey(drawing.drawTo);
+                    if (!fk || !tk) return;
+                    (root._confirmationDrawMatches || []).forEach(function(family) {
+                        var fi=family.map[fk], ti=family.map[tk]; if(fi==null) return;
+                        var from=lowerWrappers[fi], to=lowerWrappers[ti]; if(!from) return;
+                        if (drawing.drawTo === 'any_intercept_candle') {
+                            var price=ptPrice(from,drawing.drawFromPriceLevel||'high'); ti=-1;
+                            for(var si=fi+1;si<lowerWrappers.length;si++){if(Number(lowerWrappers[si].low)<=price&&Number(lowerWrappers[si].high)>=price){ti=si;break;}}
+                            if(ti<0) return; to=lowerWrappers[ti];
+                        }
+                        if(!to) return;
+                        var fp=ptPrice(from,drawing.drawFromPriceLevel||'high');
+                        var tp=drawing.drawTo==='any_intercept_candle'?fp:ptPrice(to,drawing.drawToPriceLevel||'high');
+                        var x1=directX(fi), x2=directX(ti); if(Math.max(x1,x2)<-100||Math.min(x1,x2)>geo.viewportW+100)return;
+                        ctx.save();ctx.strokeStyle=ptResolveConfiguredColor(drawing.drawingColor,'blue');ctx.lineWidth=1.4;ctx.beginPath();ctx.moveTo(x1,geo.pToY(fp));ctx.lineTo(x2,geo.pToY(tp));ctx.stroke();ctx.restore();
+                    });
+                });
+
+                // Confirmation trades are evaluated against lower candles, not the HTF source
+                // array. Their records are kept separate and are merged into Roots Data below.
+                if (root.tradeFor === 'root_confirmation' && root.useForTrades && crTfs.includes(targetTf)) {
+                    var previousTf = PT_CURRENT_TIMEFRAME;
+                    PT_CURRENT_TIMEFRAME = targetTf;
+                    var confirmationTrades = ptBuildRootTradeData([root], lowerCandlesForConfirmation).filter(function(t){return t.timeframe===targetTf;});
+                    PT_CURRENT_TIMEFRAME = previousTf;
+                    confirmationTrades.forEach(function(t){
+                        t.dataMode='confirmation'; t.sourceTimeframe=String(PT_CURRENT_TIMEFRAME).toLowerCase();
+                        t.timeframe=targetTf; t.confirmationAnchor=cr.anchorCandleName || String(cr.anchorCandleId);
+                        PT_CONFIRMATION_TRADE_DATA.push(t);
+                        // Draw risk/reward zones directly against lower candle indexes.
+                        if(t.entryIndex==null || !lowerCandlesForConfirmation[t.entryIndex]) return;
+                        var endIdx=t.outcome==='take profit reached'?t.tpTriggerIndex:(t.outcome==='stoploss hit'?t.slTriggerIndex:(t.triggerIndex!=null?t.triggerIndex:lowerCandlesForConfirmation.length-1));
+                        if(endIdx==null || endIdx<0) endIdx=lowerCandlesForConfirmation.length-1;
+                        var bx=directX(t.entryIndex)+Number(PT_VIEW.candleWidth||5)/2, ex=directX(endIdx)+Number(PT_VIEW.candleWidth||5)/2;
+                        var ey=geo.pToY(t.entryPrice), sy=geo.pToY(t.slPrice), ty=geo.pToY(t.tpPrice);
+                        ctx.save();ctx.strokeStyle='#f2c94c';ctx.lineWidth=1.2;ctx.setLineDash([5,3]);ctx.beginPath();ctx.moveTo(bx,ey);ctx.lineTo(ex,ey);ctx.stroke();ctx.setLineDash([]);
+                        ctx.fillStyle='rgba(235,64,75,.18)';ctx.fillRect(bx,Math.min(ey,sy),Math.max(1,ex-bx),Math.max(1,Math.abs(sy-ey)));
+                        ctx.fillStyle='rgba(46,204,113,.18)';ctx.fillRect(bx,Math.min(ey,ty),Math.max(1,ex-bx),Math.max(1,Math.abs(ty-ey)));ctx.restore();
+                    });
+                }
+            });
+        }
+
         // Trade visualization and deterministic family-level trade records.
         PT_ROOT_TRADE_DATA = ptBuildRootTradeData(config.roots, PT_CANDLES);
         var tradeCandleWidth = Number(PT_VIEW.candleWidth || 5);
@@ -3906,14 +4499,14 @@ try {
             // the entry-trigger candle, or the latest loaded candle while still pending.
             var firstTradeIndex = trade.entryIndex;
             if (firstTradeIndex < 0 || firstTradeIndex >= PT_CANDLES.length) return;
-            var firstTradeCenterX = geo.baseX + firstTradeIndex * geo.step + geo.step / 2;
+            var firstTradeCenterX = ptOverlayX(geo, firstTradeIndex);
             var boxStart = firstTradeCenterX + tradeCandleWidth / 2;
             var exitIndex = trade.outcome === 'take profit reached' ? trade.tpTriggerIndex :
                 (trade.outcome === 'stoploss hit' ? trade.slTriggerIndex : null);
             var endIndex = exitIndex != null ? exitIndex :
                 (trade.triggerIndex != null ? trade.triggerIndex : PT_CANDLES.length - 1);
             if (endIndex < firstTradeIndex) endIndex = firstTradeIndex;
-            var endCenterX = geo.baseX + endIndex * geo.step + geo.step / 2;
+            var endCenterX = ptOverlayX(geo, endIndex);
             var endBodyRightX = endCenterX + tradeCandleWidth / 2;
             var boxWidth = Math.max(1, endBodyRightX - boxStart);
             var entryY = geo.pToY(trade.entryPrice);
@@ -3930,14 +4523,115 @@ try {
             ctx.fillStyle = 'rgba(46, 204, 113, 0.20)';
             ctx.fillRect(boxStart, Math.min(entryY, tpY), boxWidth, Math.max(1, Math.abs(tpY-entryY)));
             if (trade.triggerIndex != null) {
-                var triggerCenterX = geo.baseX + trade.triggerIndex * geo.step + geo.step / 2;
+                var triggerCenterX = ptOverlayX(geo, trade.triggerIndex);
                 ctx.fillStyle = '#f2c94c'; ctx.beginPath(); ctx.arc(triggerCenterX, entryY, 3, 0, Math.PI*2); ctx.fill();
             }
             ctx.restore();
         });
+
+        // Run each applicable higher-timeframe root against its own source candles.
+        // The lower timeframe remains the visible chart; geometry maps each HTF candle
+        // to the available lower candles overlapping its open/close interval.
+        if (!PT_PROJECTION_RENDER_PASS && PT_BG_TF_DATA && Object.keys(PT_BG_TF_DATA).length) {
+            var savedCandles = PT_CANDLES;
+            var savedTimeframe = PT_CURRENT_TIMEFRAME;
+            var savedMap = PT_PROJECTION_MAP;
+            var savedTradeData = PT_ROOT_TRADE_DATA;
+            var savedVirtualMatches = PT_VIRTUAL_MATCHES;
+            var projectedTrades = [];
+            var mainTradesAcrossTimeframes = Array.isArray(savedTradeData) ? savedTradeData.slice() : [];
+            PT_CONFIRMATION_TRADE_DATA = [];
+            PT_PROJECTION_TARGET_TIMEFRAME = String(savedTimeframe || '').toLowerCase();
+            PT_PROJECTION_LOWER_CANDLES = savedCandles;
+            Object.keys(PT_BG_TF_DATA).forEach(function (higherTf) {
+                if (ptTfMilliseconds(higherTf) <= ptTfMilliseconds(savedTimeframe)) return;
+                var higherCandles = PT_BG_TF_DATA[higherTf] || [];
+                if (!higherCandles.length) return;
+                var projectionMap = ptBuildProjectionMap(higherCandles, savedCandles);
+                PT_CANDLES = higherCandles;
+                PT_CURRENT_TIMEFRAME = higherTf;
+                PT_PROJECTION_MAP = projectionMap;
+                PT_PROJECTION_RENDER_PASS = true;
+                ptApplyTrainingOverlay(geo);
+                if (Array.isArray(PT_ROOT_TRADE_DATA)) {
+                    PT_ROOT_TRADE_DATA.forEach(function(t) {
+                        var ep = projectionMap[t.entryIndex];
+                        var sp = projectionMap[t.slSourceIndex != null ? t.slSourceIndex : ptIndexForTradeTime(t.slTime)];
+                        var tpSourceIndex = t.tpSourceIndex != null ? t.tpSourceIndex : ptIndexForTradeTime(t.tpTime);
+                        var tpPiece = tpSourceIndex != null ? projectionMap[tpSourceIndex] : null;
+                        if (!ep || ep.first < 0 || ep.last < 0) return;
+                        var entryAfter = ep.last; // the 4th 1h candle closes before entry-trigger scanning begins
+                        var order = String(t.orderType || 'buy').toLowerCase();
+                        var isLong = ['buy','buy-limit','buy-stop'].indexOf(order) >= 0;
+                        var triggerIndex = null;
+                        for (var i = entryAfter + 1; i < savedCandles.length; i++) {
+                            var c = savedCandles[i];
+                            var hit = ['buy','buy-limit','sell-stop'].indexOf(order) >= 0 ? Number(c.low) < Number(t.entryPrice) : Number(c.high) > Number(t.entryPrice);
+                            if (hit) { triggerIndex = i; break; }
+                        }
+                        var slTrigger = null, tpTrigger = null;
+                        var outcome = triggerIndex == null ? 'pending entry' : 'in trade';
+                        if (triggerIndex != null) {
+                            for (var j = triggerIndex; j < savedCandles.length; j++) {
+                                var cj = savedCandles[j];
+                                var slHit = isLong ? Number(cj.low) <= Number(t.slPrice) : Number(cj.high) >= Number(t.slPrice);
+                                var tpHit = isLong ? Number(cj.high) >= Number(t.tpPrice) : Number(cj.low) <= Number(t.tpPrice);
+                                if (slHit || tpHit) { if (slHit) { outcome='stoploss hit'; slTrigger=j; } else { outcome='take profit reached'; tpTrigger=j; } break; }
+                            }
+                        }
+                        function stampLower(idx) { return idx == null || !savedCandles[idx] ? null : String(savedCandles[idx].time || savedCandles[idx].open_time || ''); }
+                        projectedTrades.push(Object.assign({}, t, {
+                            dataMode:'projected', sourceTimeframe:higherTf, timeframe:savedTimeframe,
+                            familyNumber:t.familyNumber, entrySourceIndex:t.entryIndex,
+                            entryIndex:ep.last, entryTime:stampLower(ep.last),
+                            triggerIndex:triggerIndex, entryTriggerTime:stampLower(triggerIndex),
+                            slTriggerIndex:slTrigger, slTriggerTime:stampLower(slTrigger),
+                            tpTriggerIndex:tpTrigger, tpTriggerTime:stampLower(tpTrigger),
+                            slSourceIndex:t.slSourceIndex, tpSourceIndex:tpSourceIndex,
+                            slTime:sp && sp.last >= 0 ? stampLower(sp.last) : t.slTime,
+                            tpTime:tpPiece && tpPiece.last >= 0 ? stampLower(tpPiece.last) : t.tpTime,
+                            outcome:outcome
+                        }));
+                    });
+                }
+            });
+            PT_CANDLES = savedCandles;
+            PT_CURRENT_TIMEFRAME = savedTimeframe;
+            PT_PROJECTION_MAP = savedMap;
+            PT_PROJECTION_RENDER_PASS = false;
+            PT_MAIN_TRADE_DATA = mainTradesAcrossTimeframes;
+            // Keep confirmation trades in their actual lower-timeframe coordinate system;
+            // parent-root projected trades above remain mapped from the HTF source.
+            PT_CONFIRMATION_TRADE_DATA.forEach(function(t){ projectedTrades.push(t); });
+            PT_PROJECTED_TRADE_DATA = projectedTrades;
+            PT_ROOT_TRADE_DATA = PT_MAIN_TRADE_DATA;
+            PT_VIRTUAL_MATCHES = savedVirtualMatches;
+            PT_PROJECTION_LOWER_CANDLES = null;
+            PT_PROJECTION_TARGET_TIMEFRAME = '';
+        } else if (!PT_PROJECTION_RENDER_PASS) {
+            PT_MAIN_TRADE_DATA = Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA.slice() : [];
+            PT_ROOT_TRADE_DATA = PT_MAIN_TRADE_DATA;
+        }
     }
 
     var PT_ROOT_TRADE_DATA = [];
+    var PT_MAIN_TRADE_DATA = [];
+    var PT_PROJECTED_TRADE_DATA = [];
+    var PT_ROOTS_DATA_MODE = 'main'; // Roots Data includes native and configured confirmation trades.
+    function ptConfirmationTradeGuidance() {
+        var cfg = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
+        if (!cfg || !Array.isArray(cfg.roots)) return '';
+        var lines = [];
+        cfg.roots.forEach(function(r) {
+            if (!r.useForTrades || r.tradeFor !== 'root_confirmation' || !r.confirmationRoot) return;
+            var tfs = (r.confirmationRoot.timeframes || []).map(function(tf){return String(tf);});
+            if (tfs.length) lines.push('Root ' + r.id + ': switch the chart to ' + tfs.join(', ') + ' to view confirmation-timeframe trades.');
+        });
+        return lines.join('\n');
+    }
+    var PT_PROJECTION_LOWER_CANDLES = null;
+    var PT_PROJECTION_TARGET_TIMEFRAME = '';
+    var PT_CONFIRMATION_TRADE_DATA = [];
     var PT_FAMILY_HOVER_NOTE = null;
     function ptShowFamilyHoverNote(trade, clientX, clientY) {
         if (!trade || !trade.minimumRiskRewardApplied) { if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none'; return; }
@@ -3958,23 +4652,30 @@ try {
 
     function ptBuildRootTradeData(roots, candles) {
         var records = [];
+        function tradeSource(root) {
+            return root.tradeFor === 'root_confirmation' && root.confirmationRoot
+                ? root.confirmationRoot : root;
+        }
         function targetKey(root, encoded) {
             if (!encoded) return null;
             var parts = String(encoded).split('|'); if (parts.length < 3) return null;
-            var tree=(root.trees||[]).find(function(t){return String(t.id)===String(parts[0]);});
+            var source = tradeSource(root);
+            var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parts[0]);});
             if(!tree) return null;
             var c=tree[parts[1]]; if(!c) return null;
             return String(c.selectedExistingId || (parts[1]==='reference' ? c.existingCandleId : null) || c.offsetTo || c.id || parts[2]);
         }
         function stamp(c) { if(!c) return '—'; var v=c.time; if(typeof v==='number') return new Date(v < 1e12 ? v*1000 : v).toISOString(); return String(v||'—'); }
-        function targetLabel(root, encoded) { if(!encoded) return '—'; var parts=String(encoded).split('|'); var tree=(root.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); var c=tree&&tree[parts[1]]; return c&&c.name ? c.name : (parts[2]||'—'); }
+        function targetLabel(root, encoded) { if(!encoded) return '—'; var parts=String(encoded).split('|'); var source=tradeSource(root); var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); var c=tree&&tree[parts[1]]; return c&&c.name ? c.name : (parts[2]||'—'); }
         roots.forEach(function(root){
             if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
             if(!root.useForTrades) return;
-            var tfs=ptNormTfList(root); if(tfs.indexOf(String(PT_CURRENT_TIMEFRAME).toLowerCase())<0) return;
+            var source = tradeSource(root);
+            var tfs = source === root ? ptNormTfList(root) : (Array.isArray(source.timeframes) ? source.timeframes.map(function(v){return String(v).toLowerCase();}) : []);
+            if(tfs.indexOf(String(PT_CURRENT_TIMEFRAME).toLowerCase())<0) return;
             var entryKey=targetKey(root,root.entryFrom), slKey=targetKey(root,root.stoplossFrom), tpKey=root.takeProfitType==='risk_reward'?null:targetKey(root,root.takeProfitFrom);
             if(!entryKey || !slKey || (root.takeProfitType!=='risk_reward' && !tpKey)) return;
-            var families=Array.isArray(root._drawMatches)?root._drawMatches:[];
+            var families=source === root ? (Array.isArray(root._drawMatches)?root._drawMatches:[]) : (Array.isArray(root._confirmationDrawMatches)?root._confirmationDrawMatches:[]);
             families.forEach(function(family, famIndex){
                 var map=family.map||{}, entryIndex=map[entryKey], slIndex=map[slKey], tpIndex=tpKey?map[tpKey]:null;
                 if(entryIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
@@ -4020,7 +4721,7 @@ try {
                 var riskDistance=Math.abs(entryPrice-slPrice);
                 var rewardDistance=(tpPrice!==null && Number.isFinite(Number(tpPrice)))?Math.abs(Number(tpPrice)-entryPrice):null;
                 var familyRiskReward=(riskDistance>0 && rewardDistance!==null)?(rewardDistance/riskDistance):null;
-                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:famIndex+1,timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),orderType:order,
+                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:famIndex+1,timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),sourceTimeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),dataMode:'main',orderType:order,
                     entryIndex:entryIndex,entryName:targetLabel(root,root.entryFrom),entryPrice:entryPrice,entryTime:stamp(entryC),
                     slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
                     riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
@@ -4031,6 +4732,7 @@ try {
         return records;
     }
     window.ptOpenRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.add('active');ptRefreshRootsData();};
+    window.ptSetRootsDataMode=function(){PT_ROOTS_DATA_MODE='main';PT_ROOT_TRADE_DATA=PT_MAIN_TRADE_DATA;ptRefreshRootsData();};
     window.ptCloseRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.remove('active');};
     // Resolve a configured candle timestamp to the currently loaded chart index.
     function ptIndexForTradeTime(value) {
@@ -4142,12 +4844,18 @@ try {
     }
 
     // Close the records modal, zoom to the full trade area, and point to its entry trigger.
-    window.ptLocateTrade=function(rootId,familyNumber){
-        var records=Array.isArray(PT_ROOT_TRADE_DATA)?PT_ROOT_TRADE_DATA:[];
+    window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe){
+        var records=(PT_MAIN_TRADE_DATA||PT_ROOT_TRADE_DATA||[]).filter(function(t){return String(t.timeframe||'').toLowerCase()===String(PT_CURRENT_TIMEFRAME||'').toLowerCase() && t.dataMode!=='projected';});
         var trade=records.find(function(t){
-            return String(t.rootId)===String(rootId)&&Number(t.familyNumber)===Number(familyNumber);
+            return String(t.rootId)===String(rootId)&&Number(t.familyNumber)===Number(familyNumber)&&(!sourceTimeframe||String(t.sourceTimeframe||'')===String(sourceTimeframe));
         });
-        if(!trade || !Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
+        if(!trade) return;
+        var expectedTimeframe = String(trade.timeframe || (trade.dataMode === 'projected' ? PT_CURRENT_TIMEFRAME : '')).toLowerCase();
+        if (expectedTimeframe && expectedTimeframe !== String(PT_CURRENT_TIMEFRAME).toLowerCase()) {
+            alert('You have to switch to ' + expectedTimeframe.toUpperCase() + ' to view this trade.');
+            return;
+        }
+        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
 
         var entryIndex = Number(trade.triggerIndex != null ? trade.triggerIndex : trade.entryIndex);
         if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) {
@@ -4264,10 +4972,26 @@ try {
         });
     };
     window.ptRefreshRootsData=function(){
-        if(typeof ptDrawChart==='function')ptDrawChart();
+        // Opening a data modal must not trigger a full chart rasterization.
+        // The chart already owns its pixels; the modal only needs trade data.
         var body=document.getElementById('ptRootsDataBody'),status=document.getElementById('ptRootsDataStatus'); if(!body)return;
-        var roots=(window.ptGetTrainingConfiguration&&window.ptGetTrainingConfiguration().roots)||[];
-        var all=PT_ROOT_TRADE_DATA||[];
+        var configuredRoots=(window.ptGetTrainingConfiguration&&window.ptGetTrainingConfiguration().roots)||[];
+        var currentTf=String(PT_CURRENT_TIMEFRAME||'').toLowerCase();
+        var roots=configuredRoots.filter(function(root){
+            if(root.applyToChart===false || root.applyToChart===0 || root.applyToChart==='0') return false;
+            var nativeMatch = ptNormTfList(root).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
+            var confirmationMatch = root.tradeFor === 'root_confirmation' && root.confirmationRoot && root.useForTrades &&
+                (root.confirmationRoot.timeframes || []).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
+            return nativeMatch || confirmationMatch;
+        });
+        var rootIds=new Set(roots.map(function(root){return String(root.id);}));
+        var all=(PT_MAIN_TRADE_DATA||PT_ROOT_TRADE_DATA||[]).concat((PT_PROJECTED_TRADE_DATA||[]).filter(function(t){return t.dataMode==='confirmation';})).filter(function(t){
+            return String(t.timeframe||'').toLowerCase()===currentTf && (t.dataMode==='confirmation' || t.dataMode!=='projected') &&
+                rootIds.has(String(t.rootId));
+        });
+        var guidance = ptConfirmationTradeGuidance();
+        var subtitle = document.querySelector('#ptRootsDataTitle') && document.querySelector('#ptRootsDataTitle').parentElement ? document.querySelector('#ptRootsDataTitle').parentElement.querySelector('.pt-dynamic-console-subtitle') : null;
+        if (subtitle) subtitle.textContent = guidance ? ('Matched root families and entry/exit trigger records.\n' + guidance) : 'Matched root families and their entry/exit trigger records';
         function fmtRR(value){return Number(value).toLocaleString(undefined,{maximumFractionDigits:3});}
         function closed(items){return items.filter(function(t){return t.outcome==='stoploss hit'||t.outcome==='take profit reached';}).sort(function(a,b){
             var ai=a.slTriggerIndex!=null?a.slTriggerIndex:(a.tpTriggerIndex!=null?a.tpTriggerIndex:(a.triggerIndex!=null?a.triggerIndex:a.entryIndex));
@@ -4287,8 +5011,15 @@ try {
             var equity=100, currentVirtualBalance=100, highestPeakBalance=100, maxDrawdown=0, accountLostAt=null;
             var activeDrawdownTrades=[],highestDrawdownTrades=[],highestDrawdownLostRisks=0,highestDrawdownRewards=0;
             var highestRevenuePeakTrades=[],highestDrawdownEquity=100;
+            var previousStreakRootId=null;
             sequence.forEach(function(t){
                 var tradeR=t.outcome==='stoploss hit' ? -1 : Math.max(0,Number(t.riskReward)||0);
+                // A global dashboard combines totals across roots, but a streak must never
+                // continue from one root into another root's unrelated trade sequence.
+                if(previousStreakRootId!==null && String(t.rootId)!==String(previousStreakRootId)){
+                    lossRun=0;winRun=0;
+                }
+                previousStreakRootId=t.rootId;
                 if(t.outcome==='stoploss hit'){
                     lossRun++;winRun=0;maxLoss=Math.max(maxLoss,lossRun);
                 } else {
@@ -4489,8 +5220,19 @@ try {
                 card('In trade',x.active,'active','fa-chart-line')+'</div></div>'+
                 '<div class="pt-provision-panel" id="pt-provision-'+key+'" hidden><div class="pt-provision-nav"><strong>Trades Provision</strong><button type="button" class="pt-dd-button secondary" onclick="ptProvisionToggle(\''+scopeKey+'\',false)">Back to summary</button></div></div>';
         }
-        // Global summary remains at the top and aggregates all roots.
-        var html=dashboard(all,'global');
+        // Restore the global summary for all native root trade families on the viewed
+        // timeframe. Projection records remain excluded, and the per-root summaries below
+        // remain isolated. Global consecutive streaks reset at root boundaries.
+        var html='';
+        if(!roots.length){
+            html='<div class="pt-rd-empty">No root data for '+ptEscapeHtml(PT_CURRENT_SYMBOL)+' · '+ptEscapeHtml(PT_CURRENT_TIMEFRAME)+'. The currently viewed timeframe is not configured in any active root.</div>';
+            body.innerHTML=html;
+            if(status)status.textContent='No native root data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+'. Configure this timeframe in a root to see its data here. Projection data is excluded.';
+            return;
+        }
+        html+='<section class="pt-rd-global-summary"><div style="font-size:1.05rem;font-weight:800;margin:0 0 12px;display:flex;align-items:center;gap:9px"><i class="fa-solid fa-chart-pie" aria-hidden="true"></i> Global Summary <span style="font-size:.78rem;font-weight:600;color:var(--pt-muted)">· '+all.length+' native trade families across '+roots.length+' root(s)</span></div>';
+        html+=dashboard(all,'global');
+        html+='</section><div style="font-size:1.02rem;font-weight:800;margin:22px 0 12px;display:flex;align-items:center;gap:9px"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> Per-Root Summaries</div>';
         roots.forEach(function(root){
             var items=all.filter(function(t){return String(t.rootId)===String(root.id);});
             var rs=stats(items);
@@ -4517,12 +5259,12 @@ try {
                 html+='<div><span>Entry trigger</span><b>'+ptEscapeHtml(t.entryTriggerTime||'Waiting for trigger candle')+'</b></div>';
                 if(t.outcome==='stoploss hit')html+='<div><span>Stoploss hit</span><b>'+ptEscapeHtml(t.slTriggerTime||'—')+'</b></div>';
                 if(t.outcome==='take profit reached')html+='<div><span>Profit reached</span><b>'+ptEscapeHtml(t.tpTriggerTime||'—')+'</b></div>';
-                html+='</div><div class="pt-rd-trade-actions"><button type="button" class="pt-dd-locate" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')"><i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Locate on chart</button></div></article>';
+                html+='</div><div class="pt-rd-trade-actions"><button type="button" class="pt-dd-locate" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\''+ptEscapeHtml(t.sourceTimeframe||'')+'\')"><i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Locate on chart</button></div></article>';
             });
             html+='</details>';
         });
         body.innerHTML=html;
-        if(status)status.textContent='Analytics for '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+all.length+' matched families from currently loaded chart candles. Price-level take profit is hard-enforced to at least 1:1.';
+        if(status)status.textContent='Native root data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+roots.length+' configured root(s), '+all.length+' matched trade families. Higher-timeframe projection data is excluded. Price-level take profit is hard-enforced to at least 1:1.';
     };
     function ptEscapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 
@@ -4593,6 +5335,7 @@ try {
         PT_CANVAS.addEventListener('mousedown', function (e) {
             if (e.button !== 0) return;
             PT_DRAG_STATE.mode = 'pan';
+            ptBeginFastInteraction();
             PT_DRAG_STATE.startX = e.clientX;
             PT_DRAG_STATE.startY = e.clientY;
             PT_DRAG_STATE.startOffsetX = PT_VIEW.offsetX;
@@ -4605,6 +5348,7 @@ try {
 
         window.addEventListener('mousemove', function (e) {
             if (PT_DRAG_STATE.mode === 'pan') {
+                ptBeginFastInteraction();
                 var dx = e.clientX - PT_DRAG_STATE.startX;
                 var dy = e.clientY - PT_DRAG_STATE.startY;
                 if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
@@ -4637,6 +5381,7 @@ try {
 
         PT_CANVAS.addEventListener('wheel', function (e) {
             e.preventDefault();
+            ptBeginFastInteraction();
             var rect = PT_CANVAS.getBoundingClientRect();
             var mx = e.clientX - rect.left;
             var factor = e.deltaY > 0 ? 0.9 : 1.1;
@@ -4653,6 +5398,7 @@ try {
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchstart', function (e) {
+            ptBeginFastInteraction();
             if (e.touches.length === 1) {
                 var firstTouch=e.touches[0];
                 PT_TOUCH_STATE.touchStartX=PT_TOUCH_STATE.latestTouchX=firstTouch.clientX;
@@ -4683,6 +5429,7 @@ try {
 
         PT_CANVAS.addEventListener('touchmove', function (e) {
             e.preventDefault();
+            ptBeginFastInteraction();
             if (e.touches.length===1) { PT_TOUCH_STATE.latestTouchX=e.touches[0].clientX; PT_TOUCH_STATE.latestTouchY=e.touches[0].clientY; }
             if (PT_TOUCH_STATE.crosshairActive && e.touches.length===1) {
                 var touch=e.touches[0],rect=PT_CANVAS.getBoundingClientRect(),x=touch.clientX-rect.left,y=touch.clientY-rect.top;
@@ -5168,9 +5915,54 @@ try {
                 return wrap;
             }
 
+            // A confirmation root's first main candle is anchored directly to a selected
+            // parent-root candle timestamp. Its own name remains an independent identity
+            // used by later confirmation trees.
+            if (root.isConfirmationRoot && opts.isFirstTree) {
+                var parentRoot = root.parentRoot || null;
+                var anchorOptions = [{value:'', label:'— select existing parent-root candle —'}];
+                if (parentRoot && Array.isArray(parentRoot.trees)) {
+                    parentRoot.trees.forEach(function (parentTree) {
+                        ['main','reference','offset'].forEach(function (kind) {
+                            var candle = parentTree[kind] ||
+                                (kind === 'offset' && parentTree.reference && parentTree.reference.referenceMode === 'new_offset' ? parentTree.reference : null);
+                            if (!candle || !String(candle.name || '').trim()) return;
+                            var id = kind === 'main'
+                                ? (candle.selectedExistingId || candle.offsetTo || candle.id)
+                                : (candle.referenceMode === 'new_offset'
+                                    ? candle.id
+                                    : (candle.selectedExistingId || candle.existingCandleId || candle.id));
+                            var label = candle.name + ' (Tree ' + parentTree.id + ' · ' + kind + ')';
+                            if (!anchorOptions.some(function (o) { return String(o.value) === String(id); })) {
+                                anchorOptions.push({value:String(id), label:label});
+                            }
+                        });
+                    });
+                }
+                var anchorSel = mkSelect('cfg_confirmation_anchor_' + root.id,
+                    anchorOptions, String(root.anchorCandleId || ''), false, function () {
+                        root.anchorCandleId = anchorSel.value;
+                        var chosen = anchorOptions.find(function (o) { return String(o.value) === String(anchorSel.value); });
+                        root.anchorCandleName = chosen ? chosen.label : '';
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Select candle to anchor in lower timeframe', anchorSel));
+
+                var anchorTimeSel = mkSelect('cfg_confirmation_anchor_time_' + root.id,
+                    [{value:'open_time',label:'Open time'},{value:'close_time',label:'Close time'}],
+                    root.anchorTime || 'open_time', false, function () {
+                        root.anchorTime = anchorTimeSel.value;
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Candle time', anchorTimeSel));
+            }
+
             // Main Candle Name
             var nameInput = mkInput('cfg_main_name_' + row.id, 'text', row.name, 'Main candle name', false, function () {
                 row.name = nameInput.value;
+                if (root.isConfirmationRoot && opts.isFirstTree) {
+                    root.anchorMainCandleName = row.name;
+                }
                 opts.onValueChange();
             });
             grid.appendChild(mkField('Main Candle Name', nameInput));
@@ -5215,11 +6007,13 @@ try {
             var positionOptions = opts.isFirstTree
                 ? [{value:'all', label:'all'}]
                 : [{value:'left', label:'left'}, {value:'right', label:'right'}];
-            var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions, row.position, opts.isFirstTree, function () {
-                row.position = posSel.value;
-                opts.onValueChange();
-            });
-            grid.appendChild(mkField('Position', posSel));
+            if (!(root.isConfirmationRoot && opts.isFirstTree)) {
+                var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions, row.position, opts.isFirstTree, function () {
+                    row.position = posSel.value;
+                    opts.onValueChange();
+                });
+                grid.appendChild(mkField('Position', posSel));
+            }
 
             // Offset to (only when not first tree)
             if (!opts.isFirstTree) {
@@ -5482,7 +6276,7 @@ try {
 
             // Root timeframes are explicitly selected as a set, not inherited
             // from the currently displayed chart timeframe.
-            if (treeIndex === 0) {
+            if (treeIndex === 0 && !root.isConfirmationRoot) {
                 var tfWrap = document.createElement('div');
                 tfWrap.className = 'pt-cfg-field pt-root-timeframes';
                 var tfLabel = document.createElement('label');
@@ -5672,6 +6466,87 @@ try {
             treeFoot.appendChild(addTreeBtn);
             content.appendChild(treeFoot);
 
+            // Confirmation-root configuration is visually separate and uses the same tree editor.
+            if (!root.confirmationRoot) root.confirmationRoot = {
+                id: root.id * 1000 + 1, name: 'Confirmation for root ' + root.id,
+                timeframes: [], anchorCandleId: '', anchorCandleName: '',
+                anchorTime: 'open_time', trees: [], drawings: []
+            };
+            var confirmationRoot = root.confirmationRoot;
+            confirmationRoot.isConfirmationRoot = true;
+            confirmationRoot.parentRoot = root;
+            confirmationRoot.parentRootId = root.id;
+            var confirmationWrap = document.createElement('section');
+            confirmationWrap.className = 'pt-cfg-confirmation-section';
+            confirmationWrap.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:16px;padding:14px;border:1px solid #e0b400;border-radius:12px;background:rgba(255,193,7,.10);min-width:0;';
+            var confirmationTitle = document.createElement('div');
+            confirmationTitle.textContent = 'CONFIRMATION ROOT';
+            confirmationTitle.style.cssText = 'font-size:.82rem;font-weight:900;letter-spacing:.08em;color:#b8860b;';
+            confirmationWrap.appendChild(confirmationTitle);
+            var addConfirmationBtn = document.createElement('button');
+            addConfirmationBtn.type = 'button';
+            addConfirmationBtn.className = 'pt-cfg-btn';
+            addConfirmationBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add confirmation root';
+            addConfirmationBtn.addEventListener('click', function () {
+                confirmationRoot.enabled = true;
+                if (!confirmationRoot.trees.length) confirmationRoot.trees.push(createTree(confirmationRoot));
+                root.expanded = true;
+                onChange();
+            });
+            confirmationWrap.appendChild(addConfirmationBtn);
+            if (confirmationRoot.enabled || confirmationRoot.trees.length) {
+                var tfLabel = document.createElement('div');
+                tfLabel.textContent = 'Select confirmation timeframes (parent-root timeframes are excluded)';
+                tfLabel.style.fontWeight = '700';
+                confirmationWrap.appendChild(tfLabel);
+                var tfList = document.createElement('div');
+                tfList.className = 'pt-root-timeframe-list';
+                (PT_ALL_TIMEFRAMES || []).filter(function (tf) {
+                    return (root.timeframes || []).indexOf(tf) === -1;
+                }).forEach(function (tf) {
+                    var item = document.createElement('label');
+                    item.className = 'pt-root-timeframe-option';
+                    var cb = document.createElement('input');
+                    cb.type = 'checkbox'; cb.value = tf;
+                    cb.checked = (confirmationRoot.timeframes || []).indexOf(tf) !== -1;
+                    cb.addEventListener('change', function () {
+                        confirmationRoot.timeframes = confirmationRoot.timeframes || [];
+                        if (cb.checked && confirmationRoot.timeframes.indexOf(tf) < 0) confirmationRoot.timeframes.push(tf);
+                        if (!cb.checked) confirmationRoot.timeframes = confirmationRoot.timeframes.filter(function (v) { return v !== tf; });
+                        confirmationRoot.timeframes = (PT_ALL_TIMEFRAMES || []).filter(function (v) { return confirmationRoot.timeframes.indexOf(v) >= 0; });
+                        onChange();
+                    });
+                    item.appendChild(cb);
+                    var span = document.createElement('span'); span.textContent = tf; item.appendChild(span);
+                    tfList.appendChild(item);
+                });
+                confirmationWrap.appendChild(tfList);
+
+                confirmationRoot.parentRoot = root;
+                confirmationRoot.parentRootId = root.id;
+                var confirmationTrees = document.createElement('div');
+                confirmationTrees.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+                confirmationRoot.trees.forEach(function (tree, idx) {
+                    confirmationTrees.appendChild(buildTree(confirmationRoot, tree, idx, onChange, onValueChange));
+                });
+                confirmationWrap.appendChild(confirmationTrees);
+                // Drawings for either source live in the parent root's blue SET DRAWINGS
+                // section. The Draw for selector chooses root candles or confirmation candles.
+                var addConfirmationTree = document.createElement('button');
+                addConfirmationTree.type = 'button'; addConfirmationTree.className = 'pt-cfg-btn';
+                addConfirmationTree.innerHTML = '<i class="fa-solid fa-plus"></i> New confirmation tree';
+                addConfirmationTree.addEventListener('click', function () {
+                    if (!confirmationRoot.trees.length || treeIsConfigured(confirmationRoot, confirmationRoot.trees[confirmationRoot.trees.length - 1], confirmationRoot.trees.length - 1)) {
+                        confirmationRoot.trees.push(createTree(confirmationRoot));
+                        onChange();
+                    } else {
+                        setFootStatus('Complete the current confirmation tree before adding another.', 'error');
+                    }
+                });
+                confirmationWrap.appendChild(addConfirmationTree);
+            }
+            content.appendChild(confirmationWrap);
+
             // Trade settings are grouped inside one green outer border.
             var tradeSection = document.createElement('section');
             tradeSection.className = 'pt-cfg-trade-section';
@@ -5689,6 +6564,13 @@ try {
             tradeToggleLabel.style.fontWeight = '800';
             tradeToggle.appendChild(tradeToggleLabel);
             tradeSection.appendChild(tradeToggle);
+            var tradeSourceSel = mkSelect('cfg_trade_for_' + root.id,
+                [{value:'root',label:'root'},{value:'root_confirmation',label:'root confirmation'}],
+                root.tradeFor || 'root', false, function () {
+                    root.tradeFor = tradeSourceSel.value;
+                    onChange();
+                });
+            tradeSection.appendChild(mkField('Set Trades for', tradeSourceSel));
 
             // Trade-entry controls are deliberately placed below all trees and above Drawings.
             // They are not rendered at all unless "Use this root for trades" is Yes.
@@ -5697,7 +6579,8 @@ try {
                 tradeGrid.className = 'pt-cfg-root-grid pt-cfg-trade-grid';
                 function candleTargetsOptions() {
                     var opts = [{value:'', label:'— select candle —'}];
-                    root.trees.forEach(function (tree) {
+                    var sourceRoot = (root.tradeFor === 'root_confirmation' && root.confirmationRoot) ? root.confirmationRoot : root;
+                    sourceRoot.trees.forEach(function (tree) {
                         ['main','reference','offset'].forEach(function (kind) {
                             var candle = tree[kind];
                             if (!candle || !candle.name) return;
@@ -5749,7 +6632,9 @@ try {
             addDrawBtn.className = 'pt-cfg-btn';
             addDrawBtn.innerHTML = '<i class="fa-solid fa-pen-ruler"></i> Add Drawing';
             addDrawBtn.addEventListener('click', function () {
-                root.drawings.push(createDrawing());
+                var drawing = createDrawing();
+                drawing.drawFor = 'root';
+                root.drawings.push(drawing);
                 root.expanded = true;
                 onChange();
             });
@@ -5784,6 +6669,22 @@ try {
             var grid = document.createElement('div');
             grid.className = 'pt-cfg-row-grid';
 
+            var drawForSel = mkSelect('cfg_draw_for_' + draw.id,
+                [{value:'root',label:'root'},{value:'root_confirmation',label:'root confirmation'}],
+                draw.drawFor || (root && root.parentRootId ? 'root_confirmation' : 'root'), false, function () {
+                    draw.drawFor = drawForSel.value;
+                    onChange();
+                });
+            grid.appendChild(mkField('Draw for', drawForSel));
+
+            function drawingSourceRoot() {
+                if (root.parentRootId && root.parentRoot) {
+                    return draw.drawFor === 'root_confirmation' ? root : root.parentRoot;
+                }
+                return draw.drawFor === 'root_confirmation' && root.confirmationRoot
+                    ? root.confirmationRoot : root;
+            }
+
             function parseTarget(value) {
                 var p = String(value || '').split('|');
                 return p.length >= 3 ? {treeId: p[0], kind: p[1], id: p[2]} : null;
@@ -5797,7 +6698,8 @@ try {
              */
             function targetOptions(includeIntercept) {
                 var list = [{value: '', label: '— select candle —'}];
-                root.trees.forEach(function (tree, index) {
+                var sourceRoot = drawingSourceRoot();
+                sourceRoot.trees.forEach(function (tree, index) {
                     ['main', 'reference', 'offset'].forEach(function (kind) {
                         var candle = tree[kind];
                         // A new offset is represented by the reference model.
@@ -5843,7 +6745,7 @@ try {
                 if (options.some(function (option) { return option.value === value; })) return value;
                 var parts = value.split('|');
                 if (parts.length < 3) return value;
-                var tree = root.trees.find(function (item) { return String(item.id) === String(parts[0]); });
+                var tree = drawingSourceRoot().trees.find(function (item) { return String(item.id) === String(parts[0]); });
                 if (!tree) return value;
                 var kind = parts[1];
                 var candle = kind === 'main' ? tree.main :
@@ -6005,6 +6907,12 @@ try {
                 takeProfitType: 'risk_reward',
                 takeProfitPriceLevel: 'high',
                 applyToChart: true,
+                tradeFor: 'root',
+                confirmationRoot: {
+                    id: id * 1000 + 1, name: 'Confirmation for root ' + id,
+                    timeframes: [], anchorCandleId: '', anchorCandleName: '',
+                    anchorTime: 'open_time', trees: [], drawings: []
+                },
                 trees: [],
                 drawings: []
             };
@@ -6023,6 +6931,13 @@ try {
                     timeframe: Array.isArray(root.timeframes) ? JSON.stringify(root.timeframes) : '',
                     use_for_trades: root.useForTrades ? 1 : 0,
                     apply_to_chart: root.applyToChart ? 1 : 0,
+                    trade_for: root.tradeFor || 'root',
+                    confirmation_root_id: root.confirmationRoot ? root.confirmationRoot.id : null,
+                    confirmation_tree_id: null,
+                    confirmation_timeframes: root.confirmationRoot ? root.confirmationRoot.timeframes : [],
+                    confirmation_anchor_candle_id: root.confirmationRoot ? (root.confirmationRoot.anchorCandleId || null) : null,
+                    confirmation_anchor_candle_name: root.confirmationRoot ? (root.confirmationRoot.anchorCandleName || '') : '',
+                    confirmation_anchor_time: root.confirmationRoot ? (root.confirmationRoot.anchorTime || 'open_time') : 'open_time',
                     entry_at: root.entryFrom || '',
                     order_type: root.orderType || 'buy',
                     entry_order_type: root.orderType || 'buy',
@@ -6107,10 +7022,58 @@ try {
                             (draw.drawTo === 'any_intercept_candle')
                                 ? null
                                 : (draw.drawToPriceLevel || ''),
-                        drawing_color: draw.drawingColor || 'blue'
+                        drawing_color: draw.drawingColor || 'blue',
+                        draw_for: draw.drawFor || 'root'
                     });
                 });
 
+                if (root.confirmationRoot && root.confirmationRoot.enabled) {
+                    var cr = root.confirmationRoot;
+                    var crOut = {
+                        id: cr.id || (root.id * 1000 + 1),
+                        root_name: cr.name || ('Confirmation for root ' + root.id),
+                        timeframes: Array.isArray(cr.timeframes) ? cr.timeframes : [],
+                        timeframe: Array.isArray(cr.timeframes) ? JSON.stringify(cr.timeframes) : '',
+                        trees: [], drawings: [],
+                        apply_to_chart: root.applyToChart ? 1 : 0,
+                        use_for_trades: 0,
+                        _parent_root_id: root.id,
+                        anchor_candle_id: cr.anchorCandleId || null,
+                        anchor_candle_name: cr.anchorCandleName || '',
+                        anchor_time: cr.anchorTime || 'open_time'
+                    };
+                    cr.trees.forEach(function (tree, treeIndex) {
+                        if (!treeIsConfigured(cr, tree, treeIndex)) return;
+                        var mainRow = tree.main, refRow = tree.reference;
+                        crOut.trees.push({
+                            tree_id: tree.id,
+                            main: {
+                                id: mainRow.id, main_id: (mainRow.selectedExistingId || mainRow.id),
+                                main_candle_name: mainRow.name || '', candle_text: mainRow.candleText || '',
+                                text_position: mainRow.textPosition || 'high', text_color: mainRow.textColor || 'purple',
+                                main_candle_type: normalizeCandleType(mainRow.mainCandleType),
+                                offset_candle: mainRow.offsetTo != null ? normalizeCandleType(mainRow.offsetCandle || DEFAULT_CANDLE_TYPE) : null,
+                                position: mainRow.position || 'all', offset_to: mainRow.offsetTo != null ? mainRow.offsetTo : null,
+                                offset_to_name: mainRow.offsetToName || '', offset_position: mainRow.offsetPosition != null ? mainRow.offsetPosition : null,
+                                offset_pos_point: mainRow.offsetPosPoint || 'all', price_level: mainRow.priceLevel || 'high', operator: mainRow.operator || '<'
+                            },
+                            reference: {
+                                referenceMode: refRow.referenceMode || 'existing',
+                                id: (refRow.referenceMode === 'existing' && refRow.selectedExistingId) ? refRow.selectedExistingId : refRow.id,
+                                reference_id: (refRow.referenceMode === 'existing' && refRow.selectedExistingId) ? refRow.selectedExistingId : refRow.id,
+                                reference_candle_name: refRow.name || '',
+                                candle_text: (treeIndex === 0 || refRow.referenceMode === 'new_offset') ? (refRow.candleText || '') : '',
+                                text_position: refRow.textPosition || 'high', text_color: refRow.textColor || 'purple',
+                                ref_candle_type: normalizeCandleType(refRow.refCandleType), position: refRow.position || 'left',
+                                offset_to: refRow.referenceMode === 'new_offset' ? (mainRow.selectedExistingId || mainRow.id) : null,
+                                offset_to_name: refRow.referenceMode === 'new_offset' ? (mainRow.name || '') : '',
+                                offset_position: refRow.offsetPosition != null ? refRow.offsetPosition : 1,
+                                offset_pos_point: refRow.offsetPosPoint || 'all', price_level: refRow.priceLevel || 'high'
+                            }
+                        });
+                    });
+                    rootOut.confirmation_root = crOut;
+                }
                 rootsOut.push(rootOut);
             });
 
@@ -6174,13 +7137,20 @@ try {
             var btn = el('ptCfgSaveBtn');
             if (btn) { btn.disabled = true; }
 
+            var hasSelectedTimeframes = function (values) {
+                return Array.isArray(values) && values.some(function (tf) {
+                    return String(tf == null ? '' : tf).trim() !== '';
+                });
+            };
+            // Only the main root timeframe is required to save. Confirmation timeframe
+            // selection is optional; when empty, confirmation is simply not rendered/applied
+            // on any chart timeframe.
             var missingRoot = PT_CFG.roots.find(function (r) {
-                return !Array.isArray(r.timeframes) ||
-                    !r.timeframes.some(function (tf) { return String(tf || '').trim() !== ''; });
+                return !hasSelectedTimeframes(r.timeframes);
             });
             if (missingRoot) {
                 if (btn) btn.disabled = false;
-                setFootStatus('Root ' + missingRoot.id + ': select at least one timeframe before saving.', 'error');
+                setFootStatus((missingRoot.name || missingRoot.root_name || ('Root ' + missingRoot.id)) + ' (Root ' + missingRoot.id + '): select at least one timeframe before saving.', 'error');
                 var rootCards = document.querySelectorAll('.pt-cfg-root');
                 rootCards.forEach(function (card) {
                     if (String(card.getAttribute('data-root-id')) === String(missingRoot.id)) {
@@ -6230,6 +7200,7 @@ try {
             .then(function (data) {
                 if (btn) btn.disabled = false;
                 if (data && data.success) {
+                    ptRefreshHigherTimeframeProjection();
                     setFootStatus(
                         'Saved: ' + data.meta.root_count + ' root(s), ' +
                         data.meta.tree_count + ' tree(s), ' +
@@ -6302,7 +7273,10 @@ try {
             return raw.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
         }
 
-        function ptRestoreSavedRows(rows) {
+        function ptRestoreSavedRows(rows, confirmationRows) {
+            rows = (Array.isArray(rows) ? rows : []).concat((Array.isArray(confirmationRows) ? confirmationRows : []).map(function (r) {
+                r.__is_confirmation = true; return r;
+            }));
             PT_CFG.roots = [];
             PT_CFG.nextRootId = 1;
             PT_CFG.nextTreeId = 1;
@@ -6312,7 +7286,8 @@ try {
             var rootMap = {};
             var treeMap = {};
             (Array.isArray(rows) ? rows : []).forEach(function (row) {
-                var rid = parseInt(row.root_id, 10) || 1;
+                var isConfirmationRow = !!row.__is_confirmation || row.parent_root_id != null;
+                var rid = isConfirmationRow ? (parseInt(row.parent_root_id, 10) || 1) : (parseInt(row.root_id, 10) || 1);
                 var tid = parseInt(row.tree_id, 10) || 1;
 
                 if (!rootMap[rid]) {
@@ -6331,6 +7306,17 @@ try {
                         takeProfitType: (String(row.take_profit_type || '').toLowerCase().replace(/\s+/g, '_') === 'price_levels') ? 'price_levels' : 'risk_reward',
                         takeProfitPriceLevel: row.take_profit_price_level || 'high',
                         applyToChart: ptDbBool(row.apply_to_chart != null ? row.apply_to_chart : row.run_in_python),
+                        tradeFor: row.trade_for || 'root',
+                        confirmationRoot: {
+                            id: parseInt(row.confirmation_root_id, 10) || (rid * 1000 + 1),
+                            name: 'Confirmation for root ' + rid,
+                            timeframes: ptParseSavedTimeframes(row.confirmation_timeframes),
+                            anchorCandleId: row.confirmation_anchor_candle_id || '',
+                            anchorCandleName: row.confirmation_anchor_candle_name || '',
+                            anchorTime: row.confirmation_anchor_time || 'open_time',
+                            enabled: !!(row.confirmation_root_id || row.confirmation_anchor_candle_id || row.confirmation_timeframes),
+                            trees: [], drawings: []
+                        },
                         trees: [], drawings: []
                     };
                     rootMap[rid] = root;
@@ -6338,9 +7324,31 @@ try {
                     PT_CFG.nextRootId = Math.max(PT_CFG.nextRootId, rid + 1);
                 }
                 var currentRoot = rootMap[rid];
+                if (!currentRoot.confirmationRoot) currentRoot.confirmationRoot = {
+                    id: parseInt(row.confirmation_root_id, 10) || (rid * 1000 + 1),
+                    name: 'Confirmation for root ' + rid,
+                    timeframes: ptParseSavedTimeframes(row.confirmation_timeframes),
+                    anchorCandleId: row.confirmation_anchor_candle_id || '',
+                    anchorCandleName: row.confirmation_anchor_candle_name || '',
+                    anchorTime: row.confirmation_anchor_time || 'open_time',
+                    enabled: false, trees: [], drawings: []
+                };
+                var targetRoot = currentRoot;
+                if (isConfirmationRow) {
+                    var cr = currentRoot.confirmationRoot;
+                    cr.id = parseInt(row.confirmation_root_id, 10) || cr.id;
+                    cr.enabled = true;
+                    cr.timeframes = ptParseSavedTimeframes(row.confirmation_timeframes || row.timeframe);
+                    cr.anchorCandleId = row.confirmation_anchor_candle_id || cr.anchorCandleId || '';
+                    cr.anchorCandleName = row.confirmation_anchor_candle_name || cr.anchorCandleName || '';
+                    cr.anchorTime = row.confirmation_anchor_time || cr.anchorTime || 'open_time';
+                    targetRoot = cr;
+                }
 
                 // Drawing rows are stored alongside candle rows in the same table.
                 if (row.draw_from || row.draw_to) {
+                    // Confirmation drawings are rendered in the parent root's drawing section;
+                    // only their Draw for value determines which candle list is used.
                     currentRoot.drawings.push({
                         id: PT_CFG.nextOffsetId++,
                         drawTreeId: String(row.tree_id || (String(row.draw_from || '').split('|')[0]) || ''),
@@ -6348,12 +7356,13 @@ try {
                         drawFromPriceLevel: row.draw_from_price_level || 'high',
                         drawTo: row.draw_to || '',
                         drawToPriceLevel: row.draw_to_price_level || 'high',
-                        drawingColor: row.drawing_color || 'blue'
+                        drawingColor: row.drawing_color || 'blue',
+                        drawFor: row.draw_for || (isConfirmationRow ? 'root_confirmation' : 'root')
                     });
                     return;
                 }
 
-                var key = rid + ':' + tid;
+                var key = (isConfirmationRow ? 'confirmation:' + rid + ':' + String(row.confirmation_root_id || '') : 'root:' + rid) + ':' + tid;
                 if (!treeMap[key]) {
                     var mainId = parseInt(row.main_id, 10) || PT_CFG.nextCandleId++;
                     var refId = parseInt(row.reference_id, 10) || PT_CFG.nextCandleId++;
@@ -6367,7 +7376,7 @@ try {
                             textColor: row.text_color || 'purple',
                             mainCandleType: row.main_candle_type || DEFAULT_CANDLE_TYPE,
                             offsetCandle: row.offset_candle || '',
-                            position: row.position || (currentRoot.trees.length ? 'left' : 'all'),
+                            position: row.position || (targetRoot.trees.length ? 'left' : 'all'),
                             offsetTo: row.offset_to || null,
                             offsetToName: row.offset_candle_name || '',
                             offsetToKind: '',
@@ -6397,7 +7406,7 @@ try {
                         offset: null
                     };
                     treeMap[key] = tree;
-                    currentRoot.trees.push(tree);
+                    targetRoot.trees.push(tree);
                     PT_CFG.nextTreeId = Math.max(PT_CFG.nextTreeId, tid + 1);
                     PT_CFG.nextCandleId = Math.max(PT_CFG.nextCandleId, mainId + 1, refId + 1);
                 }
@@ -6513,6 +7522,10 @@ try {
             PT_CFG.roots.forEach(function (root) {
                 root.trees.sort(function (a, b) { return a.id - b.id; });
                 if (!root.trees.length) root.trees.push(createTree(root));
+                if (root.confirmationRoot) {
+                    root.confirmationRoot.trees.sort(function (a, b) { return a.id - b.id; });
+                    root.confirmationRoot.drawings = root.confirmationRoot.drawings || [];
+                }
             });
             PT_CFG_LOADED = true;
         }
@@ -6532,7 +7545,7 @@ try {
                     try { data = JSON.parse(raw); }
                     catch (e) { throw new Error('Could not read saved configuration from the server.'); }
                     if (!response.ok || !data.success) throw new Error(data.message || 'Could not load saved configuration.');
-                    ptRestoreSavedRows(data.rows || []);
+                    ptRestoreSavedRows(data.rows || [], data.confirmation_rows || []);
                     return data.rows || [];
                 });
             }).catch(function (error) {
