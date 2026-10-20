@@ -82,6 +82,9 @@ $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
 
 $viewerBroker = strtolower(trim((string)($user['broker'] ?? '')));
 
+// A private programme may be opened only through its direct programme link.
+$linkedProgrammeId = (int)($_GET['programme_id'] ?? $_GET['programme'] ?? 0);
+
 // ==================== HELPERS ====================
 if (!function_exists('resolveDeveloperDisplayName')) {
     function resolveDeveloperDisplayName(array $devRow) {
@@ -228,9 +231,14 @@ if (
                        h.email AS developer_email
                 FROM programme p
                 INNER JOIN harvhub h ON h.id = p.userid
-                WHERE p.id = ? AND p.visibility = 1
+                WHERE p.id = ?
                 LIMIT 1
             ");
+            // The View modal is only called for a programme already surfaced by the
+            // programme list or by a direct-URL search. Resolve the requested record
+            // by its exact ID here instead of re-applying public-advertisement filters.
+            // Those filters are for discovery/listing, not for loading the selected
+            // programme's details after it has been found.
             $stmt->execute([$pid]);
             $programme = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -403,10 +411,16 @@ if (
             $stmt = $pdo->prepare("
                 SELECT p.id, p.userid, p.sub_account_id AS developer_sub_account_id, p.broker, p.program_name
                 FROM programme p
-                WHERE p.id = ? AND p.visibility = 1
+                WHERE p.id = ?
+                  AND (
+                        (p.advertisement = 1
+                         AND p.server_advertisement_approval = 1
+                         AND p.visibility = 1)
+                        OR p.id = ?
+                  )
                 LIMIT 1
             ");
-            $stmt->execute([$pid]);
+            $stmt->execute([$pid, $linkedProgrammeId]);
             $programme = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$programme) {
@@ -843,10 +857,15 @@ try {
                h.email AS developer_email, h.broker AS developer_broker
         FROM programme p
         INNER JOIN harvhub h ON h.id = p.userid
-        WHERE p.visibility = 1
+        WHERE (
+                (p.advertisement = 1
+                 AND p.server_advertisement_approval = 1
+                 AND p.visibility = 1)
+                OR p.id = ?
+              )
         ORDER BY p.id DESC
     ");
-    $stmt->execute();
+    $stmt->execute([$linkedProgrammeId]);
     $rawProgrammes = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($rawProgrammes as $p) {
@@ -884,8 +903,13 @@ try {
             if ($pRow && !empty($pRow['period'])) $periodLabel = resolvePeriodLabel($pRow['period']);
         } catch (PDOException $e) {}
 
+        $programmeLink = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://')
+            . ($_SERVER['HTTP_HOST'] ?? '')
+            . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/')
+            . '/programmes.php?programme_id=' . (int)$p['id'];
         $programmes[] = [
             'id' => (int)$p['id'],
+            'programme_link' => $programmeLink,
             'program_name' => $p['program_name'],
             'broker' => $programmeBroker,
             'broker_pretty' => prettyBroker($programmeBroker),
@@ -1067,7 +1091,7 @@ if ($userHasProgramme) {
     }
 }
 
-$defaultTab = $userHasProgramme ? 'invested' : 'programmes';
+$defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'invested' : 'programmes');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1080,6 +1104,7 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
 <?php include 'programmes_style.php'; ?>
+
 <style>
     .prog-item-broker {
         font-size: 0.78rem;
@@ -1314,7 +1339,7 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
             <input type="text"
                    id="progSearchInput"
                    class="prog-search-input"
-                   placeholder="Search Programme, programme url  or dev username"
+                   placeholder="Search programme name or programme URL"
                    autocomplete="off"
                    oninput="onProgSearch(this.value)"
                    onfocus="onProgSearch(this.value)">
@@ -1328,7 +1353,7 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
             <?php if (empty($programmes)): ?>
                 <div class="prog-empty-state">
                     <span class="prog-empty-icon">—</span>
-                    <p>No public programmes available at the moment</p>
+                    <p>No advertised and approved programmes are available at the moment</p>
                 </div>
             <?php else: ?>
                 <div class="prog-list" id="progList">
@@ -1343,7 +1368,8 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
                                  ($p['developer_first_name'] ?? '') . ' ' .
                                  ($p['developer_last_name'] ?? '') . ' ' .
                                  ($p['developer_fullname'] ?? '') . ' ' .
-                                 ($p['developer_email'] ?? '')
+                                 ($p['developer_email'] ?? '') . ' ' .
+                                 ($p['programme_link'] ?? '')
                              )) ?>">
                             <div class="prog-item-main">
                                 <div class="prog-item-header">
@@ -1670,7 +1696,18 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
     window.switchProgTab = switchProgTab;
 
     function onProgSearch(query) {
-        var q = (query || '').trim().toLowerCase();
+        var rawQuery = (query || '').trim();
+        // If a user pastes a programme invite URL, resolve it through its ID.
+        // A direct programme link is treated as the requested programme and can display it.
+        var linkMatch = rawQuery.match(/[?&](?:programme_id|programme)=(\d+)/i);
+        if (linkMatch && parseInt(linkMatch[1], 10) > 0) {
+            var targetUrl = window.location.pathname + '?programme_id=' + encodeURIComponent(linkMatch[1]);
+            if (window.location.search !== '?programme_id=' + encodeURIComponent(linkMatch[1])) {
+                window.location.href = targetUrl;
+                return;
+            }
+        }
+        var q = rawQuery.toLowerCase();
         var listEl = document.getElementById('progList');
         if (!listEl) return;
 
@@ -2062,6 +2099,92 @@ $defaultTab = $userHasProgramme ? 'invested' : 'programmes';
             if (am && am.classList.contains('active')) { closeProgAlert(); }
         }
     });
+
+
+    // ==================== LIVE PROGRAMME UPDATES ====================
+    // VPS uses an 8-second polling interval. Keep this page in sync without
+    // reloading the whole document or disturbing the current tab/search.
+    var _programmeRefreshTimer = null;
+    var _programmeRefreshBusy = false;
+
+    function programmeModalIsOpen() {
+        return ['progDetailModal', 'progAlertModal', 'progConfirmModal', 'progCancelModal'].some(function (id) {
+            var el = document.getElementById(id);
+            return !!(el && el.classList.contains('active'));
+        });
+    }
+
+    function refreshProgrammePanels() {
+        if (_programmeRefreshBusy || document.hidden || programmeModalIsOpen()) return;
+        _programmeRefreshBusy = true;
+
+        fetch(window.location.href, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(function (response) {
+            if (!response.ok) throw new Error('Programme refresh failed');
+            return response.text();
+        })
+        .then(function (htmlText) {
+            // Parse the latest server-rendered programme data off-screen.
+            var parsed = new DOMParser().parseFromString(htmlText, 'text/html');
+            var currentList = document.getElementById('progTabProgrammes');
+            var latestList = parsed.getElementById('progTabProgrammes');
+            var currentInvested = document.getElementById('progTabInvested');
+            var latestInvested = parsed.getElementById('progTabInvested');
+
+            if (currentList && latestList) {
+                currentList.innerHTML = latestList.innerHTML;
+                // Reapply the user's existing search to newly received programme rows.
+                var searchInput = document.getElementById('progSearchInput');
+                if (searchInput && searchInput.value.trim() !== '') {
+                    onProgSearch(searchInput.value);
+                }
+            }
+
+            // Investment state can change while this page remains open.
+            // Update only the panel contents; keep tabs and page state intact.
+            if (currentInvested && latestInvested && !programmeModalIsOpen()) {
+                currentInvested.innerHTML = latestInvested.innerHTML;
+            }
+
+            // If the active tab is Sent Requests, its records are refreshed below
+            // through the existing AJAX endpoint, just as VPS refreshes its lists.
+            var sentTab = document.querySelector('.prog-tab[data-tab="sent"]');
+            var sentContent = document.getElementById('progTabSent');
+            if (sentTab && sentContent && sentTab.classList.contains('active') && sentContent.classList.contains('active')) {
+                loadSentInvestmentRequests();
+            }
+        })
+        .catch(function () {
+            // Keep the current display on transient network/server errors.
+        })
+        .finally(function () {
+            _programmeRefreshBusy = false;
+        });
+    }
+
+    function startProgrammeAutoRefresh() {
+        if (_programmeRefreshTimer) window.clearInterval(_programmeRefreshTimer);
+        _programmeRefreshTimer = window.setInterval(function () {
+            refreshProgrammePanels();
+        }, 8000);
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) refreshProgrammePanels();
+    });
+    window.addEventListener('focus', refreshProgrammePanels);
+    window.addEventListener('beforeunload', function () {
+        if (_programmeRefreshTimer) {
+            window.clearInterval(_programmeRefreshTimer);
+            _programmeRefreshTimer = null;
+        }
+    });
+    startProgrammeAutoRefresh();
 
     window.onProgSearch           = onProgSearch;
     window.viewProgramme          = viewProgramme;
