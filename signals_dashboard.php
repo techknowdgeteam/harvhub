@@ -1,5 +1,5 @@
 <?php
-// signals_dashboard.php — programme-specific trader signal dashboard
+// current signals_dashboard.php — programme-specific trader signal dashboard
 session_start();
 require_once 'usersdb.php';
 
@@ -265,6 +265,102 @@ function getServerAccountConfig($pdo) {
     } catch (Throwable $e) {
         return [];
     }
+}
+
+/**
+ * Return whether this programme has at least one trained root and whether
+ * at least one root (regular or confirmation configuration) is enabled for trades.
+ * Schema introspection keeps this compatible with the current configuration table
+ * variants used by the dashboard.
+ */
+function getProgrammeTrainingReadiness(PDO $pdo, int $userId, int $programmeId): array {
+    $result = ['has_root' => false, 'trades_configured' => false];
+
+    if ($userId <= 0 || $programmeId <= 0) return $result;
+
+    $tableInfo = function (string $table) use ($pdo): array {
+        $allowed = [
+            'programme_training_configuration',
+            'programme_configuration_confirmation',
+            'programme_training_confirmation_configuration'
+        ];
+        if (!in_array($table, $allowed, true)) return ['exists' => false, 'columns' => []];
+
+        try {
+            $q = $pdo->query("SHOW COLUMNS FROM `{$table}`");
+            $cols = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                if (isset($row['Field'])) $cols[strtolower((string)$row['Field'])] = (string)$row['Field'];
+            }
+            return ['exists' => !empty($cols), 'columns' => $cols];
+        } catch (Throwable $e) {
+            return ['exists' => false, 'columns' => []];
+        }
+    };
+
+    $countRows = function (string $table, array $info, int $userId, int $programmeId, bool $rootsOnly, bool $tradesOnly) use ($pdo): int {
+        if (empty($info['exists'])) return 0;
+        $cols = $info['columns'];
+
+        $userCol = $cols['userid'] ?? $cols['user_id'] ?? $cols['developerid'] ?? null;
+        $programmeCol = $cols['programmeid'] ?? $cols['programme_id'] ?? null;
+        if (!$userCol || !$programmeCol) return 0;
+
+        $where = ["`{$userCol}` = ?", "`{$programmeCol}` = ?"];
+        $params = [$userId, $programmeId];
+
+        if ($rootsOnly && isset($cols['row_role'])) {
+            $where[] = "`{$cols['row_role']}` = 'root'";
+        } elseif ($rootsOnly && isset($cols['configuration_type'])) {
+            $where[] = "`{$cols['configuration_type']}` = 'root'";
+        }
+
+        if ($tradesOnly) {
+            // The configuration is selected by trade_for, not a boolean toggle.
+            $tradeForCol = $cols['trade_for'] ?? null;
+            if (!$tradeForCol) return 0;
+            $where[] = "LOWER(CAST(`{$tradeForCol}` AS CHAR)) IN ('root','root_confirmation')";
+        }
+
+        try {
+            $sql = "SELECT COUNT(*) FROM `{$table}` WHERE " . implode(' AND ', $where);
+            $q = $pdo->prepare($sql);
+            $q->execute($params);
+            return (int)$q->fetchColumn();
+        } catch (Throwable $e) {
+            return 0;
+        }
+    };
+
+    $mainTable = 'programme_training_configuration';
+    $mainInfo = $tableInfo($mainTable);
+    $result['has_root'] = $countRows($mainTable, $mainInfo, $userId, $programmeId, true, false) > 0;
+
+    foreach ([
+        'programme_training_configuration',
+        'programme_configuration_confirmation',
+        'programme_training_confirmation_configuration'
+    ] as $table) {
+        $info = ($table === $mainTable) ? $mainInfo : $tableInfo($table);
+        if ($countRows($table, $info, $userId, $programmeId, true, true) > 0) {
+            $result['trades_configured'] = true;
+            break;
+        }
+    }
+
+    return $result;
+}
+
+/** Gate each session notice once per authenticated PHP session. */
+function shouldShowSignalsSessionModalOnce(int $userId, int $programmeId, string $key): bool {
+    if (session_status() !== PHP_SESSION_ACTIVE) return true;
+    if (!isset($_SESSION['signals_dashboard_modal_seen']) || !is_array($_SESSION['signals_dashboard_modal_seen'])) {
+        $_SESSION['signals_dashboard_modal_seen'] = [];
+    }
+    $sessionKey = $userId . ':' . $programmeId . ':' . $key;
+    if (!empty($_SESSION['signals_dashboard_modal_seen'][$sessionKey])) return false;
+    $_SESSION['signals_dashboard_modal_seen'][$sessionKey] = time();
+    return true;
 }
 
 function countProgrammeVpsRequests($pdo, $programmeId) {
@@ -629,6 +725,10 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         'signal_testing_started_at' => null,
         'show_explore_challenges' => false,
         'show_begin_test' => false,
+        'training_has_root' => false,
+        'training_trades_configured' => false,
+        'training_readiness_message' => '',
+        'challenge_duration' => 0,
         'show_session_modal' => false,
         'session_modal_title' => '',
         'session_modal_message' => '',
@@ -643,7 +743,10 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if (!$programme) return $state;
 
-    $advertisement = (int)($programme['advertisement'] ?? 0);
+    // A programme is advertised only when both the advertisement flag and
+    // the server-side approval flag are enabled. Approval is decided elsewhere.
+    $advertisement = ((int)($programme['advertisement'] ?? 0) === 1
+        && (int)($programme['server_advertisement_approval'] ?? 0) === 1) ? 1 : 0;
     $interestStatus = $interest ? (string)($interest['interest_status'] ?? '') : '';
     $beginTest = $interest ? (int)($interest['begin_test'] ?? 0) : 0;
     $signalTestingStartedAt = $interest ? ($interest['signal_testing_started_at'] ?? null) : null;
@@ -654,6 +757,10 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
     $state['signal_testing_started_at'] = $signalTestingStartedAt;
 
     $programmeId = (int)$programme['id'];
+
+    $trainingReadiness = getProgrammeTrainingReadiness($pdo, (int)$userId, $programmeId);
+    $state['training_has_root'] = !empty($trainingReadiness['has_root']);
+    $state['training_trades_configured'] = !empty($trainingReadiness['trades_configured']);
 
     $state['incoming_request_count'] = countProgrammeInvestmentRequests($pdo, $userId, $programmeId);
 
@@ -670,23 +777,35 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed';
 
-    $buildChallengeChevron = function ($periodLabel) {
+    $buildChallengeChevron = function ($periodLabel, $indicatorType = 'challenge') {
         $label = trim((string)$periodLabel);
         if ($label === '') $label = 'Signals';
         $safe = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+        $indicatorType = strtolower(trim((string)$indicatorType)) === 'provision' ? 'provision' : 'challenge';
         return '<button type="button" class="sd-challenge-chevron" onclick="sdGoToChallenges()">'
-             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals challenge</span>'
+             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals ' . $indicatorType . '</span>'
              .   '<span class="sd-challenge-chevron-right"><i class="fa-solid fa-chevron-right"></i></span>'
              . '</button>';
     };
 
     $periodLabel = '';
-    if ($interest) {
-        $period = strtolower((string)($interest['trades_provision'] ?? ''));
-        if ($period === 'daily')   $periodLabel = 'Daily';
-        elseif ($period === 'weekly')  $periodLabel = 'Weekly';
-        elseif ($period === 'monthly') $periodLabel = 'Monthly';
+    $period = strtolower((string)($interest['trades_provision'] ?? ''));
+    if ($period === 'daily') {
+        $periodLabel = 'Daily';
+        $challengeDuration = (int)($serverConfig['day_challenge_duration'] ?? 30);
+        if ($challengeDuration <= 0) $challengeDuration = 30;
+    } elseif ($period === 'weekly') {
+        $periodLabel = 'Weekly';
+        $challengeDuration = (int)($serverConfig['weekly_challenge_duration'] ?? 60);
+        if ($challengeDuration <= 0) $challengeDuration = 60;
+    } elseif ($period === 'monthly') {
+        $periodLabel = 'Monthly';
+        $challengeDuration = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
+        if ($challengeDuration <= 0) $challengeDuration = 90;
+    } else {
+        $challengeDuration = 0;
     }
+    $state['challenge_duration'] = $challengeDuration;
 
     if ($advertisement === 0 && $noInterest) {
         if (!$hasVps) {
@@ -701,7 +820,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if ($advertisement === 1 && $interestStatus === 'breached') {
         $state['show_explore_challenges'] = true;
-        $state['show_session_modal'] = true;
+        $state['show_session_modal'] = shouldShowSignalsSessionModalOnce((int)$userId, $programmeId, 'breached:' . $programmeId);
         $state['session_modal_title'] = 'Challenge Breached';
         $state['session_modal_message'] = 'Your programme has breached the challenge request. You need to train your programme or join a new challenge.';
         $state['session_modal_class'] = 'danger';
@@ -711,7 +830,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if ($advertisement === 0 && $interestStatus === 'failed') {
         $state['show_explore_challenges'] = true;
-        $state['show_session_modal'] = true;
+        $state['show_session_modal'] = shouldShowSignalsSessionModalOnce((int)$userId, $programmeId, 'failed:' . $programmeId);
         $state['session_modal_title'] = 'Challenge Failed';
         $state['session_modal_message'] = 'Your programme failed to meet up the challenge. Train your programme or join a new challenge.';
         $state['session_modal_class'] = 'warning';
@@ -719,13 +838,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $state['greeting_sub'] = "Your programme failed the challenge. Train or join a new challenge.";
     }
 
-    if ($advertisement === 0 && $interestStatus === 'passed') {
-        try {
-            $upd = $pdo->prepare("UPDATE programme SET advertisement = 1 WHERE id = ?");
-            $upd->execute([$programmeId]);
-            $state['advertisement'] = 1;
-        } catch (Throwable $e) {}
-    }
+    // Do not change advertisement here; server-side approval controls publication.
 
     if ($advertisement === 1 && $interestStatus === 'passed') {
         $progName = $programme['program_name'] ?: 'Programme';
@@ -739,24 +852,50 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if ($advertisement === 0 && $interestStatus === 'interested' && $beginTest === 0) {
         if ($hasVps && $hasBroker) {
-            $state['show_begin_test'] = true;
-            $state['show_session_modal'] = true;
-            $state['session_modal_title'] = 'Begin Your Challenge Test';
-            $state['session_modal_message'] = 'You have shown interest in a challenge. Ensure you begin test after training your programme to perfectly deliver your challenge request.';
-            $state['session_modal_class'] = 'info';
-            $interestId = $interest ? (int)($interest['id'] ?? 0) : 0;
-            $state['session_modal_key']   = 'begin_test:' . $programmeId . ':' . $interestId;
-            $state['greeting_sub'] = '';
-            $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+            if (!$state['training_has_root']) {
+                $state['training_readiness_message'] = 'You have not trained your programme yet. Add at least one root in Programme Training before beginning the challenge test.';
+            } elseif (!$state['training_trades_configured']) {
+                $state['training_readiness_message'] = 'You haven’t configured your programme for trading yet.';
+            } else {
+                $state['show_begin_test'] = true;
+                $state['greeting_sub'] = '';
+                $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+
+                $interestId = $interest ? (int)($interest['id'] ?? 0) : 0;
+                $modalKey = 'begin_test:' . $programmeId . ':' . $interestId;
+                $state['show_session_modal'] = shouldShowSignalsSessionModalOnce((int)$userId, $programmeId, $modalKey);
+                $state['session_modal_title'] = 'Begin Your Challenge Test';
+                $state['session_modal_message'] = 'You have shown interest in a challenge. Once you agree to begin the test, live trades will be generated from your trained programme for the next ' . $challengeDuration . ' days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.';
+                $state['session_modal_class'] = 'info';
+                $state['session_modal_key'] = $modalKey;
+            }
         } else {
             $missing = !$hasVps ? 'VPS' : 'broker';
             $state['greeting_sub'] = "Connect your {$missing} to begin testing your programme.";
         }
     }
 
+    // Keep the challenge-period indicator visible in the greeting card on every
+    // dashboard render while the user has an active challenge interest. This is
+    // independent of whether the Begin Test action is currently available.
+    if ($advertisement === 0 && $interestStatus === 'interested') {
+        $state['greeting_sub'] = '';
+        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+    }
+
     if ($advertisement === 0 && $interestStatus === 'ongoing') {
         $state['greeting_sub'] = '';
         $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+    }
+
+    // Published programmes must keep both indicators visible: the publication
+    // status and the challenge period that the programme entered. Do not hide
+    // the challenge-period link merely because the programme is advertised.
+    if ($advertisement === 1) {
+        $state['greeting_sub'] = 'Programme is advertised';
+        $state['greeting_sub_html'] =
+            '<span class="sd-advertised-indicator" style="display:block;font-weight:700;margin-bottom:4px;">Advertised</span>'
+            . $buildChallengeChevron($periodLabel ?: 'Daily', 'provision');
     }
 
     if ($state['greeting_sub_html'] === '') {
@@ -803,6 +942,21 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $bannersHtml .=   '</span>';
         $bannersHtml .=   '<span class="sd-incoming-right"><i class="fa-solid fa-chevron-right sd-incoming-chev"></i></span>';
         $bannersHtml .= '</button>';
+    }
+
+    if ($state['training_readiness_message'] !== '') {
+        $title = !$state['training_has_root'] ? 'Programme Training' : 'Trading Setup';
+        $icon = !$state['training_has_root'] ? 'fa-graduation-cap' : 'fa-sliders';
+        $bannersHtml .= '<div class="sd-greeting-divider"></div>';
+        $bannersHtml .= '<div class="sd-incoming-banner sd-training-readiness" role="status" aria-live="polite">';
+        $bannersHtml .=   '<span class="sd-incoming-left">';
+        $bannersHtml .=     '<span class="sd-incoming-icon"><i class="fa-solid ' . $icon . '"></i></span>';
+        $bannersHtml .=     '<span class="sd-incoming-label">';
+        $bannersHtml .=       '<span class="sd-incoming-title">' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</span>';
+        $bannersHtml .=       '<span class="sd-incoming-sub">' . htmlspecialchars($state['training_readiness_message'], ENT_QUOTES, 'UTF-8') . '</span>';
+        $bannersHtml .=     '</span>';
+        $bannersHtml .=   '</span>';
+        $bannersHtml .= '</div>';
     }
 
     if ($state['show_begin_test']) {
@@ -1175,6 +1329,7 @@ function buildLiveState($pdo, $userId, $programme, $email) {
         'has_vps' => false,
         'has_broker' => false,
         'published' => false,
+        'programme_streaming' => 1,
         'is_public' => false,
         'broker' => '',
         'broker_server' => '',
@@ -1225,7 +1380,8 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $state['programme_id'] = $programmeId;
     $state['programme_name'] = (string)($programme['program_name'] ?? '');
     $state['is_public'] = ((int)($programme['visibility'] ?? 0) === 1);
-    $state['published'] = ((int)($programme['advertisement'] ?? 0) === 1);
+    $state['published'] = ((int)($programme['advertisement'] ?? 0) === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1);
+    $state['programme_streaming'] = (int)($programme['programme_streaming'] ?? 1);
 
     syncProgrammeTradesToInvestors($pdo, $userId, $programmeId);
 
@@ -1466,6 +1622,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $interestId = (int)$interest['id'];
 
+            $readiness = getProgrammeTrainingReadiness($pdo, (int)$userId, (int)$programme['id']);
+            if (empty($readiness['has_root'])) {
+                jres(['success' => false, 'message' => 'Train your programme before beginning the test.']);
+            }
+            if (empty($readiness['trades_configured'])) {
+                jres(['success' => false, 'message' => 'You haven’t configured your programme for trading yet.']);
+            }
+
             $upd = $pdo->prepare("UPDATE signals_provider_interest SET begin_test = 1, interest_status = 'ongoing', signal_testing_started_at = NOW() WHERE id = ?");
             $upd->execute([$interestId]);
 
@@ -1592,6 +1756,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             jres(['success' => true, 'selected_symbols' => $symbols, 'selected_timeframes' => $timeframes]);
         } catch (Throwable $e) {
             jres(['success' => false, 'message' => 'Failed to save.']);
+        }
+    }
+
+    if ($action === 'confirm_pause_programme_streaming') {
+        if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
+        $passwordAttempt = (string)($_POST['pause_password'] ?? '');
+        if ($passwordAttempt === '') jres(['success' => false, 'message' => 'Enter your account password to confirm the pause.']);
+        try {
+            $check = $pdo->prepare("SELECT password, advertisement, server_advertisement_approval FROM harvhub h CROSS JOIN programme p WHERE h.id = ? AND p.id = ? AND p.userid = h.id LIMIT 1");
+            $check->execute([$userId, (int)$programme['id']]);
+            $row = $check->fetch(PDO::FETCH_ASSOC);
+            if (!$row || (int)$row['advertisement'] !== 1 || (int)$row['server_advertisement_approval'] !== 1) {
+                jres(['success' => false, 'message' => 'Streaming settings are available only when the programme is advertised and approved.']);
+            }
+            $storedPassword = (string)($row['password'] ?? '');
+            $passwordOk = $storedPassword !== '' &&
+                (password_verify($passwordAttempt, $storedPassword) || hash_equals($storedPassword, $passwordAttempt));
+            if (!$passwordOk) jres(['success' => false, 'message' => 'Incorrect password. Please try again.']);
+
+            $upd = $pdo->prepare("UPDATE programme SET programme_streaming = 0 WHERE id = ? AND userid = ?");
+            $upd->execute([(int)$programme['id'], $userId]);
+            $programme['programme_streaming'] = 0;
+            jres(['success' => true, 'programme_streaming' => 0]);
+        } catch (Throwable $e) {
+            jres(['success' => false, 'message' => 'Failed to pause signal provision generation.']);
+        }
+    }
+
+    if ($action === 'save_programme_streaming') {
+        if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
+        $streamingRaw = (string)($_POST['programme_streaming'] ?? '');
+        if ($streamingRaw !== '0' && $streamingRaw !== '1') jres(['success' => false, 'message' => 'Invalid streaming setting.']);
+        $streaming = (int)$streamingRaw;
+        if ($streaming === 0) jres(['success' => false, 'message' => 'Pausing requires confirmation and password verification.']);
+        try {
+            $check = $pdo->prepare("SELECT advertisement, server_advertisement_approval FROM programme WHERE id = ? AND userid = ? LIMIT 1");
+            $check->execute([(int)$programme['id'], $userId]);
+            $eligible = $check->fetch(PDO::FETCH_ASSOC);
+            if (!$eligible || (int)$eligible['advertisement'] !== 1 || (int)$eligible['server_advertisement_approval'] !== 1) {
+                jres(['success' => false, 'message' => 'Streaming settings are available only when the programme is advertised and approved.']);
+            }
+            $upd = $pdo->prepare("UPDATE programme SET programme_streaming = ? WHERE id = ? AND userid = ?");
+            $upd->execute([$streaming, (int)$programme['id'], $userId]);
+            $programme['programme_streaming'] = $streaming;
+            jres(['success' => true, 'programme_streaming' => $streaming]);
+        } catch (Throwable $e) {
+            jres(['success' => false, 'message' => 'Failed to update streaming status.']);
         }
     }
 
@@ -1782,7 +1993,8 @@ if ($programme) {
 
 $hasBroker = false;
 if ($programme) $hasBroker = (!empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']));
-$published = $programme && (int)$programme['advertisement'] === 1;
+$published = $programme && (int)($programme['advertisement'] ?? 0) === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
+$programmeStreaming = $programme ? (int)($programme['programme_streaming'] ?? 1) : 1;
 $isPublic  = $programme && (int)($programme['visibility'] ?? 0) === 1;
 
 $incomingRequestCount = 0;
@@ -1923,7 +2135,11 @@ if ($programme && !empty($email)) {
     a { text-decoration: none; color: inherit; }
     body.dark-mode { --sd-bg:#0c1311; --sd-card:#131d1a; --sd-text:#e8f2ee; --sd-muted:#93a8a1; --sd-soft:#12271f; --sd-border:#22322d; --sd-shadow: 0 10px 30px rgba(0,0,0,.4); }
 
-    body.sd-scroll-locked { overflow: hidden; }
+    html.sd-scroll-locked,
+    body.sd-scroll-locked {
+        overflow: hidden !important;
+        overscroll-behavior: none;
+    }
 
     .sd-page { max-width: 1100px; margin: 0 auto; padding: 0 20px 100px; width: 100%; }
     @media (max-width: 480px) { .sd-page { padding: 0 14px 90px; } }
@@ -1937,6 +2153,17 @@ if ($programme && !empty($email)) {
     .sd-greeting-text .sd-greet-title { font-size: 1.02rem; font-weight: 700; margin: 0 0 2px 0; word-break: break-word; }
     .sd-greeting-text .sd-greet-sub { font-size: 0.82rem; color: var(--sd-muted); margin: 0; line-height: 1.45; }
     .sd-greeting-divider { height: 1px; background: var(--sd-border); margin: 0 -18px; opacity: 0.6; }
+    .sd-greeting-invite-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:8px; flex-wrap:wrap; }
+    .sd-streaming-indicator { display:inline-flex; align-items:center; justify-content:center; gap:9px; min-height:42px; padding:9px 12px; border:1px solid var(--sd-border); border-radius:12px; background:var(--sd-card); color:var(--sd-text); font:inherit; font-size:.78rem; font-weight:800; line-height:1.25; white-space:nowrap; box-shadow:0 1px 3px rgba(18,33,29,.035); }
+    .sd-streaming-indicator.streaming { color:#168447; background:rgba(46,204,143,.10); border-color:rgba(22,163,74,.28); cursor:default; }
+    .sd-streaming-indicator.streaming::before { content:''; display:inline-block; width:8px; height:8px; border-radius:50%; background:#16a34a; box-shadow:0 0 0 3px rgba(22,163,74,.12); flex-shrink:0; }
+    .sd-streaming-indicator.paused { color:#a87309; background:rgba(245,166,35,.10); border-color:rgba(197,138,8,.34); cursor:pointer; text-align:left; transition:transform .15s,border-color .2s,background .2s; }
+    .sd-streaming-indicator.paused:hover { border-color:var(--sd-warning); background:rgba(245,166,35,.15); transform:translateX(2px); }
+    .sd-streaming-indicator.paused i { color:#f5b82e; font-size:inherit; line-height:inherit; flex-shrink:0; }
+    #sdStreamingIndicatorWrap { margin-left:auto; display:flex; align-items:center; }
+    @media (max-width:480px) { .sd-streaming-indicator { gap:7px; padding:9px 10px; font-size:.74rem; } }
+    .sd-invite-link { width:100%; box-sizing:border-box; padding:11px 12px; border:1px solid var(--sd-border); border-radius:10px; background:var(--sd-bg); color:var(--sd-text); font-size:.82rem; }
+    .sd-invite-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:12px; }
 
     .sd-challenge-chevron { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 6px 0; background: transparent; border: none; color: var(--sd-text); font-family: inherit; font-size: 0.77rem; cursor: pointer; text-align: left; transition: color .18s, transform .15s; }
     .sd-challenge-chevron:hover { transform: translateX(2px); }
@@ -2057,13 +2284,16 @@ if ($programme && !empty($email)) {
     .sd-status-tile-value { font-size: .95rem; font-weight: 700; word-break: break-word; }
     .sd-status-tile-value .sd-chip { display: inline-block; padding: 3px 9px; margin: 2px 4px 2px 0; background: rgba(46,204,143,0.12); color: var(--sd-accent); border-radius: 8px; font-size: .78rem; font-weight: 700; }
 
-    .sd-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 99999; overscroll-behavior: contain; }
+    .sd-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 99999; overscroll-behavior: contain; }
     .sd-modal.open { display: flex; }
-    .sd-modal-card { width: min(500px, 100%); max-height: calc(100vh - 120px); overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
+    .sd-modal-card { width: min(500px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
     .sd-modal-card h3 { margin-bottom: 5px; font-size: 1.05rem; font-weight: 800; }
+    html.sd-scroll-locked, body.sd-scroll-locked { overflow:hidden !important; overscroll-behavior:none !important; }
+    .sd-modal, .sd-session-modal, .sd-alert-modal, .sd-confirm-modal { overscroll-behavior:contain; }
+    .sd-session-card, .sd-alert-card, .sd-confirm-card { max-height:calc(100dvh - 36px); overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
     .sd-modal-card .sd-sub { color: var(--sd-muted); font-size: .82rem; }
 
-    .sd-picker-card { width: min(460px, 100%); max-height: calc(100vh - 120px); overflow-y: auto; background: var(--sd-card); border-radius: 20px; padding: 22px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
+    .sd-picker-card { width: min(460px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; background: var(--sd-card); border-radius: 20px; padding: 22px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
     .sd-picker-card h3 { margin-bottom: 5px; font-size: 1.05rem; font-weight: 800; }
     .sd-picker-card .sd-sub { color: var(--sd-muted); font-size: .82rem; margin-bottom: 14px; }
     .sd-picker-list { display: flex; flex-direction: column; gap: 8px; }
@@ -2096,7 +2326,7 @@ if ($programme && !empty($email)) {
     .sd-err { display: none; background: #fdecec; color: var(--sd-danger); padding: 10px; border-radius: 10px; font-size: .82rem; margin-bottom: 10px; }
     body.dark-mode .sd-err { background: #3a1c1c; color: #ff9c9c; }
 
-    .sd-session-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 9999999; }
+    .sd-session-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 9999999; }
     .sd-session-modal.open { display: flex; }
     .sd-session-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); text-align: center; }
     .sd-session-card h3 { margin-bottom: 8px; font-size: 1.05rem; font-weight: 800; }
@@ -2105,7 +2335,7 @@ if ($programme && !empty($email)) {
     .sd-session-card.warning h3 { color: var(--sd-warning); }
     .sd-session-card.danger h3 { color: var(--sd-danger); }
 
-    .sd-alert-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 9999999; }
+    .sd-alert-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 9999999; }
     .sd-alert-modal.open { display: flex; }
     .sd-alert-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); text-align: center; }
     .sd-alert-icon { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin: 0 auto 14px; }
@@ -2116,7 +2346,7 @@ if ($programme && !empty($email)) {
     .sd-alert-title { font-size: 1.05rem; font-weight: 800; margin-bottom: 8px; }
     .sd-alert-text { color: var(--sd-muted); font-size: .88rem; margin-bottom: 18px; line-height: 1.5; }
 
-    .sd-confirm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 60px 18px; z-index: 999999; }
+    .sd-confirm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.58); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 999999; }
     .sd-confirm-modal.open { display: flex; }
     .sd-confirm-card { width: min(400px, 100%); background: var(--sd-card); border-radius: 20px; padding: 25px; box-shadow: 0 25px 80px rgba(0,0,0,.4); }
     .sd-confirm-card h3 { margin-bottom: 8px; font-size: 1.05rem; font-weight: 800; }
@@ -2150,6 +2380,22 @@ if ($programme && !empty($email)) {
         <div id="sdGreetingBanners">
             <?= $greetingBanners ?>
         </div>
+        <?php if ($published): ?>
+        <div class="sd-greeting-invite-row">
+            <button type="button" class="sd-btn primary" id="sdInviteProgrammeBtn">
+                <i class="fa-solid fa-link"></i> Invite
+            </button>
+            <div id="sdStreamingIndicatorWrap">
+                <?php if ($programmeStreaming === 0): ?>
+                    <button type="button" class="sd-streaming-indicator paused" id="sdStreamingIndicator" aria-label="Streaming is paused">
+                        <span>Streaming is paused</span><i class="fa-solid fa-chevron-right sd-incoming-chev"></i>
+                    </button>
+                <?php else: ?>
+                    <span class="sd-streaming-indicator streaming" id="sdStreamingIndicator">Streaming</span>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php endif; ?>
     </div>
 
     <div class="sd-stats-grid">
@@ -2232,11 +2478,35 @@ if ($programme && !empty($email)) {
 
 </div>
 
-<!-- SETTINGS MODAL -->
+<!-- INVITE MODAL: available only for advertised and approved programmes -->
+<?php if ($published): ?>
+<div class="sd-modal" id="sdInviteProgrammeModal" aria-hidden="true">
+    <div class="sd-modal-card">
+        <h3>Invite to this programme</h3>
+        <p class="sd-sub">Copy this link to share the programme.</p>
+        <input type="text" class="sd-invite-link" id="sdProgrammeInviteLink" readonly value="<?= esc_h(((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '') . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/programmes.php?programme_id=' . (int)($programme['id'] ?? 0)) ?>">
+        <div class="sd-invite-actions">
+            <button type="button" class="sd-btn" onclick="sdCloseModal('sdInviteProgrammeModal')">Close</button>
+            <button type="button" class="sd-btn primary" id="sdCopyProgrammeInviteBtn"><i class="fa-regular fa-copy"></i> Copy link</button>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="sd-modal" id="sdSettingsModal">
     <div class="sd-modal-card">
         <h3>Programme Settings</h3>
         <p class="sd-sub">These settings apply only to the selected programme.</p>
+
+        <?php if ($published): ?>
+        <div class="sd-field">
+            <label>Streaming</label>
+            <select id="sdStreamingSelect">
+                <option value="1" <?= $programmeStreaming === 1 ? 'selected' : '' ?>>Stream</option>
+                <option value="0" <?= $programmeStreaming === 0 ? 'selected' : '' ?>>Pause stream</option>
+            </select>
+        </div>
+        <?php endif; ?>
 
         <div class="sd-field">
             <label>Visibility</label>
@@ -2244,6 +2514,23 @@ if ($programme && !empty($email)) {
                 <option value="1" <?= $isPublic ? 'selected' : '' ?>>Public</option>
                 <option value="0" <?= !$isPublic ? 'selected' : '' ?>>Private</option>
             </select>
+        </div>
+
+        <div class="sd-field">
+            <label>Timezone</label>
+            <select id="sdReqTimezone">
+                <option value="">— No timezone selected —</option>
+                <?php foreach ($TIMEZONE_OPTIONS as $groupLabel => $groupTzs): ?>
+                    <optgroup label="<?= esc_h($groupLabel) ?>">
+                        <?php foreach ($groupTzs as $tzKey => $tzLabel): ?>
+                            <option value="<?= esc_h($tzKey) ?>" <?= ($timezoneValue === $tzKey) ? 'selected' : '' ?>>
+                                <?= esc_h($tzLabel) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </optgroup>
+                <?php endforeach; ?>
+            </select>
+            <p class="sd-sub" style="margin-top:4px">Used for market analysis timing and challenge windows.</p>
         </div>
 
         <div class="sd-fold-section">
@@ -2288,22 +2575,6 @@ if ($programme && !empty($email)) {
                         <input id="sdReqMaxInv" type="number" min="0" step="0.01" value="<?= esc_h(number_format($maxInvestment,2,'.','')) ?>">
                     </div>
 
-                    <div class="sd-field">
-                        <label>Timezone</label>
-                        <select id="sdReqTimezone">
-                            <option value="">— No timezone selected —</option>
-                            <?php foreach ($TIMEZONE_OPTIONS as $groupLabel => $groupTzs): ?>
-                                <optgroup label="<?= esc_h($groupLabel) ?>">
-                                    <?php foreach ($groupTzs as $tzKey => $tzLabel): ?>
-                                        <option value="<?= esc_h($tzKey) ?>" <?= ($timezoneValue === $tzKey) ? 'selected' : '' ?>>
-                                            <?= esc_h($tzLabel) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </optgroup>
-                            <?php endforeach; ?>
-                        </select>
-                        <p class="sd-sub" style="margin-top:4px">Used for market analysis timing and challenge windows.</p>
-                    </div>
                 </div>
             </div>
         </div>
@@ -2338,7 +2609,7 @@ if ($programme && !empty($email)) {
             <i class="fa-solid fa-play"></i>
         </div>
         <h3>Begin Test</h3>
-        <p class="sd-sub" style="margin-bottom:20px;">Once you agree to begin test, your trades analytics will be compared with the challenge interest and once met, you will be advertised.</p>
+        <p class="sd-sub" style="margin-bottom:20px;">Once you agree to begin the test, live trades will be generated from your trained programme for the next <?= (int)($signalsState['challenge_duration'] ?? 0) ?> days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.</p>
         <div style="display:grid;gap:9px;">
             <button class="sd-btn primary" id="sdConfirmBeginTest" style="width:100%;">Confirm Test</button>
             <button class="sd-btn ghost" onclick="sdCloseModal('sdBeginTestModal')" style="width:100%;">Cancel</button>
@@ -2346,8 +2617,25 @@ if ($programme && !empty($email)) {
     </div>
 </div>
 
+<!-- FINAL PASSWORD CONFIRMATION FOR PAUSING SIGNAL PROVISION -->
+<div class="sd-modal" id="sdPausePasswordModal" aria-hidden="true">
+    <div class="sd-modal-card">
+        <h3>Confirm pause</h3>
+        <p class="sd-sub">Enter your account password to confirm pausing signal provision generation for this programme.</p>
+        <div class="sd-field">
+            <label for="sdPausePassword">Account password</label>
+            <input type="password" id="sdPausePassword" autocomplete="current-password" placeholder="Enter your password">
+            <p id="sdPausePasswordMsg" class="sd-sub" role="status" aria-live="polite" style="margin-top:8px;"></p>
+        </div>
+        <div style="display:grid;gap:9px;">
+            <button type="button" class="sd-btn primary" id="sdConfirmPauseBtn" style="width:100%;">Confirm pause</button>
+            <button type="button" class="sd-btn ghost" onclick="sdCloseModal('sdPausePasswordModal')" style="width:100%;">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <!-- SESSION INFO MODAL -->
-<div class="sd-session-modal" id="sdSessionModal">
+<div class="sd-session-modal" id="sdSessionModal" aria-hidden="true">
     <div class="sd-session-card info" id="sdSessionCard">
         <h3 id="sdSessionTitle">Notice</h3>
         <p id="sdSessionMessage">Message</p>
@@ -2356,7 +2644,7 @@ if ($programme && !empty($email)) {
 </div>
 
 <!-- CUSTOM ALERT MODAL -->
-<div class="sd-alert-modal" id="sdAlertModal">
+<div class="sd-alert-modal" id="sdAlertModal" aria-hidden="true">
     <div class="sd-alert-card">
         <div class="sd-alert-icon info" id="sdAlertIcon"><i class="fa-solid fa-circle-info"></i></div>
         <div class="sd-alert-title" id="sdAlertTitle">Notice</div>
@@ -2366,7 +2654,7 @@ if ($programme && !empty($email)) {
 </div>
 
 <!-- CONFIRM MODAL (trade modify) -->
-<div class="sd-confirm-modal" id="sdConfirmModal">
+<div class="sd-confirm-modal" id="sdConfirmModal" aria-hidden="true">
     <div class="sd-confirm-card">
         <h3 id="sdConfirmTitle">Confirm Action</h3>
         <p id="sdConfirmMessage">Are you sure?</p>
@@ -2379,6 +2667,195 @@ if ($programme && !empty($email)) {
 
 <script>
 (function () {
+    var SD_PROGRAMME_PUBLISHED = <?= $published ? 'true' : 'false' ?>;
+    var initialStreaming = <?= (int)$programmeStreaming ?>;
+    var publishedForStreaming = <?= $published ? 'true' : 'false' ?>;
+
+    function renderStreamingIndicator(value) {
+        var wrap = document.getElementById('sdStreamingIndicatorWrap');
+        if (!wrap || !publishedForStreaming) return;
+        value = parseInt(value, 10) === 0 ? 0 : 1;
+        if (value === 0) {
+            wrap.innerHTML = '<button type="button" class="sd-streaming-indicator paused" id="sdStreamingIndicator" aria-label="Streaming is paused"><span>Streaming is paused</span><i class="fa-solid fa-chevron-right sd-incoming-chev"></i></button>';
+            var pausedIndicator = document.getElementById('sdStreamingIndicator');
+            if (pausedIndicator) pausedIndicator.addEventListener('click', openResumeStreamingConfirm);
+        } else {
+            wrap.innerHTML = '<span class="sd-streaming-indicator streaming" id="sdStreamingIndicator">Streaming</span>';
+        }
+    }
+
+    function saveStreaming(value, done) {
+        if (!publishedForStreaming) return;
+        post({ action: 'save_programme_streaming', programme_streaming: value }, function (d) {
+            if (d && d.success) {
+                initialStreaming = parseInt(d.programme_streaming, 10) === 0 ? 0 : 1;
+                renderStreamingIndicator(initialStreaming);
+                var select = document.getElementById('sdStreamingSelect');
+                if (select) select.value = String(initialStreaming);
+                if (typeof done === 'function') done(true, d);
+            } else if (typeof done === 'function') {
+                done(false, d || {});
+            }
+        });
+    }
+
+    function openResumeStreamingConfirm() {
+        if (initialStreaming !== 0 || !publishedForStreaming) return;
+        window.sdShowConfirm(
+            'Resume streaming?',
+            'Your programme is currently halted from streaming, so it is not generating signals for your investors. Do you wish to resume it?',
+            'Resume',
+            function () {
+                saveStreaming(1, function (ok, result) {
+                    if (ok) window.sdAlert('Your programme streaming has been resumed.', 'success', 'Streaming resumed');
+                    else window.sdAlert((result && result.message) || 'Could not resume streaming.', 'error', 'Update failed');
+                });
+            }
+        );
+    }
+
+    var streamingIndicator = document.getElementById('sdStreamingIndicator');
+    if (streamingIndicator && streamingIndicator.classList.contains('paused')) streamingIndicator.addEventListener('click', openResumeStreamingConfirm);
+
+    function openPausePasswordModal() {
+        var field = document.getElementById('sdPausePassword');
+        var msg = document.getElementById('sdPausePasswordMsg');
+        var btn = document.getElementById('sdConfirmPauseBtn');
+        if (field) field.value = '';
+        if (msg) msg.textContent = '';
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Confirm pause'; }
+        window.sdOpenModal('sdPausePasswordModal');
+        if (field) window.setTimeout(function () { field.focus(); }, 80);
+    }
+
+    function confirmPauseStreaming(password) {
+        var btn = document.getElementById('sdConfirmPauseBtn');
+        var msg = document.getElementById('sdPausePasswordMsg');
+        if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+        if (msg) msg.textContent = '';
+        post({ action: 'confirm_pause_programme_streaming', pause_password: password }, function (result) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Confirm pause'; }
+            if (result && result.success) {
+                initialStreaming = 0;
+                renderStreamingIndicator(0);
+                var select = document.getElementById('sdStreamingSelect');
+                if (select) select.value = '0';
+                var settingsMsg = document.getElementById('sdStreamingSettingsMsg');
+                if (settingsMsg) settingsMsg.textContent = 'Streaming paused.';
+                window.sdCloseModal('sdPausePasswordModal');
+                window.sdAlert('Signal provision generation has been paused. Your programme is not currently generating signals for your investors.', 'success', 'Streaming paused');
+            } else {
+                var message = (result && result.message) || 'Could not pause streaming.';
+                if (msg) msg.textContent = message;
+                if (message.toLowerCase().indexOf('incorrect password') !== -1) {
+                    var field = document.getElementById('sdPausePassword');
+                    if (field) { field.value = ''; field.focus(); }
+                }
+            }
+        });
+    }
+
+    var pauseConfirmBtn = document.getElementById('sdConfirmPauseBtn');
+    if (pauseConfirmBtn) pauseConfirmBtn.addEventListener('click', function () {
+        var field = document.getElementById('sdPausePassword');
+        var password = field ? field.value : '';
+        if (!password) {
+            var msg = document.getElementById('sdPausePasswordMsg');
+            if (msg) msg.textContent = 'Enter your account password to continue.';
+            if (field) field.focus();
+            return;
+        }
+        confirmPauseStreaming(password);
+    });
+    var pausePasswordField = document.getElementById('sdPausePassword');
+    if (pausePasswordField) pausePasswordField.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            if (pauseConfirmBtn) pauseConfirmBtn.click();
+        }
+    });
+
+    var streamingSelect = document.getElementById('sdStreamingSelect');
+    if (streamingSelect) {
+        streamingSelect.addEventListener('change', function () {
+            var desired = parseInt(streamingSelect.value, 10) === 0 ? 0 : 1;
+            var msg = document.getElementById('sdStreamingSettingsMsg');
+
+            if (desired === 0 && initialStreaming !== 0) {
+                // Do not persist the pause until both confirmations and password pass.
+                streamingSelect.value = String(initialStreaming);
+                if (msg) msg.textContent = '';
+                window.sdCloseModal('sdSettingsModal');
+                window.sdShowConfirm(
+                    'Pause signal provision generation?',
+                    'Are you sure you want to pause the signal provision generation? Please pause only if you want to make adjustments in your training configuration or if you notice it is close to breaching the provision agreement. Ensure you resume sooner so your investors will not be disappointed.',
+                    'Pause streaming',
+                    function () { openPausePasswordModal(); },
+                    function () { streamingSelect.value = String(initialStreaming); }
+                );
+                return;
+            }
+
+            if (desired === 1 && initialStreaming === 0) {
+                streamingSelect.value = '0';
+                window.sdCloseModal('sdSettingsModal');
+                openResumeStreamingConfirm();
+                return;
+            }
+
+            streamingSelect.disabled = true;
+            if (msg) msg.textContent = 'Saving…';
+            saveStreaming(1, function (ok, result) {
+                streamingSelect.disabled = false;
+                if (msg) msg.textContent = ok ? 'Streaming resumed.' : ((result && result.message) || 'Failed to save streaming status.');
+                if (!ok) {
+                    streamingSelect.value = String(initialStreaming);
+                    window.sdAlert((result && result.message) || 'Failed to save streaming status.', 'error', 'Streaming update failed');
+                }
+            });
+        });
+    }
+
+    var inviteBtn = document.getElementById('sdInviteProgrammeBtn');
+    if (inviteBtn) inviteBtn.addEventListener('click', function () {
+        // Recheck the server-rendered eligibility flag before opening the invite.
+        if (!SD_PROGRAMME_PUBLISHED) return;
+        var modal = document.getElementById('sdInviteProgrammeModal');
+        if (!modal) return;
+        modal.setAttribute('aria-hidden', 'false');
+        if (typeof window.sdOpenModal === 'function') {
+            window.sdOpenModal('sdInviteProgrammeModal');
+        } else {
+            modal.classList.add('open');
+            document.documentElement.classList.add('sd-scroll-locked');
+            document.body.classList.add('sd-scroll-locked');
+            try {
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({ type: 'harvhubModalOpen' }, '*');
+                }
+            } catch (e) {}
+        }
+    });
+    var copyInviteBtn = document.getElementById('sdCopyProgrammeInviteBtn');
+    if (copyInviteBtn) copyInviteBtn.addEventListener('click', function () {
+        var field = document.getElementById('sdProgrammeInviteLink');
+        if (!field) return;
+        var copied = function () {
+            copyInviteBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied';
+            field.select();
+            window.setTimeout(function () { copyInviteBtn.innerHTML = '<i class="fa-regular fa-copy"></i> Copy link'; }, 1800);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(field.value).then(copied).catch(function () {
+                field.focus(); field.select();
+                try { document.execCommand('copy'); copied(); } catch (e) { field.select(); }
+            });
+        } else {
+            field.focus(); field.select();
+            try { document.execCommand('copy'); copied(); } catch (e) { field.select(); }
+        }
+    });
+
     'use strict';
 
     function notifyParentModal(open) {
@@ -2394,8 +2871,8 @@ if ($programme && !empty($email)) {
     function anyOverlayOpen() {
         return !!document.querySelector('.sd-modal.open, .sd-session-modal.open, .sd-alert-modal.open, .sd-confirm-modal.open');
     }
-    function lockBodyScroll() { document.body.classList.add('sd-scroll-locked'); }
-    function unlockBodyScroll() { if (!anyOverlayOpen()) document.body.classList.remove('sd-scroll-locked'); }
+    function lockBodyScroll() { document.documentElement.classList.add('sd-scroll-locked'); document.body.classList.add('sd-scroll-locked'); }
+    function unlockBodyScroll() { if (!anyOverlayOpen()) { document.documentElement.classList.remove('sd-scroll-locked'); document.body.classList.remove('sd-scroll-locked'); } }
 
     window.harvhubGoToTab = function (tab) {
         try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'switchTab', tab: tab }, '*'); return; } } catch (e) {}
@@ -2458,6 +2935,7 @@ if ($programme && !empty($email)) {
         var el = document.getElementById(id);
         if (!el) return;
         el.classList.add('open');
+        el.setAttribute('aria-hidden', 'false');
         lockBodyScroll();
         notifyParentModal(true);
     };
@@ -2466,7 +2944,11 @@ if ($programme && !empty($email)) {
         var el = document.getElementById(id);
         if (!el) return;
         el.classList.remove('open');
-        if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
+        el.setAttribute('aria-hidden', 'true');
+        if (!anyOverlayOpen()) {
+            unlockBodyScroll();
+            notifyParentModal(false);
+        }
     };
 
     document.querySelectorAll('.sd-modal').forEach(function (m) {
@@ -2511,6 +2993,7 @@ if ($programme && !empty($email)) {
 
         var el = document.getElementById('sdAlertModal');
         el.classList.add('open');
+        el.setAttribute('aria-hidden', 'false');
         lockBodyScroll();
         notifyParentModal(true);
     };
@@ -2518,6 +3001,7 @@ if ($programme && !empty($email)) {
     document.getElementById('sdAlertOkBtn').addEventListener('click', function () {
         var el = document.getElementById('sdAlertModal');
         el.classList.remove('open');
+        el.setAttribute('aria-hidden', 'true');
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
     });
 
@@ -2537,6 +3021,7 @@ if ($programme && !empty($email)) {
         var el = document.getElementById('sdSessionModal');
         if (!el.classList.contains('open')) {
             el.classList.add('open');
+            el.setAttribute('aria-hidden', 'false');
             lockBodyScroll();
             notifyParentModal(true);
         }
@@ -2544,7 +3029,7 @@ if ($programme && !empty($email)) {
 
     window.sdCloseSessionModal = function () {
         var el = document.getElementById('sdSessionModal');
-        if (el) el.classList.remove('open');
+        if (el) { el.classList.remove('open'); el.setAttribute('aria-hidden', 'true'); }
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
     };
 
@@ -2555,9 +3040,14 @@ if ($programme && !empty($email)) {
         cls: <?= json_encode($sessionModalClass) ?>,
         key: <?= json_encode($sessionModalKey) ?>
     };
+    var shownSessionModalKeys = {};
     if (INITIAL_SESSION.show && INITIAL_SESSION.title && INITIAL_SESSION.message) {
         setTimeout(function () {
-            sdShowSessionModal(INITIAL_SESSION.title, INITIAL_SESSION.message, INITIAL_SESSION.cls, INITIAL_SESSION.key);
+            var key = INITIAL_SESSION.key || (INITIAL_SESSION.title + '|' + INITIAL_SESSION.message);
+            if (!shownSessionModalKeys[key]) {
+                shownSessionModalKeys[key] = true;
+                sdShowSessionModal(INITIAL_SESSION.title, INITIAL_SESSION.message, INITIAL_SESSION.cls, key);
+            }
         }, 800);
     }
 
@@ -2596,6 +3086,7 @@ if ($programme && !empty($email)) {
         _sdConfirmOnCancel = onCancel;
 
         modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
         lockBodyScroll();
         notifyParentModal(true);
     };
@@ -2604,6 +3095,7 @@ if ($programme && !empty($email)) {
         var modal = document.getElementById('sdConfirmModal');
         if (!modal) return;
         modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
         if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
         var cancelFn = _sdConfirmOnCancel;
         _sdConfirmOnYes = null;
@@ -2618,7 +3110,7 @@ if ($programme && !empty($email)) {
             _sdConfirmOnYes = null;
             _sdConfirmOnCancel = null;
             var modal = document.getElementById('sdConfirmModal');
-            if (modal) modal.classList.remove('open');
+            if (modal) { modal.classList.remove('open'); modal.setAttribute('aria-hidden', 'true'); }
             if (!anyOverlayOpen()) { unlockBodyScroll(); notifyParentModal(false); }
             if (typeof fn === 'function') fn();
         });
@@ -2767,6 +3259,13 @@ if ($programme && !empty($email)) {
             );
         }
 
+        if (data.programme_streaming !== undefined) {
+            initialStreaming = parseInt(data.programme_streaming, 10) === 0 ? 0 : 1;
+            renderStreamingIndicator(initialStreaming);
+            var streamingSelectLive = document.getElementById('sdStreamingSelect');
+            if (streamingSelectLive && document.activeElement !== streamingSelectLive) streamingSelectLive.value = String(initialStreaming);
+        }
+
         var psEl = document.getElementById('sdProfitSplitValue');
         if (psEl) updateText(psEl, parseFloat(data.developer_percentage || 0).toFixed(2), true);
 
@@ -2823,12 +3322,16 @@ if ($programme && !empty($email)) {
         if (data.signals_state) {
             var ss = data.signals_state;
             if (ss.show_session_modal && ss.session_modal_title && ss.session_modal_message) {
-                sdShowSessionModal(
-                    ss.session_modal_title,
-                    ss.session_modal_message,
-                    ss.session_modal_class || 'info',
-                    ss.session_modal_key || ''
-                );
+                var sessionKey = ss.session_modal_key || (ss.session_modal_title + '|' + ss.session_modal_message);
+                if (!shownSessionModalKeys[sessionKey]) {
+                    shownSessionModalKeys[sessionKey] = true;
+                    sdShowSessionModal(
+                        ss.session_modal_title,
+                        ss.session_modal_message,
+                        ss.session_modal_class || 'info',
+                        sessionKey
+                    );
+                }
             }
         }
 

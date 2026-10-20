@@ -150,113 +150,137 @@ function programmeNameExistsForUser($pdo, $userId, $normalizedKey, $excludeProgr
  * Build the hierarchical status description for a programme.
  */
 function buildProgrammeStatusDescription($pdo, $userId, $programme) {
-    $programmeId = (int)$programme['id'];
+    $programmeId = (int)($programme['id'] ?? 0);
+    if ($programmeId <= 0) return 'Programme status unavailable';
 
-    // --- Investment requests ---
     $invCount = 0;
+    $vpsRequestCount = 0;
+
     try {
-        $rq = $pdo->prepare("SELECT COUNT(*) FROM programme_investment_requestors WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'");
-        $rq->execute([$userId, $programmeId]);
-        $invCount = (int)$rq->fetchColumn();
+        $q = $pdo->prepare("SELECT COUNT(*) FROM programme_investment_requestors WHERE developerid = ? AND programme_id = ? AND request_status = 'pending'");
+        $q->execute([(int)$userId, $programmeId]);
+        $invCount = (int)$q->fetchColumn();
     } catch (Throwable $e) {}
 
-    // --- VPS requests ---
-    $vpsCount = 0;
     try {
-        $vq = $pdo->prepare("SELECT COUNT(*) FROM programme_vps_hosts_requestors WHERE owner_programme_id = ? AND request_status = 'pending'");
-        $vq->execute([$programmeId]);
-        $vpsCount = (int)$vq->fetchColumn();
+        $q = $pdo->prepare("SELECT COUNT(*) FROM programme_vps_hosts_requestors WHERE owner_programme_id = ? AND request_status = 'pending'");
+        $q->execute([$programmeId]);
+        $vpsRequestCount = (int)$q->fetchColumn();
     } catch (Throwable $e) {}
 
-    if ($invCount > 0 && $vpsCount > 0) {
-        return $invCount . ' investment request' . ($invCount === 1 ? '' : 's')
-             . ', ' . $vpsCount . ' vps request' . ($vpsCount === 1 ? '' : 's');
-    }
-    if ($invCount > 0) {
-        return $invCount . ' investment request' . ($invCount === 1 ? '' : 's');
-    }
-    if ($vpsCount > 0) {
-        return $vpsCount . ' vps request' . ($vpsCount === 1 ? '' : 's');
-    }
+    $advertised = (int)($programme['advertisement'] ?? 0) === 1;
+    // A missing/null streaming field is treated as enabled for legacy installations.
+    $streaming = !array_key_exists('programme_streaming', $programme) || $programme['programme_streaming'] === null
+        ? 1 : (int)$programme['programme_streaming'];
 
-    // --- VPS / Broker existence ---
     $hasVps = false;
     try {
-        $s = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
-        $s->execute([$programmeId]);
-        $hasVps = (bool)$s->fetchColumn();
+        $q = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
+        $q->execute([$programmeId]);
+        $hasVps = (bool)$q->fetchColumn();
     } catch (Throwable $e) {}
     if (!$hasVps) {
         try {
-            $s = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND host_status = 'active' LIMIT 1");
-            $s->execute([$programmeId]);
-            $hasVps = (bool)$s->fetchColumn();
+            $q = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND LOWER(host_status) = 'active' LIMIT 1");
+            $q->execute([$programmeId]);
+            $hasVps = (bool)$q->fetchColumn();
         } catch (Throwable $e) {}
     }
 
-    $hasBroker = (!empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']));
+    $hasBroker = trim((string)($programme['broker'] ?? '')) !== ''
+        && trim((string)($programme['server'] ?? '')) !== ''
+        && trim((string)($programme['login'] ?? '')) !== '';
 
-    if (!$hasVps && !$hasBroker) {
-        return 'Connect vps, connect broker';
-    }
-    if (!$hasVps && $hasBroker) {
-        return 'Connect vps';
-    }
-    if ($hasVps && !$hasBroker) {
-        return 'Connect your broker';
-    }
+    $hasTrainedRoot = false;
+    $tradesConfigured = false;
+    foreach (['programme_training_configuration', 'programme_configuration_confirmation', 'programme_training_confirmation_configuration'] as $table) {
+        try {
+            $cols = [];
+            foreach ($pdo->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(PDO::FETCH_ASSOC) as $col) {
+                if (isset($col['Field'])) $cols[strtolower((string)$col['Field'])] = (string)$col['Field'];
+            }
+            $uidCol = $cols['userid'] ?? $cols['user_id'] ?? $cols['developerid'] ?? null;
+            $pidCol = $cols['programmeid'] ?? $cols['programme_id'] ?? null;
+            if (!$uidCol || !$pidCol) continue;
 
-    if ((int)$programme['advertisement'] === 1) {
-        return 'Programme is advertised';
+            $where = "`{$uidCol}` = ? AND `{$pidCol}` = ?";
+            if (isset($cols['row_role'])) $where .= " AND LOWER(`{$cols['row_role']}`) = 'root'";
+            elseif (isset($cols['configuration_type'])) $where .= " AND LOWER(`{$cols['configuration_type']}`) = 'root'";
+
+            $q = $pdo->prepare("SELECT COUNT(*) FROM `{$table}` WHERE {$where}");
+            $q->execute([(int)$userId, $programmeId]);
+            if ((int)$q->fetchColumn() > 0) $hasTrainedRoot = true;
+
+            if (isset($cols['trade_for'])) {
+                $whereTrades = "`{$uidCol}` = ? AND `{$pidCol}` = ? AND LOWER(CAST(`{$cols['trade_for']}` AS CHAR)) IN ('root','root_confirmation')";
+                $q = $pdo->prepare("SELECT COUNT(*) FROM `{$table}` WHERE {$whereTrades}");
+                $q->execute([(int)$userId, $programmeId]);
+                if ((int)$q->fetchColumn() > 0) $tradesConfigured = true;
+            }
+        } catch (Throwable $e) {
+            // Optional configuration tables may not exist on older installations.
+        }
     }
 
     $interest = null;
     try {
-        $iq = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
-        $iq->execute([$userId, $programmeId]);
-        $interest = $iq->fetch(PDO::FETCH_ASSOC) ?: null;
+        $q = $pdo->prepare("SELECT interest_status, begin_test FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
+        $q->execute([(int)$userId, $programmeId]);
+        $interest = $q->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Throwable $e) {}
 
-    if ($interest) {
-        $interestStatus = (string)($interest['interest_status'] ?? '');
-        $beginTest = (int)($interest['begin_test'] ?? 0);
-        $signalTestingStartedAt = $interest['signal_testing_started_at'] ?? null;
+    $interestStatus = strtolower(trim((string)($interest['interest_status'] ?? '')));
+    $beginTest = (int)($interest['begin_test'] ?? 0) === 1;
 
-        if ($interestStatus === 'ongoing') {
-            $daysLeft = 0;
-            if (!empty($signalTestingStartedAt)) {
-                try {
-                    $start = new DateTime($signalTestingStartedAt);
-                    $challengeDuration = 30;
-                    try {
-                        $srv = $pdo->query("SELECT contract_duration FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                        if ($srv && (int)$srv['contract_duration'] > 0) {
-                            $challengeDuration = (int)$srv['contract_duration'];
-                        }
-                    } catch (Throwable $e) {}
-                    $end = clone $start;
-                    $end->modify('+' . $challengeDuration . ' days');
-                    $today = new DateTime();
-                    $today->setTime(0, 0, 0);
-                    $endClone = clone $end;
-                    $endClone->setTime(0, 0, 0);
-                    $diff = (int)$today->diff($endClone)->format('%r%a');
-                    $daysLeft = max(0, $diff);
-                } catch (Exception $e) {}
-            }
-            return 'In a challenge, ' . $daysLeft . ' day' . ($daysLeft === 1 ? '' : 's') . ' left';
+    /*
+     * Return exactly ONE status. Priority:
+     * 1. Incoming investment requests, 2. streaming disturbance,
+     * 3. VPS requests, 4. failed/breached provision test,
+     * 5. setup actions, 6. test/provision success, 7. advertised/ready state.
+     *
+     * Advertisement takes precedence over Begin Test: an advertised programme
+     * must never be told to begin a test, regardless of begin_test.
+     */
+    if ($invCount > 0) {
+        return $invCount . ' investment request' . ($invCount === 1 ? '' : 's') . ' need' . ($invCount === 1 ? 's' : '') . ' attention';
+    }
+
+    if ($streaming === 0) {
+        return 'Streaming is paused';
+    }
+
+    if ($vpsRequestCount > 0) {
+        return $vpsRequestCount . ' VPS request' . ($vpsRequestCount === 1 ? '' : 's') . ' need' . ($vpsRequestCount === 1 ? 's' : '') . ' attention';
+    }
+
+    if (!$advertised && in_array($interestStatus, ['failed', 'breached'], true)) {
+        return 'Provision test needs attention';
+    }
+
+    if (!$advertised) {
+        if (!$hasVps) return 'Connect VPS';
+        if (!$hasBroker) return 'Connect your broker';
+        if (!$hasTrainedRoot) return 'Programme not trained';
+        if (!$tradesConfigured) return 'Training configured; trades not configured';
+
+        if ($interestStatus === 'interested' && !$beginTest) {
+            return 'Begin test';
+        }
+
+        if ($beginTest || $interestStatus === 'ongoing') {
+            return 'Provision test in progress';
         }
 
         if ($interestStatus === 'passed') {
-            return 'Challenge passed';
+            return 'Provision test passed';
         }
 
-        if ($interestStatus === 'interested' && $beginTest === 0) {
-            return 'In a challenge, begin test after proper training';
-        }
+        return 'Programme is not advertised';
     }
 
-    return 'Join challenge';
+    // Once advertised, begin_test is irrelevant. Only higher-priority
+    // disturbances above can replace this normal success indicator.
+    return 'Advertised';
 }
 
 // ---- AJAX ----
@@ -265,7 +289,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json; charset=utf-8');
         try {
             $q = $pdo->prepare("
-                SELECT p.id, p.program_name, p.visibility, p.advertisement
+                SELECT p.*
                 FROM programme p
                 INNER JOIN harvhub h ON h.id = p.userid
                 WHERE LOWER(h.email) = ?
@@ -715,6 +739,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     body.modal-overlay-open .harvhub-header-top { display: none !important; }
     body.modal-overlay-open .shell-page-header  { display: none !important; }
     body.modal-overlay-open .bottom-nav         { display: none !important; }
+    body.training-controls-open .bottom-nav { display: none !important; }
 
     body.page-vps .harvhub-header-top,
     body.page-vps .shell-page-header,
@@ -1651,6 +1676,16 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     function setModalOpen(isOpen) {
         window.__harvhubModalOpen = !!isOpen;
         document.body.classList.toggle('modal-overlay-open', !!isOpen);
+
+        // The dashboard modal temporarily takes over the viewport. When the
+        // final modal closes, restore the shell header and bottom navigation.
+        if (!isOpen) {
+            lastScrollTop = 0;
+            isNavHidden = false;
+            isHeaderHidden = false;
+            if (typeof showNav === 'function') showNav();
+            if (typeof showHeader === 'function') showHeader();
+        }
     }
 
     function applyChromeForTab(tab) {
@@ -1822,6 +1857,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 
     function switchTab(tab) {
         if (!frames[tab]) return;
+        if (tab !== 'training') document.body.classList.remove('training-controls-open');
         names.forEach(function (k) { frames[k].classList.toggle('active', k === tab); });
         if (navTabNames.indexOf(tab) !== -1) lastNavTab = tab;
         navItems.forEach(function (b) { b.classList.toggle('active', b.dataset.tab === lastNavTab); });
@@ -1838,7 +1874,10 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
 
     navItems.forEach(function (b) {
-        b.addEventListener('click', function () { switchTab(b.dataset.tab); });
+        b.addEventListener('click', function () {
+            document.body.classList.remove('training-controls-open');
+            switchTab(b.dataset.tab);
+        });
     });
 
     window.addEventListener('message', function (e) {
@@ -1881,6 +1920,19 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         }
         if (e.data.type === 'harvhubModalOpen') setModalOpen(true);
         if (e.data.type === 'harvhubModalClose') setModalOpen(false);
+        if (e.data.type === 'trainingControlsOpen') {
+            var controlsModalOpen = e.data.open === true;
+            document.body.classList.toggle('training-controls-open', controlsModalOpen);
+
+            // Modal visibility is authoritative: clear any previous animated hide
+            // styles so the bottom navigation returns immediately when all modals close.
+            if (bottomNav) {
+                bottomNav.style.transform = '';
+                bottomNav.style.opacity = '';
+                bottomNav.style.pointerEvents = '';
+            }
+            isNavHidden = controlsModalOpen;
+        }
     });
 
     new MutationObserver(function (muts) {

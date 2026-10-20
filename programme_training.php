@@ -108,6 +108,7 @@ if ($selectedProgrammeId > 0) {
 
 $programmeId   = $programme ? (int)$programme['id'] : 0;
 $programmeName = $programme ? ($programme['program_name'] ?? 'Programme') : 'Programme';
+$ptRootsRequireUnlock = $programme && (int)($programme['advertisement'] ?? 0) === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
 
 // ==================== LIST PARSER ====================
 function parseCleanList($raw) {
@@ -206,6 +207,61 @@ function ptTextSubstr($value, $length) {
         if ($part !== false) return $part;
     }
     return substr($value, 0, $length);
+}
+
+// ==================== AJAX: REFRESH ROOT-LOCK STATUS ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_roots_lock'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    try {
+        $q = $pdo->prepare('SELECT advertisement, server_advertisement_approval FROM programme WHERE id = ? AND userid = ? LIMIT 1');
+        $q->execute([$reqProgrammeId, $userId]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'Programme not found or access denied.']); exit; }
+        $locked = (int)$row['advertisement'] === 1 && (int)$row['server_advertisement_approval'] === 1;
+        $unlocked = !empty($_SESSION['pt_roots_unlocked'][$reqProgrammeId]);
+        if (!$locked) { unset($_SESSION['pt_roots_unlocked'][$reqProgrammeId]); $unlocked = false; }
+        echo json_encode(['success'=>true,'locked'=>$locked,'unlocked'=>$locked && $unlocked]);
+    } catch (Throwable $e) { http_response_code(500); echo json_encode(['success'=>false,'message'=>'Could not verify programme lock status.']); }
+    exit;
+}
+
+// ==================== AJAX: MANUALLY LOCK ROOTS ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['lock_roots'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    try {
+        $q = $pdo->prepare('SELECT advertisement, server_advertisement_approval FROM programme WHERE id = ? AND userid = ? LIMIT 1');
+        $q->execute([$reqProgrammeId, $userId]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'Programme not found or access denied.']); exit; }
+        $required = (int)$row['advertisement'] === 1 && (int)$row['server_advertisement_approval'] === 1;
+        if ($required) unset($_SESSION['pt_roots_unlocked'][$reqProgrammeId]);
+        echo json_encode(['success'=>true,'locked'=>$required]);
+    } catch (Throwable $e) { http_response_code(500); echo json_encode(['success'=>false,'message'=>'Could not lock roots.']); }
+    exit;
+}
+
+// ==================== AJAX: VERIFY ROOT-UNLOCK PASSWORD ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['verify_unlock_roots'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($_SESSION['user_email'])) { http_response_code(401); echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit; }
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    $attempt = (string)($_POST['account_password'] ?? '');
+    if ($reqProgrammeId <= 0 || $attempt === '') { echo json_encode(['success'=>false,'message'=>'Enter your account password to unlock roots.']); exit; }
+    try {
+        $q = $pdo->prepare('SELECT h.password, p.advertisement, p.server_advertisement_approval FROM programme p INNER JOIN harvhub h ON h.id = p.userid WHERE p.id = ? AND p.userid = ? LIMIT 1');
+        $q->execute([$reqProgrammeId, $userId]);
+        $row = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'Programme not found or access denied.']); exit; }
+        if ((int)$row['advertisement'] !== 1 || (int)$row['server_advertisement_approval'] !== 1) { echo json_encode(['success'=>false,'message'=>'Root locking is not required for this programme.']); exit; }
+        $stored = (string)($row['password'] ?? '');
+        $ok = $stored !== '' && (password_verify($attempt, $stored) || hash_equals($stored, $attempt));
+        if (!$ok) { echo json_encode(['success'=>false,'message'=>'Incorrect password. Please try again.']); exit; }
+        $_SESSION['pt_roots_unlocked'][(int)$reqProgrammeId] = true;
+        echo json_encode(['success'=>true,'message'=>'Roots unlocked for this configuration session.']);
+    } catch (Throwable $e) { http_response_code(500); echo json_encode(['success'=>false,'message'=>'Could not verify password. Please try again.']); }
+    exit;
 }
 
 // ==================== AJAX: LOAD SAVED PROGRAMME CONFIGURATION ====================
@@ -334,6 +390,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     if (!$ownedStmt->fetchColumn()) {
         http_response_code(403);
         echo json_encode(['success' => false, 'message' => 'Programme not found or access denied.']);
+        exit;
+    }
+    $lockCheck = $pdo->prepare('SELECT advertisement, server_advertisement_approval FROM programme WHERE id = ? AND userid = ? LIMIT 1');
+    $lockCheck->execute([$reqProgrammeId, $userId]);
+    $lockState = $lockCheck->fetch(PDO::FETCH_ASSOC) ?: [];
+    if ((int)($lockState['advertisement'] ?? 0) === 1 && (int)($lockState['server_advertisement_approval'] ?? 0) === 1 && empty($_SESSION['pt_roots_unlocked'][$reqProgrammeId])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'Roots are locked. Verify your account password before saving changes.']);
         exit;
     }
 
@@ -1056,7 +1120,7 @@ try {
     .pt-controls-btn-row::-webkit-scrollbar { display:none; width:0; height:0; }
     .pt-controls-btn-row { scrollbar-width:none; -ms-overflow-style:none; padding-left:34px; padding-right:34px; }
     .pt-controls { position:relative; }
-    .pt-control-scroll-arrow { position:absolute; top:50%; transform:translateY(-50%); z-index:30; width:34px; height:42px; display:grid; place-items:center; border:1px solid var(--pt-border); border-radius:10px; background:var(--pt-card); color:var(--pt-text); box-shadow:0 3px 12px rgba(0,0,0,.18); cursor:pointer; }
+    .pt-control-scroll-arrow { position:absolute; top:var(--pt-control-arrow-top, 0px); transform:none; z-index:30; width:34px; height:var(--pt-control-arrow-height, 42px); display:grid; place-items:center; border:1px solid var(--pt-border); border-radius:10px; background:var(--pt-card); color:var(--pt-text); box-shadow:0 3px 12px rgba(0,0,0,.18); cursor:pointer; }
     .pt-control-scroll-arrow.left { left:4px; }
     .pt-control-scroll-arrow.right { right:4px; }
     .pt-control-scroll-arrow[hidden] { display:none !important; }
@@ -2208,6 +2272,26 @@ try {
     .pt-provision-period-head { flex-direction: column; gap: 2px; }
 }
 </style>
+
+<style>
+.pt-cfg-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pt-cfg-toolbar-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
+.pt-unlock-roots-btn{margin-left:0;white-space:nowrap;border:1px solid #d39e00!important;color:#805f00!important;background:rgba(255,193,7,.16)!important;cursor:pointer!important;opacity:1!important;filter:none!important;box-shadow:0 2px 0 rgba(128,95,0,.16);transition:transform .12s ease,background .12s ease,box-shadow .12s ease}.pt-unlock-roots-btn:hover{background:rgba(255,193,7,.28)!important;border-color:#a97b00!important;color:#684d00!important;box-shadow:0 4px 12px rgba(128,95,0,.18)}.pt-unlock-roots-btn:active{transform:translateY(1px)}.pt-unlock-roots-btn:focus-visible{outline:3px solid rgba(211,158,0,.35);outline-offset:2px}
+.pt-cfg-modal.pt-roots-locked #ptCfgRoots{opacity:.68;filter:grayscale(.72);pointer-events:none;user-select:none}
+.pt-cfg-modal.pt-roots-locked #ptCfgRoots .pt-cfg-root{cursor:not-allowed!important;background:rgba(128,128,128,.09)}
+.pt-cfg-modal.pt-roots-locked #ptCfgRoots .pt-cfg-root-head{cursor:default!important}
+.pt-cfg-modal.pt-roots-locked #ptCfgAddRootBtn,.pt-cfg-modal.pt-roots-locked #ptCfgSaveBtn{display:none!important}
+.pt-unlock-modal{display:none;position:fixed;inset:0;z-index:100010;background:rgba(0,0,0,.58);align-items:center;justify-content:center;padding:18px}
+.pt-unlock-modal.active{display:flex}
+.pt-unlock-box{width:min(420px,100%);background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.28)}
+.pt-unlock-icon{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:rgba(255,193,7,.15);color:#d39e00;font-size:20px;margin-bottom:14px}
+.pt-unlock-box h3{margin:0 0 8px;font-size:19px}.pt-unlock-box p{margin:0 0 18px;color:var(--pt-muted);line-height:1.5;font-size:13px}
+.pt-unlock-box label{display:block;font-size:12px;font-weight:750;margin-bottom:7px}.pt-unlock-box input{width:100%;box-sizing:border-box;padding:12px;border:1px solid var(--pt-border);border-radius:9px;background:var(--pt-bg);color:var(--pt-text);font:inherit}
+.pt-unlock-error{min-height:20px;margin-top:8px;color:#dc3545;font-size:12px}.pt-unlock-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:14px;flex-wrap:wrap}
+.pt-controls{--pt-control-arrow-top:0px;--pt-control-arrow-height:42px}
+.pt-control-scroll-arrow{border-radius:0!important;top:var(--pt-control-arrow-top,0px)!important;height:var(--pt-control-arrow-height,42px)!important;align-self:stretch}
+</style>
+
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?>">
 
@@ -2373,10 +2457,15 @@ try {
 
         <div class="pt-cfg-body" id="ptCfgBody">
             <div class="pt-cfg-toolbar">
-                <button type="button" class="pt-cfg-btn primary" onclick="ptCfgAddRoot()">
-                    <i class="fa-solid fa-plus"></i> New Root
-                </button>
-                <span class="pt-cfg-toolbar-hint" id="ptCfgHint">No roots configured yet.</span>
+                <div class="pt-cfg-toolbar-left">
+                    <button type="button" class="pt-cfg-btn pt-unlock-roots-btn" id="ptUnlockRootsBtn" onclick="ptToggleRootsLock()" style="display:none">
+                        <i class="fa-solid fa-lock" aria-hidden="true"></i> Unlock roots
+                    </button>
+                    <button type="button" class="pt-cfg-btn primary" id="ptCfgAddRootBtn" onclick="ptCfgAddRoot()">
+                        <i class="fa-solid fa-plus"></i> New root
+                    </button>
+                    <span class="pt-cfg-toolbar-hint" id="ptCfgHint">Configure your roots.</span>
+                </div>
             </div>
 
             <div id="ptCfgRoots"></div>
@@ -2395,6 +2484,21 @@ try {
             </button>
         </div>
     </div>
+</div>
+
+<div id="ptUnlockRootsModal" class="pt-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="ptUnlockRootsTitle">
+    <form class="pt-unlock-box" id="ptUnlockRootsForm">
+        <div class="pt-unlock-icon"><i class="fa-solid fa-lock"></i></div>
+        <h3 id="ptUnlockRootsTitle">Unlock roots</h3>
+        <p>Enter your account password to unlock the roots for editing.</p>
+        <label for="ptUnlockRootsPassword">Account password</label>
+        <input type="password" id="ptUnlockRootsPassword" autocomplete="current-password" required>
+        <div class="pt-unlock-error" id="ptUnlockRootsError" role="alert"></div>
+        <div class="pt-unlock-actions">
+            <button type="button" class="pt-cfg-btn" onclick="ptCloseUnlockRootsModal()">Cancel</button>
+            <button type="submit" class="pt-cfg-btn primary" id="ptUnlockRootsSubmit"><i class="fa-solid fa-unlock"></i> Unlock roots</button>
+        </div>
+    </form>
 </div>
 
 <!-- Custom confirmation modal: deleting a root requires an explicit second action. -->
@@ -7318,7 +7422,7 @@ try {
 
             if (!PT_CFG.roots.length) {
                 if (empty) empty.style.display = 'block';
-                if (hint) hint.textContent = 'No roots configured yet.';
+                if (hint) hint.textContent = 'Configure your roots.';
                 return;
             }
             if (empty) empty.style.display = 'none';
@@ -7330,11 +7434,7 @@ try {
                 host.appendChild(buildRoot(root, onChange, onValueChange));
             });
 
-            if (hint) {
-                var trees = 0;
-                PT_CFG.roots.forEach(function (r) { trees += r.trees.length; });
-                hint.textContent = PT_CFG.roots.length + ' root(s) · ' + trees + ' tree(s)';
-            }
+            if (hint) hint.textContent = 'Configure your roots.';
         }
 
         // ---------- restore saved database rows into the modal's editable UI ----------
@@ -7638,31 +7738,119 @@ try {
             return PT_CFG_LOAD_PROMISE;
         }
 
+        // The shell navigation is controlled only by actual modal visibility below.
+        // Clicking a control button alone must never hide the navigation.
+
         // Expose read-only configuration access for the virtual candle matcher.
         window.ptGetTrainingConfiguration = function () { return PT_CFG; };
 
         // ---------- public API ----------
+        var PT_ROOTS_LOCK_REQUIRED = <?= $ptRootsRequireUnlock ? 'true' : 'false' ?>;
+        var PT_ROOTS_UNLOCKED = <?= !empty($_SESSION['pt_roots_unlocked'][$programmeId]) ? 'true' : 'false' ?>;
+        function ptApplyRootLock() {
+            var m = el('ptConfigModal');
+            var unlock = el('ptUnlockRootsBtn');
+            if (!m) return;
+            var locked = PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED;
+            m.classList.toggle('pt-roots-locked', locked);
+            var roots = el('ptCfgRoots');
+            if (roots) {
+                if (locked) roots.setAttribute('inert', '');
+                else roots.removeAttribute('inert');
+            }
+            if (unlock) {
+                unlock.style.display = PT_ROOTS_LOCK_REQUIRED ? 'inline-flex' : 'none';
+                unlock.innerHTML = locked
+                    ? '<i class="fa-solid fa-lock" aria-hidden="true"></i> Unlock roots'
+                    : '<i class="fa-solid fa-lock-open" aria-hidden="true"></i> Lock roots';
+                unlock.setAttribute('aria-label', locked ? 'Unlock roots' : 'Lock roots');
+            }
+            var add = el('ptCfgAddRootBtn');
+            var save = el('ptCfgSaveBtn');
+            if (add) add.disabled = locked;
+            if (save) save.disabled = locked || !PT_CFG.roots.length;
+        }
         window.ptOpenConfigModal = function () {
             var m = el('ptConfigModal');
             if (!m) return;
+            // Open immediately. Lock/approval state is already rendered from the server,
+            // and every protected server action validates it again.
             m.classList.add('active');
+            try { parent.postMessage({type:'trainingControlsOpen', open:true}, '*'); } catch(e) {}
+            ptApplyRootLock();
             setFootStatus('Loading saved configuration…');
             ptLoadSavedConfiguration(true).then(function () {
-                render();
-                updateFootStatus();
+                render(); ptApplyRootLock(); updateFootStatus();
                 if (!PT_CFG.roots.length) setFootStatus('No saved configuration yet. Add a root to begin.');
-                else setFootStatus('Loaded saved configuration: ' + PT_CFG.roots.length + ' root(s).', 'ok');
-            }).catch(function () {
-                render();
-                updateFootStatus();
+                else setFootStatus(PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED ? 'Roots are locked. Unlock roots to make changes.' : 'Saved configuration loaded.', 'ok');
+            }).catch(function (error) {
+                render(); ptApplyRootLock();
+                setFootStatus((error && error.message) || 'Could not load saved configuration.', 'error');
             });
         };
+        window.ptToggleRootsLock = function () {
+            if (!PT_ROOTS_LOCK_REQUIRED) return;
+            if (!PT_ROOTS_UNLOCKED) { window.ptOpenUnlockRootsModal(); return; }
+            var button = el('ptUnlockRootsBtn');
+            var wasUnlocked = PT_ROOTS_UNLOCKED;
+            // Lock locally at once; the server request persists the session state.
+            PT_ROOTS_UNLOCKED = false;
+            ptApplyRootLock();
+            setFootStatus('Locking roots…');
+            if (button) button.disabled = true;
+            fetch('programme_training.php', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'}, credentials:'same-origin', body:'lock_roots=1&programme_id='+encodeURIComponent(PT_PROGRAMME_ID)})
+            .then(function(r){return r.json();}).then(function(data){
+                if (!data.success) throw new Error(data.message || 'Could not lock roots.');
+                PT_ROOTS_UNLOCKED = false;
+                ptApplyRootLock();
+                setFootStatus('Roots locked. Unlock roots to edit or save changes.', 'ok');
+            }).catch(function(error){
+                PT_ROOTS_UNLOCKED = wasUnlocked;
+                ptApplyRootLock();
+                setFootStatus((error && error.message) || 'Could not lock roots.', 'error');
+            }).finally(function(){if(button) button.disabled = false;});
+        };
+        window.ptOpenUnlockRootsModal = function () {
+            if (!PT_ROOTS_LOCK_REQUIRED || PT_ROOTS_UNLOCKED) return;
+            var modal = el('ptUnlockRootsModal'), field = el('ptUnlockRootsPassword'), err = el('ptUnlockRootsError');
+            if (err) err.textContent = '';
+            if (field) field.value = '';
+            if (modal) modal.classList.add('active');
+            try { parent.postMessage({type:'trainingControlsOpen', open:true}, '*'); } catch(e) {}
+            // Leave the password field unfocused; the user can focus it manually.
+        };
+        window.ptCloseUnlockRootsModal = function () {
+            var modal = el('ptUnlockRootsModal'); if (modal) modal.classList.remove('active');
+        };
+        document.addEventListener('DOMContentLoaded', function () {
+            var form = el('ptUnlockRootsForm');
+            if (form) form.addEventListener('submit', function (event) {
+                event.preventDefault();
+                var field = el('ptUnlockRootsPassword'), err = el('ptUnlockRootsError'), submit = el('ptUnlockRootsSubmit');
+                var password = field ? field.value : '';
+                if (!password) { if (err) err.textContent = 'Enter your account password to continue.'; return; }
+                if (submit) submit.disabled = true;
+                if (err) err.textContent = 'Verifying password…';
+                fetch('programme_training.php', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'}, credentials:'same-origin', body:'verify_unlock_roots=1&programme_id='+encodeURIComponent(PT_PROGRAMME_ID)+'&account_password='+encodeURIComponent(password)})
+                .then(function(r){return r.json();}).then(function(data){
+                    if (!data.success) { if (err) err.textContent = data.message || 'Incorrect password.'; return; }
+                    PT_ROOTS_UNLOCKED = true; ptCloseUnlockRootsModal(); ptApplyRootLock(); render();
+                    setFootStatus('Roots unlocked for this session. They will stay unlocked until you click Lock roots.', 'ok');
+                }).catch(function(){ if (err) err.textContent = 'Could not verify password. Please try again.'; })
+                .finally(function(){ if (submit) submit.disabled = false; });
+            });
+            var unlockModal = el('ptUnlockRootsModal');
+            if (unlockModal) unlockModal.addEventListener('mousedown', function(e){if(e.target===unlockModal) ptCloseUnlockRootsModal();});
+        });
         window.ptCloseConfigModal = function () {
             var m = el('ptConfigModal');
             if (m) m.classList.remove('active');
+            window.ptCloseUnlockRootsModal();
+            try { parent.postMessage({type:'trainingControlsOpen', open:false}, '*'); } catch(e) {}
             setFootStatus('');
         };
         window.ptCfgAddRoot = function () {
+            if (PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED) return;
             PT_CFG.roots.push(createRoot());
             render();
             updateFootStatus();
@@ -7672,6 +7860,7 @@ try {
         var _origRender = render;
         render = function () {
             _origRender();
+            if (typeof ptApplyRootLock === 'function') ptApplyRootLock();
             updateFootStatus();
         };
 
@@ -7701,6 +7890,7 @@ try {
             });
 
             render();
+            if (typeof ptApplyRootLock === 'function') ptApplyRootLock();
             updateFootStatus();
 
             // Load saved roots/trees on page start and re-evaluate the current chart.
@@ -7718,6 +7908,8 @@ try {
         var right = document.getElementById('ptControlsScrollRight');
         if (!row || !left || !right) return;
         var max = Math.max(0, row.scrollWidth - row.clientWidth);
+        var controls = row.closest('.pt-controls');
+        if (controls) { controls.style.setProperty('--pt-control-arrow-top', row.offsetTop + 'px'); controls.style.setProperty('--pt-control-arrow-height', Math.max(1, row.offsetHeight) + 'px'); }
         var hasOverflow = max > 2;
         left.hidden = !hasOverflow || row.scrollLeft <= 2;
         right.hidden = !hasOverflow || row.scrollLeft >= max - 2;
@@ -7772,6 +7964,36 @@ try {
         }
         var rootsModal = document.getElementById('ptRootsDataModal');
         if (rootsModal) rootsModal.addEventListener('mousedown', function(e){ if(e.target===rootsModal) window.ptCloseRootsData(); });
+        function ptNotifyControlsModalState() {
+            // These are the actual modal classes/IDs used by this page.
+            // Symbol and timeframe pickers use .pt-picker-modal; Roots Data uses
+            // .pt-dynamic-console-modal. Configuration uses .pt-cfg-modal.
+            var modalSelectors = [
+                '#ptSymbolModal',
+                '#ptTimeframeModal',
+                '#ptConfigModal',
+                '#ptRootsDataModal',
+                '#ptUnlockRootsModal',
+                '#ptRootDeleteModal',
+                '.pt-picker-modal',
+                '.pt-cfg-modal',
+                '.pt-dynamic-console-modal',
+                '.pt-unlock-modal',
+                '.pt-root-delete-modal',
+                '.pt-modal'
+            ].join(',');
+            var active = Array.prototype.some.call(document.querySelectorAll(modalSelectors), function(node) {
+                if (!node || node.getAttribute('aria-hidden') === 'true') return false;
+                var style = window.getComputedStyle(node);
+                return style.display !== 'none' &&
+                       style.visibility !== 'hidden' &&
+                       parseFloat(style.opacity || '1') !== 0;
+            });
+            try { parent.postMessage({type:'trainingControlsOpen', open:active}, '*'); } catch(e) {}
+        }
+        new MutationObserver(ptNotifyControlsModalState).observe(document.body, {subtree:true, attributes:true, attributeFilter:['class','style','aria-hidden']});
+        window.addEventListener('beforeunload', function(){try{parent.postMessage({type:'trainingControlsOpen',open:false},'*');}catch(e){}});
+        setTimeout(ptNotifyControlsModalState, 0);
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') window.ptCloseRootsData();
         });

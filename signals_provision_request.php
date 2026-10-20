@@ -1,5 +1,5 @@
 <?php
-// signals_provision_request.php — Trader challenge request browser
+// signals_provision_request.php — Trader provision request browser
 session_start();
 require_once 'usersdb.php';
 
@@ -47,6 +47,84 @@ if ($selectedProgrammeId > 0) {
 function esc_h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function jres($a){ header('Content-Type: application/json'); echo json_encode($a); exit; }
 
+function getProgrammeTrainingReadiness(PDO $pdo, int $userId, int $programmeId): array {
+    $result = ['has_root' => false, 'trades_configured' => false];
+
+    if ($userId <= 0 || $programmeId <= 0) return $result;
+
+    $tableInfo = function (string $table) use ($pdo): array {
+        $allowed = [
+            'programme_training_configuration',
+            'programme_configuration_confirmation',
+            'programme_training_confirmation_configuration'
+        ];
+        if (!in_array($table, $allowed, true)) return ['exists' => false, 'columns' => []];
+
+        try {
+            $q = $pdo->query("SHOW COLUMNS FROM `{$table}`");
+            $cols = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                if (isset($row['Field'])) $cols[strtolower((string)$row['Field'])] = (string)$row['Field'];
+            }
+            return ['exists' => !empty($cols), 'columns' => $cols];
+        } catch (Throwable $e) {
+            return ['exists' => false, 'columns' => []];
+        }
+    };
+
+    $countRows = function (string $table, array $info, int $userId, int $programmeId, bool $rootsOnly, bool $tradesOnly) use ($pdo): int {
+        if (empty($info['exists'])) return 0;
+        $cols = $info['columns'];
+
+        $userCol = $cols['userid'] ?? $cols['user_id'] ?? $cols['developerid'] ?? null;
+        $programmeCol = $cols['programmeid'] ?? $cols['programme_id'] ?? null;
+        if (!$userCol || !$programmeCol) return 0;
+
+        $where = ["`{$userCol}` = ?", "`{$programmeCol}` = ?"];
+        $params = [$userId, $programmeId];
+
+        if ($rootsOnly && isset($cols['row_role'])) {
+            $where[] = "`{$cols['row_role']}` = 'root'";
+        } elseif ($rootsOnly && isset($cols['configuration_type'])) {
+            $where[] = "`{$cols['configuration_type']}` = 'root'";
+        }
+
+        if ($tradesOnly) {
+            // The configuration is selected by trade_for, not a boolean toggle.
+            $tradeForCol = $cols['trade_for'] ?? null;
+            if (!$tradeForCol) return 0;
+            $where[] = "LOWER(CAST(`{$tradeForCol}` AS CHAR)) IN ('root','root_confirmation')";
+        }
+
+        try {
+            $sql = "SELECT COUNT(*) FROM `{$table}` WHERE " . implode(' AND ', $where);
+            $q = $pdo->prepare($sql);
+            $q->execute($params);
+            return (int)$q->fetchColumn();
+        } catch (Throwable $e) {
+            return 0;
+        }
+    };
+
+    $mainTable = 'programme_training_configuration';
+    $mainInfo = $tableInfo($mainTable);
+    $result['has_root'] = $countRows($mainTable, $mainInfo, $userId, $programmeId, true, false) > 0;
+
+    foreach ([
+        'programme_training_configuration',
+        'programme_configuration_confirmation',
+        'programme_training_confirmation_configuration'
+    ] as $table) {
+        $info = ($table === $mainTable) ? $mainInfo : $tableInfo($table);
+        if ($countRows($table, $info, $userId, $programmeId, true, true) > 0) {
+            $result['trades_configured'] = true;
+            break;
+        }
+    }
+
+    return $result;
+}
+
 $serverConfig = [];
 try {
     $q = $pdo->query("SELECT * FROM server_account WHERE id = 1 LIMIT 1");
@@ -54,8 +132,35 @@ try {
 } catch (Throwable $e) {}
 
 $dayDuration     = (int)($serverConfig['day_challenge_duration'] ?? 30);
-$weeklyDuration  = (int)($serverConfig['weekly_challenge_duration'] ?? 32);
+$weeklyDuration  = (int)($serverConfig['weekly_challenge_duration'] ?? 60);
 $monthlyDuration = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
+
+$trainingReadiness = getProgrammeTrainingReadiness($pdo, $userId, (int)($programme['id'] ?? 0));
+$programmeHasVps = false;
+if ($programme) {
+    try {
+        $vpsQ = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
+        $vpsQ->execute([(int)$programme['id']]);
+        $programmeHasVps = (bool)$vpsQ->fetchColumn();
+    } catch (Throwable $e) {}
+    if (!$programmeHasVps) {
+        try {
+            $vpsQ = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND host_status = 'active' LIMIT 1");
+            $vpsQ->execute([(int)$programme['id']]);
+            $programmeHasVps = (bool)$vpsQ->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+}
+$programmeHasBroker = $programme
+    && !empty($programme['broker'])
+    && !empty($programme['server'])
+    && !empty($programme['login']);
+
+// Once the programme is advertised and approved, a provision test is no longer required.
+$programmeIsAdvertised = $programme
+    && (int)($programme['advertisement'] ?? 0) === 1
+    && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
+
 
 $existingInterest = null;
 if ($programme) {
@@ -112,11 +217,11 @@ function generateRealisticSystemChallenges($period) {
             'expected_win' => $win,
             'source' => 'system', 'is_active' => 1, 'created_at' => $now,
             'username' => 'System', 'first_name' => 'System', 'last_name' => '',
-            'fullname' => 'System Challenge', 'user_email' => '',
+            'fullname' => 'System Provision', 'user_email' => '',
         ];
     };
 
-    $types = ['fixed_risk_reward', 'custom_and_minimum_risk_reward', 'custom_and_fixed_risk_reward'];
+    $types = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
     $seen  = [];
 
     for ($rr = 1; $rr <= 20; $rr++) {
@@ -194,7 +299,7 @@ function synthesizeFilteredCard(string $type, int $rr, int $trades, int $win, in
         'expected_win' => $win,
         'source' => 'system', 'is_active' => 1, 'created_at' => date('Y-m-d H:i:s'),
         'username' => 'System', 'first_name' => 'System', 'last_name' => '',
-        'fullname' => 'System Challenge', 'user_email' => '',
+        'fullname' => 'System Provision', 'user_email' => '',
     ];
 }
 
@@ -224,7 +329,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $win    = isset($_POST['expected_win'])    && $_POST['expected_win']    !== '' ? (int)$_POST['expected_win']    : null;
         $loss   = isset($_POST['consecutive_loss'])&& $_POST['consecutive_loss']!== '' ? (int)$_POST['consecutive_loss']: null;
 
-        $allowedTypes = ['fixed_risk_reward', 'custom_and_minimum_risk_reward', 'custom_and_fixed_risk_reward'];
+        $allowedTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
         if (!in_array($type, $allowedTypes, true)) {
             jres(['success' => false, 'filter_error' => true, 'message' => 'Please select a risk reward type.']);
         }
@@ -282,9 +387,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $period    = trim($_POST['period'] ?? 'daily');
         if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) $period = 'daily';
 
+        $allowedTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
+        $submittedType = (string)($_POST['risk_reward_type'] ?? 'fixed_risk_reward');
+        if (!in_array($submittedType, $allowedTypes, true)) {
+            jres(['success' => false, 'message' => 'Invalid risk-to-reward type.']);
+        }
+        $submittedRr = max(1.0, (float)($_POST['risk_reward'] ?? 1));
         $request = [
-            'risk_reward_type' => $_POST['risk_reward_type'] ?? 'fixed_risk_reward',
-            'risk_reward'      => (float)($_POST['risk_reward'] ?? 2),
+            'risk_reward_type' => $submittedType,
+            'risk_reward'      => $submittedRr,
             'trades_provision' => $period,
             'consecutive_loss' => (int)($_POST['consecutive_loss'] ?? 2),
             'trades_count'     => (int)($_POST['trades_count'] ?? 1),
@@ -328,7 +439,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $pdo->rollBack();
                     jres([
                         'success' => false,
-                        'message' => 'You already have an active challenge interest for this programme. Cancel it first to choose a different challenge.'
+                        'message' => 'You already have an active provision interest for this programme. The current provision must be cancelled before choosing another.'
                     ]);
                 }
             } else {
@@ -401,7 +512,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (strpos($msg, 'uq_spi') !== false || strpos($msg, 'Duplicate entry') !== false) {
                 jres([
                     'success' => false,
-                    'message' => 'A challenge interest for this programme already exists. Cancel it first if you want to choose a different challenge.'
+                    'message' => 'A provision interest for this programme already exists. Cancel the current provision before choosing another.'
                 ]);
             }
 
@@ -421,11 +532,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $periodLabel = ucfirst($period);
 
-            $joinMessage = 'Your programme ' . $programmeName . ' has joined a ' . $periodLabel . ' signals challenge.';
+            $joinMessage = 'Your programme ' . $programmeName . ' has joined a ' . $periodLabel . ' signals provision.';
 
             recordProgrammeNotification($pdo, $programmeId, $email, [
                 'notification_key' => 'prog-signals-interest-' . $programmeId . '-' . $interestId . '-' . date('YmdHis'),
-                'title'            => 'Challenge Joined',
+                'title'            => 'Provision Joined',
                 'message'          => $joinMessage,
                 'type'             => 'success',
                 'section'          => 'Signals',
@@ -438,7 +549,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         jres([
             'success'     => true,
-            'message'     => 'Challenge interest saved.',
+            'message'     => 'Provision interest saved.',
             'interest_id' => $interestId
         ]);
     }
@@ -506,11 +617,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
 
+    if ($action === 'begin_test') {
+        if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
+        // An already-advertised programme does not need a test; skip all test/readiness checks.
+        if ((int)($programme['advertisement'] ?? 0) === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1) {
+            jres(['success' => true, 'already_advertised' => true, 'message' => 'This programme is already advertised. No provision test is required.']);
+        }
+        try {
+            $q = $pdo->prepare("
+                SELECT * FROM signals_provider_interest
+                WHERE user_id = ? AND programme_id = ?
+                  AND interest_status IN ('interested','pending','active')
+                ORDER BY id DESC LIMIT 1
+            ");
+            $q->execute([$userId, (int)$programme['id']]);
+            $interest = $q->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$interest) jres(['success' => false, 'message' => 'No provision interest found.']);
+            if ((int)($interest['begin_test'] ?? 0) === 1 || strtolower((string)($interest['interest_status'] ?? '')) === 'ongoing') {
+                jres(['success' => false, 'message' => 'The provision test has already begun.']);
+            }
+            $readiness = getProgrammeTrainingReadiness($pdo, $userId, (int)$programme['id']);
+            if (empty($readiness['has_root'])) {
+                jres(['success' => false, 'message' => 'Train your programme before beginning the test.']);
+            }
+            if (empty($readiness['trades_configured'])) {
+                jres(['success' => false, 'message' => 'You haven’t configured your programme for trading yet.']);
+            }
+            $hasVps = false;
+            try {
+                $v = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
+                $v->execute([(int)$programme['id']]);
+                $hasVps = (bool)$v->fetchColumn();
+            } catch (Throwable $e) {}
+            if (!$hasVps) {
+                try {
+                    $v = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND host_status = 'active' LIMIT 1");
+                    $v->execute([(int)$programme['id']]);
+                    $hasVps = (bool)$v->fetchColumn();
+                } catch (Throwable $e) {}
+            }
+            $hasBroker = !empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']);
+            if (!$hasVps || !$hasBroker) {
+                jres(['success' => false, 'message' => 'Connect your ' . (!$hasVps ? 'VPS' : 'broker') . ' to begin testing your programme.']);
+            }
+            $upd = $pdo->prepare("
+                UPDATE signals_provider_interest
+                SET begin_test = 1, interest_status = 'ongoing', signal_testing_started_at = NOW(),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND programme_id = ?
+            ");
+            $upd->execute([(int)$interest['id'], $userId, (int)$programme['id']]);
+            try {
+                recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
+                    'notification_key' => 'signals-test-started-' . (int)$programme['id'] . '-' . (int)$interest['id'] . '-' . date('YmdHis'),
+                    'title' => 'Provision Test Started',
+                    'message' => 'Your signals provision test has begun.',
+                    'type' => 'success',
+                    'section' => 'Signals',
+                    'action_tab' => 'signals',
+                    'force' => true
+                ]);
+            } catch (Throwable $e) {}
+            jres(['success' => true, 'message' => 'Test started.']);
+        } catch (Throwable $e) {
+            jres(['success' => false, 'message' => 'Failed to start test.']);
+        }
+    }
+
     if ($action === 'cancel_interest') {
         if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
 
         $interestId = (int)($_POST['interest_id'] ?? 0);
-        if ($interestId <= 0) jres(['success' => false, 'message' => 'Invalid challenge.']);
+        if ($interestId <= 0) jres(['success' => false, 'message' => 'Invalid provision.']);
 
         try {
             $q = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE id = ? AND user_id = ? AND programme_id = ? LIMIT 1");
@@ -518,12 +696,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $interest = $q->fetch(PDO::FETCH_ASSOC);
 
             if (!$interest) {
-                jres(['success' => false, 'message' => 'Challenge interest not found.']);
+                jres(['success' => false, 'message' => 'Provision interest not found.']);
             }
 
             $status = strtolower((string)($interest['interest_status'] ?? ''));
             if (in_array($status, ['cancelled', 'failed', 'breached', 'passed'], true)) {
-                jres(['success' => false, 'message' => 'This challenge interest can no longer be cancelled.']);
+                jres(['success' => false, 'message' => 'This provision interest can no longer be cancelled.']);
             }
 
             $upd = $pdo->prepare("
@@ -557,12 +735,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) $period = 'daily';
             $periodLabel = ucfirst($period);
 
-            $cancelMessage = 'Your programme ' . $programmeName . ' has cancelled its ' . $periodLabel . ' signals challenge.';
+            $cancelMessage = 'Your programme ' . $programmeName . ' has cancelled its ' . $periodLabel . ' signals provision.';
 
             try {
                 recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
                     'notification_key' => 'prog-signals-cancelled-' . (int)$programme['id'] . '-' . $interestId . '-' . date('YmdHis'),
-                    'title'            => 'Challenge Cancelled',
+                    'title'            => 'Provision Cancelled',
                     'message'          => $cancelMessage,
                     'type'             => 'warning',
                     'section'          => 'Signals',
@@ -573,7 +751,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 error_log('[signals_provision_request] cancel notification failed: ' . $notifErr->getMessage());
             }
 
-            jres(['success' => true, 'message' => 'Challenge interest cancelled successfully.']);
+            jres(['success' => true, 'message' => 'Provision interest cancelled successfully.']);
         } catch (Throwable $e) {
             jres(['success' => false, 'message' => 'Failed to cancel interest: ' . $e->getMessage()]);
         }
@@ -770,6 +948,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .spr-cancel-btn:hover { background: #c43c3c; transform: scale(1.04); box-shadow: 0 6px 18px rgba(223,78,78,.28); }
     .spr-cancel-btn:active { transform: scale(.98); }
     .spr-cancel-btn:disabled { background: var(--spr-muted); cursor: not-allowed; opacity: .7; transform: none; box-shadow: none; }
+    .spr-cancel-btn.is-readonly-provision, .spr-cancel-btn.is-readonly-provision:disabled { background: var(--spr-muted); color: #fff; opacity: .58; filter: none; cursor: not-allowed; pointer-events: none; transform: none; box-shadow: none; }
+    .spr-begin-test-btn { flex-shrink:0; padding:10px 22px; border:0; border-radius:10px; background:var(--spr-info); color:#fff; font-weight:800; font-size:.85rem; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .spr-begin-test-btn:hover { filter:brightness(.92); }
+
 
     @media (max-width: 640px) {
         :root { --spr-page-pad: 14px; }
@@ -835,12 +1017,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <div class="spr-fixed-header">
         <div class="spr-header">
             <button class="spr-header-back" onclick="sprGoBack()" aria-label="Back"><i class="fa-solid fa-arrow-left"></i></button>
-            <div class="spr-header-title">Challenge Requests</div>
+            <div class="spr-header-title">Provision Requests</div>
         </div>
 
         <div class="spr-main-tabs">
-            <button class="spr-main-tab active" data-main-tab="challenges">Signals Challenge</button>
-            <button class="spr-main-tab" data-main-tab="interested">Interested Challenge</button>
+            <button class="spr-main-tab active" data-main-tab="challenges">Signals Provision</button>
+            <button class="spr-main-tab" data-main-tab="interested">Interested Provision</button>
         </div>
 
         <div class="spr-sub-tabs" id="sprSubTabs">
@@ -861,7 +1043,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     <div class="spr-scroll-area" id="sprScrollArea">
         <div id="sprRequestList" class="spr-list">
-            <div class="spr-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading challenges…</p></div>
+            <div class="spr-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading provisions…</p></div>
         </div>
     </div>
 </div>
@@ -869,7 +1051,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <!-- FILTER MODAL -->
 <div class="spr-modal" id="sprFilterModal">
     <div class="spr-modal-card">
-        <h3>Filter Challenges</h3>
+        <h3>Filter Provisions</h3>
         <p class="spr-sub">Select a risk reward type to continue. Fill all fields to find your exact match.</p>
 
         <div class="spr-field">
@@ -877,8 +1059,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <select id="sprFilterType">
                 <option value="">Select risk reward type to continue</option>
                 <option value="fixed_risk_reward">Fixed Risk Reward</option>
-                <option value="custom_and_minimum_risk_reward">Custom &amp; Minimum Risk Reward</option>
-                <option value="custom_and_fixed_risk_reward">Custom &amp; Fixed Risk Reward</option>
+                <option value="minimum_risk_reward">Minimum Risk Reward</option>
+                <option value="custom_and_default_risk_reward">Custom &amp; Default Risk Reward</option>
             </select>
         </div>
 
@@ -889,17 +1071,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </div>
 
             <div class="spr-field">
-                <label>Trades Count</label>
+                <label>Minimum Trades Count</label>
                 <input type="number" id="sprFilterTrades" min="1" max="100" step="1" placeholder="e.g. 10" autocomplete="off">
             </div>
 
             <div class="spr-field">
-                <label>Expected Win Count</label>
+                <label>Minimum Expected Win Count</label>
                 <input type="number" id="sprFilterWin" min="1" max="100" step="1" placeholder="e.g. 8" autocomplete="off">
             </div>
 
             <div class="spr-field">
-                <label>Consecutive Expected Loss</label>
+                <label>Maximum Expected Consecutive Loss</label>
                 <input type="number" id="sprFilterLoss" min="1" max="100" step="1" placeholder="e.g. 3" autocomplete="off">
             </div>
         </div>
@@ -917,9 +1099,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <div class="spr-modal" id="sprConfirmModal">
     <div class="spr-modal-card spr-confirm-card">
         <div class="spr-confirm-icon"><i class="fa-solid fa-trophy"></i></div>
-        <div class="spr-confirm-title">Confirm Challenge Interest</div>
-        <div class="spr-confirm-text">
-            Choosing interest in this request means your trading strategy must meet the values — it mustn't go below the minimum requests and maximum requests. Once these are met, you will be reviewed if your edge request will be profitable for investors.
+        <div class="spr-confirm-title">Confirm Provision Interest</div>
+        <div class="spr-confirm-text" id="sprConfirmInterestText">
+            By joining this provision, you agree to meet its duration and trading-performance requirements.
         </div>
         <div class="spr-actions">
             <button class="spr-btn primary" id="sprConfirmInterestBtn">Confirm to Proceed</button>
@@ -932,13 +1114,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <div class="spr-modal" id="sprCancelConfirmModal">
     <div class="spr-modal-card spr-confirm-card">
         <div class="spr-confirm-icon" style="background:#fdecec;color:var(--spr-danger);"><i class="fa-solid fa-triangle-exclamation"></i></div>
-        <div class="spr-confirm-title" id="sprCancelConfirmTitle">Cancel Challenge Interest</div>
+        <div class="spr-confirm-title" id="sprCancelConfirmTitle">Cancel Provision Interest</div>
         <div class="spr-confirm-text" id="sprCancelConfirmText">
-            If you cancel this signal challenge, your programme will need to embark on a new challenge duration to participate again. This action cannot be undone.
+            This provision status is read-only. You cannot cancel it from this button.
         </div>
         <div class="spr-actions">
-            <button class="spr-btn danger" id="sprCancelInterestConfirmBtn">Yes, Cancel Challenge</button>
-            <button class="spr-btn ghost" onclick="sprCloseModal('sprCancelConfirmModal')">Keep Challenge</button>
+            <button class="spr-btn danger" id="sprCancelInterestConfirmBtn">Yes, Cancel Provision</button>
+            <button class="spr-btn ghost" onclick="sprCloseModal('sprCancelConfirmModal')">Keep Provision</button>
+        </div>
+    </div>
+</div>
+
+<!-- BEGIN PROVISION TEST MODAL -->
+<div class="spr-modal" id="sprBeginTestModal">
+    <div class="spr-modal-card spr-confirm-card" style="text-align:center;">
+        <div class="spr-confirm-icon" style="background:rgba(52,152,219,.12);color:#3498db;"><i class="fa-solid fa-play"></i></div>
+        <div class="spr-confirm-title">Begin Test</div>
+        <div class="spr-confirm-text" id="sprBeginTestText">Once you agree to begin the test, live trades will be generated from your trained programme for the next <?= (int)($dayDuration ?: 30) ?> days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.</div>
+        <div class="spr-actions">
+            <button class="spr-btn primary" id="sprConfirmBeginTestBtn">Confirm Test</button>
+            <button class="spr-btn ghost" onclick="sprCloseModal('sprBeginTestModal')">Cancel</button>
         </div>
     </div>
 </div>
@@ -961,6 +1156,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     var CURRENT_MAIN_TAB = 'challenges';
     var CURRENT_PERIOD = 'daily';
+    var CHALLENGE_DURATIONS = { daily: <?= (int)$dayDuration ?>, weekly: <?= (int)$weeklyDuration ?>, monthly: <?= (int)$monthlyDuration ?> };
+    var TRAINING_HAS_ROOT = <?= !empty($trainingReadiness['has_root']) ? 'true' : 'false' ?>;
+    var TRAINING_TRADES_CONFIGURED = <?= !empty($trainingReadiness['trades_configured']) ? 'true' : 'false' ?>;
+    var PROGRAMME_HAS_VPS = <?= $programmeHasVps ? 'true' : 'false' ?>;
+    var PROGRAMME_HAS_BROKER = <?= $programmeHasBroker ? 'true' : 'false' ?>;
+    var PROGRAMME_IS_ADVERTISED = <?= $programmeIsAdvertised ? 'true' : 'false' ?>;
+
     var REQUESTS = [];
     var INTERESTS = [];
     var PENDING_REQUEST = null;
@@ -1057,8 +1259,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     function rrTypeLabel(t) {
         switch (t) {
             case 'fixed_risk_reward': return 'Fixed Risk Reward';
-            case 'custom_and_minimum_risk_reward': return 'Custom & Minimum Risk Reward';
-            case 'custom_and_fixed_risk_reward': return 'Custom & Fixed Risk Reward';
+            case 'minimum_risk_reward': return 'Minimum Risk Reward';
+            case 'custom_and_default_risk_reward': return 'Custom & Default Risk Reward';
             default: return 'Fixed Risk Reward';
         }
     }
@@ -1068,7 +1270,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var isMine = !!(myInterest && req.id && parseInt(myInterest.id, 10) === parseInt(req.id, 10));
         var hasAnyInterest = !!(myInterest && myInterest.id);
 
-        var name = isSystem ? 'System Challenge' :
+        var name = isSystem ? 'System Provision' :
             (req.username || req.first_name || req.fullname || ('Trader #' + req.user_id));
 
         var rr = parseFloat(req.risk_reward) || 0;
@@ -1084,26 +1286,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         html +=   '<div class="spr-item-main">';
         html +=     '<div class="spr-item-header">';
         html +=       '<div class="spr-item-title">' + escapeHtml(name) + (isSystem ? ' <span style="font-size:.72rem;color:var(--spr-muted);font-weight:600;">· System</span>' : '') + '</div>';
-        html +=       '<div class="spr-item-sub">' + escapeHtml(periodLabel) + ' trades challenge</div>';
+        html +=       '<div class="spr-item-sub">' + escapeHtml(periodLabel) + ' trades provision</div>';
         html +=     '</div>';
         html +=     '<div class="spr-meta-row">';
 
         html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Trades Provision:</span><span class="spr-meta-value">' + escapeHtml(periodLabel) + '</span></div>';
         html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Risk Reward Type:</span><span class="spr-meta-value">' + escapeHtml(rrType) + '</span></div>';
         html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Risk Reward</span><span class="spr-meta-value">1:' + rr + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Trades Count</span><span class="spr-meta-value">' + trCount + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Expected Win</span><span class="spr-meta-value">' + expWin + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Consecutive Expected Loss</span><span class="spr-meta-value">' + loss + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Minimum Trades Count</span><span class="spr-meta-value">' + trCount + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Minimum Expected Win Count</span><span class="spr-meta-value">' + expWin + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Maximum Expected Consecutive Loss</span><span class="spr-meta-value">' + loss + '</span></div>';
 
         html +=     '</div>';
         html +=   '</div>';
 
         if (isMine) {
-            html += '<button class="spr-interested-btn is-mine" disabled>Interested ✓</button>';
+            html += '<button class="spr-interested-btn is-mine" disabled>Interested in provision ✓</button>';
         } else if (hasAnyInterest) {
-            html += '<button class="spr-interested-btn is-readonly" disabled title="You already have an active challenge interest for this programme.">Already In a challenge</button>';
+            html += '<button class="spr-interested-btn is-readonly" disabled title="You already have an active provision interest for this programme.">Already providing signals</button>';
         } else {
-            html += '<button class="spr-interested-btn" onclick="sprSelectRequest(' + (req.id || 0) + ')">Interested</button>';
+            html += '<button class="spr-interested-btn" onclick="sprSelectRequest(' + (req.id || 0) + ')">Interested in provision</button>';
         }
 
         html += '</div>';
@@ -1126,19 +1328,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         html += '<div class="spr-item" data-interest-id="' + interest.id + '">';
         html +=   '<div class="spr-item-main">';
         html +=     '<div class="spr-item-header">';
-        html +=       '<div class="spr-item-title">' + escapeHtml(periodLabel) + ' Challenge</div>';
+        html +=       '<div class="spr-item-title">' + escapeHtml(periodLabel) + ' Provision</div>';
         html +=       '<div class="spr-item-sub">Status: <span style="color:' + statusColor + ';font-weight:800;text-transform:capitalize;">' + escapeHtml(status) + '</span></div>';
         html +=     '</div>';
         html +=     '<div class="spr-meta-row">';
         html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Risk Reward Type:</span><span class="spr-meta-value">' + escapeHtml(rrType) + '</span></div>';
         html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Risk Reward</span><span class="spr-meta-value">1:' + (parseFloat(interest.risk_reward) || 0) + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Trades Count</span><span class="spr-meta-value">' + (parseInt(interest.trades_count, 10) || 0) + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Expected Win</span><span class="spr-meta-value">' + (parseInt(interest.expected_win, 10) || 0) + '</span></div>';
-        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Consecutive Expected Loss</span><span class="spr-meta-value">' + (parseInt(interest.consecutive_loss, 10) || 0) + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Minimum Trades Count</span><span class="spr-meta-value">' + (parseInt(interest.trades_count, 10) || 0) + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Minimum Expected Win Count</span><span class="spr-meta-value">' + (parseInt(interest.expected_win, 10) || 0) + '</span></div>';
+        html +=       '<div class="spr-meta-item"><span class="spr-meta-label">Maximum Expected Consecutive Loss</span><span class="spr-meta-value">' + (parseInt(interest.consecutive_loss, 10) || 0) + '</span></div>';
         html +=     '</div>';
         html +=   '</div>';
         html +=   '<div class="spr-item-actions">';
-        html +=     '<button class="spr-cancel-btn" onclick="sprCancelInterest(' + interest.id + ')">Cancel Challenge</button>';
+        var canBeginTest = !PROGRAMME_IS_ADVERTISED && status === 'interested' && (parseInt(interest.begin_test, 10) || 0) === 0
+            && TRAINING_HAS_ROOT && TRAINING_TRADES_CONFIGURED && PROGRAMME_HAS_VPS && PROGRAMME_HAS_BROKER;
+        if (canBeginTest) {
+            html += '<button class="spr-begin-test-btn" onclick="sprBeginTest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-play"></i> Begin Test</button>';
+        }
+        html += '<button class="spr-cancel-btn is-readonly-provision" type="button" disabled aria-disabled="true" tabindex="-1" title="This status button is read-only">Cancel Provision</button>';
         html +=   '</div>';
         html += '</div>';
         return html;
@@ -1160,7 +1367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     function renderChallenges() {
         if (!REQUESTS.length) {
-            requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-trophy"></i><strong>No challenges match</strong><p>Try a different filter or period.</p></div>';
+            requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-trophy"></i><strong>No provisions match</strong><p>Try a different filter or period.</p></div>';
             updateCancelFilterButton();
             return;
         }
@@ -1176,7 +1383,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     function renderInterests() {
         if (!INTERESTS.length) {
-            requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-bookmark"></i><strong>No active challenge interests</strong><p>Go to Signals Challenge tab and click Interested to join a challenge.</p></div>';
+            requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-bookmark"></i><strong>No active provision interests</strong><p>Go to Signals Provision tab and select Interested in provision.</p></div>';
             return;
         }
 
@@ -1186,11 +1393,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     function loadChallenges() {
-        requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading challenges…</p></div>';
+        requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>Loading provisions…</p></div>';
 
         post({ action: 'get_requests', period: CURRENT_PERIOD }, function (d) {
             if (!d || !d.success) {
-                requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-exclamation-triangle"></i><strong>Error</strong><p>' + escapeHtml(d.message || 'Failed to load challenges.') + '</p></div>';
+                requestListEl.innerHTML = '<div class="spr-empty"><i class="fa-solid fa-exclamation-triangle"></i><strong>Error</strong><p>' + escapeHtml(d.message || 'Failed to load provisions.') + '</p></div>';
                 return;
             }
             REQUESTS = d.requests || [];
@@ -1254,8 +1461,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var v = filterTypeSelect.value;
         if (v) {
             filterDetails.classList.add('visible');
-            if (v === 'custom_and_minimum_risk_reward') rrLabel.textContent = 'Minimum Risk Reward (1:?)';
-            else if (v === 'custom_and_fixed_risk_reward') rrLabel.textContent = 'Fixed Risk Reward (1:?)';
+            if (v === 'minimum_risk_reward') rrLabel.textContent = 'Minimum Risk Reward (1:?)';
+            else if (v === 'fixed_risk_reward') rrLabel.textContent = 'Fixed Risk Reward (1:?)';
+            else if (v === 'custom_and_default_risk_reward') rrLabel.textContent = 'Default Risk Reward (1:?)';
             else rrLabel.textContent = 'Risk Reward (1:?)';
         } else {
             filterDetails.classList.remove('visible');
@@ -1311,7 +1519,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var digits = extractDigits(this.value);
             this.value = digits === '' ? '' : '1:' + digits;
         });
-        el.addEventListener('blur', function () { if (this.value === '1:') this.value = ''; });
+        el.addEventListener('blur', function () {
+            if (this.value === '1:') { this.value = ''; return; }
+            var digits = extractDigits(this.value);
+            if (digits !== '' && parseInt(digits, 10) < 1) digits = '1';
+            this.value = digits === '' ? '' : '1:' + digits;
+        });
     })();
 
     function parseRrInput() {
@@ -1394,6 +1607,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     window.sprSelectRequest = function (requestId) {
         PENDING_REQUEST = REQUESTS.filter(function (r) { return parseInt(r.id, 10) === requestId; })[0] || null;
         if (!PENDING_REQUEST) return;
+
+        var period = CURRENT_PERIOD;
+        var duration = parseInt(CHALLENGE_DURATIONS[period], 10) || ({ daily: 30, weekly: 60, monthly: 90 }[period]);
+        var trades = parseInt(PENDING_REQUEST.trades_count, 10) || 0;
+        var wins = parseInt(PENDING_REQUEST.expected_win, 10) || 0;
+        var losses = parseInt(PENDING_REQUEST.consecutive_loss, 10) || 0;
+        var rr = Math.max(1, parseFloat(PENDING_REQUEST.risk_reward) || 1);
+        var type = PENDING_REQUEST.risk_reward_type || 'fixed_risk_reward';
+        var rrRequirement = type === 'fixed_risk_reward'
+            ? 'Each trade must use a fixed 1:' + rr + ' risk-to-reward ratio.'
+            : (type === 'minimum_risk_reward'
+                ? 'Each trade must have a risk-to-reward ratio of at least 1:' + rr + '.'
+                : 'Each trade will use its generated custom risk-to-reward ratio.');
+
+        document.getElementById('sprConfirmInterestText').textContent =
+            'By joining this ' + period + ' challenge, your strategy\'s performance and compliance with the specified requirements will be evaluated over the next ' + duration + ' days. ' +
+            'Minimum trades count: ' + trades + '. ' +
+            'Minimum expected win count: ' + wins + '. ' +
+            'Maximum expected consecutive losses: ' + losses + '. ' +
+            rrRequirement;
+
         sprOpenModal('sprConfirmModal');
     };
 
@@ -1419,7 +1653,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             btn.textContent = 'Confirm to Proceed';
             if (d && d.success) {
                 sprCloseModal('sprConfirmModal');
-                sprAlert('Your challenge interest has been saved successfully. You can now begin your training and testing.', 'success', 'Interest Registered');
+                sprAlert('Your provision interest has been saved successfully. You can now begin your training and testing.', 'success', 'Interest Registered');
                 loadChallenges();
             } else {
                 sprAlert((d && d.message) || 'Failed to save interest.', 'error', 'Could not save');
@@ -1427,11 +1661,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         });
     });
 
+    window.sprBeginTest = function (interestId, periodLabel) {
+        var duration = parseInt(CHALLENGE_DURATIONS[String(periodLabel || 'Daily').toLowerCase()], 10) || 30;
+        document.getElementById('sprBeginTestText').textContent =
+            'Once you agree to begin the test, live trades will be generated from your trained programme for the next ' + duration +
+            ' days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.';
+        window.SPR_BEGIN_TEST_INTEREST_ID = parseInt(interestId, 10) || 0;
+        sprOpenModal('sprBeginTestModal');
+    };
+
+    document.getElementById('sprConfirmBeginTestBtn').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Starting…';
+        post({ action: 'begin_test', interest_id: window.SPR_BEGIN_TEST_INTEREST_ID || 0 }, function (d) {
+            btn.disabled = false;
+            btn.textContent = 'Confirm Test';
+            if (d && d.success) {
+                sprCloseModal('sprBeginTestModal');
+                sprAlert('Your signals provision test has begun.', 'success', 'Test Started');
+                loadInterests();
+            } else {
+                sprAlert((d && d.message) || 'Failed to begin test.', 'error', 'Could not begin test');
+            }
+        });
+    });
+
     window.sprCancelInterest = function (interestId) {
         PENDING_INTEREST_ID = interestId;
-        document.getElementById('sprCancelConfirmTitle').textContent = 'Cancel Challenge Interest';
+        document.getElementById('sprCancelConfirmTitle').textContent = 'Cancel Provision Interest';
         document.getElementById('sprCancelConfirmText').textContent =
-            'If you cancel this signal challenge, your programme will need to embark on a new challenge duration to participate again. This action cannot be undone.';
+            'This provision status is read-only. You cannot cancel it from this button.';
         sprOpenModal('sprCancelConfirmModal');
     };
 
@@ -1443,19 +1703,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         post({ action: 'cancel_interest', interest_id: PENDING_INTEREST_ID }, function (d) {
             btn.disabled = false;
-            btn.textContent = 'Yes, Cancel Challenge';
+            btn.textContent = 'Yes, Cancel Provision';
 
             if (d && d.success) {
                 sprCloseModal('sprCancelConfirmModal');
                 sprAlert(
-                    'Your challenge interest has been cancelled. Your programme will need to embark on a new challenge duration to participate again.',
+                    'Your provision interest has been cancelled. Your programme will need to embark on a new provision duration to participate again.',
                     'warning',
-                    'Challenge Cancelled'
+                    'Provision Cancelled'
                 );
                 PENDING_INTEREST_ID = null;
                 loadInterests();
             } else {
-                sprAlert((d && d.message) || 'Failed to cancel challenge.', 'error', 'Could not cancel');
+                sprAlert((d && d.message) || 'Failed to cancel provision.', 'error', 'Could not cancel');
             }
         });
     });
