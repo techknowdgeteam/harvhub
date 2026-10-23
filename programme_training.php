@@ -3,6 +3,7 @@
 // Programme candlestick chart and persistent configuration builder.
 // Configuration is stored separately from candle_records. Match results are browser-local JSON only.
  // Live candle refresh is wired in via `fetch_candles_latest`.
+ // The programme training configuration and programme training configuration confimation elements must entirely be identical and same engineering entirely, any new changes must affect or be integrated in both elements and tables, 100% identical engineering!!!
 
 session_start();
 
@@ -68,6 +69,68 @@ try {
     if (!in_array('drawing_color', $cfgColumns, true)) {
         $pdo->exec("ALTER TABLE `programme_training_configuration` ADD COLUMN `drawing_color` VARCHAR(16) NOT NULL DEFAULT 'blue'");
     }
+    // New-group main-candle anchoring fields (separate from legacy existing-group offsets).
+    foreach (['programme_training_configuration', 'programme_training_confirmation_configuration'] as $anchorTable) {
+        try {
+            $exists = $pdo->query("SHOW TABLES LIKE " . $pdo->quote($anchorTable))->fetchColumn();
+            if (!$exists) continue;
+            $present = $pdo->query("SHOW COLUMNS FROM `" . $anchorTable . "`")->fetchAll(PDO::FETCH_COLUMN);
+            $newColumns = [
+                'region_search_mode' => "VARCHAR(40) NULL DEFAULT 'just_offset_existing_candles'",
+                'region_from_candle_id' => "BIGINT NULL DEFAULT NULL",
+                'region_from_candle_name' => "VARCHAR(160) NULL DEFAULT NULL",
+                'region_to_candle_id' => "BIGINT NULL DEFAULT NULL",
+                'region_to_candle_name' => "VARCHAR(160) NULL DEFAULT NULL",
+                'group_necessity' => "VARCHAR(24) NULL DEFAULT 'required'",
+                'if_group_found' => "VARCHAR(32) NULL DEFAULT 'identify_and_trade'",
+                'main_new_group_offset_to' => "BIGINT NULL DEFAULT NULL",
+                'main_new_group_offset_pos_point' => "VARCHAR(32) NULL DEFAULT NULL",
+                'main_new_group_direction' => "VARCHAR(8) NULL DEFAULT NULL",
+                'reference_mode' => "VARCHAR(24) NULL DEFAULT 'existing'"
+            ];
+            foreach ($newColumns as $column => $definition) {
+                if (!in_array($column, $present, true)) {
+                    $pdo->exec("ALTER TABLE `" . $anchorTable . "` ADD COLUMN `" . $column . "` " . $definition);
+                }
+            }
+            // These columns apply only to a newly configured new-group main candle.
+            // Existing-group rows, reference rows, and drawing rows must be allowed to
+            // leave them NULL. Normalize older NOT NULL definitions on both tables.
+            $nullableAnchorColumns = [
+                'main_new_group_offset_to' => 'BIGINT NULL DEFAULT NULL',
+                'main_new_group_offset_pos_point' => 'VARCHAR(32) NULL DEFAULT NULL',
+                'main_new_group_direction' => 'VARCHAR(8) NULL DEFAULT NULL'
+            ];
+            foreach ($nullableAnchorColumns as $column => $definition) {
+                $meta = $pdo->query("SHOW COLUMNS FROM `" . $anchorTable . "` LIKE " . $pdo->quote($column))->fetch(PDO::FETCH_ASSOC);
+                if ($meta && strtoupper((string)($meta['Null'] ?? 'NO')) !== 'YES') {
+                    $pdo->exec("ALTER TABLE `" . $anchorTable . "` MODIFY COLUMN `" . $column . "` " . $definition);
+                }
+            }
+        } catch (Throwable $migrationError) {
+            error_log('New-group main anchor migration for ' . $anchorTable . ': ' . $migrationError->getMessage());
+        }
+    }
+
+    // Retired new-group and separate group-selector fields are no longer used.
+    // Drop them from both configuration tables; mode now belongs to the main-candle UI.
+    foreach (['programme_training_configuration', 'programme_training_confirmation_configuration'] as $retiredTable) {
+        try {
+            $exists = $pdo->query("SHOW TABLES LIKE " . $pdo->quote($retiredTable))->fetchColumn();
+            if (!$exists) continue;
+            $retiredColumns = ['new_group_offset_pos_point','new_group_specific_group','new_group_price_level','new_group_operator','existing_group_id','existing_group_price_level','group_selection_type','existing_groups_candle_id','new_group_direction'];
+            $present = $pdo->query("SHOW COLUMNS FROM `" . $retiredTable . "`")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($retiredColumns as $retiredColumn) {
+                if (in_array($retiredColumn, $present, true)) {
+                    $pdo->exec("ALTER TABLE `" . $retiredTable . "` DROP COLUMN `" . $retiredColumn . "`");
+                }
+            }
+        } catch (Throwable $migrationError) {
+            error_log('Retired new-group column migration for ' . $retiredTable . ': ' . $migrationError->getMessage());
+        }
+    }
+
+    // Legacy group-selection columns are dropped by the migration above; mode is now held by the main-candle configuration.
 } catch (Throwable $e) {
     // Do not break chart viewing when the configuration table has not yet been created.
     error_log('Programme training annotation-column migration: ' . $e->getMessage());
@@ -291,7 +354,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
 
     try {
         $baseSelect = 'SELECT config_id, user_id, programme_id, timeframe, root_id, root_name, tree_id,
-                    main_id, main_candle_name, reference_id, reference_candle_name,
+                    main_id, main_candle_name, reference_id, reference_candle_name, reference_mode,
+                    main_new_group_offset_to, main_new_group_offset_pos_point, main_new_group_direction,
+                    region_search_mode, region_from_candle_id, region_from_candle_name, region_to_candle_id, region_to_candle_name, group_necessity, if_group_found,
                     offset_to, offset_id, offset_position, offset_position_point,
                     offset_candle_name, position, price_level, operator, use_for_trade,
                     entry_at, entry_price_level, stoploss_at, stoploss_price_level,
@@ -300,8 +365,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
                     draw_from, draw_from_price_level, draw_to,
                     draw_to_price_level, apply_to_chart, main_candle_type,
                     ref_candle_type, offset_candle, candle_text, text_position,
-                    text_color, drawing_color, confirmation_root_id, confirmation_tree_id,
-                    confirmation_timeframes, confirmation_anchor_candle_id,
+                    text_color, drawing_color,
+                    confirmation_root_id, confirmation_tree_id, confirmation_timeframes, confirmation_anchor_candle_id,
                     confirmation_anchor_candle_name, confirmation_anchor_time, draw_for, trade_for';
         $stmt = $pdo->prepare($baseSelect . ' FROM programme_training_configuration WHERE user_id = ? AND programme_id = ? ORDER BY root_id, tree_id, config_id');
         $stmt->execute([$userId, $reqProgrammeId]);
@@ -314,8 +379,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
             $confirmationDbColumns = $pdo->query("SHOW COLUMNS FROM `programme_training_confirmation_configuration`")->fetchAll(PDO::FETCH_COLUMN);
             $loadFields = [
                 'config_id','user_id','programme_id','timeframe','root_id','root_name','tree_id',
-                'main_id','main_candle_name','reference_id','reference_candle_name',
-                'offset_to','offset_id','offset_position','offset_position_point','offset_candle_name',
+                'main_id','main_candle_name','reference_id','reference_candle_name','reference_mode',
+                'main_new_group_offset_to','main_new_group_offset_pos_point','main_new_group_direction','region_search_mode','region_from_candle_id','region_from_candle_name','region_to_candle_id','region_to_candle_name','group_necessity','if_group_found','offset_to','offset_id','offset_position','offset_position_point','offset_candle_name',
                 'position','price_level','operator','use_for_trade','entry_at','entry_price_level',
                 'stoploss_at','stoploss_price_level','take_profit_at','take_profit_type',
                 'take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
@@ -493,11 +558,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             throw new RuntimeException('The required table programme_training_configuration does not exist. Create it using the supplied SQL first.');
         }
 
+        // Price-level conditions must always use exactly one price level.
+        // Combined values such as "open or close" are intentionally not accepted.
         $allowedLevels = ['high','low','open','close','candle_center','body_center','high_wick_center','low_wick_center'];
         $allowedTextPositions = ['high','low'];
         $allowedOperators = ['<','>','=<','>=','='];
-        $allowedPositions = ['all','left','right','latest_candle'];
-        $allowedOffsetPoints = ['all','random','fixed'];
+        $allowedPositions = ['left','right','left_and_right'];
+        $allowedOffsetPoints = ['all','random','fixed','any_first_candle'];
         $allowedCandleTypes = ['bearish','bullish','bearish_or_bullish'];
         // Persist named CSS colors or the special "custom" theme-aware color.
         $allowedColors = ['custom','purple','red','blue','green','yellow','orange','pink','white','black','cyan','magenta','lime','teal','navy','gold','coral','violet','indigo','brown','gray','grey'];
@@ -581,6 +648,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $treeId = max(1, (int)($tree['tree_id'] ?? 1));
                 $main = isset($tree['main']) && is_array($tree['main']) ? $tree['main'] : [];
                 $reference = isset($tree['reference']) && is_array($tree['reference']) ? $tree['reference'] : [];
+
+                // Do not persist blank/unconfigured tree wrappers. The browser filters
+                // these too, but enforce it here so older clients cannot create empty rows.
+                $candidateMainName = trim((string)($main['main_candle_name'] ?? $main['name'] ?? ''));
+                $candidateRefName = trim((string)($reference['reference_candle_name'] ?? $reference['name'] ?? ''));
+                if ($candidateMainName === '' || $candidateRefName === '') {
+                    continue;
+                }
                 $mainId = isset($main['main_id']) ? (int)$main['main_id'] : (int)($main['id'] ?? 0);
                 $referenceId = isset($reference['reference_id']) ? (int)$reference['reference_id'] : (int)($reference['id'] ?? 0);
                 $mainId = $mainId > 0 ? $mainId : null;
@@ -588,12 +663,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $mainName = $cleanText($main['main_candle_name'] ?? '', 120);
                 $refName = $cleanText($reference['reference_candle_name'] ?? '', 120);
                 $mainType = $safeChoice($main['main_candle_type'] ?? null, $allowedCandleTypes, 'bearish_or_bullish');
-                $refType = $safeChoice($reference['ref_candle_type'] ?? null, $allowedCandleTypes, 'bearish_or_bullish');
+                $isFirstReferenceInRoot = ($treeIndex === 0);
+                $isNewOffset = (($reference['referenceMode'] ?? 'existing') === 'new_offset');
+                // The root's first reference is configured as its own candle. For later
+                // trees, an existing-reference selection points to an already-defined candle,
+                // so no Offset Candle Type filter is valid unless a new offset is being created.
+                $referenceTypeValue = $isFirstReferenceInRoot
+                    ? ($reference['ref_candle_type'] ?? $reference['offset_candle'] ?? null)
+                    : ($reference['offset_candle'] ?? $reference['ref_candle_type'] ?? null);
+                $referenceType = ($isFirstReferenceInRoot || $isNewOffset)
+                    ? $safeChoice($referenceTypeValue, $allowedCandleTypes, 'bearish_or_bullish')
+                    : null;
+                $refType = $isFirstReferenceInRoot ? $referenceType : null;
                 $mainOffset = isset($main['offset_to']) && $main['offset_to'] !== '' ? (int)$main['offset_to'] : null;
                 $refOffset = $mainId;
-                $mainOffsetPosition = isset($main['offset_position']) && $main['offset_position'] !== '' ? max(1, (int)$main['offset_position']) : 1;
+                $mainOffsetPosition = ((isset($main['create_offset']) && $main['create_offset'] === 'no') || (isset($main['offset_position']) && $main['offset_position'] !== '' && (int)$main['offset_position'] === 0)) ? 0 : (isset($main['offset_position']) && $main['offset_position'] !== '' ? max(1, (int)$main['offset_position']) : 1);
                 $refOffsetPosition = isset($reference['offset_position']) && $reference['offset_position'] !== '' ? max(1, (int)$reference['offset_position']) : 1;
-                $mainPosition = $safeChoice($main['position'] ?? null, $allowedPositions, 'all');
+                $mainPosition = $treeIndex === 0
+                    ? $safeChoice($main['position'] ?? null, ['left_and_right'], 'left_and_right')
+                    : $safeChoice($main['position'] ?? null, ['left','right'], 'left');
                 $refPosition = $safeChoice($reference['position'] ?? null, ['left','right'], 'left');
                 $mainOffsetPoint = $safeChoice($main['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
                 $refOffsetPoint = $safeChoice($reference['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
@@ -604,35 +692,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $refPrice = $safeChoice($reference['price_level'] ?? null, $allowedLevels, 'high');
                 // A new offset is its own candle identity in this tree. Its label must
                 // be saved directly to candle_text on this reference/offset row.
-                $isNewOffset = (($reference['referenceMode'] ?? 'existing') === 'new_offset');
                 $refText = (($treeIndex === 0) || $isNewOffset) ? $cleanText($reference['candle_text'] ?? '', 160) : null;
                 $refTextPosition = $safeChoice($reference['text_position'] ?? null, $allowedTextPositions, 'high');
                 $refTextColor = $safeChoice($reference['text_color'] ?? null, $allowedColors, 'purple');
                 $operator = $safeChoice($main['operator'] ?? null, $allowedOperators, '>');
+                // Group mode is a property of the main-candle selector, not separate database columns.
+                $groupSelectionType = $safeChoice($tree['main_mode'] ?? $tree['group_selection_type'] ?? 'existing_group', ['existing_group','new_group','existing_candles_window'], 'existing_group');
                 $offsetName = $cleanText($main['offset_to_name'] ?? '', 120);
-                $offsetType = $mainOffset !== null ? $safeChoice($main['offset_candle'] ?? null, $allowedCandleTypes, 'bearish_or_bullish') : null;
+                $offsetType = (!in_array($groupSelectionType, ['new_group','existing_candles_window'], true) && $mainOffset !== null)
+                    ? $safeChoice($main['offset_candle'] ?? null, $allowedCandleTypes, 'bearish_or_bullish')
+                    : null;
 
                 // Main-candle row: reference_id is NULL so it is distinguishable from the reference row.
                 $rows[] = array_merge([
                     'user_id' => $userId, 'programme_id' => $reqProgrammeId, 'timeframe' => ptTextSubstr($timeframe, 32),
                     'root_id' => $rootId, 'tree_id' => $treeId,
+                    'region_search_mode' => in_array($groupSelectionType, ['new_group','existing_candles_window'], true) ? (($groupSelectionType === 'existing_candles_window') ? 'existing_candles_perimeter' : 'just_offset_existing_candles') : null,
+                    'region_from_candle_id' => ($groupSelectionType === 'existing_candles_window' && !empty($tree['region_from_candle_id'])) ? (int)$tree['region_from_candle_id'] : null,
+                    'region_from_candle_name' => ($groupSelectionType === 'existing_candles_window') ? $cleanText($tree['region_from_candle_name'] ?? '', 160) : null,
+                    'region_to_candle_id' => ($groupSelectionType === 'existing_candles_window' && !empty($tree['region_to_candle_id'])) ? (int)$tree['region_to_candle_id'] : null,
+                    'region_to_candle_name' => ($groupSelectionType === 'existing_candles_window') ? $cleanText($tree['region_to_candle_name'] ?? '', 160) : null,
+                    'group_necessity' => ($treeIndex > 0) ? $safeChoice(!empty($tree['group_necessity']) ? $tree['group_necessity'] : 'required', ['required','not_important'], 'required') : 'required',
+                    'if_group_found' => ($treeIndex > 0) ? $safeChoice($tree['if_group_found'] ?? 'identify_and_trade', ['identify_and_trade','identify_but_dont_trade'], 'identify_and_trade') : 'identify_and_trade',
                     'main_id' => $mainId, 'main_candle_name' => $mainName,
-                    'reference_id' => null, 'reference_candle_name' => null,
+                    'reference_id' => null, 'reference_candle_name' => null, 'reference_mode' => null,
                     'offset_to' => $mainOffset, 'offset_id' => $mainOffset,
+                    // New-group-only settings. Existing-group main rows must persist NULL;
+                    // an unconfigured new group may also leave these optional fields NULL.
+                    'main_new_group_offset_to' => ($groupSelectionType === 'new_group' && isset($main['new_group_offset_to']) && $main['new_group_offset_to'] !== '' && (int)$main['new_group_offset_to'] > 0) ? (int)$main['new_group_offset_to'] : null,
+                    'main_new_group_offset_pos_point' => ($groupSelectionType === 'new_group' && isset($main['new_group_offset_pos_point']) && $main['new_group_offset_pos_point'] !== '') ? $safeChoice($main['new_group_offset_pos_point'], $allowedOffsetPoints, null) : null,
+                    'main_new_group_direction' => ($groupSelectionType === 'new_group' && isset($main['new_group_direction']) && in_array($main['new_group_direction'], ['left','right'], true)) ? $main['new_group_direction'] : null,
                     'offset_position' => $mainOffsetPosition, 'offset_position_point' => $mainOffsetPoint,
                     'offset_candle_name' => $offsetName, 'position' => $mainPosition,
                     'price_level' => $mainPrice, 'operator' => $operator,
                     'candle_text' => $mainText, 'text_position' => $mainTextPosition,
                     'text_color' => $mainTextColor, 'drawing_color' => 'blue',
-                    'main_candle_type' => $mainType, 'ref_candle_type' => null, 'offset_candle' => $offsetType
+                    'main_candle_type' => $mainType, 'ref_candle_type' => null, 'offset_candle' => $offsetType,
+                    
                 ], $common);
 
                 // Reference-candle row: linked to its tree's main through main_id/offset_to.
                 $rows[] = array_merge([
                     'user_id' => $userId, 'programme_id' => $reqProgrammeId, 'timeframe' => ptTextSubstr($timeframe, 32),
                     'root_id' => $rootId, 'tree_id' => $treeId,
+                    'region_search_mode' => in_array($groupSelectionType, ['new_group','existing_candles_window'], true) ? (($groupSelectionType === 'existing_candles_window') ? 'existing_candles_perimeter' : 'just_offset_existing_candles') : null,
+                    'region_from_candle_id' => ($groupSelectionType === 'existing_candles_window' && !empty($tree['region_from_candle_id'])) ? (int)$tree['region_from_candle_id'] : null,
+                    'region_from_candle_name' => ($groupSelectionType === 'existing_candles_window') ? $cleanText($tree['region_from_candle_name'] ?? '', 160) : null,
+                    'region_to_candle_id' => ($groupSelectionType === 'existing_candles_window' && !empty($tree['region_to_candle_id'])) ? (int)$tree['region_to_candle_id'] : null,
+                    'region_to_candle_name' => ($groupSelectionType === 'existing_candles_window') ? $cleanText($tree['region_to_candle_name'] ?? '', 160) : null,
+                    'group_necessity' => ($treeIndex > 0) ? $safeChoice(!empty($tree['group_necessity']) ? $tree['group_necessity'] : 'required', ['required','not_important'], 'required') : 'required',
+                    'if_group_found' => ($treeIndex > 0) ? $safeChoice($tree['if_group_found'] ?? 'identify_and_trade', ['identify_and_trade','identify_but_dont_trade'], 'identify_and_trade') : 'identify_and_trade',
                     'main_id' => $mainId, 'main_candle_name' => $mainName,
                     'reference_id' => $referenceId, 'reference_candle_name' => $refName,
+                    'reference_mode' => $isNewOffset ? 'new_offset' : 'existing',
                     'offset_to' => $refOffset, 'offset_id' => $refOffset,
                     'offset_position' => $refOffsetPosition, 'offset_position_point' => $refOffsetPoint,
                     'offset_candle_name' => $mainName, 'position' => $refPosition,
@@ -640,7 +752,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                     'candle_text' => $refText, 'text_position' => $refTextPosition,
                     'text_color' => $refTextColor, 'drawing_color' => 'blue',
                     'main_candle_type' => null, 'ref_candle_type' => $refType,
-                    'offset_candle' => $isNewOffset ? $refType : null
+                    // The first reference persists ref_candle_type. Later references persist
+                    // offset_candle only for a newly-created offset; direct existing-candle
+                    // references must not carry a candle-type filter.
+                    'offset_candle' => (!$isFirstReferenceInRoot && $isNewOffset) ? $referenceType : null,
+                    
                 ], $common);
             }
 
@@ -675,7 +791,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
         $columns = [
             'user_id','programme_id','timeframe','root_id','root_name','tree_id','main_id','main_candle_name',
-            'reference_id','reference_candle_name','offset_to','offset_id','offset_position',
+            'region_search_mode','region_from_candle_id','region_from_candle_name','region_to_candle_id','region_to_candle_name','group_necessity','if_group_found',
+            'reference_id','reference_candle_name','reference_mode','offset_to','offset_id','main_new_group_offset_to','main_new_group_offset_pos_point','main_new_group_direction','region_search_mode','region_from_candle_id','region_from_candle_name','region_to_candle_id','region_to_candle_name','group_necessity','if_group_found','offset_position',
             'offset_position_point','offset_candle_name','position','price_level','operator',
             'use_for_trade','entry_at','entry_price_level','stoploss_at','stoploss_price_level',
             'take_profit_at','take_profit_type','take_profit_price_level','risk_reward','order_type','entry_order_type','entry_trigger_after',
@@ -685,6 +802,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
             'confirmation_timeframes','confirmation_anchor_candle_id','confirmation_anchor_candle_name',
             'confirmation_anchor_time','draw_for','trade_for'
         ];
+        // Defensive safeguard: an INSERT column list must never contain duplicates.
+        // Several legacy entries above were repeated, including if_group_found.
+        // Keep the first occurrence and preserve the original column order.
+        $columns = array_values(array_unique($columns));
         if (count($rows) === 0) {
             throw new RuntimeException('Nothing was saved because no configured tree or drawing produced a database row. Configure at least one tree or drawing, then save again. Existing saved rows were left unchanged.');
         }
@@ -4072,6 +4193,125 @@ try {
             default: return a < b;
         }
     }
+    function ptPriceLevelParts(level) {
+        var valid = ['high','low','open','close','candle_center','body_center','high_wick_center','low_wick_center'];
+        var parts = String(level || 'high').toLowerCase().split(/\\s+or\\s+/).map(function(v){return v.trim();}).filter(function(v){return valid.indexOf(v)>=0;});
+        return parts.length ? parts : ['high'];
+    }
+    function ptComparePriceLevels(mainCandle, mainLevel, op, referenceCandle, referenceLevel) {
+        var mainParts = ptPriceLevelParts(mainLevel), refParts = ptPriceLevelParts(referenceLevel);
+        for (var i=0; i<mainParts.length; i++) {
+            var mainValue = ptPrice(mainCandle, mainParts[i]);
+            for (var j=0; j<refParts.length; j++) {
+                var referenceValue = ptPrice(referenceCandle, refParts[j]);
+                if (ptCompare(mainValue, op, referenceValue)) {
+                    return {matched:true, mainLevel:mainParts[i], referenceLevel:refParts[j],
+                        mainValue:mainValue, referenceValue:referenceValue};
+                }
+            }
+        }
+        return {matched:false, mainLevel:null, referenceLevel:null, mainValue:null, referenceValue:null};
+    }
+    function ptIsAnyFirstCandle() {
+        // Any configured offset control may request this behavior. Do not let a
+        // default value such as 'all' on the other control mask the selection.
+        for (var i = 0; i < arguments.length; i++) {
+            if (String(arguments[i] || '').trim().toLowerCase() === 'any_first_candle') return true;
+        }
+        return false;
+    }
+    function ptEffectiveOffsetPoint(mainOrOffset, reference) {
+        var mainPoint = mainOrOffset && mainOrOffset.offsetPosPoint;
+        var refPoint = reference && reference.offsetPosPoint;
+        return ptIsAnyFirstCandle(mainPoint, refPoint) ? 'any_first_candle' : (mainPoint || refPoint || 'all');
+    }
+    function ptOffsetCandidates(index, direction, distance, point, length) {
+        var dir = String(direction || 'right').toLowerCase();
+        var dirs = (dir === 'left_and_right' || dir === 'left and right' || dir === 'both' || dir === 'all')
+            ? [-1, 1] : (dir === 'left' ? [-1] : [1]);
+        var anyFirst = String(point || '').trim().toLowerCase() === 'any_first_candle';
+        var numericDistance = Number(distance);
+        var count = (Number.isFinite(numericDistance) && numericDistance === 0) ? 0 : Math.max(1, numericDistance || 1), out = [];
+        dirs.forEach(function(sign) {
+            if (count === 0) {
+                if (index >= 0 && index < length && out.indexOf(index) === -1) out.push(index);
+            } else if (anyFirst) {
+                // Ignore the fixed offset distance: inspect every later candle in this
+                // direction, in nearest-to-farthest order. The matcher selects the first
+                // candle that passes candle type AND the configured price-level test.
+                for (var step = 1; ; step++) {
+                    var idx = index + sign * step;
+                    if (idx < 0 || idx >= length) break;
+                    out.push(idx);
+                }
+            } else {
+                var target = index + sign * count;
+                if (target >= 0 && target < length) out.push(target);
+            }
+        });
+        return out;
+    }
+
+    // Resolve the new-group reference relative to its newly matched main candle.
+    // fixed: only the exact Nth candle is eligible.
+    // all: every candle from 1..N must satisfy the reference type and price comparison.
+    // random: any one of candles 1..N may satisfy; choose the nearest valid one.
+    // any_first_candle: scan outward and choose the first valid candle.
+    function ptResolveNewGroupReference(mainIndex, main, ref, candles) {
+        var point = String(ref.offsetPosPoint || 'all').toLowerCase();
+        var distance = Math.max(1, Number(ref.offsetPosition) || 1);
+        var direction = String(ref.position || 'left').toLowerCase() === 'right' ? 1 : -1;
+        var indices = [];
+        if (point === 'any_first_candle') {
+            for (var step = 1; ; step++) {
+                var anyIndex = mainIndex + direction * step;
+                if (anyIndex < 0 || anyIndex >= candles.length) break;
+                indices.push(anyIndex);
+            }
+        } else if (point === 'fixed') {
+            var fixedIndex = mainIndex + direction * distance;
+            if (fixedIndex >= 0 && fixedIndex < candles.length) indices.push(fixedIndex);
+        } else {
+            // "all" and "random" both examine the first N candles, but apply
+            // different acceptance rules below.
+            for (var n = 1; n <= distance; n++) {
+                var candidateIndex = mainIndex + direction * n;
+                if (candidateIndex < 0 || candidateIndex >= candles.length) {
+                    if (point === 'all') return null; // all N positions must exist
+                    break;
+                }
+                indices.push(candidateIndex);
+            }
+        }
+
+        var valid = [];
+        for (var i = 0; i < indices.length; i++) {
+            var idx = indices[i], candle = candles[idx];
+            if (!candle || !ptTypeMatches(candle, ref.refCandleType)) {
+                if (point === 'all') return null;
+                continue;
+            }
+            var comparison = ptComparePriceLevels(
+                candles[mainIndex], main.priceLevel || 'high', main.operator || '<',
+                candle, ref.priceLevel || 'high'
+            );
+            if (!comparison.matched) {
+                if (point === 'all') return null;
+                continue;
+            }
+            valid.push({index: idx, levelMatch: comparison});
+            if (point === 'fixed' || point === 'random' || point === 'any_first_candle') break;
+        }
+
+        if (point === 'all') {
+            // The mapped reference is the Nth candle, but every candle 1..N
+            // has already been checked and must pass.
+            if (valid.length !== distance) return null;
+            return valid[valid.length - 1];
+        }
+        return valid.length ? valid[0] : null;
+    }
+
     function ptFindNamedCandle(tree, name, role) {
         if (!tree) return null;
         var main = tree.main || {}, ref = tree.reference || {};
@@ -4114,6 +4354,11 @@ try {
             // Each configured candle has one canonical identity. Trees may change its role,
             // but may not search for a different chart candle with the same display name.
             var chainStates = [];
+            // New-group matching can fan out across many candle combinations. Keep a
+            // deterministic ceiling per root so the UI remains responsive on large charts.
+            // A root is still treated atomically: capped partial states never count as a
+            // complete root unless every tree condition was actually evaluated.
+            var PT_MAX_ROOT_MATCH_STATES = 2500;
             var configuredTrees = (root.trees || []).slice().sort(function (a, b) { return Number(a.id) - Number(b.id); });
             var processedTreeCount = 0;
             configuredTrees.forEach(function (tree, treeIndex) {
@@ -4130,62 +4375,248 @@ try {
 
                 if (treeIndex === 0) {
                     all.forEach(function (mainCandle, mainIdx) {
+                        if (nextStates.length >= PT_MAX_ROOT_MATCH_STATES) return;
                         if (!ptTypeMatches(mainCandle, main.mainCandleType)) return;
-                        var refIdx = ptOffsetIndex(mainIdx, ref.position || 'right', ref.offsetPosition || 1, all.length);
-                        if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) return;
-                        var leftValue = ptPrice(mainCandle, main.priceLevel || 'high');
-                        var rightValue = ptPrice(all[refIdx], ref.priceLevel || 'high');
-                        if (!ptCompare(leftValue, main.operator || '<', rightValue)) return;
-                        var map = {};
-                        map[mainKey] = mainIdx;
-                        map[refKey] = refIdx;
-                        candidates.push(mainIdx);
-                        nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: [{
-                            rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
-                            mainCandleId: mainCandle.id, referenceCandleId: all[refIdx].id,
-                            offsetCandleId: isNewRef ? all[refIdx].id : null,
-                            mainIdentity: mainKey, referenceIdentity: refKey,
-                            operator: main.operator || '<', mainPriceLevel: main.priceLevel || 'high',
-                            referencePriceLevel: ref.priceLevel || 'high', mainValue: leftValue, referenceValue: rightValue
-                        }] });
+                        var refCandidates = ptOffsetCandidates(mainIdx, main.position || ref.position || 'left_and_right', main.offsetPosition || ref.offsetPosition || 1, ptEffectiveOffsetPoint(main, ref), all.length);
+                        for (var rci=0; rci<refCandidates.length; rci++) {
+                            var refIdx = refCandidates[rci];
+                            if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) continue;
+                            var levelMatch = ptComparePriceLevels(mainCandle, main.priceLevel || 'high', main.operator || '<', all[refIdx], ref.priceLevel || 'high');
+                            if (!levelMatch.matched) continue;
+                            var map = {}; map[mainKey] = mainIdx; map[refKey] = refIdx;
+                            candidates.push(mainIdx);
+                            nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: [{
+                                rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
+                                ifGroupFound: tree.ifGroupFound || 'identify_and_trade',
+                                mainCandleId: mainCandle.id, referenceCandleId: all[refIdx].id,
+                                offsetCandleId: isNewRef ? all[refIdx].id : null,
+                                mainIdentity: mainKey, referenceIdentity: refKey,
+                                operator: main.operator || '<', mainPriceLevel: levelMatch.mainLevel,
+                                referencePriceLevel: levelMatch.referenceLevel, configuredMainPriceLevel: main.priceLevel || 'high',
+                                configuredReferencePriceLevel: ref.priceLevel || 'high',
+                                mainValue: levelMatch.mainValue, referenceValue: levelMatch.referenceValue
+                            }] });
+                            // any_first_candle means the first candle in the requested direction
+                            // that satisfies all conditions, not merely the first candle scanned.
+                            if (ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
+                        }
                     });
                 } else {
                     chainStates.forEach(function (state) {
-                        // A later tree's main must resolve to the exact identity selected earlier.
+                        if (nextStates.length >= PT_MAX_ROOT_MATCH_STATES) return;
+                        // A new group creates both main/reference identities relative to the
+                        // selected existing-group candle. It does not reuse an earlier main.
+                        if (tree.groupSelectionType === 'existing_candles_window') {
+                            // Existing Candles Window is a directional fence.
+                            // From and To determine direction; the selected reference does NOT
+                            // determine direction. Candle indices run latest-to-oldest, so a
+                            // larger index is an older/previous candle.
+                            var fromKey = String(tree.regionFromCandleId == null ? '' : tree.regionFromCandleId);
+                            var toKey = String(tree.regionToCandleId == null ? '' : tree.regionToCandleId);
+                            var fromIndex = Object.prototype.hasOwnProperty.call(state.map, fromKey) ? Number(state.map[fromKey]) : -1;
+                            var toIndex = Object.prototype.hasOwnProperty.call(state.map, toKey) ? Number(state.map[toKey]) : -1;
+
+                            // Missing endpoints, identical endpoints, or endpoints that cannot
+                            // be resolved mean this tree cannot match; do not fall back globally.
+                            if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex ||
+                                !all[fromIndex] || !all[toIndex]) return;
+
+                            var windowDirection = toIndex > fromIndex ? 1 : -1;
+                            var windowMainCandidates = [];
+                            for (var wi = fromIndex + windowDirection;
+                                 wi !== toIndex && wi >= 0 && wi < all.length;
+                                 wi += windowDirection) {
+                                windowMainCandidates.push(wi);
+                            }
+                            // The fence endpoints are gates, never main-candle candidates.
+                            if (!windowMainCandidates.length) return;
+
+                            if (!isNewRef) {
+                                // Existing reference may be either gate or any candle strictly
+                                // inside the fence. A reference outside the fence breaks this
+                                // chain branch; it must never be silently ignored/replaced.
+                                var existingRefIndex = Object.prototype.hasOwnProperty.call(state.map, refKey)
+                                    ? Number(state.map[refKey]) : -1;
+                                var refIsGate = existingRefIndex === fromIndex || existingRefIndex === toIndex;
+                                var refIsInside = windowMainCandidates.indexOf(existingRefIndex) !== -1;
+                                if (existingRefIndex < 0 || !all[existingRefIndex] || (!refIsGate && !refIsInside)) return;
+
+                                // Search from the candle immediately after From toward To. The
+                                // first main satisfying type + price comparison is this tree's
+                                // match. Reference location never reverses or reorders the scan.
+                                for (var wc = 0; wc < windowMainCandidates.length && nextStates.length < PT_MAX_ROOT_MATCH_STATES; wc++) {
+                                    var windowMainIndex = windowMainCandidates[wc];
+
+                                    // A directly selected existing reference is only the comparison
+                                    // anchor. It must never also be accepted as this tree's main
+                                    // candle, even when it lies inside the From–To window (for
+                                    // example, when the configured operator is "="). Otherwise the
+                                    // same physical candle can be reported as both main and reference.
+                                    if (windowMainIndex === existingRefIndex) continue;
+
+                                    if (!ptTypeMatches(all[windowMainIndex], main.mainCandleType)) continue;
+                                    var windowLevelMatch = ptComparePriceLevels(
+                                        all[windowMainIndex], main.priceLevel || 'high', main.operator || '<',
+                                        all[existingRefIndex], ref.priceLevel || 'high'
+                                    );
+                                    if (!windowLevelMatch.matched) continue;
+                                    var existingMap = Object.assign({}, state.map);
+                                    existingMap[mainKey] = windowMainIndex;
+                                    existingMap[refKey] = existingRefIndex;
+                                    nextStates.push({map:existingMap, mainIndex:windowMainIndex, refIndex:existingRefIndex,
+                                        conditions:(state.conditions||[]).concat([{
+                                            rootId:root.id, treeId:tree.id, mainName:main.name, referenceName:ref.name,
+                                            ifGroupFound: tree.ifGroupFound || 'identify_and_trade',
+                                            mainCandleId:all[windowMainIndex].id, referenceCandleId:all[existingRefIndex].id,
+                                            offsetCandleId:null, mainIdentity:mainKey, referenceIdentity:refKey,
+                                            operator:main.operator||'<', mainPriceLevel:windowLevelMatch.mainLevel,
+                                            referencePriceLevel:windowLevelMatch.referenceLevel,
+                                            configuredMainPriceLevel:main.priceLevel||'high',
+                                            configuredReferencePriceLevel:ref.priceLevel||'high',
+                                            mainValue:windowLevelMatch.mainValue, referenceValue:windowLevelMatch.referenceValue,
+                                            groupSelectionType:'existing_candles_window'
+                                        }])});
+                                    break;
+                                }
+                            } else {
+                                // A new offset reference must also resolve strictly inside the
+                                // fence. For each main, use the configured reference offset rules,
+                                // then reject any reference candidate outside the fence. This
+                                // prevents a valid-looking match from escaping the window and
+                                // breaking the rest of the root chain.
+                                var windowSet = {};
+                                windowMainCandidates.forEach(function (idx) { windowSet[idx] = true; });
+                                var windowStateStartCount = nextStates.length;
+                                for (var wmi = 0; wmi < windowMainCandidates.length && nextStates.length < PT_MAX_ROOT_MATCH_STATES; wmi++) {
+                                    var windowMi = windowMainCandidates[wmi];
+                                    if (!ptTypeMatches(all[windowMi], main.mainCandleType)) continue;
+                                    var boundedRefCandidates = ptOffsetCandidates(
+                                        windowMi, ref.position || 'left', ref.offsetPosition || 1,
+                                        ptEffectiveOffsetPoint(main, ref), all.length
+                                    );
+                                    for (var wri = 0; wri < boundedRefCandidates.length; wri++) {
+                                        var windowRi = boundedRefCandidates[wri];
+                                        if (windowRi < 0 || !all[windowRi] || !windowSet[windowRi]) continue;
+                                        if (!ptTypeMatches(all[windowRi], ref.refCandleType)) continue;
+                                        var newWindowLevelMatch = ptComparePriceLevels(
+                                            all[windowMi], main.priceLevel || 'high', main.operator || '<',
+                                            all[windowRi], ref.priceLevel || 'high'
+                                        );
+                                        if (!newWindowLevelMatch.matched) continue;
+                                        var newWindowMap = Object.assign({}, state.map);
+                                        newWindowMap[mainKey] = windowMi;
+                                        newWindowMap[refKey] = windowRi;
+                                        nextStates.push({map:newWindowMap, mainIndex:windowMi, refIndex:windowRi,
+                                            conditions:(state.conditions||[]).concat([{
+                                                rootId:root.id, treeId:tree.id, mainName:main.name, referenceName:ref.name,
+                                                ifGroupFound: tree.ifGroupFound || 'identify_and_trade',
+                                                mainCandleId:all[windowMi].id, referenceCandleId:all[windowRi].id,
+                                                offsetCandleId:all[windowRi].id, mainIdentity:mainKey, referenceIdentity:refKey,
+                                                operator:main.operator||'<', mainPriceLevel:newWindowLevelMatch.mainLevel,
+                                                referencePriceLevel:newWindowLevelMatch.referenceLevel,
+                                                configuredMainPriceLevel:main.priceLevel||'high',
+                                                configuredReferencePriceLevel:ref.priceLevel||'high',
+                                                mainValue:newWindowLevelMatch.mainValue, referenceValue:newWindowLevelMatch.referenceValue,
+                                                groupSelectionType:'existing_candles_window'
+                                            }])});
+                                        // The first valid main/reference combination in fence order wins.
+                                        break;
+                                    }
+                                    if (nextStates.length > windowStateStartCount) break;
+                                }
+                            }
+                            return;
+                        }
+                        if (tree.groupSelectionType === 'new_group') {
+                            // A new group must be anchored to the selected existing candle.
+                            // Resolve that candle from the previous tree's identity map; never
+                            // scan the entire chart as if the new group were a free-standing root.
+                            if (nextStates.length >= PT_MAX_ROOT_MATCH_STATES) return;
+                            var anchorKey = String(main.newGroupOffsetTo == null ? '' : main.newGroupOffsetTo);
+                            var anchorIndex = anchorKey !== '' && Object.prototype.hasOwnProperty.call(state.map, anchorKey)
+                                ? Number(state.map[anchorKey]) : -1;
+                            if (anchorIndex < 0 || !all[anchorIndex]) return;
+                            var anchorDirection = String(main.newGroupDirection || 'right').toLowerCase() === 'left' ? -1 : 1;
+                            var anchorPoint = String(main.newGroupOffsetPosPoint || 'all').toLowerCase();
+                            var anchorStart = anchorIndex + anchorDirection;
+                            var anchorEnd = anchorDirection === 1 ? all.length : -1;
+                            var anchorStep = anchorDirection;
+                            // With no separate distance field in this UI, fixed/random begin
+                            // at the nearest candle; all/any_first_candle can search outward.
+                            if (anchorPoint === 'fixed' || anchorPoint === 'random') {
+                                anchorEnd = anchorStart + anchorStep;
+                            }
+                            for (var mi = anchorStart; (anchorStep > 0 ? mi < anchorEnd : mi > anchorEnd) &&
+                                 mi >= 0 && mi < all.length && nextStates.length < PT_MAX_ROOT_MATCH_STATES; mi += anchorStep) {
+                                if (!ptTypeMatches(all[mi], main.mainCandleType)) continue;
+                                var refMatch = ptResolveNewGroupReference(mi, main, ref, all);
+                                if (!refMatch) continue;
+                                var ri = refMatch.index;
+                                var levelMatch = refMatch.levelMatch;
+                                var map = Object.assign({}, state.map);
+                                map[mainKey] = mi;
+                                map[refKey] = ri;
+                                nextStates.push({map:map, mainIndex:mi, refIndex:ri, conditions:(state.conditions||[]).concat([{
+                                    rootId:root.id, treeId:tree.id, mainName:main.name, referenceName:ref.name,
+                                    ifGroupFound: tree.ifGroupFound || 'identify_and_trade',
+                                    mainCandleId:all[mi].id, referenceCandleId:all[ri].id, offsetCandleId:null,
+                                    mainIdentity:mainKey, referenceIdentity:refKey, operator:main.operator||'<',
+                                    mainPriceLevel:levelMatch.mainLevel, referencePriceLevel:levelMatch.referenceLevel,
+                                    configuredMainPriceLevel:main.priceLevel||'high', configuredReferencePriceLevel:ref.priceLevel||'high',
+                                    mainValue:levelMatch.mainValue, referenceValue:levelMatch.referenceValue,
+                                    groupSelectionType:'new_group',
+                                    referenceOffsetPosPoint:String(ref.offsetPosPoint || 'all'),
+                                    referenceOffsetPosition:Math.max(1, Number(ref.offsetPosition) || 1)
+                                }])});
+                                if (anchorPoint === 'any_first_candle') break;
+                            }
+                            return;
+                        }
+                        // Existing-group behavior: later main resolves to the exact identity selected earlier.
                         var mainIdx = Object.prototype.hasOwnProperty.call(state.map, mainKey) ? state.map[mainKey] : -1;
                         if (mainIdx < 0 || !all[mainIdx] || !ptTypeMatches(all[mainIdx], main.mainCandleType)) return;
-                        var refIdx = -1;
-                        if (isNewRef) {
-                            refIdx = ptOffsetIndex(mainIdx, ref.position || 'left', ref.offsetPosition || 1, all.length);
-                        } else if (Object.prototype.hasOwnProperty.call(state.map, refKey)) {
-                            // Existing reference points at the same candle already defined in the chain.
-                            refIdx = state.map[refKey];
+                        var refCandidates = [];
+                        if (isNewRef) refCandidates = ptOffsetCandidates(mainIdx, ref.position || 'left', ref.offsetPosition || 1, ptEffectiveOffsetPoint(main, ref), all.length);
+                        else if (Object.prototype.hasOwnProperty.call(state.map, refKey)) refCandidates = [state.map[refKey]];
+                        for (var rci=0; rci<refCandidates.length; rci++) {
+                            var refIdx = refCandidates[rci];
+                            if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) continue;
+                            var levelMatch = ptComparePriceLevels(all[mainIdx], main.priceLevel || 'high', main.operator || '<', all[refIdx], ref.priceLevel || 'high');
+                            if (!levelMatch.matched) continue;
+                            var map = Object.assign({}, state.map); if (isNewRef) map[refKey] = refIdx;
+                            candidates.push(mainIdx);
+                            nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: (state.conditions || []).concat([{
+                                rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
+                                mainCandleId: all[mainIdx].id, referenceCandleId: all[refIdx].id,
+                                offsetCandleId: isNewRef ? all[refIdx].id : null,
+                                mainIdentity: mainKey, referenceIdentity: refKey,
+                                operator: main.operator || '<', mainPriceLevel: levelMatch.mainLevel,
+                                referencePriceLevel: levelMatch.referenceLevel, configuredMainPriceLevel: main.priceLevel || 'high',
+                                configuredReferencePriceLevel: ref.priceLevel || 'high',
+                                mainValue: levelMatch.mainValue, referenceValue: levelMatch.referenceValue
+                            }]) });
+                            if (ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
                         }
-                        if (refIdx < 0 || !all[refIdx] || !ptTypeMatches(all[refIdx], ref.refCandleType)) return;
-                        var leftValue = ptPrice(all[mainIdx], main.priceLevel || 'high');
-                        var rightValue = ptPrice(all[refIdx], ref.priceLevel || 'high');
-                        if (!ptCompare(leftValue, main.operator || '<', rightValue)) return;
-                        var map = Object.assign({}, state.map);
-                        if (isNewRef) map[refKey] = refIdx;
-                        candidates.push(mainIdx);
-                        nextStates.push({ map: map, mainIndex: mainIdx, refIndex: refIdx, conditions: (state.conditions || []).concat([{
-                            rootId: root.id, treeId: tree.id, mainName: main.name, referenceName: ref.name,
-                            mainCandleId: all[mainIdx].id, referenceCandleId: all[refIdx].id,
-                            offsetCandleId: isNewRef ? all[refIdx].id : null,
-                            mainIdentity: mainKey, referenceIdentity: refKey,
-                            operator: main.operator || '<', mainPriceLevel: main.priceLevel || 'high',
-                            referencePriceLevel: ref.priceLevel || 'high', mainValue: leftValue, referenceValue: rightValue
-                        }]) });
                     });
+                }
+                if (treeIndex > 0 && tree.groupNecessity === 'not_important') {
+                    // Keep the successful branch and also retain the incoming branch where this
+                    // optional tree does not match. Required trees still constrain every family.
+                    nextStates = nextStates.concat(chainStates);
                 }
                 chainStates = nextStates;
             });
-            // A root is atomic: every configured tree must be evaluated and pass.
-            // Do not publish partial conditions, labels, or drawings for incomplete families.
+            // Required trees are atomic; optional trees may be absent from a successful family.
             var rootTrees = configuredTrees;
-            var completeStates = (rootTrees.length > 0 && processedTreeCount === rootTrees.length)
+            var requiredTrees = rootTrees.filter(function (tree, index) {
+                return index === 0 || tree.groupNecessity !== 'not_important';
+            });
+            var completeStates = (requiredTrees.length > 0 && processedTreeCount >= requiredTrees.length)
                 ? chainStates.filter(function (state) {
-                    return Array.isArray(state.conditions) && state.conditions.length === rootTrees.length;
+                    var conditions = Array.isArray(state.conditions) ? state.conditions : [];
+                    return requiredTrees.every(function (requiredTree) {
+                        return conditions.some(function (condition) { return String(condition.treeId) === String(requiredTree.id); });
+                    });
                 }) : [];
             completeStates.forEach(function (state) {
                 (state.conditions || []).forEach(function (condition) {
@@ -4198,7 +4629,14 @@ try {
                 });
             });
             root._drawMatches = completeStates.map(function (state) {
-                return { map: Object.assign({}, state.map) };
+                var conditions = Array.isArray(state.conditions) ? state.conditions : [];
+                return {
+                    map: Object.assign({}, state.map),
+                    conditions: conditions,
+                    noTrade: conditions.some(function (condition) {
+                        return condition.ifGroupFound === 'identify_but_dont_trade';
+                    })
+                };
             });
             // Report tree matches only when they belong to a complete 100% root family.
             rootTrees.forEach(function (tree) {
@@ -4376,6 +4814,17 @@ try {
                     if (fromIdx < 0 || !all[fromIdx]) return;
 
                     var fromLevel = drawing.drawFromPriceLevel || 'high';
+                    // If this endpoint belongs to a matched condition, use the exact
+                    // individual level pair selected by the matcher rather than re-deciding.
+                    var fromCondition = null;
+                    rootMatches.forEach(function(family){
+                        if(Number((family.map||{})[fromKey])!==Number(fromIdx)) return;
+                        (family.conditions||[]).forEach(function(c){
+                            if(String(c.treeId)!==String(fromTreeId)) return;
+                            if(String(c.mainIdentity)===String(fromKey)||String(c.referenceIdentity)===String(fromKey)) fromCondition=c;
+                        });
+                    });
+                    if(fromCondition) fromLevel = String(fromCondition.mainIdentity)===String(fromKey) ? (fromCondition.mainPriceLevel || fromLevel) : (fromCondition.referencePriceLevel || fromLevel);
                     var sourcePrice = PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(fromIdx, fromLevel, all) : ptPrice(all[fromIdx], fromLevel);
                     var x1 = ptOverlayX(geo, fromIdx, fromLevel);
                     var y1 = geo.pToY(sourcePrice);
@@ -4408,6 +4857,17 @@ try {
 
                     if (toIdx < 0 || !all[toIdx]) return;
                     var toLevel = drawing.drawToPriceLevel || 'high';
+                    var toCondition = null;
+                    if(toName !== 'any_intercept_candle') {
+                        rootMatches.forEach(function(family){
+                            if(Number((family.map||{})[toKey])!==Number(toIdx)) return;
+                            (family.conditions||[]).forEach(function(c){
+                                if(String(c.treeId)!==String(toTreeId)) return;
+                                if(String(c.mainIdentity)===String(toKey)||String(c.referenceIdentity)===String(toKey)) toCondition=c;
+                            });
+                        });
+                        if(toCondition) toLevel = String(toCondition.mainIdentity)===String(toKey) ? (toCondition.mainPriceLevel || toLevel) : (toCondition.referencePriceLevel || toLevel);
+                    }
                     var x2 = ptOverlayX(geo, toIdx, toName === 'any_intercept_candle' ? 'center' : toLevel);
                     // Projected endpoints snap to the exact lower-timeframe candle/price.
                     var y2 = toName === 'any_intercept_candle' ? y1 : (drawing.drawToPriceLevel === 'axis' ? y1 : geo.pToY(PT_PROJECTION_RENDER_PASS ? ptProjectionPrice(toIdx, toLevel, all) : ptPrice(all[toIdx], toLevel)));
@@ -4460,23 +4920,34 @@ try {
                     var next = [];
                     if (ti === 0) {
                         var mi = anchorIdx;
-                        var ri = ptOffsetIndex(mi, ref.position || 'right', ref.offsetPosition || 1, lowerWrappers.length);
-                        if (ptTypeMatches(lowerWrappers[mi], main.mainCandleType) && ri >= 0 && ptTypeMatches(lowerWrappers[ri], ref.refCandleType) &&
-                            ptCompare(ptPrice(lowerWrappers[mi], main.priceLevel || 'high'), main.operator || '<', ptPrice(lowerWrappers[ri], ref.priceLevel || 'high'))) {
-                            var firstMap = {}; firstMap[mainKey] = mi; firstMap[refKey] = ri;
-                            next.push({map:firstMap, conditions:[{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey}]});
+                        if (ptTypeMatches(lowerWrappers[mi], main.mainCandleType)) {
+                            var ris = ptOffsetCandidates(mi, main.position || ref.position || 'left_and_right', main.offsetPosition || ref.offsetPosition || 1, ptEffectiveOffsetPoint(main, ref), lowerWrappers.length);
+                            for (var rci=0; rci<ris.length; rci++) {
+                                var ri=ris[rci];
+                                if (ri < 0 || !ptTypeMatches(lowerWrappers[ri], ref.refCandleType)) continue;
+                                var lm=ptComparePriceLevels(lowerWrappers[mi], main.priceLevel||'high', main.operator||'<', lowerWrappers[ri], ref.priceLevel||'high');
+                                if (!lm.matched) continue;
+                                var firstMap = {}; firstMap[mainKey] = mi; firstMap[refKey] = ri;
+                                next.push({map:firstMap, conditions:[{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}]});
+                                if(ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
+                            }
                         }
                     } else {
                         states.forEach(function(st) {
                             var mi = Object.prototype.hasOwnProperty.call(st.map, mainKey) ? st.map[mainKey] : -1;
                             if (mi < 0 || !lowerWrappers[mi] || !ptTypeMatches(lowerWrappers[mi], main.mainCandleType)) return;
-                            var ri = -1;
-                            if (isNewRef) ri = ptOffsetIndex(mi, ref.position || 'left', ref.offsetPosition || 1, lowerWrappers.length);
-                            else if (Object.prototype.hasOwnProperty.call(st.map, refKey)) ri = st.map[refKey];
-                            if (ri < 0 || !lowerWrappers[ri] || !ptTypeMatches(lowerWrappers[ri], ref.refCandleType)) return;
-                            if (!ptCompare(ptPrice(lowerWrappers[mi], main.priceLevel || 'high'), main.operator || '<', ptPrice(lowerWrappers[ri], ref.priceLevel || 'high'))) return;
-                            var m = Object.assign({}, st.map); if (isNewRef) m[refKey] = ri;
-                            next.push({map:m, conditions:st.conditions.concat([{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey}])});
+                            var ris = [];
+                            if (isNewRef) ris = ptOffsetCandidates(mi, ref.position || 'left', ref.offsetPosition || 1, ptEffectiveOffsetPoint(main, ref), lowerWrappers.length);
+                            else if (Object.prototype.hasOwnProperty.call(st.map, refKey)) ris = [st.map[refKey]];
+                            for(var rci=0;rci<ris.length;rci++){
+                                var ri=ris[rci];
+                                if (ri < 0 || !lowerWrappers[ri] || !ptTypeMatches(lowerWrappers[ri], ref.refCandleType)) continue;
+                                var lm=ptComparePriceLevels(lowerWrappers[mi], main.priceLevel||'high', main.operator||'<', lowerWrappers[ri], ref.priceLevel||'high');
+                                if(!lm.matched) continue;
+                                var m = Object.assign({}, st.map); if (isNewRef) m[refKey] = ri;
+                                next.push({map:m, conditions:st.conditions.concat([{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}])});
+                                if(ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
+                            }
                         });
                     }
                     states = next;
@@ -4815,6 +5286,7 @@ try {
             var entryKey=targetKey(root,root.entryFrom), slKey=targetKey(root,root.stoplossFrom), tpKey=root.takeProfitType==='risk_reward'?null:targetKey(root,root.takeProfitFrom);
             if(!entryKey || !slKey || (root.takeProfitType!=='risk_reward' && !tpKey)) return;
             var families=source === root ? (Array.isArray(root._drawMatches)?root._drawMatches:[]) : (Array.isArray(root._confirmationDrawMatches)?root._confirmationDrawMatches:[]);
+                families = families.filter(function (family) { return !family.noTrade; });
             families.forEach(function(family, famIndex){
                 var map=family.map||{};
                 var entryIndex=resolveTradeTargetIndex(entryKey,family,candles,root.entryPriceLevel||'high');
@@ -4823,7 +5295,24 @@ try {
                 if(entryIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
                 var entryC=candles[entryIndex], slC=candles[slIndex], tpC=tpIndex!=null?candles[tpIndex]:null;
                 if(!entryC||!slC) return;
-                var entryPrice=ptPrice(entryC,root.entryPriceLevel||'high'), slPrice=ptPrice(slC,root.stoplossPriceLevel||'high');
+                function matchedTradeLevel(key, configuredLevel, family) {
+                    var parts=String(key||'').split('|');
+                    if(parts.length<3 || parts[0]==='parent') return configuredLevel||'high';
+                    var treeId=String(parts[0]), kind=String(parts[1]);
+                    var tree=(source.trees||[]).find(function(t){return String(t.id)===treeId;});
+                    if(!tree) return configuredLevel||'high';
+                    var identity=kind==='main' ? String((tree.main||{}).selectedExistingId||(tree.main||{}).offsetTo||(tree.main||{}).id) :
+                        String((tree.reference||{}).referenceMode!=='new_offset'&&((tree.reference||{}).selectedExistingId||(tree.reference||{}).existingCandleId)?((tree.reference||{}).selectedExistingId||(tree.reference||{}).existingCandleId):(tree.reference||{}).id);
+                    var conds=[];
+                    (family.conditions||[]).forEach(function(c){if(String(c.mainIdentity)===identity||String(c.referenceIdentity)===identity) conds.push(c);});
+                    if(!conds.length) return configuredLevel||'high';
+                    var c=conds[conds.length-1];
+                    return String(c.mainIdentity)===identity ? (c.mainPriceLevel||configuredLevel||'high') : (c.referencePriceLevel||configuredLevel||'high');
+                }
+                var entryResolvedLevel=matchedTradeLevel(root.entryFrom,root.entryPriceLevel,family);
+                var slResolvedLevel=matchedTradeLevel(root.stoplossFrom,root.stoplossPriceLevel,family);
+                var tpResolvedLevel=matchedTradeLevel(root.takeProfitFrom,root.takeProfitPriceLevel,family);
+                var entryPrice=ptPrice(entryC,entryResolvedLevel), slPrice=ptPrice(slC,slResolvedLevel);
                 var order=String(root.orderType||'buy').toLowerCase();
                 var isLong=['buy','buy-limit','buy-stop'].indexOf(order)>=0;
                 var triggerIndex=null;
@@ -4837,7 +5326,7 @@ try {
                 var riskDistanceForTarget=Math.abs(entryPrice-slPrice);
                 var configuredTpPrice = root.takeProfitType==='risk_reward'
                     ? (isLong ? entryPrice+riskDistanceForTarget*(rr>0?rr:1) : entryPrice-riskDistanceForTarget*(rr>0?rr:1))
-                    : (tpC?ptPrice(tpC,root.takeProfitPriceLevel||'high'):null);
+                    : (tpC?ptPrice(tpC,tpResolvedLevel):null);
                 var tpPrice = configuredTpPrice;
                 var minimumRiskRewardApplied = false;
                 // HARD RULE: price-level take profit can never be less than 1:1.
@@ -5843,6 +6332,7 @@ try {
             updateFootStatus();
         }
 
+        // Each condition can select one price level only. No multi-level OR options.
         var PRICE_LEVELS = [
             'high','low','open','close',
             'candle_center','body_center',
@@ -5850,7 +6340,7 @@ try {
         ];
         var PRICE_LEVELS_ALL = ['all'].concat(PRICE_LEVELS);
         var OPERATORS = ['<','>','=<','>=','='];
-        var OFFSET_POS_POINTS = ['all','random','fixed'];
+        var OFFSET_POS_POINTS = ['all','random','fixed','any_first_candle'];
         var TP_TYPES = ['risk_reward','price_levels'];
         var DRAW_TO_EXTRA = ['any_intercept_candle'];
         var TEXT_POSITIONS = ['high','low'];
@@ -5957,12 +6447,33 @@ try {
                        String(ref.name || '').trim() !== '';
             }
 
-            var mainSelection = main.selectedExistingId || main.offsetTo;
-            if (!mainSelection || !findCandleById(mainSelection, root)) return false;
+            if (treeIndex === 0) {
+                return String(main.name || '').trim() !== '' &&
+                       String(ref.name || '').trim() !== '';
+            }
 
             var mode = ref.referenceMode || 'existing';
+
+            if (tree.groupSelectionType === 'existing_candles_window') {
+                var fromId = tree.regionFromCandleId;
+                var toId = tree.regionToCandleId;
+                if (!fromId || !toId || String(fromId) === String(toId) ||
+                    !findCandleById(fromId, root) || !findCandleById(toId, root)) {
+                    return false;
+                }
+            }
+
+            // Main-group selection and reference-candle selection are independent.
+            // A new-group main can still point back to an existing candle, or its
+            // reference can be a newly-created offset anchored to this tree's main.
+            if (treeIndex > 0 && tree.groupSelectionType === 'existing_group') {
+                var mainSelection = main.selectedExistingId || main.offsetTo;
+                if (!mainSelection || !findCandleById(mainSelection, root)) return false;
+            }
+
             if (mode === 'new_offset') {
-                return String(ref.name || '').trim() !== '';
+                return String(main.name || '').trim() !== '' &&
+                       String(ref.name || '').trim() !== '';
             }
             var refSelection = ref.selectedExistingId || ref.existingCandleId;
             return !!(refSelection && findCandleById(refSelection, root));
@@ -6056,8 +6567,100 @@ try {
             var grid = document.createElement('div');
             grid.className = 'pt-cfg-row-grid';
 
-            // Later trees may only register an existing candle as their main.
+            // Later trees choose their mode here. New group exposes the same full
+            // main-candle controls as the root anchor; Existing group lists all candles.
             if (!opts.isFirstTree) {
+                tree.groupSelectionType = tree.groupSelectionType || 'existing_group';
+                var modeSel = mkSelect('cfg_main_mode_' + tree.id, [
+                    {value:'existing_group', label:'Existing group'},
+                    {value:'new_group', label:'New group'},
+                    {value:'existing_candles_window', label:'Existing Candles Window'}
+                ], tree.groupSelectionType, false, function () {
+                    tree.groupSelectionType = modeSel.value;
+                    tree.regionSearchMode = tree.groupSelectionType === 'existing_candles_window'
+                        ? 'existing_candles_perimeter' : 'just_offset_existing_candles';
+                    if (tree.groupSelectionType !== 'existing_group') {
+                        // Main is a newly located candle; reference mode remains independent.
+                        row.selectedExistingId = null;
+                        row.offsetTo = null;
+                        row.offsetToName = '';
+                        row.offsetToKind = '';
+                        row.name = '';
+                    }
+                    opts.onChange();
+                });
+                grid.appendChild(mkField('Select your option', modeSel));
+
+                if (tree.groupSelectionType === 'existing_candles_window') {
+                    // The window endpoints bound all matching. The endpoints themselves
+                    // are anchors, not candidates.
+                    tree.regionSearchMode = 'existing_candles_perimeter';
+                    var regionTargets = collectOffsetTargets(root, null);
+                    var fromChoices = [{value:'',label:'— select start candle —'}];
+                    var toChoices = [{value:'',label:'— select end candle —'}];
+                    regionTargets.forEach(function (target) {
+                        var choice = {value:String(target.id),label:target.name + ' (' + target.kind + ' · tree ' + target.treeId + ')'};
+                        fromChoices.push(choice); toChoices.push(choice);
+                    });
+                    var fromRegion = mkSelect('cfg_region_from_' + tree.id, fromChoices, tree.regionFromCandleId ? String(tree.regionFromCandleId) : '', false, function () {
+                        var selectedTarget = regionTargets.find(function (target) { return String(target.id) === fromRegion.value; });
+                        tree.regionFromCandleId = selectedTarget ? selectedTarget.id : null;
+                        tree.regionFromCandleName = selectedTarget ? selectedTarget.name : '';
+                        opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('From candle', fromRegion));
+                    var toRegion = mkSelect('cfg_region_to_' + tree.id, toChoices, tree.regionToCandleId ? String(tree.regionToCandleId) : '', false, function () {
+                        var selectedTarget = regionTargets.find(function (target) { return String(target.id) === toRegion.value; });
+                        tree.regionToCandleId = selectedTarget ? selectedTarget.id : null;
+                        tree.regionToCandleName = selectedTarget ? selectedTarget.name : '';
+                        opts.onValueChange();
+                    });
+                    grid.appendChild(mkField('To candle', toRegion));
+                } else if (tree.groupSelectionType === 'new_group') {
+                    var anchorTargets = collectOffsetTargets(root, tree.id);
+                    var anchorChoices = [{value:'', label:'— select existing candle —'}];
+                    anchorTargets.forEach(function (t) {
+                        anchorChoices.push({value:String(t.id), label:t.name + ' (' + t.kind + ' · tree ' + t.treeId + ')'});
+                    });
+                    var anchorSel = mkSelect('cfg_main_new_group_anchor_' + row.id, anchorChoices,
+                        row.newGroupOffsetTo != null ? String(row.newGroupOffsetTo) : '', false, function () {
+                            var chosen = null;
+                            anchorTargets.forEach(function (t) { if (String(t.id) === anchorSel.value) chosen = t; });
+                            row.newGroupOffsetTo = chosen ? chosen.id : null;
+                            row.newGroupOffsetToName = chosen ? chosen.name : '';
+                            opts.onValueChange();
+                        });
+                    grid.appendChild(mkField('Offset existing candles', anchorSel));
+
+                    var anchorDirection = mkSelect('cfg_main_new_group_direction_' + row.id,
+                        [{value:'right',label:'right'},{value:'left',label:'left'}],
+                        row.newGroupDirection || 'right', false, function () {
+                            row.newGroupDirection = anchorDirection.value;
+                            opts.onValueChange();
+                        });
+                    grid.appendChild(mkField('Direction search to the', anchorDirection));
+
+                    var mainOffsetPoint = mkSelect('cfg_main_new_group_point_' + row.id, OFFSET_POS_POINTS,
+                        row.newGroupOffsetPosPoint || 'all', false, function () {
+                            row.newGroupOffsetPosPoint = mainOffsetPoint.value;
+                            opts.onChange();
+                        });
+                    grid.appendChild(mkField('Main offset pos point', mainOffsetPoint));
+                    if (row.newGroupOffsetPosPoint !== 'any_first_candle') {
+                        var mainOffsetPosition = mkInput('cfg_main_new_group_position_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : 1, 'e.g. 1', false, function () {
+                            row.offsetPosition = mainOffsetPosition.value === '' ? null : Math.max(1, parseInt(mainOffsetPosition.value, 10) || 1);
+                            opts.onValueChange();
+                        });
+                        mainOffsetPosition.min = '1';
+                        mainOffsetPosition.step = '1';
+                        grid.appendChild(mkField('Main offset position', mainOffsetPosition));
+                    }
+                }
+            }
+
+            // Existing-group mode selects a candle. New-group mode uses all the normal
+            // main-candle fields below, just like the first main candle in the tree.
+            if (!opts.isFirstTree && tree.groupSelectionType === 'existing_group') {
                 var targets = collectOffsetTargets(root, tree.id);
                 var choices = [{value:'', label:'— select existing candle —'}];
                 targets.forEach(function (t) {
@@ -6076,6 +6679,37 @@ try {
                     opts.onChange();
                 });
                 grid.appendChild(mkField('Main candle (existing candle)', existingSel));
+
+                // Create offset controls are shared by normal and confirmation roots.
+                // No means point exactly at the selected existing candle (zero-distance
+                // marker); Yes enables the offset-point and numeric-position controls.
+                row.createOffset = row.createOffset || (Number(row.offsetPosition) === 0 ? 'no' : 'yes');
+                var createOffsetSel = mkSelect('cfg_main_create_offset_' + row.id, [
+                    {value:'yes', label:'Yes'}, {value:'no', label:'No'}
+                ], row.createOffset, false, function () {
+                    row.createOffset = createOffsetSel.value;
+                    if (row.createOffset === 'no') row.offsetPosition = 0;
+                    else if (!Number(row.offsetPosition) || Number(row.offsetPosition) < 1) row.offsetPosition = 1;
+                    opts.onChange();
+                });
+                grid.appendChild(mkField('Create offset', createOffsetSel));
+                if (row.createOffset === 'yes') {
+                    var existingMainOffsetPoint = mkSelect('cfg_main_oppoint_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
+                        row.offsetPosPoint = existingMainOffsetPoint.value;
+                        opts.onChange();
+                    });
+                    grid.appendChild(mkField('Main offset pos point', existingMainOffsetPoint));
+                    if (row.offsetPosPoint !== 'any_first_candle') {
+                        var existingMainOffsetPosition = mkInput('cfg_main_oppos_' + row.id, 'number', row.offsetPosition != null && Number(row.offsetPosition) > 0 ? row.offsetPosition : 1, 'e.g. 1', false, function () {
+                            row.offsetPosition = existingMainOffsetPosition.value === '' ? null : Math.max(1, parseInt(existingMainOffsetPosition.value, 10) || 1);
+                            opts.onValueChange();
+                        });
+                        existingMainOffsetPosition.min = '1';
+                        existingMainOffsetPosition.step = '1';
+                        grid.appendChild(mkField('Main offset position', existingMainOffsetPosition));
+                    }
+                }
+
                 var pl = mkSelect('cfg_main_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
                     row.priceLevel = pl.value; opts.onValueChange();
                 });
@@ -6130,6 +6764,19 @@ try {
                 grid.appendChild(mkField('Candle time', anchorTimeSel));
             }
 
+            // In just-offset mode, the main candle's own direction follows the
+            // anchor controls and appears before Main Candle Name. Perimeter mode
+            // deliberately has no direction selector because the From/To window
+            // defines the search region.
+            if (!opts.isFirstTree && (tree.groupSelectionType === 'new_group' || tree.groupSelectionType === 'existing_candles_window') && tree.regionSearchMode !== 'existing_candles_perimeter') {
+                var newGroupMainDirection = mkSelect('cfg_new_group_main_direction_' + row.id,
+                    [{value:'left',label:'left'},{value:'right',label:'right'}], row.position || 'left', false, function () {
+                        row.position = newGroupMainDirection.value;
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Direction search to the', newGroupMainDirection));
+            }
+
             // Main Candle Name
             var nameInput = mkInput('cfg_main_name_' + row.id, 'text', row.name, 'Main candle name', false, function () {
                 row.name = nameInput.value;
@@ -6166,7 +6813,7 @@ try {
             // Offset candle type is its own configurable property and is saved
             // to programme_training_configuration.offset_candle. It is not
             // inferred from the selected offset target.
-            if (!opts.isFirstTree) {
+            if (!opts.isFirstTree && tree.groupSelectionType === 'existing_group') {
                 row.offsetCandle = normalizeCandleType(row.offsetCandle);
                 var offsetTypeSel = mkSelect('cfg_offset_type_' + row.id,
                     CANDLE_TYPES, row.offsetCandle, false, function () {
@@ -6176,20 +6823,31 @@ try {
                 grid.appendChild(mkField('Offset Candle Type', offsetTypeSel));
             }
 
-            // Position
+            // The first main tree always visibly displays its fixed search direction.
+            // It is read-only and has exactly one option: left and right. All other
+            // main rows can search only left or right.
             var positionOptions = opts.isFirstTree
-                ? [{value:'all', label:'all'}]
+                ? [{value:'left_and_right', label:'left and right'}]
                 : [{value:'left', label:'left'}, {value:'right', label:'right'}];
-            if (!(root.isConfirmationRoot && opts.isFirstTree)) {
-                var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions, row.position, opts.isFirstTree, function () {
+            var mainPositionDefault = opts.isFirstTree ? 'left_and_right' : 'left';
+            if (opts.isFirstTree) row.position = 'left_and_right';
+            var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions,
+                opts.isFirstTree ? 'left_and_right' : (row.position || mainPositionDefault),
+                opts.isFirstTree, function () {
                     row.position = posSel.value;
                     opts.onValueChange();
                 });
-                grid.appendChild(mkField('Position', posSel));
+            // In New group mode, the group's own direction is authoritative for
+            // locating the group relative to its anchor. Do not expose or use a
+            // second direction selector for the main candle; the reference candle
+            // keeps its own direction selector because it is compared against main.
+            // This shared builder is used by both normal and confirmation roots.
+            if (opts.isFirstTree || tree.groupSelectionType === 'existing_group') {
+                grid.appendChild(mkField('Direction search to the', posSel));
             }
 
             // Offset to (only when not first tree)
-            if (!opts.isFirstTree) {
+            if (!opts.isFirstTree && tree.groupSelectionType === 'existing_group') {
                 var offsetOptions = [{value:'', label:'— select candle —'}];
                 opts.offsetTargets.forEach(function (t) {
                     offsetOptions.push({value: String(t.id), label: t.name + ' (' + t.kind + ' · tree ' + t.treeId + ')'});
@@ -6211,20 +6869,21 @@ try {
             }
 
             // Offset Position + Pos Point (not first tree)
-            if (!opts.isFirstTree) {
-                var opInput = mkInput('cfg_main_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : '', 'e.g. 1', false, function () {
-                    row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
-                    opts.onValueChange();
-                });
-                opInput.min = '1';
-                opInput.step = '1';
-                grid.appendChild(mkField('Offset Position', opInput));
-
+            if (!opts.isFirstTree && tree.groupSelectionType === 'existing_group') {
                 var oppSel = mkSelect('cfg_main_oppoint_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
                     row.offsetPosPoint = oppSel.value;
                     opts.onValueChange();
                 });
-                grid.appendChild(mkField('Offset Pos Point', oppSel));
+                grid.appendChild(mkField('Main offset pos point', oppSel));
+                if (row.offsetPosPoint !== 'any_first_candle') {
+                    var opInput = mkInput('cfg_main_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : '', 'e.g. 1', false, function () {
+                        row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
+                        opts.onValueChange();
+                    });
+                    opInput.min = '1';
+                    opInput.step = '1';
+                    grid.appendChild(mkField('Main offset position', opInput));
+                }
             }
 
             // Price Level
@@ -6261,8 +6920,9 @@ try {
             var grid = document.createElement('div');
             grid.className = 'pt-cfg-row-grid';
 
-            // Later trees choose either an existing candle reference or a new
-            // offset from this tree's main candle.
+            // Reference selection is independent of main-group mode. Any later tree,
+            // including a New group, can reference an existing tree candle or create
+            // a new offset anchored to this tree's main candle.
             if (opts.tree && opts.root.trees.indexOf(opts.tree) > 0) {
                 row.referenceMode = row.referenceMode || 'existing';
                 var modeSel = mkSelect('cfg_ref_mode_' + row.id, [
@@ -6286,7 +6946,10 @@ try {
                             row.selectedExistingId = chosen ? chosen.id : null;
                             row.existingCandleId = chosen ? chosen.id : null;
                             row.name = chosen ? chosen.name : '';
-                            if (chosen) row.refCandleType = normalizeCandleType(chosen.candleType || DEFAULT_CANDLE_TYPE);
+                            if (chosen) {
+                                row.refCandleType = normalizeCandleType(chosen.candleType || DEFAULT_CANDLE_TYPE);
+                                row.offsetCandle = row.refCandleType;
+                            }
                             opts.onValueChange();
                         });
                     grid.appendChild(mkField('Reference candle', refSel));
@@ -6294,6 +6957,13 @@ try {
                         row.priceLevel = refLevel.value; opts.onValueChange();
                     });
                     grid.appendChild(mkField('Price level', refLevel));
+
+                    // An existing reference candle is already a concrete candle in the
+                    // referenced tree. Do not offer Offset Candle Type here: candle-type
+                    // filters apply only when creating a new offset candle, not when pointing
+                    // directly at an existing candle. Clear stale values from older configs.
+                    row.offsetCandle = null;
+                    row.refCandleType = null;
                 } else {
                     var offsetToMain = document.createElement('input');
                     offsetToMain.type = 'text'; offsetToMain.disabled = true;
@@ -6302,7 +6972,7 @@ try {
                     var offsetName = mkInput('cfg_new_offset_name_' + row.id, 'text', row.name || '', 'Offset candle name', false, function () {
                         row.name = offsetName.value; opts.onValueChange();
                     });
-                    grid.appendChild(mkField('Offset candle name', offsetName));
+                    grid.appendChild(mkField('Reference Candle Name', offsetName));
                     var offsetText = mkInput('cfg_new_offset_text_' + row.id, 'text', row.candleText || '', 'Text shown on matched candles', false, function () {
                         row.candleText = offsetText.value; opts.onValueChange();
                     });
@@ -6315,23 +6985,39 @@ try {
                         row.textColor = offsetTextColor.value; opts.onValueChange();
                     });
                     grid.appendChild(mkField('Text color', offsetTextColor));
-                    var offsetType = mkSelect('cfg_new_offset_type_' + row.id, CANDLE_TYPES, row.refCandleType || DEFAULT_CANDLE_TYPE, false, function () {
-                        row.refCandleType = offsetType.value; opts.onValueChange();
-                    });
-                    grid.appendChild(mkField('Offset candle type', offsetType));
+                    var isFirstReferenceInRoot = opts.root.trees.indexOf(opts.tree) === 0;
+                    if (isFirstReferenceInRoot) {
+                        row.refCandleType = normalizeCandleType(row.refCandleType || row.offsetCandle || DEFAULT_CANDLE_TYPE);
+                        var firstOffsetRefType = mkSelect('cfg_new_offset_type_' + row.id, CANDLE_TYPES, row.refCandleType, false, function () {
+                            row.refCandleType = firstOffsetRefType.value;
+                            row.offsetCandle = null;
+                            opts.onValueChange();
+                        });
+                        grid.appendChild(mkField('Reference Candle Type', firstOffsetRefType));
+                    } else {
+                        row.offsetCandle = normalizeCandleType(row.offsetCandle || row.refCandleType || DEFAULT_CANDLE_TYPE);
+                        var offsetType = mkSelect('cfg_new_offset_type_' + row.id, CANDLE_TYPES, row.offsetCandle, false, function () {
+                            row.offsetCandle = offsetType.value;
+                            row.refCandleType = offsetType.value;
+                            opts.onValueChange();
+                        });
+                        grid.appendChild(mkField('Offset Candle Type', offsetType));
+                    }
                     var pos = mkSelect('cfg_new_offset_pos_' + row.id, ['left','right'], row.position || 'left', false, function () {
                         row.position = pos.value; opts.onValueChange();
                     });
-                    grid.appendChild(mkField('Position', pos));
-                    var offsetPos = mkInput('cfg_new_offset_position_' + row.id, 'number', row.offsetPosition || 1, '1', false, function () {
-                        row.offsetPosition = Math.max(1, parseInt(offsetPos.value || '1', 10)); opts.onValueChange();
-                    });
-                    offsetPos.min = '1'; offsetPos.step = '1';
-                    grid.appendChild(mkField('Offset position', offsetPos));
+                    grid.appendChild(mkField('Direction search to the', pos));
                     var point = mkSelect('cfg_new_offset_point_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
-                        row.offsetPosPoint = point.value; opts.onValueChange();
+                        row.offsetPosPoint = point.value; opts.onValueChange(); render();
                     });
-                    grid.appendChild(mkField('Offset position point', point));
+                    grid.appendChild(mkField('Offset Pos Point', point));
+                    if (row.offsetPosPoint !== 'any_first_candle') {
+                        var offsetPos = mkInput('cfg_new_offset_position_' + row.id, 'number', row.offsetPosition || 1, '1', false, function () {
+                            row.offsetPosition = Math.max(1, parseInt(offsetPos.value || '1', 10)); opts.onValueChange();
+                        });
+                        offsetPos.min = '1'; offsetPos.step = '1';
+                        grid.appendChild(mkField('Offset Position', offsetPos));
+                    }
                     var price = mkSelect('cfg_new_offset_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
                         row.priceLevel = price.value; opts.onValueChange();
                     });
@@ -6348,10 +7034,10 @@ try {
             });
             grid.appendChild(mkField('Reference Candle Name', nameInput));
 
-            // The first tree's reference is independently labelable. Later
-            // references that point to an existing tree candle inherit that
-            // candle's label; a later new-offset reference has its own fields above.
-            if (opts.root.trees.indexOf(opts.tree) === 0) {
+            // The first tree and all new-group references are independently
+            // defined candles, so each gets its own annotation controls.
+            if (opts.root.trees.indexOf(opts.tree) === 0 ||
+                (opts.tree && (opts.tree.groupSelectionType === 'new_group' || opts.tree.groupSelectionType === 'existing_candles_window'))) {
                 var firstRefText = mkInput('cfg_ref_text_' + row.id, 'text', row.candleText || '', 'Text shown on matched reference candles', false, function () {
                     row.candleText = firstRefText.value; opts.onValueChange();
                 });
@@ -6366,22 +7052,38 @@ try {
                 grid.appendChild(mkField('Text color', firstRefTextColor));
             }
 
-            row.refCandleType = normalizeCandleType(row.refCandleType);
-            var refTypeSel = mkSelect('cfg_ref_type_' + row.id, CANDLE_TYPES,
-                row.refCandleType, false, function () {
-                    row.refCandleType = refTypeSel.value;
-                    opts.onValueChange();
-                });
-            grid.appendChild(mkField('Reference Candle Type', refTypeSel));
+            // The root's first reference uses Reference Candle Type. Every later
+            // reference uses Offset Candle Type. Never hide both type controls together.
+            var isRootFirstReference = opts.root.trees.indexOf(opts.tree) === 0;
+            if (isRootFirstReference) {
+                row.refCandleType = normalizeCandleType(row.refCandleType || row.offsetCandle || DEFAULT_CANDLE_TYPE);
+                var refTypeSel = mkSelect('cfg_ref_type_' + row.id, CANDLE_TYPES,
+                    row.refCandleType, false, function () {
+                        row.refCandleType = refTypeSel.value;
+                        row.offsetCandle = null;
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Reference Candle Type', refTypeSel));
+            } else {
+                row.offsetCandle = normalizeCandleType(row.offsetCandle || row.refCandleType || DEFAULT_CANDLE_TYPE);
+                var laterOffsetTypeSel = mkSelect('cfg_ref_offset_type_' + row.id, CANDLE_TYPES,
+                    row.offsetCandle, false, function () {
+                        row.offsetCandle = laterOffsetTypeSel.value;
+                        row.refCandleType = laterOffsetTypeSel.value;
+                        opts.onValueChange();
+                    });
+                grid.appendChild(mkField('Offset Candle Type', laterOffsetTypeSel));
+            }
 
-            // Position — left/right only
+            // Reference rows only allow left or right. "left and right" belongs
+            // exclusively to the read-only first main tree direction.
             var posSel = mkSelect('cfg_ref_pos_' + row.id,
                 [{value:'left', label:'left'}, {value:'right', label:'right'}],
-                row.position || 'left', false, function () {
+                row.position === 'right' ? 'right' : 'left', false, function () {
                     row.position = posSel.value;
                     opts.onValueChange();
                 });
-            grid.appendChild(mkField('Position', posSel));
+            grid.appendChild(mkField('Direction search to the', posSel));
 
             // Offset To — always uneditable, displays main name
             var offsetLabelText = mainRow && mainRow.name ? mainRow.name + ' (this tree main)' : '(this tree main)';
@@ -6392,20 +7094,20 @@ try {
             grid.appendChild(mkField('Offset To', offsetDisplay));
 
             // Offset Position
-            var opInput = mkInput('cfg_ref_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : 1, 'e.g. 1', false, function () {
-                row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
-                opts.onValueChange();
-            });
-            opInput.min = '1';
-            opInput.step = '1';
-            grid.appendChild(mkField('Offset Position', opInput));
-
-            // Offset Pos Point
             var oppSel = mkSelect('cfg_ref_oppoint_' + row.id, OFFSET_POS_POINTS, row.offsetPosPoint || 'all', false, function () {
                 row.offsetPosPoint = oppSel.value;
-                opts.onValueChange();
+                opts.onValueChange(); render();
             });
             grid.appendChild(mkField('Offset Pos Point', oppSel));
+            if (row.offsetPosPoint !== 'any_first_candle') {
+                var opInput = mkInput('cfg_ref_oppos_' + row.id, 'number', row.offsetPosition != null ? row.offsetPosition : 1, 'e.g. 1', false, function () {
+                    row.offsetPosition = opInput.value === '' ? null : parseInt(opInput.value, 10);
+                    opts.onValueChange();
+                });
+                opInput.min = '1';
+                opInput.step = '1';
+                grid.appendChild(mkField('Offset Position', opInput));
+            }
 
             // Price Level
             var plSel = mkSelect('cfg_ref_pl_' + row.id, PRICE_LEVELS, row.priceLevel || 'high', false, function () {
@@ -6485,7 +7187,32 @@ try {
 
             wrap.appendChild(head);
 
-            // Main row
+            // These settings govern the whole tree family (both Main and Reference cards),
+            // so render them once above both cards rather than inside the Main Candle card.
+            if (treeIndex > 0) {
+                var priorityGrid = document.createElement('div');
+                priorityGrid.className = 'pt-cfg-row-grid pt-tree-group-priority';
+                tree.groupNecessity = tree.groupNecessity || 'required';
+                var necessitySel = mkSelect('cfg_group_necessity_' + tree.id, [
+                    {value:'required', label:'required'},
+                    {value:'not_important', label:'not important'}
+                ], tree.groupNecessity, false, function () {
+                    tree.groupNecessity = necessitySel.value; onValueChange();
+                });
+                priorityGrid.appendChild(mkField('Group necessity', necessitySel));
+                tree.ifGroupFound = tree.ifGroupFound || 'identify_and_trade';
+                var foundActionSel = mkSelect('cfg_if_group_found_' + tree.id, [
+                    {value:'identify_and_trade', label:'identify and trade'},
+                    {value:'identify_but_dont_trade', label:'identify but don’t trade'}
+                ], tree.ifGroupFound, false, function () {
+                    tree.ifGroupFound = foundActionSel.value; onValueChange();
+                });
+                priorityGrid.appendChild(mkField('If Group is found', foundActionSel));
+                wrap.appendChild(priorityGrid);
+            }
+
+            // Main and reference are the only candle rows. The main row owns the
+            // Existing group / New group choice; no separate new-group panel is used.
             var mainRow = buildMainRow({
                 root: root,
                 tree: tree,
@@ -6497,7 +7224,6 @@ try {
             });
             wrap.appendChild(mainRow);
 
-            // Reference row
             var refRow = buildReferenceRow({
                 root: root,
                 tree: tree,
@@ -7029,6 +7755,7 @@ try {
 
             return {
                 id: treeId,
+                groupSelectionType: 'existing_group',
                 main: {
                     id: mainId,
                     name: '',
@@ -7037,12 +7764,16 @@ try {
                     textColor: 'purple',
                     mainCandleType: DEFAULT_CANDLE_TYPE,
                     offsetCandle: '',
-                    position: isFirst ? 'all' : 'left',
+                    position: isFirst ? 'left_and_right' : 'left',
                     offsetTo: null,
                     offsetToName: '',
                     offsetToKind: '',
                     offsetPosition: null,
                     offsetPosPoint: 'all',
+                    newGroupOffsetTo: null,
+                    newGroupOffsetToName: '',
+                    newGroupOffsetPosPoint: 'all',
+                    newGroupDirection: 'right',
                     priceLevel: 'high',
                     operator: '<'
                 },
@@ -7149,6 +7880,14 @@ try {
 
                     rootOut.trees.push({
                         tree_id: tree.id,
+                        region_search_mode: tree.regionSearchMode || 'just_offset_existing_candles',
+                        region_from_candle_id: tree.regionFromCandleId || null,
+                        region_from_candle_name: tree.regionFromCandleName || '',
+                        region_to_candle_id: tree.regionToCandleId || null,
+                        region_to_candle_name: tree.regionToCandleName || '',
+                        group_necessity: tree.groupNecessity || 'required',
+                        if_group_found: tree.ifGroupFound || 'identify_and_trade',
+                        main_mode: tree.groupSelectionType || 'existing_group',
                         main: {
                             id: mainRow.id,
                             main_id: (mainRow.selectedExistingId || mainRow.id),
@@ -7163,12 +7902,15 @@ try {
                                     return target ? (target.row.mainCandleType || target.row.refCandleType || target.row.offsetCandle) : DEFAULT_CANDLE_TYPE;
                                 })())
                                 : null,
-                            position: mainRow.position || 'all',
+                            position: mainRow.position || 'left_and_right',
                             offset_to: mainRow.offsetTo != null ? mainRow.offsetTo : null,
                             offset_to_name: mainRow.offsetToName || '',
                             offset_position:
                                 mainRow.offsetPosition != null ? mainRow.offsetPosition : null,
                             offset_pos_point: mainRow.offsetPosPoint || 'all',
+                            new_group_offset_to: mainRow.newGroupOffsetTo != null ? mainRow.newGroupOffsetTo : null,
+                            new_group_offset_pos_point: mainRow.newGroupOffsetPosPoint || 'all',
+                            new_group_direction: mainRow.newGroupDirection || 'right',
                             price_level: mainRow.priceLevel || 'high',
                             operator: mainRow.operator || '<'
                         },
@@ -7185,7 +7927,14 @@ try {
                                 : '',
                             text_position: refRow.textPosition || (tree.offset && tree.offset.textPosition) || 'high',
                             text_color: refRow.textColor || (tree.offset && tree.offset.textColor) || 'purple',
-                            ref_candle_type: normalizeCandleType(refRow.refCandleType),
+                            ref_candle_type: root.trees.indexOf(tree) === 0
+                                ? normalizeCandleType(refRow.refCandleType || refRow.offsetCandle)
+                                : null,
+                            // Existing references point directly to an already-defined candle;
+                            // only newly-created offsets use Offset Candle Type.
+                            offset_candle: (root.trees.indexOf(tree) === 0 || refRow.referenceMode !== 'new_offset')
+                                ? null
+                                : normalizeCandleType(refRow.offsetCandle || refRow.refCandleType),
                             position: refRow.position || 'left',
                             offset_to: (refRow.referenceMode === 'new_offset') ? (mainRow.selectedExistingId || mainRow.id) : null,
                             offset_to_name: (refRow.referenceMode === 'new_offset') ? (mainRow.name || '') : '',
@@ -7233,15 +7982,26 @@ try {
                         var mainRow = tree.main, refRow = tree.reference;
                         crOut.trees.push({
                             tree_id: tree.id,
-                            main: {
+                            region_search_mode: tree.regionSearchMode || 'just_offset_existing_candles',
+                            region_from_candle_id: tree.regionFromCandleId || null,
+                            region_from_candle_name: tree.regionFromCandleName || '',
+                            region_to_candle_id: tree.regionToCandleId || null,
+                            region_to_candle_name: tree.regionToCandleName || '',
+                            group_necessity: tree.groupNecessity || 'required',
+                            if_group_found: tree.ifGroupFound || 'identify_and_trade',
+                            main_mode: tree.groupSelectionType || 'existing_group',
+                                                    main: {
                                 id: mainRow.id, main_id: (mainRow.selectedExistingId || mainRow.id),
                                 main_candle_name: mainRow.name || '', candle_text: mainRow.candleText || '',
                                 text_position: mainRow.textPosition || 'high', text_color: mainRow.textColor || 'purple',
                                 main_candle_type: normalizeCandleType(mainRow.mainCandleType),
                                 offset_candle: mainRow.offsetTo != null ? normalizeCandleType(mainRow.offsetCandle || DEFAULT_CANDLE_TYPE) : null,
-                                position: mainRow.position || 'all', offset_to: mainRow.offsetTo != null ? mainRow.offsetTo : null,
+                                position: mainRow.position || 'left_and_right', offset_to: mainRow.offsetTo != null ? mainRow.offsetTo : null,
                                 offset_to_name: mainRow.offsetToName || '', offset_position: mainRow.offsetPosition != null ? mainRow.offsetPosition : null,
-                                offset_pos_point: mainRow.offsetPosPoint || 'all', price_level: mainRow.priceLevel || 'high', operator: mainRow.operator || '<'
+                                offset_pos_point: mainRow.offsetPosPoint || 'all',
+                                new_group_offset_to: mainRow.newGroupOffsetTo != null ? mainRow.newGroupOffsetTo : null,
+                                new_group_offset_pos_point: mainRow.newGroupOffsetPosPoint || 'all',
+                                new_group_direction: mainRow.newGroupDirection || 'right', price_level: mainRow.priceLevel || 'high', operator: mainRow.operator || '<'
                             },
                             reference: {
                                 referenceMode: refRow.referenceMode || 'existing',
@@ -7250,9 +8010,19 @@ try {
                                 reference_candle_name: refRow.name || '',
                                 candle_text: (treeIndex === 0 || refRow.referenceMode === 'new_offset') ? (refRow.candleText || '') : '',
                                 text_position: refRow.textPosition || 'high', text_color: refRow.textColor || 'purple',
-                                ref_candle_type: normalizeCandleType(refRow.refCandleType), position: refRow.position || 'left',
-                                offset_to: refRow.referenceMode === 'new_offset' ? (mainRow.selectedExistingId || mainRow.id) : null,
-                                offset_to_name: refRow.referenceMode === 'new_offset' ? (mainRow.name || '') : '',
+                                ref_candle_type: treeIndex === 0
+                                    ? normalizeCandleType(refRow.refCandleType || refRow.offsetCandle)
+                                    : null,
+                                // Existing references point directly to an already-defined candle;
+                                // only newly-created offsets use Offset Candle Type.
+                                offset_candle: (treeIndex === 0 || refRow.referenceMode !== 'new_offset')
+                                    ? null
+                                    : normalizeCandleType(refRow.offsetCandle || refRow.refCandleType),
+                                position: refRow.position || 'left',
+                                offset_to: ((tree.groupSelectionType === 'new_group' || tree.groupSelectionType === 'existing_candles_window') || refRow.referenceMode === 'new_offset')
+                                    ? (mainRow.selectedExistingId || mainRow.id) : null,
+                                offset_to_name: ((tree.groupSelectionType === 'new_group' || tree.groupSelectionType === 'existing_candles_window') || refRow.referenceMode === 'new_offset')
+                                    ? (mainRow.name || '') : '',
                                 offset_position: refRow.offsetPosition != null ? refRow.offsetPosition : 1,
                                 offset_pos_point: refRow.offsetPosPoint || 'all', price_level: refRow.priceLevel || 'high'
                             }
@@ -7550,6 +8320,13 @@ try {
                     var refId = parseInt(row.reference_id, 10) || PT_CFG.nextCandleId++;
                     var tree = {
                         id: tid,
+                        regionSearchMode: row.region_search_mode || 'just_offset_existing_candles',
+                        regionFromCandleId: row.region_from_candle_id ? parseInt(row.region_from_candle_id, 10) : null,
+                        regionFromCandleName: row.region_from_candle_name || '',
+                        regionToCandleId: row.region_to_candle_id ? parseInt(row.region_to_candle_id, 10) : null,
+                        regionToCandleName: row.region_to_candle_name || '',
+                        groupNecessity: row.group_necessity || 'required',
+                        ifGroupFound: row.if_group_found || 'identify_and_trade',
                         main: {
                             id: mainId,
                             name: row.main_candle_name || '',
@@ -7558,12 +8335,16 @@ try {
                             textColor: row.text_color || 'purple',
                             mainCandleType: row.main_candle_type || DEFAULT_CANDLE_TYPE,
                             offsetCandle: row.offset_candle || '',
-                            position: row.position || (targetRoot.trees.length ? 'left' : 'all'),
+                            position: targetRoot.trees.length ? (row.position === 'right' ? 'right' : 'left') : 'left_and_right',
                             offsetTo: row.offset_to || null,
                             offsetToName: row.offset_candle_name || '',
                             offsetToKind: '',
                             offsetPosition: row.offset_position != null ? parseInt(row.offset_position, 10) : null,
                             offsetPosPoint: row.offset_position_point || 'all',
+                            newGroupOffsetTo: row.main_new_group_offset_to ? parseInt(row.main_new_group_offset_to, 10) : null,
+                            newGroupOffsetToName: '',
+                            newGroupOffsetPosPoint: row.main_new_group_offset_pos_point || 'all',
+                            newGroupDirection: row.main_new_group_direction || 'right',
                             priceLevel: row.price_level || 'high',
                             operator: row.operator || '<',
                             selectedExistingId: null
@@ -7594,12 +8375,26 @@ try {
                 }
 
                 var savedTree = treeMap[key];
+                if (row.reference_id === null || row.reference_id === '') {
+                    var savedTreeIndex = targetRoot.trees.indexOf(savedTree);
+                    savedTree.groupSelectionType = (savedTreeIndex > 0 && row.region_search_mode === 'existing_candles_perimeter')
+                        ? 'existing_candles_window'
+                        : ((savedTreeIndex > 0 && (row.main_new_group_offset_to || !row.offset_to))
+                            ? 'new_group'
+                            : 'existing_group');
+                    if (savedTree.groupSelectionType === 'existing_candles_window') {
+                        savedTree.regionSearchMode = 'existing_candles_perimeter';
+                    }
+                }
                 // A main row has a NULL reference_id; a reference row has a populated reference_id.
                 if (row.reference_id !== null && row.reference_id !== '' && row.reference_candle_name) {
                     savedTree.reference.id = parseInt(row.reference_id, 10) || savedTree.reference.id;
                     savedTree.reference.name = row.reference_candle_name || '';
-                    savedTree.reference.refCandleType = row.ref_candle_type || DEFAULT_CANDLE_TYPE;
-                    var savedIsNewOffset = !!row.offset_candle && !!row.offset_to;
+                    savedTree.reference.refCandleType = row.ref_candle_type || row.offset_candle || DEFAULT_CANDLE_TYPE;
+                    savedTree.reference.offsetCandle = row.offset_candle || row.ref_candle_type || DEFAULT_CANDLE_TYPE;
+                    var savedIsNewOffset = row.reference_mode
+                        ? String(row.reference_mode) === 'new_offset'
+                        : (!!row.offset_candle && !!row.offset_to);
                     savedTree.reference.referenceMode = savedIsNewOffset ? 'new_offset' : 'existing';
                     savedTree.reference.selectedExistingId = savedIsNewOffset ? null : (parseInt(row.reference_id, 10) || null);
                     savedTree.reference.existingCandleId = savedTree.reference.selectedExistingId;
