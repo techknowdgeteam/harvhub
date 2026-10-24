@@ -1,17 +1,30 @@
 <?php
     // investorapp.php — Investor workspace shell (sub-account aware)
     session_start();
-    require_once 'usersdb.php';
+    // Central table name; database credentials/connections come only from mysqlconnection.php.
+    $tableName = 'harvhub';
 
-    try {
-        $pdo = new PDO(
-            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-            $user, $pass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-    } catch (Exception $e) {
-        die("Database connection failed.");
+    /* Centralized database connection: mysqlconnection.php owns all credentials. */
+try {
+    require_once __DIR__ . '/mysqlconnection.php';
+
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException('getAvailablePdoConnection() was not found in mysqlconnection.php.');
     }
+
+    $pdo = getAvailablePdoConnection();
+
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('getAvailablePdoConnection() did not return a PDO connection.');
+    }
+
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
+}
 
     require_once __DIR__ . '/notification_service.php';
 

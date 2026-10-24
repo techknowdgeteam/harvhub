@@ -1,10 +1,71 @@
 <?php
-// current signals_dashboard.php — programme-specific trader signal dashboard
-session_start();
-require_once 'usersdb.php';
+// signals_dashboard.php — programme-specific trader signal dashboard
+// Buffer accidental output from included files before headers/redirects/JSON responses.
+if (ob_get_level() === 0) {
+    ob_start();
+}
 
-try { $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]); }
-catch (Exception $e) { die("Database connection failed."); }
+session_start();
+/*
+ * Use the same shared PDO connection manager as traderapp.php.
+ * Keep mysqlconnection.php saved as UTF-8 without BOM and with no output
+ * before the opening PHP tag.
+ */
+try {
+    require_once __DIR__ . '/mysqlconnection.php';
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException('getAvailablePdoConnection() was not found in mysqlconnection.php.');
+    }
+    $pdo = getAvailablePdoConnection();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('getAvailablePdoConnection() did not return a PDO connection.');
+    }
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
+}
+
+/*
+ * The current database table listing supplied for HarvHub does not include
+ * `programme`. The dashboard relies on that table throughout, so stop with
+ * a clear message instead of allowing an uncaught PDOException later.
+ */
+try {
+    $programmeTableCheck = $pdo->prepare(
+        'SELECT COUNT(*) FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_name = ?'
+    );
+    $programmeTableCheck->execute(['programme']);
+    $programmeTableExists = (int)$programmeTableCheck->fetchColumn() > 0;
+} catch (Throwable $e) {
+    error_log('signals_dashboard.php programme-table check failed: ' . $e->getMessage());
+    $programmeTableExists = false;
+}
+
+if (!$programmeTableExists) {
+    http_response_code(503);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => false,
+            'message' => 'The required `programme` table is missing from the connected database. Restore the original table/schema before using the Signals Dashboard.'
+        ]);
+        exit;
+    }
+
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signals Dashboard unavailable</title>';
+    echo '<style>body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f5f7fa;color:#1a2332}.box{max-width:760px;margin:8vh auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;line-height:1.6}h1{font-size:22px}code{background:#f1f5f9;padding:2px 5px;border-radius:4px}</style></head><body><main class="box">';
+    echo '<h1>Signals Dashboard is temporarily unavailable</h1>';
+    echo '<p>The database connection succeeded, but the connected database <code>' . htmlspecialchars((string)$pdo->query('SELECT DATABASE()')->fetchColumn(), ENT_QUOTES, 'UTF-8') . '</code> does not contain the required <code>programme</code> table.</p>';
+    echo '<p>The dashboard depends on that table for programme selection and ownership. Restore the original table and its data/schema from a backup or the project’s original SQL migration. Do not create an empty table without the correct schema.</p>';
+    echo '<p>Once the table is restored, reload this page.</p>';
+    echo '</main></body></html>';
+    exit;
+}
 
 require_once __DIR__ . '/notification_service.php';
 

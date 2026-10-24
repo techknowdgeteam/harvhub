@@ -1,16 +1,39 @@
 <?php
 // index.php — HarvHub role-based landing page, authentication and advertisements
+/* Buffer accidental output from included PHP files before sessions, headers, or redirects. */
+if (ob_get_level() === 0) {
+    ob_start();
+}
+
 session_start();
 
+/*
+ * Use the shared database connection configured in mysqlconnection.php.
+ * Keep all database credentials in that file rather than duplicating them here.
+ */
 try {
-    $pdo = new PDO(
-        "mysql:host=sql312.infinityfree.com;dbname=if0_40473107_harvhub;charset=utf8mb4",
-        "if0_40473107",
-        "InDQmdl53FZ85",
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
-} catch (Exception $e) {
-    die("Database connection failed.");
+    require_once __DIR__ . '/mysqlconnection.php';
+
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException(
+            'getAvailablePdoConnection() was not found in mysqlconnection.php.'
+        );
+    }
+
+    $pdo = getAvailablePdoConnection();
+
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException(
+            'getAvailablePdoConnection() did not return a PDO connection.'
+        );
+    }
+
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log('index.php database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
 }
 
 function esc($v) {

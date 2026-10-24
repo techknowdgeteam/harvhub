@@ -1,12 +1,22 @@
 <?php
 // programme_menu.php — programme-scoped menu
 session_start();
-require_once 'usersdb.php';
-
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (Exception $e) { die("Database connection failed."); }
+    require_once __DIR__ . '/mysqlconnection.php';
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException('getAvailablePdoConnection() was not found in mysqlconnection.php.');
+    }
+    $pdo = getAvailablePdoConnection();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('getAvailablePdoConnection() did not return a PDO connection.');
+    }
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
+}
 
 if (!isset($_SESSION['user_email'])) { header("Location: index.php?role=developer"); exit; }
 $email = strtolower($_SESSION['user_email']);

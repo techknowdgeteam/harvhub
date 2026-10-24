@@ -5,14 +5,17 @@
 session_start();
 
 try {
-    $pdo = new PDO(
-        "mysql:host=sql312.infinityfree.com;dbname=if0_40473107_harvhub;charset=utf8mb4",
-        "if0_40473107",
-        "InDQmdl53FZ85",
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
-} catch (Exception $e) {
-    die("Database connection failed.");
+    require_once __DIR__ . '/mysqlconnection.php';
+    $pdo = getAvailablePdoConnection();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Shared database connection manager did not return PDO.');
+    }
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
 }
 
 require_once __DIR__ . '/notification_service.php';

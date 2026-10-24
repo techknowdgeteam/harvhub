@@ -1,14 +1,19 @@
 <?php
 // signals_provision_request.php — Trader provision request browser
 session_start();
-require_once 'usersdb.php';
+require_once __DIR__ . '/mysqlconnection.php';
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-    ]);
-} catch (Exception $e) {
-    die("Database connection failed.");
+    $pdo = getAvailablePdoConnection();
+} catch (Throwable $e) {
+    error_log(
+        basename(__FILE__) .
+        ' database connection failed: ' .
+        $e->getMessage()
+    );
+
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
 }
 
 require_once __DIR__ . '/notification_service.php';

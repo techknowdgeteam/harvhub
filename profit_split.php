@@ -10,10 +10,6 @@
 
     $email  = strtolower($_SESSION['user_email']);
 
-    $host   = "sql312.infinityfree.com";
-    $dbname = "if0_40473107_harvhub";
-    $user   = "if0_40473107";
-    $pass   = "InDQmdl53FZ85";
 
     $tableName              = "harvhub";
     $serverAccountTable     = "server_account";
@@ -22,15 +18,18 @@
     $programmeTable         = "programme";
 
     try {
-        $pdo = new PDO(
-            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-            $user,
-            $pass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-    } catch (Exception $e) {
-        die("Database connection failed.");
+    require_once __DIR__ . '/mysqlconnection.php';
+    $pdo = getAvailablePdoConnection();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('Shared database connection manager did not return PDO.');
     }
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
+}
 
     // ==================== RESOLVE ACTIVE SUB ACCOUNT ====================
     $activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);

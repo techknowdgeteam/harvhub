@@ -1,562 +1,872 @@
+
 <?php
-// phpmyadmin_tablesfetch.php
-// Dependency-aware multi-statement SQL executor with DROP deduplication.
-// Parses each statement, builds a dependency graph per table,
-// orders them safely, executes, and returns per-statement results
-// in the ORIGINAL input order.
+/*
+ * phpmyadmin_tablesfetch.php
+ *
+ * Compatible with phpmyadmintemplate.php.
+ * Uses mysqlconnection.php and getAvailablePdoConnection().
+ *
+ * Supports:
+ * - Fetching tables
+ * - Fetching columns
+ * - Executing SQL statements
+ * - Dependency-aware ordering of common SQL operations
+ * - Duplicate DROP statement detection
+ * - JSON-only responses
+ */
 
-$host       = 'sql312.infinityfree.com';
-$dbname     = 'if0_40473107_harvhub';
-$dbUsername = 'if0_40473107';
-$dbPassword = 'InDQmdl53FZ85';
+ob_start();
 
-header('Content-Type: application/json');
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+error_reporting(E_ALL);
+
+header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
+function jsonResponse($data, $httpCode = 200)
+{
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    if (!headers_sent()) {
+        http_response_code($httpCode);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+
+    $json = json_encode(
+        $data,
+        JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
+    );
+
+    if ($json === false) {
+        http_response_code(500);
+        echo '{"status":"error","message":"JSON encoding failed.","tables":[],"columns":[],"data":[],"results":[]}';
+    } else {
+        echo $json;
+    }
+
+    exit;
 }
 
-/* =====================================================================
- * 1. SQL SPLITTER (respects quotes + comments)
- * ===================================================================== */
-function splitSqlStatements(string $sql): array {
-    $statements = [];
+/*
+ * Convert fatal PHP errors into JSON when possible.
+ */
+register_shutdown_function(function () {
+    $error = error_get_last();
+
+    if (
+        $error &&
+        in_array(
+            $error['type'],
+            array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR),
+            true
+        )
+    ) {
+        error_log(
+            'phpmyadmin_tablesfetch.php fatal error: ' .
+            $error['message'] . ' in ' .
+            $error['file'] . ':' . $error['line']
+        );
+
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+        }
+
+        echo '{"status":"error","message":"A PHP error occurred. Check the hosting error log.","tables":[],"columns":[],"data":[],"results":[]}';
+    }
+});
+
+if (isset($_SERVER['REQUEST_METHOD']) &&
+    $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    jsonResponse(array('status' => 'success', 'message' => 'OK'));
+}
+
+/*
+ * Load the known-working database connection.
+ */
+try {
+    require_once __DIR__ . '/mysqlconnection.php';
+
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException(
+            'getAvailablePdoConnection() is unavailable.'
+        );
+    }
+
+    $pdo = getAvailablePdoConnection();
+
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException(
+            'The database connection did not return PDO.'
+        );
+    }
+
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+} catch (Throwable $e) {
+    error_log(
+        'phpmyadmin_tablesfetch.php connection error: ' .
+        $e->getMessage()
+    );
+
+    jsonResponse(array(
+        'status' => 'error',
+        'message' => 'Database connection failed. Check mysqlconnection.php and the hosting error log.',
+        'tables' => array(),
+        'columns' => array(),
+        'data' => array(),
+        'results' => array()
+    ), 500);
+}
+
+/*
+ * Split SQL into statements without splitting on semicolons inside
+ * quoted strings or comments.
+ */
+function splitSqlStatements($sql)
+{
+    $statements = array();
     $current = '';
-    $len = strlen($sql);
-    $inSingle = $inDouble = $inBacktick = false;
-    $inLineComment = $inBlockComment = false;
+    $length = strlen($sql);
 
-    for ($i = 0; $i < $len; $i++) {
-        $ch   = $sql[$i];
-        $next = ($i + 1 < $len) ? $sql[$i + 1] : '';
+    $single = false;
+    $double = false;
+    $backtick = false;
+    $lineComment = false;
+    $blockComment = false;
 
-        if (!$inSingle && !$inDouble && !$inBacktick) {
-            if ($inLineComment) {
-                if ($ch === "\n") { $inLineComment = false; $current .= $ch; }
+    for ($i = 0; $i < $length; $i++) {
+        $ch = $sql[$i];
+        $next = ($i + 1 < $length) ? $sql[$i + 1] : '';
+
+        if ($lineComment) {
+            if ($ch === "\n") {
+                $lineComment = false;
+                $current .= "\n";
+            }
+            continue;
+        }
+
+        if ($blockComment) {
+            if ($ch === '*' && $next === '/') {
+                $blockComment = false;
+                $i++;
+            }
+            continue;
+        }
+
+        if (!$single && !$double && !$backtick) {
+            if (
+                $ch === '#' ||
+                (
+                    $ch === '-' &&
+                    $next === '-' &&
+                    (
+                        $i + 2 >= $length ||
+                        ctype_space($sql[$i + 2])
+                    )
+                )
+            ) {
+                $lineComment = true;
+
+                if ($ch === '-') {
+                    $i++;
+                }
                 continue;
             }
-            if ($inBlockComment) {
-                if ($ch === '*' && $next === '/') { $inBlockComment = false; $i++; }
+
+            if ($ch === '/' && $next === '*') {
+                $blockComment = true;
+                $i++;
                 continue;
             }
-            if ($ch === '-' && $next === '-') { $inLineComment = true; $i++; continue; }
-            if ($ch === '#') { $inLineComment = true; continue; }
-            if ($ch === '/' && $next === '*') { $inBlockComment = true; $i++; continue; }
         }
 
-        if ($ch === "'" && !$inDouble && !$inBacktick) {
-            if ($inSingle && $next === "'") { $current .= "''"; $i++; continue; }
-            $inSingle = !$inSingle; $current .= $ch; continue;
-        }
-        if ($ch === '"' && !$inSingle && !$inBacktick) {
-            if ($inDouble && $next === '"') { $current .= '""'; $i++; continue; }
-            $inDouble = !$inDouble; $current .= $ch; continue;
-        }
-        if ($ch === '`' && !$inSingle && !$inDouble) {
-            $inBacktick = !$inBacktick; $current .= $ch; continue;
+        if ($ch === '\\' && ($single || $double)) {
+            $current .= $ch;
+
+            if ($next !== '') {
+                $current .= $next;
+                $i++;
+            }
+            continue;
         }
 
-        if ($ch === ';' && !$inSingle && !$inDouble && !$inBacktick) {
-            $t = trim($current);
-            if ($t !== '') $statements[] = $t;
+        if ($ch === "'" && !$double && !$backtick) {
+            if ($single && $next === "'") {
+                $current .= "''";
+                $i++;
+                continue;
+            }
+
+            $single = !$single;
+            $current .= $ch;
+            continue;
+        }
+
+        if ($ch === '"' && !$single && !$backtick) {
+            if ($double && $next === '"') {
+                $current .= '""';
+                $i++;
+                continue;
+            }
+
+            $double = !$double;
+            $current .= $ch;
+            continue;
+        }
+
+        if ($ch === '`' && !$single && !$double) {
+            $backtick = !$backtick;
+            $current .= $ch;
+            continue;
+        }
+
+        if (
+            $ch === ';' &&
+            !$single &&
+            !$double &&
+            !$backtick
+        ) {
+            if (trim($current) !== '') {
+                $statements[] = trim($current);
+            }
+
             $current = '';
             continue;
         }
+
         $current .= $ch;
     }
-    $t = trim($current);
-    if ($t !== '') $statements[] = $t;
+
+    if (trim($current) !== '') {
+        $statements[] = trim($current);
+    }
+
     return $statements;
 }
 
-/* =====================================================================
- * 2. STATEMENT ANALYZER
- * ===================================================================== */
+/*
+ * Identify the operation and, when possible, its primary table.
+ */
+function analyzeSqlStatement($sql)
+{
+    $clean = trim($sql);
 
-// Priority: LOWER number = runs FIRST.
-const PRIORITY = [
-    'CREATE_DATABASE' => 0,
-    'CREATE_TABLE'    => 1,
-    'CREATE_INDEX'    => 2,
-    'ALTER_TABLE'     => 3,
-    'INSERT'          => 4,
-    'UPDATE'          => 5,
-    'DELETE'          => 6,
-    'SELECT'          => 7,
-    'TRUNCATE'        => 8,
-    'DROP_INDEX'      => 9,
-    'DROP_TABLE'      => 10,
-    'DROP_DATABASE'   => 11,
-    'OTHER'           => 5,
-];
-
-function analyzeStatement(string $sql): array {
-    $clean = ltrim($sql);
-    $clean = preg_replace('/^(\/\*.*?\*\/|--[^\n]*\n|#[^\n]*\n|\s)+/s', '', $clean);
-
-    $info = [
-        'type'  => 'OTHER',
+    $info = array(
+        'type' => 'OTHER',
         'table' => null,
-        'raw'   => $sql,
-    ];
+        'sql' => $sql
+    );
 
-    if (preg_match('/^CREATE\s+(TEMPORARY\s+)?TABLE\s+(IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'CREATE_TABLE';
-        $info['table'] = $m[3];
-        return $info;
-    }
-    if (preg_match('/^CREATE\s+(UNIQUE\s+)?INDEX\s+`?[a-zA-Z0-9_]+`?\s+ON\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'CREATE_INDEX';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^CREATE\s+DATABASE\s+(IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'CREATE_DATABASE';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^ALTER\s+TABLE\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'ALTER_TABLE';
-        $info['table'] = $m[1];
-        return $info;
-    }
-    if (preg_match('/^INSERT\s+(INTO\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'INSERT';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^UPDATE\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'UPDATE';
-        $info['table'] = $m[1];
-        return $info;
-    }
-    if (preg_match('/^DELETE\s+FROM\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'DELETE';
-        $info['table'] = $m[1];
-        return $info;
-    }
-    if (preg_match('/^TRUNCATE\s+(TABLE\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'TRUNCATE';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^DROP\s+TABLE\s+(IF\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'DROP_TABLE';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^DROP\s+INDEX\s+`?[a-zA-Z0-9_]+`?\s+ON\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'DROP_INDEX';
-        $info['table'] = $m[1];
-        return $info;
-    }
-    if (preg_match('/^DROP\s+DATABASE\s+(IF\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'DROP_DATABASE';
-        $info['table'] = $m[2];
-        return $info;
-    }
-    if (preg_match('/^SELECT\b/i', $clean)) {
-        $info['type'] = 'SELECT';
-        if (preg_match('/\bFROM\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-            $info['table'] = $m[1];
+    $patterns = array(
+        'CREATE_DATABASE' => '/^CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i',
+        'CREATE_TABLE' => '/^CREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i',
+        'CREATE_INDEX' => '/^CREATE\s+(?:UNIQUE\s+)?INDEX\s+`?[a-zA-Z0-9_]+`?\s+ON\s+`?([a-zA-Z0-9_]+)`?/i',
+        'ALTER_TABLE' => '/^ALTER\s+TABLE\s+`?([a-zA-Z0-9_]+)`?/i',
+        'INSERT' => '/^INSERT\s+(?:IGNORE\s+)?INTO\s+`?([a-zA-Z0-9_]+)`?/i',
+        'REPLACE' => '/^REPLACE\s+INTO\s+`?([a-zA-Z0-9_]+)`?/i',
+        'UPDATE' => '/^UPDATE\s+`?([a-zA-Z0-9_]+)`?/i',
+        'DELETE' => '/^DELETE\s+FROM\s+`?([a-zA-Z0-9_]+)`?/i',
+        'TRUNCATE' => '/^TRUNCATE\s+(?:TABLE\s+)?`?([a-zA-Z0-9_]+)`?/i',
+        'DROP_TABLE' => '/^DROP\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i',
+        'DROP_DATABASE' => '/^DROP\s+DATABASE\s+(?:IF\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?/i',
+        'DROP_INDEX' => '/^DROP\s+INDEX\s+`?[a-zA-Z0-9_]+`?\s+ON\s+`?([a-zA-Z0-9_]+)`?/i',
+        'SELECT' => '/^(?:SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i'
+    );
+
+    foreach ($patterns as $type => $pattern) {
+        if (preg_match($pattern, $clean, $matches)) {
+            $info['type'] = $type;
+
+            if (isset($matches[1]) &&
+                in_array($type, array(
+                    'CREATE_DATABASE',
+                    'CREATE_TABLE',
+                    'CREATE_INDEX',
+                    'ALTER_TABLE',
+                    'INSERT',
+                    'REPLACE',
+                    'UPDATE',
+                    'DELETE',
+                    'TRUNCATE',
+                    'DROP_TABLE',
+                    'DROP_DATABASE',
+                    'DROP_INDEX'
+                ), true)) {
+                $info['table'] = $matches[1];
+            }
+
+            if ($type === 'SELECT' &&
+                preg_match(
+                    '/\bFROM\s+`?([a-zA-Z0-9_]+)`?/i',
+                    $clean,
+                    $matches
+                )) {
+                $info['table'] = $matches[1];
+            }
+
+            return $info;
         }
-        return $info;
-    }
-    if (preg_match('/^(DESCRIBE|DESC|EXPLAIN)\s+`?([a-zA-Z0-9_]+)`?/i', $clean, $m)) {
-        $info['type']  = 'SELECT';
-        $info['table'] = $m[2];
-        return $info;
     }
 
     return $info;
 }
 
-/* =====================================================================
- * 3. DEPENDENCY-AWARE SCHEDULER (with DROP deduplication)
- * ===================================================================== */
-function scheduleStatements(array $statements): array {
-    // 1. Analyze each
-    $analyzed = [];
+/*
+ * Dependency-aware scheduler.
+ *
+ * Creation and alterations precede queries on the same table.
+ * DROP operations follow other operations involving that table.
+ * Duplicate DROP statements are skipped.
+ */
+function scheduleSqlStatements($statements)
+{
+    $items = array();
+    $count = count($statements);
+
     foreach ($statements as $i => $sql) {
-        $info = analyzeStatement($sql);
+        $info = analyzeSqlStatement($sql);
         $info['originalIndex'] = $i;
-        $info['dupOf'] = null;
-        $analyzed[] = $info;
+        $info['duplicate'] = false;
+        $items[] = $info;
     }
 
-    // 2. Dedupe DROP_* per (type, table): keep the FIRST, mark the rest as dupOf
-    $firstDropByTable = [];
-    foreach ($analyzed as $idx => $a) {
-        $t = $a['table'];
-        if ($t === null) continue;
-        if (in_array($a['type'], ['DROP_TABLE', 'DROP_DATABASE', 'DROP_INDEX'], true)) {
-            $key = $a['type'] . ':' . $t;
-            if (isset($firstDropByTable[$key])) {
-                $analyzed[$idx]['dupOf'] = $firstDropByTable[$key];
-            } else {
-                $firstDropByTable[$key] = $a['originalIndex'];
-            }
+    $seenDrops = array();
+
+    foreach ($items as $i => $item) {
+        if (!in_array(
+            $item['type'],
+            array('DROP_TABLE', 'DROP_DATABASE', 'DROP_INDEX'),
+            true
+        )) {
+            continue;
+        }
+
+        $key = $item['type'] . ':' .
+            ($item['table'] === null ? '' : $item['table']);
+
+        if (isset($seenDrops[$key])) {
+            $items[$i]['duplicate'] = true;
+        } else {
+            $seenDrops[$key] = true;
         }
     }
 
-    // 3. Group by table
-    $byTable = [];
-    foreach ($analyzed as $a) {
-        if ($a['table'] !== null) $byTable[$a['table']][] = $a['originalIndex'];
-    }
+    $dependencies = array_fill(0, $count, array());
 
-    // 4. Which tables get a CREATE in this batch?
-    $tablesBeingCreated = [];
-    foreach ($analyzed as $a) {
-        if ($a['type'] === 'CREATE_TABLE' && $a['table']) $tablesBeingCreated[$a['table']] = true;
-    }
-
-    // 5. Build dependency map
-    $deps = [];
-    foreach ($analyzed as $a) {
-        $deps[$a['originalIndex']] = [];
-
-        // Duplicate DROP depends on its original (runs after it, so we can skip)
-        if ($a['dupOf'] !== null) {
-            $deps[$a['originalIndex']][] = $a['dupOf'];
+    foreach ($items as $i => $item) {
+        if ($item['duplicate'] || $item['table'] === null) {
+            continue;
         }
 
-        if (!$a['table']) continue;
-        $t = $a['table'];
+        foreach ($items as $j => $other) {
+            if ($i === $j || $other['duplicate']) {
+                continue;
+            }
 
-        foreach ($byTable[$t] as $otherIdx) {
-            if ($otherIdx === $a['originalIndex']) continue;
-            // Don't chain onto duplicates of other statements (avoid cycles)
-            if ($analyzed[$otherIdx]['dupOf'] !== null
-                && $analyzed[$otherIdx]['dupOf'] !== $a['originalIndex']) continue;
+            if ($item['table'] !== $other['table']) {
+                continue;
+            }
 
-            $other = $analyzed[$otherIdx];
+            if (
+                $other['type'] === 'CREATE_TABLE' &&
+                $item['type'] !== 'CREATE_TABLE'
+            ) {
+                $dependencies[$i][] = $j;
+            }
 
-            if ($other['type'] === 'CREATE_TABLE' && $a['type'] !== 'CREATE_TABLE') {
-                $deps[$a['originalIndex']][] = $otherIdx;
+            if (
+                $item['type'] === 'ALTER_TABLE' &&
+                $other['type'] === 'CREATE_TABLE'
+            ) {
+                $dependencies[$i][] = $j;
             }
-            if ($a['type'] === 'ALTER_TABLE' && $other['type'] === 'CREATE_TABLE') {
-                $deps[$a['originalIndex']][] = $otherIdx;
+
+            if (
+                in_array(
+                    $item['type'],
+                    array('INSERT', 'REPLACE', 'UPDATE', 'DELETE', 'SELECT', 'TRUNCATE'),
+                    true
+                ) &&
+                in_array($other['type'], array('CREATE_TABLE', 'ALTER_TABLE'), true)
+            ) {
+                $dependencies[$i][] = $j;
             }
-            if (in_array($a['type'], ['INSERT', 'UPDATE', 'DELETE', 'SELECT', 'TRUNCATE'], true)) {
-                if ($other['type'] === 'CREATE_TABLE') $deps[$a['originalIndex']][] = $otherIdx;
-                if ($other['type'] === 'ALTER_TABLE')  $deps[$a['originalIndex']][] = $otherIdx;
+
+            if (
+                in_array(
+                    $item['type'],
+                    array('DROP_TABLE', 'DROP_INDEX'),
+                    true
+                ) &&
+                !in_array(
+                    $other['type'],
+                    array('DROP_TABLE', 'DROP_INDEX', 'DROP_DATABASE'),
+                    true
+                )
+            ) {
+                $dependencies[$i][] = $j;
             }
-            if (in_array($a['type'], ['DROP_TABLE', 'DROP_INDEX', 'DROP_DATABASE'], true)
-                && !in_array($other['type'], ['DROP_TABLE', 'DROP_INDEX', 'DROP_DATABASE'], true)) {
-                $deps[$a['originalIndex']][] = $otherIdx;
-            }
-            if ($a['type'] === 'DROP_TABLE' && $other['type'] === 'DROP_INDEX') {
-                $deps[$a['originalIndex']][] = $otherIdx;
+
+            if (
+                $item['type'] === 'DROP_TABLE' &&
+                $other['type'] === 'DROP_INDEX'
+            ) {
+                $dependencies[$i][] = $j;
             }
         }
+
+        $dependencies[$i] = array_values(
+            array_unique($dependencies[$i])
+        );
     }
 
-    // 6. Topological sort with priority tie-breaker
-    $remaining = array_column($analyzed, 'originalIndex');
-    $ordered   = [];
-    $maxIter   = count($remaining) + 5;
-    $iter      = 0;
+    $priority = array(
+        'CREATE_DATABASE' => 0,
+        'CREATE_TABLE' => 1,
+        'CREATE_INDEX' => 2,
+        'ALTER_TABLE' => 3,
+        'INSERT' => 4,
+        'REPLACE' => 4,
+        'UPDATE' => 5,
+        'DELETE' => 6,
+        'SELECT' => 7,
+        'TRUNCATE' => 8,
+        'DROP_INDEX' => 9,
+        'DROP_TABLE' => 10,
+        'DROP_DATABASE' => 11,
+        'OTHER' => 5
+    );
 
-    while (!empty($remaining) && $iter++ < $maxIter) {
-        $ready = [];
-        foreach ($remaining as $idx) {
+    $remaining = array();
+
+    for ($i = 0; $i < $count; $i++) {
+        $remaining[] = $i;
+    }
+
+    $ordered = array();
+
+    while (!empty($remaining)) {
+        $ready = array();
+
+        foreach ($remaining as $index) {
             $allDone = true;
-            foreach ($deps[$idx] as $d) {
-                if (!in_array($d, $ordered, true)) { $allDone = false; break; }
+
+            foreach ($dependencies[$index] as $dependency) {
+                if (!in_array($dependency, $ordered, true)) {
+                    $allDone = false;
+                    break;
+                }
             }
-            if ($allDone) $ready[] = $idx;
+
+            if ($allDone) {
+                $ready[] = $index;
+            }
         }
+
+        /*
+         * Avoid an infinite loop if dependencies form a cycle.
+         */
         if (empty($ready)) {
-            foreach ($remaining as $idx) $ordered[] = $idx;
+            foreach ($remaining as $index) {
+                $ordered[] = $index;
+            }
             break;
         }
 
-        usort($ready, function($a, $b) use ($analyzed, $tablesBeingCreated) {
-            $A = $analyzed[$a];
-            $B = $analyzed[$b];
-            $pa = PRIORITY[$A['type']] ?? 5;
-            $pb = PRIORITY[$B['type']] ?? 5;
-            if ($pa !== $pb) return $pa <=> $pb;
+        usort($ready, function ($a, $b) use ($items, $priority) {
+            $pa = isset($priority[$items[$a]['type']])
+                ? $priority[$items[$a]['type']] : 5;
 
-            $ac = isset($tablesBeingCreated[$A['table']]) ? 1 : 0;
-            $bc = isset($tablesBeingCreated[$B['table']]) ? 1 : 0;
-            if ($ac !== $bc) return $bc <=> $ac;
+            $pb = isset($priority[$items[$b]['type']])
+                ? $priority[$items[$b]['type']] : 5;
 
-            return $A['originalIndex'] <=> $B['originalIndex'];
+            if ($pa !== $pb) {
+                return $pa <=> $pb;
+            }
+
+            return $items[$a]['originalIndex'] <=>
+                $items[$b]['originalIndex'];
         });
 
         $pick = $ready[0];
         $ordered[] = $pick;
-        $remaining = array_values(array_diff($remaining, [$pick]));
+
+        $remaining = array_values(
+            array_diff($remaining, array($pick))
+        );
     }
 
-    $orderInfo = [];
-    foreach ($ordered as $idx) $orderInfo[] = $analyzed[$idx];
-    return $orderInfo;
-}
+    $result = array();
 
-/* =====================================================================
- * 4. EXECUTE ONE STATEMENT
- * ===================================================================== */
-function executeSingleStatement(PDO $pdo, string $sql, int $index, string $type): array {
-    $result = [
-        'index'        => $index,
-        'sql'          => $sql,
-        'type'         => $type,
-        'status'       => 'unknown',
-        'message'      => '',
-        'rows'         => [],
-        'columnMeta'   => [],
-        'affectedRows' => 0,
-        'isReadQuery'  => false,
-    ];
+    foreach ($ordered as $index) {
+        $result[] = $items[$index];
+    }
 
-    try {
-        $stmt = $pdo->query($sql);
+    /*
+     * Return statements in original input order, retaining the
+     * execution order separately.
+     */
+    $executionOrder = array();
 
-        if ($stmt === false) {
-            $result['status']  = 'error';
-            $result['message'] = 'Query returned false.';
-            return $result;
-        }
+    foreach ($result as $position => $item) {
+        $executionOrder[$item['originalIndex']] = $position;
+    }
 
-        if ($stmt->columnCount() > 0) {
-            $result['isReadQuery'] = true;
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            $result['rows'] = $rows;
+    usort($result, function ($a, $b) {
+        return $a['originalIndex'] <=> $b['originalIndex'];
+    });
 
-            $meta = [];
-            for ($i = 0; $i < $stmt->columnCount(); $i++) {
-                $m = $stmt->getColumnMeta($i);
-                if ($m && isset($m['name'])) $meta[] = ['name' => $m['name']];
-            }
-            $result['columnMeta'] = $meta;
-
-            if (empty($rows)) {
-                $result['status']  = 'empty';
-                $result['message'] = 'Query ran successfully but returned 0 rows.';
-            } else {
-                $result['status']  = 'success';
-                $result['message'] = 'Query succeeded with ' . count($rows) . ' row(s).';
-            }
-        } else {
-            $affected = $stmt->rowCount();
-            $result['affectedRows'] = $affected;
-            $result['status']  = 'success';
-            $result['message'] = 'Statement executed. Affected rows: ' . $affected;
-        }
-    } catch (PDOException $e) {
-        $result['status']  = 'error';
-        $result['message'] = $e->getMessage();
-    } catch (Throwable $e) {
-        $result['status']  = 'error';
-        $result['message'] = $e->getMessage();
+    foreach ($result as $i => $item) {
+        $result[$i]['executionOrder'] =
+            $executionOrder[$item['originalIndex']];
     }
 
     return $result;
 }
 
-/* =====================================================================
- * 5. MAIN HANDLER
- * ===================================================================== */
-function handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table = null, $sqlQuery = null) {
+/*
+ * Execute one SQL statement.
+ */
+function executeOneSqlStatement($pdo, $item)
+{
+    $sql = $item['sql'];
+
+    $result = array(
+        'index' => $item['originalIndex'],
+        'executionOrder' => $item['executionOrder'],
+        'sql' => $sql,
+        'type' => $item['type'],
+        'status' => 'unknown',
+        'message' => '',
+        'rows' => array(),
+        'columnMeta' => array(),
+        'affectedRows' => 0,
+        'isReadQuery' => false
+    );
+
+    if ($item['duplicate']) {
+        $result['status'] = 'skipped';
+        $result['message'] = 'Duplicate DROP statement skipped.';
+        return $result;
+    }
+
     try {
-        $pdo = new PDO(
-            "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-            $dbUsername, $dbPassword,
-            [
-                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES   => false,
-            ]
+        $stmt = $pdo->query($sql);
+
+        if ($stmt === false) {
+            throw new RuntimeException('SQL execution failed.');
+        }
+
+        if ($stmt->columnCount() > 0) {
+            $result['isReadQuery'] = true;
+            $result['rows'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            for ($i = 0; $i < $stmt->columnCount(); $i++) {
+                $meta = $stmt->getColumnMeta($i);
+
+                if (is_array($meta) && isset($meta['name'])) {
+                    $result['columnMeta'][] = array(
+                        'name' => $meta['name']
+                    );
+                }
+            }
+
+            $count = count($result['rows']);
+
+            $result['status'] = $count > 0 ? 'success' : 'empty';
+
+            $result['message'] = $count > 0
+                ? 'Query succeeded with ' . $count . ' row(s).'
+                : 'Query succeeded but returned 0 rows.';
+        } else {
+            $result['affectedRows'] = $stmt->rowCount();
+            $result['status'] = 'success';
+            $result['message'] =
+                'Statement executed. Affected rows: ' .
+                $result['affectedRows'];
+        }
+
+        $stmt->closeCursor();
+
+    } catch (Throwable $e) {
+        error_log(
+            'phpmyadmin_tablesfetch.php SQL error: ' .
+            $e->getMessage()
         );
 
-        if ($sqlQuery !== null && trim($sqlQuery) !== '') {
-            $statements = splitSqlStatements($sqlQuery);
-
-            if (empty($statements)) {
-                return [
-                    'status'   => 'error',
-                    'message'  => 'No executable SQL statements found.',
-                    'data'     => [],
-                    'results'  => [],
-                    'tables'   => [],
-                    'columns'  => [],
-                ];
-            }
-
-            // ---- Schedule in dependency-safe order ----
-            $scheduled = scheduleStatements($statements);
-
-            $resultsByOriginal = [];
-            $successCount = 0;
-            $errorCount   = 0;
-            $emptyCount   = 0;
-            $skippedCount = 0;
-
-            foreach ($scheduled as $pos => $info) {
-                $origIdx = $info['originalIndex'];
-                $stmtSql = $info['raw'];
-                $type    = $info['type'];
-
-                // ─── Duplicate DROP → skip cleanly ───
-                if ($info['dupOf'] !== null) {
-                    $resultsByOriginal[$origIdx] = [
-                        'index'        => $origIdx,
-                        'sql'          => $stmtSql,
-                        'type'         => $type,
-                        'status'       => 'skipped',
-                        'message'      => 'Skipped — same table already scheduled for DROP earlier in this batch.',
-                        'rows'         => [],
-                        'columnMeta'   => [],
-                        'affectedRows' => 0,
-                        'isReadQuery'  => false,
-                    ];
-                    $skippedCount++;
-                    continue;
-                }
-
-                // ─── Skip if a prerequisite failed ───
-                $depFailed = false;
-                foreach ($scheduled as $other) {
-                    if ($other['originalIndex'] === $origIdx) continue;
-                    if ($other['dupOf'] !== null) continue; // duplicates don't gate others
-                    if ($other['table'] && $info['table'] && $other['table'] === $info['table']) {
-                        if (isset($resultsByOriginal[$other['originalIndex']])) {
-                            $depStatus = $resultsByOriginal[$other['originalIndex']]['status'];
-                            if ($depStatus === 'error' || $depStatus === 'skipped') {
-                                $depType = $other['type'];
-                                $isPrereq = in_array($depType, ['CREATE_TABLE', 'ALTER_TABLE', 'CREATE_INDEX', 'CREATE_DATABASE'], true);
-                                if ($info['type'] === 'DROP_TABLE' || $info['type'] === 'DROP_DATABASE') {
-                                    $isPrereq = true;
-                                }
-                                if ($isPrereq) { $depFailed = true; break; }
-                            }
-                        }
-                    }
-                }
-
-                if ($depFailed) {
-                    $resultsByOriginal[$origIdx] = [
-                        'index'        => $origIdx,
-                        'sql'          => $stmtSql,
-                        'type'         => $type,
-                        'status'       => 'skipped',
-                        'message'      => 'Skipped because a prerequisite statement failed.',
-                        'rows'         => [],
-                        'columnMeta'   => [],
-                        'affectedRows' => 0,
-                        'isReadQuery'  => false,
-                    ];
-                    $skippedCount++;
-                    continue;
-                }
-
-                $r = executeSingleStatement($pdo, $stmtSql, $origIdx, $type);
-                $resultsByOriginal[$origIdx] = $r;
-
-                if ($r['status'] === 'success')    $successCount++;
-                else if ($r['status'] === 'error') $errorCount++;
-                else if ($r['status'] === 'empty') $emptyCount++;
-            }
-
-            ksort($resultsByOriginal);
-            $results = array_values($resultsByOriginal);
-
-            $total = count($results);
-            $ok    = $successCount + $emptyCount;
-
-            $parts = [];
-            if ($successCount > 0) $parts[] = $successCount . ' succeeded';
-            if ($emptyCount   > 0) $parts[] = $emptyCount   . ' returned no rows';
-            if ($skippedCount > 0) $parts[] = $skippedCount . ' skipped';
-            if ($errorCount   > 0) $parts[] = $errorCount   . ' failed';
-
-            if ($errorCount === 0 && $skippedCount === 0)  $overallStatus = 'success';
-            else if ($ok > 0)                              $overallStatus = 'partial';
-            else                                           $overallStatus = 'error';
-
-            $message = implode(', ', $parts) . ' (of ' . $total . ' statement(s)).';
-
-            $data = [];
-            if ($total === 1) {
-                $only = $results[0];
-                if ($only['status'] !== 'error') {
-                    if ($only['isReadQuery']) {
-                        $data = ['rows' => $only['rows'], 'columnMeta' => $only['columnMeta']];
-                    } else {
-                        $data = ['affectedRows' => $only['affectedRows']];
-                    }
-                }
-            }
-
-            return [
-                'status'   => $overallStatus,
-                'message'  => $message,
-                'data'     => $data,
-                'results'  => $results,
-                'summary'  => [
-                    'total'     => $total,
-                    'succeeded' => $successCount,
-                    'empty'     => $emptyCount,
-                    'skipped'   => $skippedCount,
-                    'failed'    => $errorCount,
-                ],
-                'tables'   => [],
-                'columns'  => [],
-            ];
-        }
-
-        if ($table !== null && $table !== '') {
-            $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', $table);
-            $stmt = $pdo->query("SHOW COLUMNS FROM `$safeTable`");
-            $columns = $stmt->fetchAll();
-            return [
-                'status'  => 'success',
-                'columns' => $columns,
-                'message' => "Columns for `$safeTable`",
-            ];
-        }
-
-        $stmt = $pdo->query("SHOW TABLES");
-        $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        return [
-            'status'  => 'success',
-            'tables'  => $tables,
-            'message' => 'Tables retrieved',
-        ];
-    } catch (PDOException $e) {
-        return [
-            'status'   => 'error',
-            'message'  => 'Database error: ' . $e->getMessage(),
-            'tables'   => [],
-            'columns'  => [],
-            'data'     => [],
-            'results'  => [],
-        ];
+        $result['status'] = 'error';
+        $result['message'] =
+            'SQL execution failed. Check the hosting PHP error log.';
     }
+
+    return $result;
 }
 
-$table = null;
-$sqlQuery = null;
+/*
+ * Main request handling.
+ */
+try {
+    $input = array();
 
-if (isset($_GET['table']))     $table = $_GET['table'];
-if (isset($_GET['sql_query'])) $sqlQuery = $_GET['sql_query'];
-if (isset($_POST['table']))     $table = $_POST['table'];
-if (isset($_POST['sql_query'])) $sqlQuery = $_POST['sql_query'];
-
-$inputJSON = file_get_contents('php://input');
-if ($inputJSON) {
-    $input = json_decode($inputJSON, true);
-    if (is_array($input)) {
-        if (isset($input['table']))     $table = $input['table'];
-        if (isset($input['sql_query'])) $sqlQuery = $input['sql_query'];
+    if (!empty($_GET)) {
+        $input = array_merge($input, $_GET);
     }
-}
 
-echo json_encode(handleDatabaseRequest($host, $dbname, $dbUsername, $dbPassword, $table, $sqlQuery));
+    if (!empty($_POST)) {
+        $input = array_merge($input, $_POST);
+    }
+
+    $contentType = isset($_SERVER['CONTENT_TYPE'])
+        ? $_SERVER['CONTENT_TYPE'] : '';
+
+    if (stripos($contentType, 'application/json') !== false) {
+        $raw = file_get_contents('php://input');
+
+        if ($raw !== false && trim($raw) !== '') {
+            $decoded = json_decode($raw, true);
+
+            if (!is_array($decoded)) {
+                jsonResponse(array(
+                    'status' => 'error',
+                    'message' => 'Invalid JSON request body.',
+                    'tables' => array(),
+                    'columns' => array(),
+                    'data' => array(),
+                    'results' => array()
+                ), 400);
+            }
+
+            $input = array_merge($input, $decoded);
+        }
+    }
+
+    $table = isset($input['table'])
+        ? trim((string) $input['table']) : '';
+
+    $sqlQuery = isset($input['sql_query'])
+        ? (string) $input['sql_query'] : '';
+
+    /*
+     * Return table list when no table or SQL query is supplied.
+     */
+    if ($table === '' && trim($sqlQuery) === '') {
+        $database = $pdo->query('SELECT DATABASE()')->fetchColumn();
+
+        $tables = $pdo->query('SHOW TABLES')
+            ->fetchAll(PDO::FETCH_COLUMN, 0);
+
+        jsonResponse(array(
+            'status' => 'success',
+            'message' => 'Tables retrieved successfully.',
+            'database' => $database,
+            'table_count' => count($tables),
+            'tables' => $tables,
+            'columns' => array(),
+            'data' => array(),
+            'results' => array()
+        ));
+    }
+
+    /*
+     * Return column metadata for the selected table.
+     */
+    if ($table !== '' && trim($sqlQuery) === '') {
+        if (!preg_match('/\A[A-Za-z0-9_]+\z/', $table)) {
+            jsonResponse(array(
+                'status' => 'error',
+                'message' => 'Invalid table name.',
+                'tables' => array(),
+                'columns' => array()
+            ), 400);
+        }
+
+        $check = $pdo->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = ?'
+        );
+
+        $check->execute(array($table));
+
+        if ((int) $check->fetchColumn() === 0) {
+            jsonResponse(array(
+                'status' => 'error',
+                'message' => 'Table not found in the selected database.',
+                'tables' => array(),
+                'columns' => array()
+            ), 404);
+        }
+
+        $stmt = $pdo->query("SHOW COLUMNS FROM `" . $table . "`");
+        $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        jsonResponse(array(
+            'status' => 'success',
+            'message' => 'Columns retrieved successfully.',
+            'table' => $table,
+            'columns' => $columns,
+            'tables' => array(),
+            'data' => array()
+        ));
+    }
+
+    /*
+     * Execute SQL statements in dependency-aware order.
+     */
+    if (trim($sqlQuery) === '') {
+        jsonResponse(array(
+            'status' => 'error',
+            'message' => 'No SQL query was supplied.',
+            'tables' => array(),
+            'columns' => array(),
+            'data' => array(),
+            'results' => array()
+        ), 400);
+    }
+
+    $statements = splitSqlStatements($sqlQuery);
+
+    if (empty($statements)) {
+        jsonResponse(array(
+            'status' => 'error',
+            'message' => 'No executable SQL statements found.',
+            'tables' => array(),
+            'columns' => array(),
+            'data' => array(),
+            'results' => array()
+        ), 400);
+    }
+
+    $scheduled = scheduleSqlStatements($statements);
+    $results = array();
+
+    foreach ($scheduled as $item) {
+        $results[] = executeOneSqlStatement($pdo, $item);
+    }
+
+    /*
+     * Results are in original input order.
+     */
+    usort($results, function ($a, $b) {
+        return $a['index'] <=> $b['index'];
+    });
+
+    $success = 0;
+    $empty = 0;
+    $failed = 0;
+    $skipped = 0;
+    $totalRows = 0;
+    $singleData = array();
+
+    foreach ($results as $result) {
+        if ($result['status'] === 'success') {
+            $success++;
+        } elseif ($result['status'] === 'empty') {
+            $empty++;
+        } elseif ($result['status'] === 'skipped') {
+            $skipped++;
+        } else {
+            $failed++;
+        }
+
+        $totalRows += count($result['rows']);
+
+        if (count($results) === 1) {
+            if ($result['isReadQuery']) {
+                $singleData = array(
+                    'rows' => $result['rows'],
+                    'columnMeta' => $result['columnMeta']
+                );
+            } else {
+                $singleData = array(
+                    'affectedRows' => $result['affectedRows']
+                );
+            }
+        }
+    }
+
+    if ($failed === 0) {
+        $overallStatus = 'success';
+    } elseif ($success + $empty > 0) {
+        $overallStatus = 'partial';
+    } else {
+        $overallStatus = 'error';
+    }
+
+    $messages = array();
+
+    if ($success > 0) {
+        $messages[] = $success . ' succeeded';
+    }
+
+    if ($empty > 0) {
+        $messages[] = $empty . ' returned no rows';
+    }
+
+    if ($skipped > 0) {
+        $messages[] = $skipped . ' skipped';
+    }
+
+    if ($failed > 0) {
+        $messages[] = $failed . ' failed';
+    }
+
+    $response = array(
+        'status' => $overallStatus,
+        'message' => implode(', ', $messages) .
+            ' (' . count($results) . ' statement(s)).',
+        'data' => $singleData,
+        'results' => $results,
+        'summary' => array(
+            'total' => count($results),
+            'succeeded' => $success,
+            'empty' => $empty,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'totalRows' => $totalRows
+        ),
+        'tables' => array(),
+        'columns' => array()
+    );
+
+    /*
+     * Refresh the table list after SQL execution.
+     */
+    try {
+        $response['tables'] = $pdo->query('SHOW TABLES')
+            ->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $ignored) {
+        $response['tables'] = array();
+    }
+
+    jsonResponse($response);
+
+} catch (Throwable $e) {
+    error_log(
+        'phpmyadmin_tablesfetch.php request error: ' .
+        $e->getMessage()
+    );
+
+    jsonResponse(array(
+        'status' => 'error',
+        'message' =>
+            'The database request failed. Check the hosting PHP error log.',
+        'tables' => array(),
+        'columns' => array(),
+        'data' => array(),
+        'results' => array()
+    ), 500);
+}

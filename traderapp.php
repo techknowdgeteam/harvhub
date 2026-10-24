@@ -1,16 +1,27 @@
 <?php
+/* Buffer any accidental output from included files before headers/redirects. */
+if (ob_get_level() === 0) { ob_start(); }
 // traderapp.php — Trader workspace shell (programme-aware)
 session_start();
-require_once 'usersdb.php';
-
+/*
+ * Use the shared database connection manager.
+ * mysqlconnection.php must be saved as UTF-8 WITHOUT BOM and must not output HTML.
+ */
 try {
-    $pdo = new PDO(
-        "mysql:host=$host;dbname=$dbname;charset=utf8mb4",
-        $user, $pass,
-        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-    );
-} catch (Exception $e) {
-    die("Database connection failed.");
+    require_once __DIR__ . '/mysqlconnection.php';
+    if (!function_exists('getAvailablePdoConnection')) {
+        throw new RuntimeException('getAvailablePdoConnection() was not found in mysqlconnection.php.');
+    }
+    $pdo = getAvailablePdoConnection();
+    if (!$pdo instanceof PDO) {
+        throw new RuntimeException('getAvailablePdoConnection() did not return a PDO connection.');
+    }
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Database connection failed. Please try again later.');
 }
 
 require_once __DIR__ . '/notification_service.php';
