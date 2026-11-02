@@ -481,46 +481,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         exit;
     }
 
-    // Expand confirmation roots into the same validated tree-row pipeline, but route their
-    // normalized rows to the dedicated confirmation table below.
+    // Expand every confirmation alternative into the same validated tree-row pipeline,
+    // routing normalized rows to the dedicated confirmation table. The legacy singular
+    // confirmation_root payload remains accepted for older browser clients.
     $parentRoots = $decodedPayload['roots'];
     foreach ($parentRoots as $parentRoot) {
-        if (!is_array($parentRoot) || empty($parentRoot['confirmation_root']) || !is_array($parentRoot['confirmation_root'])) continue;
-        $cr = $parentRoot['confirmation_root'];
-
-        // The UI's authoritative confirmation-timeframe selector is serialized on the
-        // parent as confirmation_timeframes. Prefer it when building the dedicated
-        // confirmation-root payload; fall back to the nested object's timeframes only
-        // for older clients.
-        $selectedConfirmationTimeframes = $parentRoot['confirmation_timeframes'] ?? [];
-        if (!is_array($selectedConfirmationTimeframes)) {
-            $rawConfirmationTimeframes = trim((string)$selectedConfirmationTimeframes);
-            $decodedConfirmationTimeframes = $rawConfirmationTimeframes !== '' ? json_decode($rawConfirmationTimeframes, true) : null;
-            $selectedConfirmationTimeframes = is_array($decodedConfirmationTimeframes)
-                ? $decodedConfirmationTimeframes
-                : ($rawConfirmationTimeframes !== '' ? explode(',', $rawConfirmationTimeframes) : []);
+        if (!is_array($parentRoot)) continue;
+        $confirmationPayloads = $parentRoot['confirmation_roots'] ?? null;
+        if (!is_array($confirmationPayloads)) $confirmationPayloads = [];
+        if (!$confirmationPayloads && !empty($parentRoot['confirmation_root']) && is_array($parentRoot['confirmation_root'])) {
+            $confirmationPayloads = [$parentRoot['confirmation_root']];
         }
-        $nestedConfirmationTimeframes = $cr['timeframes'] ?? [];
-        if (!is_array($nestedConfirmationTimeframes)) $nestedConfirmationTimeframes = [];
-        $cleanConfirmationTimeframes = static function ($values) {
-            return array_values(array_unique(array_filter(array_map(
+        $legacyParentTimeframes = $parentRoot['confirmation_timeframes'] ?? [];
+        foreach ($confirmationPayloads as $confirmationIndex => $cr) {
+            if (!is_array($cr)) continue;
+            $rawConfirmationTimeframes = $cr['timeframes'] ?? [];
+            if (!is_array($rawConfirmationTimeframes)) {
+                $rawConfirmationTimeframes = trim((string)$rawConfirmationTimeframes);
+                $decodedConfirmationTimeframes = $rawConfirmationTimeframes !== '' ? json_decode($rawConfirmationTimeframes, true) : null;
+                $rawConfirmationTimeframes = is_array($decodedConfirmationTimeframes)
+                    ? $decodedConfirmationTimeframes
+                    : ($rawConfirmationTimeframes !== '' ? explode(',', $rawConfirmationTimeframes) : []);
+            }
+            // Only the old singular payload inherits parent-level timeframe metadata.
+            if ($confirmationIndex === 0 && empty($cr['timeframes']) && !empty($legacyParentTimeframes)) {
+                $rawConfirmationTimeframes = $legacyParentTimeframes;
+                if (!is_array($rawConfirmationTimeframes)) {
+                    $rawConfirmationTimeframes = trim((string)$rawConfirmationTimeframes);
+                    $decodedConfirmationTimeframes = $rawConfirmationTimeframes !== '' ? json_decode($rawConfirmationTimeframes, true) : null;
+                    $rawConfirmationTimeframes = is_array($decodedConfirmationTimeframes)
+                        ? $decodedConfirmationTimeframes
+                        : ($rawConfirmationTimeframes !== '' ? explode(',', $rawConfirmationTimeframes) : []);
+                }
+            }
+            $cleanConfirmationTimeframes = array_values(array_unique(array_filter(array_map(
                 static function ($tf) { return trim((string)$tf); },
-                is_array($values) ? $values : []
+                is_array($rawConfirmationTimeframes) ? $rawConfirmationTimeframes : []
             ), static function ($tf) { return $tf !== ''; })));
-        };
-        $selectedConfirmationTimeframes = $cleanConfirmationTimeframes($selectedConfirmationTimeframes);
-        $nestedConfirmationTimeframes = $cleanConfirmationTimeframes($nestedConfirmationTimeframes);
-        $cr['timeframes'] = $selectedConfirmationTimeframes ?: $nestedConfirmationTimeframes;
-
-        $cr['_is_confirmation'] = true;
-        $cr['_parent_root_id'] = (int)($parentRoot['id'] ?? 1);
-        $cr['_anchor_candle_id'] = (int)($cr['anchor_candle_id'] ?? 0) ?: null;
-        $cr['_anchor_candle_name'] = (string)($cr['anchor_candle_name'] ?? '');
-        $cr['_anchor_time'] = (string)($cr['anchor_time'] ?? 'open_time');
-        $cr['_confirmation_timeframes'] = $cr['timeframes'];
-        $cr['id'] = max(1, (int)($cr['id'] ?? ((int)($parentRoot['id'] ?? 1) * 1000 + 1)));
-        $cr['root_name'] = (string)($cr['root_name'] ?? ('Confirmation for root ' . (int)($parentRoot['id'] ?? 1)));
-        $decodedPayload['roots'][] = $cr;
+            $cr['timeframes'] = $cleanConfirmationTimeframes;
+            $cr['_is_confirmation'] = true;
+            $cr['_parent_root_id'] = (int)($parentRoot['id'] ?? 1);
+            $cr['_anchor_candle_id'] = (int)($cr['anchor_candle_id'] ?? 0) ?: null;
+            $cr['_anchor_candle_name'] = (string)($cr['anchor_candle_name'] ?? '');
+            $cr['_anchor_time'] = (string)($cr['anchor_time'] ?? 'open_time');
+            $cr['_confirmation_timeframes'] = $cleanConfirmationTimeframes;
+            $fallbackConfirmationId = ((int)($parentRoot['id'] ?? 1) * 1000) + $confirmationIndex + 1;
+            $cr['id'] = max(1, (int)($cr['id'] ?? $fallbackConfirmationId));
+            $cr['root_name'] = (string)($cr['root_name'] ?? ('Confirmation ' . ($confirmationIndex + 1) . ' for root ' . (int)($parentRoot['id'] ?? 1)));
+            $cr['trade_for'] = 'root_confirmation';
+            $decodedPayload['roots'][] = $cr;
+        }
     }
 
     // Validate parent roots and confirmation roots against their respective selectors.
@@ -687,9 +697,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
                 $refOffset = $mainId;
                 $mainOffsetPosition = ((isset($main['create_offset']) && $main['create_offset'] === 'no') || (isset($main['offset_position']) && $main['offset_position'] !== '' && (int)$main['offset_position'] === 0)) ? 0 : (isset($main['offset_position']) && $main['offset_position'] !== '' ? max(1, (int)$main['offset_position']) : 1);
                 $refOffsetPosition = isset($reference['offset_position']) && $reference['offset_position'] !== '' ? max(1, (int)$reference['offset_position']) : 1;
-                $mainPosition = $treeIndex === 0
-                    ? $safeChoice($main['position'] ?? null, ['left_and_right'], 'left_and_right')
-                    : $safeChoice($main['position'] ?? null, ['left','right'], 'left');
+                // The first parent-root main remains fixed to left_and_right. The first
+                // confirmation-root main is independently configurable (left, right, or both).
+                if (!empty($root['_is_confirmation']) && $treeIndex === 0) {
+                    $mainPosition = $safeChoice($main['position'] ?? null, ['left','right','left_and_right'], 'left_and_right');
+                } elseif ($treeIndex === 0) {
+                    $mainPosition = 'left_and_right';
+                } else {
+                    $mainPosition = $safeChoice($main['position'] ?? null, ['left','right'], 'left');
+                }
                 $refPosition = $safeChoice($reference['position'] ?? null, ['left','right'], 'left');
                 $mainOffsetPoint = $safeChoice($main['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
                 $refOffsetPoint = $safeChoice($reference['offset_pos_point'] ?? null, $allowedOffsetPoints, 'all');
@@ -873,12 +889,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
         $pdo->commit();
 
         $rootCount = count($parentRoots);
-        $treeCount = 0;
-        foreach ($parentRoots as $r) $treeCount += isset($r['trees']) && is_array($r['trees']) ? count($r['trees']) : 0;
+        $mainTreeCount = 0;
+        $confirmationTreeCount = 0;
+        foreach ($parentRoots as $r) {
+            $mainTreeCount += isset($r['trees']) && is_array($r['trees']) ? count($r['trees']) : 0;
+            $confirmationPayloads = isset($r['confirmation_roots']) && is_array($r['confirmation_roots'])
+                ? $r['confirmation_roots']
+                : ((!empty($r['confirmation_root']) && is_array($r['confirmation_root'])) ? [$r['confirmation_root']] : []);
+            foreach ($confirmationPayloads as $confirmationPayload) {
+                if (is_array($confirmationPayload) && isset($confirmationPayload['trees']) && is_array($confirmationPayload['trees'])) {
+                    $confirmationTreeCount += count($confirmationPayload['trees']);
+                }
+            }
+        }
+        $treeCount = $mainTreeCount + $confirmationTreeCount;
         echo json_encode([
             'success' => true,
             'message' => 'Parent and confirmation configuration saved.',
-            'meta' => ['root_count' => $rootCount, 'tree_count' => $treeCount, 'row_count' => $savedMainRows, 'confirmation_row_count' => $savedConfirmationRows]
+            'meta' => [
+                'root_count' => $rootCount,
+                'tree_count' => $treeCount,
+                'main_tree_count' => $mainTreeCount,
+                'confirmation_tree_count' => $confirmationTreeCount,
+                'row_count' => $savedMainRows,
+                'confirmation_row_count' => $savedConfirmationRows,
+                'total_row_count' => $savedMainRows + $savedConfirmationRows
+            ]
         ]);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -1415,7 +1451,7 @@ try {
         height: 100%;
     }
     .pt-chart-canvas.pt-grabbing { cursor: grabbing; }
-    .pt-family-hover-note{position:fixed;z-index:12000;display:none;max-width:min(320px,calc(100vw - 24px));padding:10px 12px;border:1px solid var(--pt-border);border-radius:10px;background:var(--pt-card);color:var(--pt-text);box-shadow:0 8px 28px rgba(0,0,0,.22);font-size:.78rem;line-height:1.45;pointer-events:none}
+    .pt-family-hover-note{position:fixed;z-index:12000;display:none;max-width:min(340px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain;padding:10px 12px;border:1px solid var(--pt-border);border-radius:10px;background:var(--pt-card);color:var(--pt-text);box-shadow:0 8px 28px rgba(0,0,0,.22);font-size:.78rem;line-height:1.45;pointer-events:auto}
     .pt-family-hover-note strong{display:block;margin-bottom:3px;font-size:.8rem}
 
 
@@ -1881,6 +1917,7 @@ try {
     .pt-cfg-modal.active { display: flex; }
 
     .pt-cfg-box {
+        position: relative;
         width: 92%;
         max-width: 1180px;
         height: 92vh;
@@ -1896,6 +1933,9 @@ try {
         font: 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
 
+    .pt-cfg-loading-overlay{position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(20,24,30,.72);color:#fff;text-align:center;font-size:.9rem;font-weight:800;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+    .pt-cfg-loading-overlay[hidden]{display:none!important}
+    .pt-cfg-loading-overlay .pt-loading-spinner{width:42px;height:42px;border-width:3px;border-color:rgba(255,255,255,.3);border-top-color:#fff}
     .pt-cfg-head {
         display: flex;
         align-items: center;
@@ -2323,11 +2363,18 @@ try {
 
 
     .pt-rd-dashboard{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+    .pt-rd-state-wrap{min-width:0}
+    .pt-rd-state-wrap .pt-rd-stat{height:100%;box-sizing:border-box}
+    .pt-rd-state-content{flex:1;min-width:0}
+    .pt-rd-state-trades{max-height:210px;overflow-y:auto;overscroll-behavior:contain;margin-top:7px;padding:8px;border:1px solid var(--pt-border);border-radius:9px;background:rgba(128,128,128,.055)}
+    .pt-rd-state-trades[hidden]{display:none!important}
+    .pt-rd-state-trades .pt-dd-sequence{margin:0}
+    .pt-rd-state-trades .pt-dd-chip{max-width:100%;overflow-wrap:anywhere}
     .pt-rd-stat{display:flex;align-items:center;gap:10px;min-width:0;padding:14px;border:1px solid var(--pt-border);border-radius:13px;background:var(--pt-card, var(--pt-bg));box-shadow:0 5px 18px rgba(0,0,0,.045)}
     .pt-rd-stat-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:rgba(128,128,128,.12);font-size:15px;flex-shrink:0}
     .pt-rd-stat.loss .pt-rd-stat-icon,.pt-rd-badge.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-rd-stat.profit .pt-rd-stat-icon,.pt-rd-badge.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-rd-stat.pending .pt-rd-stat-icon,.pt-rd-badge.pending{color:#bd8516;background:rgba(189,133,22,.13)}.pt-rd-stat.active .pt-rd-stat-icon,.pt-rd-badge.active{color:#4388dc;background:rgba(67,136,220,.13)}
     .pt-rd-stat-label{font-size:.72rem;color:var(--pt-muted);font-weight:650}.pt-rd-stat-value{font-size:1.55rem;line-height:1.2;font-weight:800;margin-top:3px}
-    .pt-dd-cover[hidden],.pt-dd-details[hidden]{display:none!important}.pt-rd-drawdown-card{align-items:stretch;min-height:0;overflow:hidden}.pt-dd-cover,.pt-dd-details{display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0}.pt-dd-content{min-width:0;flex:1}.pt-dd-details{display:block;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.pt-dd-detail-heading{font-size:.78rem;font-weight:800;margin-bottom:10px}.pt-dd-sequence{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}.pt-dd-chip{display:inline-flex;padding:6px 8px;border:0;border-radius:7px;font-size:.78rem;font-weight:800;background:rgba(128,128,128,.1);cursor:pointer;font-family:inherit}.pt-dd-chip:focus-visible,.pt-dd-locate:focus-visible{outline:2px solid var(--pt-accent);outline-offset:2px}.pt-dd-chip.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-dd-chip.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-dd-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 12px}.pt-dd-totals>div{padding:8px;border-radius:8px;background:rgba(128,128,128,.08)}.pt-dd-totals span{display:block;color:var(--pt-muted);font-size:.68rem}.pt-dd-totals strong{font-size:.95rem}.pt-dd-button{display:inline-flex;align-items:center;justify-content:center;margin-top:9px;padding:7px 10px;border:0;border-radius:8px;background:var(--pt-accent);color:#fff;font:inherit;font-size:.75rem;font-weight:800;cursor:pointer}.pt-dd-button.secondary{background:rgba(128,128,128,.16);color:var(--pt-text)}.pt-dd-empty{font-size:.75rem;color:var(--pt-muted);padding:8px 0}
+    .pt-dd-cover[hidden],.pt-dd-details[hidden]{display:none!important}.pt-rd-drawdown-card{align-items:stretch;min-height:0;overflow:hidden}.pt-dd-cover,.pt-dd-details{display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0}.pt-dd-content{min-width:0;flex:1}.pt-dd-details{display:block;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.pt-dd-detail-heading{font-size:.78rem;font-weight:800;margin-bottom:10px}.pt-dd-sequence{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}.pt-dd-chip{display:inline-flex;padding:6px 8px;border:0;border-radius:7px;font-size:.78rem;font-weight:800;background:rgba(128,128,128,.1);cursor:pointer;font-family:inherit}.pt-dd-chip:focus-visible,.pt-dd-locate:focus-visible{outline:2px solid var(--pt-accent);outline-offset:2px}.pt-dd-chip.loss{color:#e05260;background:rgba(224,82,96,.12)}.pt-dd-chip.profit{color:#16a36a;background:rgba(22,163,106,.12)}.pt-dd-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 12px}.pt-dd-totals>div{padding:8px;border-radius:8px;background:rgba(128,128,128,.08)}.pt-dd-totals span{display:block;color:var(--pt-muted);font-size:.68rem}.pt-dd-totals strong{font-size:.95rem}.pt-dd-button{display:inline-flex;align-items:center;justify-content:center;margin-top:9px;padding:7px 10px;border:0;border-radius:8px;background:var(--pt-accent);color:#fff;font:inherit;font-size:.75rem;font-weight:800;cursor:pointer}.pt-dd-button.secondary{background:rgba(128,128,128,.16);color:var(--pt-text)}.pt-dd-details>.pt-dd-back{margin:0 0 10px}.pt-dd-empty{font-size:.75rem;color:var(--pt-muted);padding:8px 0}
 
     .pt-rd-root{border:1px solid var(--pt-border);border-radius:14px;margin-bottom:12px;overflow:hidden;background:var(--pt-card,var(--pt-bg))}.pt-rd-root>summary{list-style:none;display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer;background:rgba(128,128,128,.045)}.pt-rd-root>summary::-webkit-details-marker{display:none}.pt-rd-root-title{font-weight:800;display:flex;align-items:center;gap:9px;flex:1}.pt-rd-root-summary{font-size:.78rem;color:var(--pt-muted);display:flex;gap:10px;align-items:center}.pt-rd-root-summary .is-profit{color:#16a36a}.pt-rd-root-summary .is-loss{color:#e05260}.pt-rd-chevron{transition:transform .18s ease;color:var(--pt-muted)}.pt-rd-root[open] .pt-rd-chevron{transform:rotate(180deg)}
     .pt-rd-root-stats{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;}.pt-rd-root-stats span{font-size:.78rem;color:var(--pt-muted);padding:6px 9px;background:rgba(128,128,128,.08);border-radius:8px}.pt-rd-root-stats b{color:var(--pt-text);margin-left:4px}
@@ -2575,6 +2622,7 @@ try {
 <!-- ==================== CONFIGURATION MODAL ==================== -->
 <div id="ptConfigModal" class="pt-cfg-modal">
     <div class="pt-cfg-box">
+        <div id="ptCfgLoadingOverlay" class="pt-cfg-loading-overlay" hidden role="status" aria-live="polite"><span class="pt-loading-spinner" aria-hidden="true"></span><span id="ptCfgLoadingText">Loading saved configuration…</span></div>
         <div class="pt-cfg-head">
             <div class="pt-cfg-title"><i class="fa-solid fa-chart-candlestick"></i> Configuration</div>
             <div class="pt-cfg-head-actions">
@@ -2651,7 +2699,7 @@ try {
             <div class="pt-dynamic-console-actions"><button type="button" class="pt-dynamic-console-action" onclick="ptRefreshRootsData()"><i class="fa-solid fa-rotate"></i> Refresh</button><button type="button" class="pt-dynamic-console-action" onclick="ptCloseRootsData()"><i class="fa-solid fa-xmark"></i> Close</button></div>
         </div>
         <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Only native data for roots configured on the currently viewed timeframe is shown here. Higher-timeframe projection data is not included.</div>
-        <div id="ptRootsDataBody" style="flex:1;overflow:auto;padding:16px 18px"></div>
+        <div id="ptRootsDataBody" style="flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:16px 18px"></div>
     </div>
 </div>
 
@@ -3606,10 +3654,11 @@ try {
             ['High',                 ptFormatPrice(c.high)],
             ['Low',                  ptFormatPrice(c.low)],
             ['Close',                ptFormatPrice(c.close)],
-            ['Candle center',        c.candle_center       != null ? ptFormatPrice(c.candle_center)       : '—'],
-            ['Body center',          c.body_center         != null ? ptFormatPrice(c.body_center)         : '—'],
-            ['High wick center',     c.high_wick_center    != null ? ptFormatPrice(c.high_wick_center)    : '—'],
-            ['Low wick center',      c.low_wick_center     != null ? ptFormatPrice(c.low_wick_center)     : '—'],
+            // Display the same OHLC-derived values used by trade execution.
+            ['Candle center',        ptFormatPrice(ptPrice(c, 'candle_center'))],
+            ['Body center',          ptFormatPrice(ptPrice(c, 'body_center'))],
+            ['High wick center',     ptFormatPrice(ptPrice(c, 'high_wick_center'))],
+            ['Low wick center',      ptFormatPrice(ptPrice(c, 'low_wick_center'))],
             ['Candle width center',  c.candle_width_center != null ? ptFormatPrice(c.candle_width_center) : '—'],
             ['Volume',               c.volume              != null ? String(c.volume)                     : '—'],
             ['Type',                 (c.close > c.open ? 'bullish' : (c.close < c.open ? 'bearish' : 'flat'))]
@@ -4155,6 +4204,7 @@ try {
     // ==================== VIRTUAL PROGRAMME MATCHING ====================
     // Results exist only in memory/localStorage. No matched candle rows are written to MySQL.
     var PT_VIRTUAL_MATCHES = [];
+    var PT_HOVER_FAMILY_MATCHES = [];
     var PT_VIRTUAL_CANDLE_JSON_KEY = 'pt_virtual_candles_v1';
     var PT_VIRTUAL_CONFIG_KEY = 'pt_virtual_config_v1';
 
@@ -4168,6 +4218,17 @@ try {
         }
         return tfs.map(function (x) { return String(x).trim().toLowerCase(); }).filter(Boolean);
     }
+        // Normalize legacy singular confirmationRoot data into the multi-alternative model.
+        // The first item remains mirrored to confirmationRoot for backward compatibility.
+        function ptGetConfirmationRoots(root) {
+            if (!root) return [];
+            if (!Array.isArray(root.confirmationRoots)) {
+                root.confirmationRoots = root.confirmationRoot ? [root.confirmationRoot] : [];
+            }
+            root.confirmationRoot = root.confirmationRoots.length ? root.confirmationRoots[0] : null;
+            return root.confirmationRoots;
+        }
+
     function ptCandleType(c) {
         return Number(c.close) > Number(c.open) ? 'bullish'
              : Number(c.close) < Number(c.open) ? 'bearish' : 'bearish_or_bullish';
@@ -4178,15 +4239,29 @@ try {
     function ptPrice(c, level) {
         if (!c) return null;
         var open = Number(c.open), close = Number(c.close), high = Number(c.high), low = Number(c.low);
-        switch (String(level || 'high').toLowerCase()) {
-            case 'open': return open;
-            case 'close': return close;
-            case 'low': return low;
-            case 'candle_center': return c.candle_center != null ? Number(c.candle_center) : (high + low) / 2;
-            case 'body_center': return c.body_center != null ? Number(c.body_center) : (open + close) / 2;
-            case 'high_wick_center': return c.high_wick_center != null ? Number(c.high_wick_center) : (high + Math.max(open, close)) / 2;
-            case 'low_wick_center': return c.low_wick_center != null ? Number(c.low_wick_center) : (low + Math.min(open, close)) / 2;
-            default: return high;
+        var normalizedLevel = String(level || 'high').toLowerCase().trim();
+        // Trade and matching prices for derived candle levels are ALWAYS calculated
+        // from OHLC. Do not trust the denormalized candle_center/body_center/wick_center
+        // columns returned by candle_records: those cached values can be stale or have
+        // been calculated with a different formula, causing (for example) a configured
+        // high_wick_center trade to be priced at candle_center.
+        switch (normalizedLevel) {
+            case 'open': return Number.isFinite(open) ? open : null;
+            case 'close': return Number.isFinite(close) ? close : null;
+            case 'high': return Number.isFinite(high) ? high : null;
+            case 'low': return Number.isFinite(low) ? low : null;
+            case 'candle_center':
+                return Number.isFinite(high) && Number.isFinite(low) ? (high + low) / 2 : null;
+            case 'body_center':
+                return Number.isFinite(open) && Number.isFinite(close) ? (open + close) / 2 : null;
+            case 'high_wick_center':
+                return Number.isFinite(high) && Number.isFinite(open) && Number.isFinite(close)
+                    ? (high + Math.max(open, close)) / 2 : null;
+            case 'low_wick_center':
+                return Number.isFinite(low) && Number.isFinite(open) && Number.isFinite(close)
+                    ? (low + Math.min(open, close)) / 2 : null;
+            default:
+                return Number.isFinite(high) ? high : null;
         }
     }
     function ptCompare(a, op, b) {
@@ -4336,6 +4411,7 @@ try {
     }
     function ptApplyTrainingOverlay(geo) {
         PT_VIRTUAL_MATCHES = [];
+        if (!PT_PROJECTION_RENDER_PASS) PT_HOVER_FAMILY_MATCHES = [];
         if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
         var config = (typeof window.ptGetTrainingConfiguration === 'function')
             ? window.ptGetTrainingConfiguration() : null;
@@ -4356,7 +4432,7 @@ try {
                 return;
             }
             var tfs = ptNormTfList(root);
-            if (!tfs.includes(String(PT_CURRENT_TIMEFRAME).toLowerCase())) return;
+            if (!tfs.includes(String(PT_CURRENT_TIMEFRAME).toLowerCase())) { root._drawMatches = []; return; }
             activeRoots.push(root);
 
             // Each configured candle has one canonical identity. Trees may change its role,
@@ -4636,9 +4712,10 @@ try {
                     all[mainIdx]._matchTreeIds.push(condition.treeId);
                 });
             });
-            root._drawMatches = completeStates.map(function (state) {
+            root._drawMatches = completeStates.map(function (state, familyIndex) {
                 var conditions = Array.isArray(state.conditions) ? state.conditions : [];
                 return {
+                    familyNumber: familyIndex + 1,
                     map: Object.assign({}, state.map),
                     conditions: conditions,
                     noTrade: conditions.some(function (condition) {
@@ -4646,6 +4723,16 @@ try {
                     })
                 };
             });
+            if (!PT_PROJECTION_RENDER_PASS) {
+                root._drawMatches.forEach(function (family) {
+                    PT_HOVER_FAMILY_MATCHES.push({
+                        rootId: root.id, rootName: root.name || ('Root ' + root.id),
+                        familyNumber: family.familyNumber, map: family.map,
+                        noTrade: !!family.noTrade, confirmationRootName: '', confirmationRootId: null,
+                        timeframe: String(PT_CURRENT_TIMEFRAME || '').toLowerCase()
+                    });
+                });
+            }
             // Report tree matches only when they belong to a complete 100% root family.
             rootTrees.forEach(function (tree) {
                 var indices = [];
@@ -4892,9 +4979,9 @@ try {
             });
         });
 
-        // Confirmation runtime: evaluate each confirmation pattern on the lower-timeframe
-        // candles at the exact parent-family anchor timestamp. These matches are kept separate
-        // from parent-root matches and are never allowed to satisfy a parent root's own trees.
+        // Confirmation runtime: evaluate each confirmation alternative on lower-timeframe
+        // candles at its selected parent-family anchor. Only the earliest successful
+        // alternative is registered for an individual parent family.
         if (PT_PROJECTION_RENDER_PASS && PT_PROJECTION_MAP && Array.isArray(PT_PROJECTION_LOWER_CANDLES)) {
             var lowerCandlesForConfirmation = PT_PROJECTION_LOWER_CANDLES;
             var lowerWrappers = lowerCandlesForConfirmation.map(function(c, i) {
@@ -4915,8 +5002,7 @@ try {
                 if (kind === 'reference') return String(c.referenceMode !== 'new_offset' && (c.selectedExistingId || c.existingCandleId) ? (c.selectedExistingId || c.existingCandleId) : (c.id || ''));
                 return String(c.referenceMode === 'new_offset' ? c.id : (c.selectedExistingId || c.existingCandleId || c.id || ''));
             }
-            function matchConfirmationAt(root, anchorIdx, parentFamily) {
-                var cr = root.confirmationRoot;
+            function matchConfirmationAt(cr, anchorIdx, parentFamily) {
                 if (!cr || !cr.trees || !cr.trees.length || anchorIdx < 0 || anchorIdx >= lowerWrappers.length) return null;
                 var states = [], configured = cr.trees.slice().sort(function(a,b){return Number(a.id)-Number(b.id);});
                 for (var ti=0; ti<configured.length; ti++) {
@@ -4936,7 +5022,7 @@ try {
                                 var lm=ptComparePriceLevels(lowerWrappers[mi], main.priceLevel||'high', main.operator||'<', lowerWrappers[ri], ref.priceLevel||'high');
                                 if (!lm.matched) continue;
                                 var firstMap = {}; firstMap[mainKey] = mi; firstMap[refKey] = ri;
-                                next.push({map:firstMap, conditions:[{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}]});
+                                next.push({map:firstMap, conditions:[{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,ifGroupFound:tree.ifGroupFound || 'identify_and_trade',mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}]});
                                 if(ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
                             }
                         }
@@ -4953,7 +5039,7 @@ try {
                                 var lm=ptComparePriceLevels(lowerWrappers[mi], main.priceLevel||'high', main.operator||'<', lowerWrappers[ri], ref.priceLevel||'high');
                                 if(!lm.matched) continue;
                                 var m = Object.assign({}, st.map); if (isNewRef) m[refKey] = ri;
-                                next.push({map:m, conditions:st.conditions.concat([{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}])});
+                                next.push({map:m, conditions:st.conditions.concat([{rootId:cr.id,treeId:tree.id,mainName:main.name,referenceName:ref.name,ifGroupFound:tree.ifGroupFound || 'identify_and_trade',mainCandleId:lowerWrappers[mi].id,referenceCandleId:lowerWrappers[ri].id,mainIdentity:mainKey,referenceIdentity:refKey,mainPriceLevel:lm.mainLevel,referencePriceLevel:lm.referenceLevel,mainValue:lm.mainValue,referenceValue:lm.referenceValue}])});
                                 if(ptIsAnyFirstCandle(main.offsetPosPoint, ref.offsetPosPoint)) break;
                             }
                         });
@@ -4966,37 +5052,109 @@ try {
             }
             config.roots.forEach(function(root) {
                 root._confirmationDrawMatches = [];
+                root._confirmationMatchesByRootId = Object.create(null);
                 if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
-                var cr = root.confirmationRoot;
-                var crTfs = cr && Array.isArray(cr.timeframes) ? cr.timeframes.map(function(v){return String(v).toLowerCase();}) : [];
-                if (!cr || !cr.enabled || !crTfs.includes(targetTf) || !cr.trees || !cr.trees.length) return;
-                var anchorKey = String(cr.anchorCandleId || '');
-                if (!anchorKey) return;
-                (root._drawMatches || []).forEach(function(parentFamily) {
+                var confirmationRoots = ptGetConfirmationRoots(root);
+                var eligibleConfirmationRoots = confirmationRoots.filter(function(cr) {
+                    if (!cr) return false;
+                    var tfs = Array.isArray(cr.timeframes) ? cr.timeframes.map(function(v){return String(v).toLowerCase();}) : [];
+                    cr._confirmationDrawMatches = [];
+                    return cr.enabled !== false && tfs.includes(targetTf) && Array.isArray(cr.trees) && cr.trees.length > 0 && !!String(cr.anchorCandleId || '');
+                });
+                if (!eligibleConfirmationRoots.length) return;
+
+                // Confirmation roots are alternatives (OR), not cumulative requirements.
+                // Evaluate every alternative for each parent family, then register exactly
+                // one winner: the alternative whose matched candles occur earliest in the
+                // lower-timeframe sequence. Completion time and configured order break ties.
+                (root._drawMatches || []).forEach(function(parentFamily, parentFamilyIndex) {
                     var parentMap = parentFamily.map || {};
-                    if (!Object.prototype.hasOwnProperty.call(parentMap, anchorKey)) return;
-                    var parentSourceIndex = Number(parentMap[anchorKey]);
-                    var piece = PT_PROJECTION_MAP[parentSourceIndex];
-                    if (!piece || piece.first < 0 || piece.last < 0) return;
-                    var parentCandle = PT_CANDLES[parentSourceIndex];
-                    if (!parentCandle) return;
-                    var stamp = cr.anchorTime === 'close_time' ? (parentCandle.close_time || parentCandle.closeTime || parentCandle.time) : (parentCandle.open_time || parentCandle.openTime || parentCandle.time);
-                    var anchorMs = timeMs(stamp);
-                    if (!Number.isFinite(anchorMs)) return;
-                    var anchorIndex = -1;
-                    for (var li=0; li<lowerCandlesForConfirmation.length; li++) {
-                        var lowerStamp = lowerCandlesForConfirmation[li].open_time || lowerCandlesForConfirmation[li].openTime || lowerCandlesForConfirmation[li].time;
-                        var lowerMs = timeMs(lowerStamp);
-                        if (Number.isFinite(lowerMs) && lowerMs >= anchorMs) { anchorIndex = li; break; }
-                    }
-                    if (anchorIndex < 0) return;
-                    var found = matchConfirmationAt(root, anchorIndex, parentFamily);
-                    if (found) root._confirmationDrawMatches = root._confirmationDrawMatches.concat(found);
+                    var candidates = [];
+                    eligibleConfirmationRoots.forEach(function(cr, confirmationIndex) {
+                        var anchorKey = String(cr.anchorCandleId || '');
+                        if (!Object.prototype.hasOwnProperty.call(parentMap, anchorKey)) return;
+                        var parentSourceIndex = Number(parentMap[anchorKey]);
+                        var piece = PT_PROJECTION_MAP[parentSourceIndex];
+                        if (!piece || piece.first < 0 || piece.last < 0) return;
+                        var parentCandle = PT_CANDLES[parentSourceIndex];
+                        if (!parentCandle) return;
+                        var stamp = cr.anchorTime === 'close_time' ? (parentCandle.close_time || parentCandle.closeTime || parentCandle.time) : (parentCandle.open_time || parentCandle.openTime || parentCandle.time);
+                        var anchorMs = timeMs(stamp);
+                        if (!Number.isFinite(anchorMs)) return;
+                        var anchorIndex = -1;
+                        for (var li=0; li<lowerCandlesForConfirmation.length; li++) {
+                            var lowerStamp = lowerCandlesForConfirmation[li].open_time || lowerCandlesForConfirmation[li].openTime || lowerCandlesForConfirmation[li].time;
+                            var lowerMs = timeMs(lowerStamp);
+                            if (Number.isFinite(lowerMs) && lowerMs >= anchorMs) { anchorIndex = li; break; }
+                        }
+                        if (anchorIndex < 0) return;
+                        var found = matchConfirmationAt(cr, anchorIndex, parentFamily);
+                        if (!found || !found.length) return;
+                        // One confirmation root can produce several valid candle mappings.
+                        // Keep the mapping that becomes fully confirmed earliest.
+                        var selectedMatch = null;
+                        var occurrenceIndex = Number.POSITIVE_INFINITY;
+                        var completionIndex = Number.POSITIVE_INFINITY;
+                        found.forEach(function(candidateMatch) {
+                            var matchedIndices = Object.keys(candidateMatch.map || {}).map(function(k){return Number(candidateMatch.map[k]);}).filter(Number.isFinite);
+                            var candidateOccurrence = matchedIndices.length ? Math.min.apply(Math, matchedIndices) : anchorIndex;
+                            var candidateCompletion = matchedIndices.length ? Math.max.apply(Math, matchedIndices) : anchorIndex;
+                            if (!selectedMatch || candidateCompletion < completionIndex ||
+                                (candidateCompletion === completionIndex && candidateOccurrence < occurrenceIndex)) {
+                                selectedMatch = candidateMatch;
+                                occurrenceIndex = candidateOccurrence;
+                                completionIndex = candidateCompletion;
+                            }
+                        });
+                        if (!selectedMatch) return;
+                        candidates.push({
+                            confirmationRoot: cr,
+                            match: selectedMatch,
+                            occurrenceIndex: occurrenceIndex,
+                            completionIndex: completionIndex,
+                            confirmationIndex: confirmationIndex
+                        });
+                    });
+                    if (!candidates.length) return;
+                    candidates.sort(function(a,b) {
+                        // A confirmation becomes eligible when its full tree is complete.
+                        // Earliest completion wins; first candle and configured order break ties.
+                        return a.completionIndex - b.completionIndex ||
+                            a.occurrenceIndex - b.occurrenceIndex ||
+                            a.confirmationIndex - b.confirmationIndex;
+                    });
+                    var winner = candidates[0];
+                    var selectedFamily = Object.assign({}, winner.match, {
+                        confirmationRootId: winner.confirmationRoot.id,
+                        confirmationRoot: winner.confirmationRoot,
+                        confirmationRootName: winner.confirmationRoot.name || ('Confirmation Root ' + winner.confirmationRoot.id),
+                        parentFamily: parentFamily,
+                        familyNumber: parentFamily.familyNumber || (parentFamilyIndex + 1),
+                        confirmationOccurrenceIndex: winner.occurrenceIndex,
+                        noTrade: !!parentFamily.noTrade || (winner.match.conditions || []).some(function (condition) { return condition.ifGroupFound === 'identify_but_dont_trade'; })
+                    });
+                    winner.confirmationRoot._confirmationDrawMatches.push(selectedFamily);
+                    root._confirmationDrawMatches.push(selectedFamily);
+                    root._confirmationMatchesByRootId[String(winner.confirmationRoot.id)] = winner.confirmationRoot._confirmationDrawMatches;
+                    PT_HOVER_FAMILY_MATCHES.push({
+                        rootId: root.id, rootName: root.name || ('Root ' + root.id),
+                        familyNumber: selectedFamily.familyNumber, map: selectedFamily.map,
+                        noTrade: !!selectedFamily.noTrade,
+                        confirmationRootName: selectedFamily.confirmationRootName,
+                        confirmationRootId: selectedFamily.confirmationRootId,
+                        timeframe: targetTf, sourceTimeframe: String(PT_CURRENT_TIMEFRAME || '').toLowerCase()
+                    });
                 });
 
-                // Render confirmation labels and drawings in native lower-timeframe coordinates.
+                // Render labels and drawings using the winning confirmation root for each
+                // parent family. No losing alternative contributes candles, labels or trades.
                 var directX = function(idx){ return geo.baseX + idx * geo.step + geo.step / 2; };
+                var renderedConfirmationIds = [];
                 (root._confirmationDrawMatches || []).forEach(function(family) {
+                    var cr = family.confirmationRoot;
+                    if (!cr) return;
+                    var crId = String(cr.id);
+                    if (renderedConfirmationIds.indexOf(crId) < 0) renderedConfirmationIds.push(crId);
                     (family.conditions || []).forEach(function(cond) {
                         var tree = (cr.trees || []).find(function(t){return String(t.id)===String(cond.treeId);});
                         if (!tree) return;
@@ -5014,52 +5172,93 @@ try {
                         }
                     });
                 });
-                function endpointKey(encoded) {
+                function endpointKey(cr, encoded) {
                     var parts=String(encoded||'').split('|'); if(parts.length<3) return null;
                     var tree=(cr.trees||[]).find(function(t){return String(t.id)===String(parts[0]);}); if(!tree) return String(parts[2]);
                     return confirmationCanonical(tree,parts[1]);
                 }
-                (cr.drawings || []).concat((root.drawings || []).filter(function(d){return d.drawFor === 'root_confirmation';})).forEach(function(drawing) {
-                    if (drawing.drawFor && drawing.drawFor !== 'root_confirmation') return;
-                    var fk=endpointKey(drawing.drawFrom), tk=endpointKey(drawing.drawTo);
-                    if (!fk || !tk) return;
-                    (root._confirmationDrawMatches || []).forEach(function(family) {
-                        var fi=family.map[fk], ti=family.map[tk]; if(fi==null) return;
-                        var from=lowerWrappers[fi], to=lowerWrappers[ti]; if(!from) return;
-                        if (drawing.drawTo === 'any_intercept_candle') {
-                            var price=ptPrice(from,drawing.drawFromPriceLevel||'high'); ti=-1;
-                            for(var si=fi+1;si<lowerWrappers.length;si++){if(Number(lowerWrappers[si].low)<=price&&Number(lowerWrappers[si].high)>=price){ti=si;break;}}
-                            if(ti<0) return; to=lowerWrappers[ti];
-                        }
-                        if(!to) return;
-                        var fp=ptPrice(from,drawing.drawFromPriceLevel||'high');
-                        var tp=drawing.drawTo==='any_intercept_candle'?fp:ptPrice(to,drawing.drawToPriceLevel||'high');
-                        var x1=directX(fi), x2=directX(ti); if(Math.max(x1,x2)<-100||Math.min(x1,x2)>geo.viewportW+100)return;
-                        ctx.save();ctx.strokeStyle=ptResolveConfiguredColor(drawing.drawingColor,'blue');ctx.lineWidth=1.4;ctx.beginPath();ctx.moveTo(x1,geo.pToY(fp));ctx.lineTo(x2,geo.pToY(tp));ctx.stroke();ctx.restore();
+                renderedConfirmationIds.forEach(function(crId) {
+                    var cr = confirmationRoots.find(function(item){return String(item.id)===crId;});
+                    if (!cr) return;
+                    var selectedForRoot = (cr._confirmationDrawMatches || []).filter(function(family){return String(family.confirmationRootId)===crId;});
+                    (cr.drawings || []).concat((root.drawings || []).filter(function(d){return d.drawFor === 'root_confirmation';})).forEach(function(drawing) {
+                        if (drawing.drawFor && drawing.drawFor !== 'root_confirmation') return;
+                        var fk=endpointKey(cr,drawing.drawFrom), tk=endpointKey(cr,drawing.drawTo);
+                        if (!fk || !tk) return;
+                        selectedForRoot.forEach(function(family) {
+                            var fi=family.map[fk], ti=family.map[tk]; if(fi==null) return;
+                            var from=lowerWrappers[fi], to=lowerWrappers[ti]; if(!from) return;
+                            if (drawing.drawTo === 'any_intercept_candle') {
+                                var price=ptPrice(from,drawing.drawFromPriceLevel||'high'); ti=-1;
+                                for(var si=fi+1;si<lowerWrappers.length;si++){if(Number(lowerWrappers[si].low)<=price&&Number(lowerWrappers[si].high)>=price){ti=si;break;}}
+                                if(ti<0) return; to=lowerWrappers[ti];
+                            }
+                            if(!to) return;
+                            var fp=ptPrice(from,drawing.drawFromPriceLevel||'high');
+                            var tp=drawing.drawTo==='any_intercept_candle'?fp:ptPrice(to,drawing.drawToPriceLevel||'high');
+                            var x1=directX(fi), x2=directX(ti); if(Math.max(x1,x2)<-100||Math.min(x1,x2)>geo.viewportW+100)return;
+                            ctx.save();ctx.strokeStyle=ptResolveConfiguredColor(drawing.drawingColor,'blue');ctx.lineWidth=1.4;ctx.beginPath();ctx.moveTo(x1,geo.pToY(fp));ctx.lineTo(x2,geo.pToY(tp));ctx.stroke();ctx.restore();
+                        });
                     });
                 });
 
-                // Confirmation trades are evaluated against lower candles, not the HTF source
-                // array. Their records are kept separate and are merged into Roots Data below.
-                if (root.tradeFor === 'root_confirmation' && root.useForTrades && crTfs.includes(targetTf)) {
+                // A selected confirmation root can have its own trade definition. Its
+                // trade is evaluated only for families where that same confirmation root
+                // won the OR selection above.
+                if (root.tradeFor === 'root_confirmation') {
+                    var sourceTimeframe = String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
                     var previousTf = PT_CURRENT_TIMEFRAME;
                     PT_CURRENT_TIMEFRAME = targetTf;
-                    var confirmationTrades = ptBuildRootTradeData([root], lowerCandlesForConfirmation).filter(function(t){return t.timeframe===targetTf;});
-                    PT_CURRENT_TIMEFRAME = previousTf;
-                    confirmationTrades.forEach(function(t){
-                        t.dataMode='confirmation'; t.sourceTimeframe=String(PT_CURRENT_TIMEFRAME).toLowerCase();
-                        t.timeframe=targetTf; t.confirmationAnchor=cr.anchorCandleName || String(cr.anchorCandleId);
-                        PT_CONFIRMATION_TRADE_DATA.push(t);
-                        // Draw risk/reward zones directly against lower candle indexes.
-                        if(t.entryIndex==null || !lowerCandlesForConfirmation[t.entryIndex]) return;
-                        var endIdx=t.outcome==='take profit reached'?t.tpTriggerIndex:(t.outcome==='stoploss hit'?t.slTriggerIndex:(t.triggerIndex!=null?t.triggerIndex:lowerCandlesForConfirmation.length-1));
-                        if(endIdx==null || endIdx<0) endIdx=lowerCandlesForConfirmation.length-1;
-                        var bx=directX(t.entryIndex)+Number(PT_VIEW.candleWidth||5)/2, ex=directX(endIdx)+Number(PT_VIEW.candleWidth||5)/2;
-                        var ey=geo.pToY(t.entryPrice), sy=geo.pToY(t.slPrice), ty=geo.pToY(t.tpPrice);
-                        ctx.save();ctx.strokeStyle='#f2c94c';ctx.lineWidth=1.2;ctx.setLineDash([5,3]);ctx.beginPath();ctx.moveTo(bx,ey);ctx.lineTo(ex,ey);ctx.stroke();ctx.setLineDash([]);
-                        ctx.fillStyle='rgba(235,64,75,.18)';ctx.fillRect(bx,Math.min(ey,sy),Math.max(1,ex-bx),Math.max(1,Math.abs(sy-ey)));
-                        ctx.fillStyle='rgba(46,204,113,.18)';ctx.fillRect(bx,Math.min(ey,ty),Math.max(1,ex-bx),Math.max(1,Math.abs(ty-ey)));ctx.restore();
+                    eligibleConfirmationRoots.forEach(function(cr) {
+                        if (!cr.useForTrades || !(cr._confirmationDrawMatches || []).length) return;
+                        var tradeRoot = Object.assign({}, cr, {
+                            id: root.id,
+                            name: root.name || ('Root ' + root.id),
+                            applyToChart: root.applyToChart,
+                            useForTrades: true,
+                            tradeFor: 'root',
+                            timeframes: cr.timeframes || [],
+                            parentTradeRoot: root,
+                            _drawMatches: cr._confirmationDrawMatches
+                        });
+                        var confirmationTrades = ptBuildRootTradeData([tradeRoot], lowerCandlesForConfirmation).filter(function(t){return t.timeframe===targetTf;});
+                        confirmationTrades.forEach(function(t){
+                            t.dataMode='confirmation';
+                            t.sourceTimeframe=sourceTimeframe;
+                            t.timeframe=targetTf;
+                            t.confirmationRootId=cr.id;
+                            t.confirmationRootName=cr.name || ('Confirmation ' + cr.id);
+                            t.confirmationAnchor=cr.anchorCandleName || String(cr.anchorCandleId);
+                            PT_CONFIRMATION_TRADE_DATA.push(t);
+                            // Draw risk/reward zones directly against lower candle indexes.
+                            if(t.entryIndex==null || !lowerCandlesForConfirmation[t.entryIndex]) return;
+                            // Open confirmation positions extend through the latest lower-timeframe candle.
+                            var endIdx=t.outcome==='take profit reached'?t.tpTriggerIndex:(t.outcome==='stoploss hit'?t.slTriggerIndex:lowerCandlesForConfirmation.length-1);
+                            if(endIdx==null || endIdx<0) endIdx=lowerCandlesForConfirmation.length-1;
+                            var bx=directX(t.entryIndex)+Number(PT_VIEW.candleWidth||5)/2, ex=directX(endIdx)+Number(PT_VIEW.candleWidth||5)/2;
+                            var ey=geo.pToY(t.entryPrice), sy=geo.pToY(t.slPrice), ty=geo.pToY(t.tpPrice);
+                            ctx.save();ctx.strokeStyle='#888888';ctx.lineWidth=0.8;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(bx,ey);ctx.lineTo(ex,ey);ctx.stroke();ctx.setLineDash([]);
+                            ctx.fillStyle='rgba(235,64,75,.18)';ctx.fillRect(bx,Math.min(ey,sy),Math.max(1,ex-bx),Math.max(1,Math.abs(sy-ey)));
+                            ctx.fillStyle='rgba(46,204,113,.18)';ctx.fillRect(bx,Math.min(ey,ty),Math.max(1,ex-bx),Math.max(1,Math.abs(ty-ey)));
+                            // Thin grey diagnostic entry path: selected Entry-at price level to the actual trigger axis.
+                            // The trigger must be strictly later than the anchor; pending orders
+                            // intentionally have no endpoint and therefore no diagnostic segment.
+                            var entryAnchorIdx = Number(t.entryAtIndex);
+                            var entryTriggerIdx = Number(t.triggerIndex);
+                            if (Number.isInteger(entryAnchorIdx) && Number.isInteger(entryTriggerIdx) &&
+                                entryAnchorIdx >= 0 && entryTriggerIdx > entryAnchorIdx &&
+                                entryTriggerIdx < lowerCandlesForConfirmation.length) {
+                                var entryAnchorAxisX = directX(entryAnchorIdx);
+                                var entryTriggerAxisX = directX(entryTriggerIdx);
+                                if (Number.isFinite(entryAnchorAxisX) && Number.isFinite(entryTriggerAxisX)) {
+                                    ctx.strokeStyle='#888888';ctx.lineWidth=0.8;ctx.setLineDash([3,3]);
+                                    ctx.beginPath();ctx.moveTo(entryAnchorAxisX,ey);ctx.lineTo(entryTriggerAxisX,ey);ctx.stroke();ctx.setLineDash([]);
+                                }
+                            }
+                            ctx.restore();
+                        });
                     });
+                    PT_CURRENT_TIMEFRAME = previousTf;
                 }
             });
         }
@@ -5070,17 +5269,17 @@ try {
         PT_ROOT_TRADE_DATA.forEach(function (trade) {
             if (trade.timeframe !== String(PT_CURRENT_TIMEFRAME).toLowerCase()) return;
             if (trade.entryIndex == null) return;
-            // Start exactly at the RIGHT edge of the configured entry candle (candle A).
-            // End at the right edge of the SL/TP exit candle when closed; otherwise at
-            // the entry-trigger candle, or the latest loaded candle while still pending.
+            // Start at the RIGHT edge of the actual entry-trigger candle. While pending,
+            // use the configured Entry at anchor as the provisional start. End at the
+            // right edge of the SL/TP exit candle, trigger candle, or latest loaded candle.
             var firstTradeIndex = trade.entryIndex;
             if (firstTradeIndex < 0 || firstTradeIndex >= PT_CANDLES.length) return;
             var firstTradeCenterX = ptOverlayX(geo, firstTradeIndex);
             var boxStart = firstTradeCenterX + tradeCandleWidth / 2;
             var exitIndex = trade.outcome === 'take profit reached' ? trade.tpTriggerIndex :
                 (trade.outcome === 'stoploss hit' ? trade.slTriggerIndex : null);
-            var endIndex = exitIndex != null ? exitIndex :
-                (trade.triggerIndex != null ? trade.triggerIndex : PT_CANDLES.length - 1);
+            // Open positions extend through the newest candle; closed positions stop at their actual exit.
+            var endIndex = exitIndex != null ? exitIndex : PT_CANDLES.length - 1;
             if (endIndex < firstTradeIndex) endIndex = firstTradeIndex;
             var endCenterX = ptOverlayX(geo, endIndex);
             var endBodyRightX = endCenterX + tradeCandleWidth / 2;
@@ -5090,14 +5289,35 @@ try {
             var tpY = geo.pToY(trade.tpPrice);
             if (Math.max(boxStart, endBodyRightX) < -100 || Math.min(boxStart, endBodyRightX) > geo.viewportW + 100) return;
             ctx.save();
-            // The entry-price guide begins at the configured entry candle's right body edge.
-            ctx.strokeStyle = '#f2c94c'; ctx.lineWidth = 1.5; ctx.setLineDash([5,3]);
+            // Thin grey trade-price guide, styled like the LTF projection guides.
+            ctx.strokeStyle = '#888888'; ctx.lineWidth = 0.8; ctx.setLineDash([3,3]);
             ctx.beginPath(); ctx.moveTo(boxStart, entryY); ctx.lineTo(endBodyRightX, entryY); ctx.stroke(); ctx.setLineDash([]);
             // Borderless TradingView-style risk/reward zones; the candle bodies define both endpoints.
             ctx.fillStyle = 'rgba(235, 64, 75, 0.20)';
             ctx.fillRect(boxStart, Math.min(entryY, slY), boxWidth, Math.max(1, Math.abs(slY-entryY)));
             ctx.fillStyle = 'rgba(46, 204, 113, 0.20)';
             ctx.fillRect(boxStart, Math.min(entryY, tpY), boxWidth, Math.max(1, Math.abs(tpY-entryY)));
+            // Thin grey diagnostic entry path begins at the exact Entry-at candle axis
+            // and its explicitly configured price level, then stops at the actual
+            // entry-trigger candle axis. Pending orders have no diagnostic endpoint.
+            var entryAnchorIndex = Number(trade.entryAtIndex);
+            var actualTriggerIndex = Number(trade.triggerIndex);
+            if (Number.isInteger(entryAnchorIndex) && Number.isInteger(actualTriggerIndex) &&
+                entryAnchorIndex >= 0 && actualTriggerIndex > entryAnchorIndex &&
+                actualTriggerIndex < PT_CANDLES.length) {
+                var entryAnchorAxisX = ptOverlayX(geo, entryAnchorIndex);
+                var entryTriggerAxisX = ptOverlayX(geo, actualTriggerIndex);
+                if (Number.isFinite(entryAnchorAxisX) && Number.isFinite(entryTriggerAxisX)) {
+                    ctx.strokeStyle = '#888888';
+                    ctx.lineWidth = 0.8;
+                    ctx.setLineDash([3, 3]);
+                    ctx.beginPath();
+                    ctx.moveTo(entryAnchorAxisX, entryY);
+                    ctx.lineTo(entryTriggerAxisX, entryY);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
             if (trade.triggerIndex != null) {
                 var triggerCenterX = ptOverlayX(geo, trade.triggerIndex);
                 ctx.fillStyle = '#f2c94c'; ctx.beginPath(); ctx.arc(triggerCenterX, entryY, 3, 0, Math.PI*2); ctx.fill();
@@ -5131,35 +5351,30 @@ try {
                 ptApplyTrainingOverlay(geo);
                 if (Array.isArray(PT_ROOT_TRADE_DATA)) {
                     PT_ROOT_TRADE_DATA.forEach(function(t) {
-                        var ep = projectionMap[t.entryIndex];
+                        var entryAnchorSourceIndex = t.entryAtIndex != null ? Number(t.entryAtIndex) : Number(t.entryIndex);
+                        var ep = projectionMap[entryAnchorSourceIndex];
                         var sp = projectionMap[t.slSourceIndex != null ? t.slSourceIndex : ptIndexForTradeTime(t.slTime)];
                         var tpSourceIndex = t.tpSourceIndex != null ? t.tpSourceIndex : ptIndexForTradeTime(t.tpTime);
                         var tpPiece = tpSourceIndex != null ? projectionMap[tpSourceIndex] : null;
                         if (!ep || ep.first < 0 || ep.last < 0) return;
-                        var entryAfter = ep.last; // the 4th 1h candle closes before entry-trigger scanning begins
-                        var order = String(t.orderType || 'buy').toLowerCase();
-                        var isLong = ['buy','buy-limit','buy-stop'].indexOf(order) >= 0;
-                        var triggerIndex = null;
-                        for (var i = entryAfter + 1; i < savedCandles.length; i++) {
-                            var c = savedCandles[i];
-                            var hit = ['buy','buy-limit','sell-stop'].indexOf(order) >= 0 ? Number(c.low) < Number(t.entryPrice) : Number(c.high) > Number(t.entryPrice);
-                            if (hit) { triggerIndex = i; break; }
-                        }
-                        var slTrigger = null, tpTrigger = null;
-                        var outcome = triggerIndex == null ? 'pending entry' : 'in trade';
-                        if (triggerIndex != null) {
-                            for (var j = triggerIndex; j < savedCandles.length; j++) {
-                                var cj = savedCandles[j];
-                                var slHit = isLong ? Number(cj.low) <= Number(t.slPrice) : Number(cj.high) >= Number(t.slPrice);
-                                var tpHit = isLong ? Number(cj.high) >= Number(t.tpPrice) : Number(cj.low) <= Number(t.tpPrice);
-                                if (slHit || tpHit) { if (slHit) { outcome='stoploss hit'; slTrigger=j; } else { outcome='take profit reached'; tpTrigger=j; } break; }
-                            }
-                        }
+                        var entryAfter = ep.last; // the anchor candle projection ends before trigger scanning starts
+                        var order = ptNormalizeTradeOrder(t.orderType || 'buy');
+                        var isLong = ptIsLongTradeOrder(order);
+                        // Projection starts after the full lower-timeframe span of the
+                        // higher-timeframe Entry-at anchor. Use the identical strict
+                        // high/low trigger rule used by native trades.
+                        var triggerIndex = ptFindEntryTriggerIndex(savedCandles, entryAfter, Number(t.entryPrice), order);
+                        var projectedEntryIndex = triggerIndex;
+                        var projectedState = ptEvaluateTradeOutcome(savedCandles,triggerIndex,t.slPrice,t.tpPrice,order);
+                        var slTrigger = projectedState.slTriggerIndex;
+                        var tpTrigger = projectedState.tpTriggerIndex;
+                        var outcome = projectedState.outcome;
                         function stampLower(idx) { return idx == null || !savedCandles[idx] ? null : String(savedCandles[idx].time || savedCandles[idx].open_time || ''); }
                         projectedTrades.push(Object.assign({}, t, {
                             dataMode:'projected', sourceTimeframe:higherTf, timeframe:savedTimeframe,
-                            familyNumber:t.familyNumber, entrySourceIndex:t.entryIndex,
-                            entryIndex:ep.last, entryTime:stampLower(ep.last),
+                            familyNumber:t.familyNumber, isLong:isLong, isShort:!isLong, entrySourceIndex:entryAnchorSourceIndex,
+                            entryAtIndex:ep.last, entryAtTime:stampLower(ep.last),
+                            entryIndex:projectedEntryIndex, entryTime:triggerIndex != null ? stampLower(projectedEntryIndex) : null,
                             triggerIndex:triggerIndex, entryTriggerTime:stampLower(triggerIndex),
                             slTriggerIndex:slTrigger, slTriggerTime:stampLower(slTrigger),
                             tpTriggerIndex:tpTrigger, tpTriggerTime:stampLower(tpTrigger),
@@ -5199,9 +5414,12 @@ try {
         if (!cfg || !Array.isArray(cfg.roots)) return '';
         var lines = [];
         cfg.roots.forEach(function(r) {
-            if (!r.useForTrades || r.tradeFor !== 'root_confirmation' || !r.confirmationRoot) return;
-            var tfs = (r.confirmationRoot.timeframes || []).map(function(tf){return String(tf);});
-            if (tfs.length) lines.push('Root ' + r.id + ': switch the chart to ' + tfs.join(', ') + ' to view confirmation-timeframe trades.');
+            if (r.tradeFor !== 'root_confirmation') return;
+            ptGetConfirmationRoots(r).forEach(function(cr) {
+                if (!cr || !cr.useForTrades) return;
+                var tfs = (cr.timeframes || []).map(function(tf){return String(tf);});
+                if (tfs.length) lines.push('Root ' + r.id + ' · confirmation ' + cr.id + ': switch the chart to ' + tfs.join(', ') + ' to view confirmation-timeframe trades.');
+            });
         });
         return lines.join('\n');
     }
@@ -5209,21 +5427,161 @@ try {
     var PT_PROJECTION_TARGET_TIMEFRAME = '';
     var PT_CONFIRMATION_TRADE_DATA = [];
     var PT_FAMILY_HOVER_NOTE = null;
-    function ptShowFamilyHoverNote(trade, clientX, clientY) {
-        if (!trade || !trade.minimumRiskRewardApplied) { if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none'; return; }
+    function ptShowFamilyHoverNote(familyInfo, trade, clientX, clientY) {
+        if (!familyInfo && !trade) {
+            if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display = 'none';
+            return;
+        }
         if (!PT_FAMILY_HOVER_NOTE) {
-            PT_FAMILY_HOVER_NOTE=document.createElement('div');
-            PT_FAMILY_HOVER_NOTE.className='pt-family-hover-note';
-            PT_FAMILY_HOVER_NOTE.setAttribute('role','status');
+            PT_FAMILY_HOVER_NOTE = document.createElement('div');
+            PT_FAMILY_HOVER_NOTE.className = 'pt-family-hover-note';
+            PT_FAMILY_HOVER_NOTE.setAttribute('role', 'status');
+            PT_FAMILY_HOVER_NOTE.addEventListener('mouseleave', function () {
+                PT_FAMILY_HOVER_NOTE.style.display = 'none';
+                PT_HOVER_INDEX = -1;
+                PT_CURSOR_Y = null;
+                ptScheduleDraw();
+                ptUpdateReadout();
+            });
             document.body.appendChild(PT_FAMILY_HOVER_NOTE);
         }
-        var actual=Number(trade.configuredTpPrice), entry=Number(trade.entryPrice), risk=Math.abs(entry-Number(trade.slPrice));
-        var actualRR=(risk>0&&Number.isFinite(actual))?(trade.isLong?(actual-entry)/risk:(entry-actual)/risk):0;
-        PT_FAMILY_HOVER_NOTE.innerHTML='<strong>Minimum risk/reward applied</strong>This trade family\'s configured take-profit provides approximately 1:'+actualRR.toFixed(2)+' reward. The minimum permitted target is 1:1, so the take-profit was adjusted to the minimum allowed level.';
-        PT_FAMILY_HOVER_NOTE.style.display='block';
-        var left=Math.max(8,Math.min((clientX||12)+14,window.innerWidth-PT_FAMILY_HOVER_NOTE.offsetWidth-8));
-        var top=Math.max(8,Math.min((clientY||12)+14,window.innerHeight-PT_FAMILY_HOVER_NOTE.offsetHeight-8));
-        PT_FAMILY_HOVER_NOTE.style.left=left+'px';PT_FAMILY_HOVER_NOTE.style.top=top+'px';
+        var html = '';
+        if (familyInfo && familyInfo.confirmationRootName) {
+            html += '<strong>' + ptEscapeHtml(familyInfo.confirmationRootName) + ' occurred first for this family</strong>';
+        }
+        if (familyInfo) {
+            html += '<strong>Family identification</strong><div>' + (familyInfo.noTrade
+                ? 'Trade identified but not traded.'
+                : 'Identified and traded.') + '</div>';
+        }
+        if (trade && trade.minimumRiskRewardApplied) {
+            var actual = Number(trade.configuredTpPrice), entry = Number(trade.entryPrice), risk = Math.abs(entry - Number(trade.slPrice));
+            var actualRR = (risk > 0 && Number.isFinite(actual))
+                ? (trade.isLong ? (actual - entry) / risk : (entry - actual) / risk) : 0;
+            html += '<strong>Minimum risk/reward applied</strong><div>This trade family\'s configured take-profit provides approximately 1:' + actualRR.toFixed(2) +
+                ' reward. The minimum permitted target is 1:1, so the take-profit was adjusted to the minimum allowed level.</div>';
+        }
+        if (!html) {
+            if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display = 'none';
+            return;
+        }
+        PT_FAMILY_HOVER_NOTE.innerHTML = html;
+        PT_FAMILY_HOVER_NOTE.style.display = 'block';
+        var left = Math.max(8, Math.min((clientX || 12) + 14, window.innerWidth - PT_FAMILY_HOVER_NOTE.offsetWidth - 8));
+        var top = Math.max(8, Math.min((clientY || 12) + 14, window.innerHeight - PT_FAMILY_HOVER_NOTE.offsetHeight - 8));
+        PT_FAMILY_HOVER_NOTE.style.left = left + 'px';
+        PT_FAMILY_HOVER_NOTE.style.top = top + 'px';
+    }
+
+    // Entry-at is an anchor only; it is NEVER an execution candle.
+    // The search starts at anchorIndex + 1 and returns the first later candle
+    // that actually touches/crosses the configured entry price:
+    //   sell-limit / buy-stop  => HIGH >= anchor price
+    //   buy-limit / sell-stop  => LOW  <= anchor price
+    // Exact price touches count as fills. The comparisons are inclusive because
+    // an order is triggered when the market reaches the order price, not only
+    // after price has moved beyond it. Market buy/sell executes on the next bar.
+    function ptNormalizeTradeOrder(orderType) {
+        var raw = String(orderType || 'buy').toLowerCase().trim().replace(/[\s_]+/g, '-');
+        var match = raw.match(/^(buy|sell)(?:-(limit|stop))?/);
+        if (!match) return 'buy';
+        return match[1] + (match[2] ? '-' + match[2] : '');
+    }
+
+    function ptIsLongTradeOrder(orderType) {
+        return ptNormalizeTradeOrder(orderType).indexOf('buy') === 0;
+    }
+
+    function ptFindEntryTriggerIndex(candles, anchorIndex, anchorPrice, orderType) {
+        if (!Array.isArray(candles) || !candles.length) return null;
+        if (anchorIndex == null || anchorIndex === '') return null;
+
+        var anchor = Number(anchorIndex);
+        var price = Number(anchorPrice);
+        if (!Number.isInteger(anchor) || anchor < 0 || anchor >= candles.length || !Number.isFinite(price)) return null;
+
+        var anchorCandle = candles[anchor];
+        if (!anchorCandle) return null;
+
+        // This is the first permissible execution bar. Starting here guarantees
+        // that the selected Entry-at candle itself can never trigger its trade.
+        var start = anchor + 1;
+        if (start >= candles.length) return null;
+
+        var order = ptNormalizeTradeOrder(orderType);
+        var useHigh = order === 'sell-limit' || order === 'buy-stop';
+        var useLow = order === 'buy-limit' || order === 'sell-stop';
+
+        // A market order has no pending price-touch condition; use the very next
+        // chronological candle after the configured anchor.
+        if (order === 'buy' || order === 'sell') return start;
+        if (!useHigh && !useLow) return null;
+
+        var anchorId = anchorCandle.id != null ? String(anchorCandle.id) : null;
+        for (var i = start; i < candles.length; i++) {
+            var candle = candles[i];
+            if (!candle) continue;
+
+            // Defensive protection for duplicated/aliased candle rows. Even if
+            // the same database candle appears twice in the array, it cannot be
+            // used as its own entry trigger.
+            if (anchorId !== null && candle.id != null && String(candle.id) === anchorId) continue;
+
+            if (useHigh) {
+                var high = Number(candle.high);
+                if (Number.isFinite(high) && high >= price) return i;
+            } else {
+                var low = Number(candle.low);
+                if (Number.isFinite(low) && low <= price) return i;
+            }
+        }
+        return null;
+    }
+
+    // Trade status is family-based, not merely entry-trigger-based.
+    // A family is IN TRADE only after its entry trigger is found and while neither
+    // exit level has been touched. BUY variants are long; SELL variants are short.
+    // If both exits touch in one OHLC candle, stoploss takes priority conservatively.
+    function ptEvaluateTradeOutcome(candles, triggerIndex, slPrice, tpPrice, orderType) {
+        if (triggerIndex == null || triggerIndex === '') {
+            return { outcome: 'pending entry', slTriggerIndex: null, tpTriggerIndex: null };
+        }
+        // Number(null) and Number('') both become 0 in JavaScript. Reject missing
+        // levels before conversion so a blank SL/TP can never be treated as price 0.
+        if (slPrice == null || slPrice === '' || tpPrice == null || tpPrice === '') {
+            return { outcome: 'pending entry', slTriggerIndex: null, tpTriggerIndex: null };
+        }
+        var trigger = Number(triggerIndex);
+        var stop = Number(slPrice);
+        var target = Number(tpPrice);
+        if (!Array.isArray(candles) || !Number.isInteger(trigger) || trigger < 0 ||
+            trigger >= candles.length || !Number.isFinite(stop) || !Number.isFinite(target)) {
+            return { outcome: 'pending entry', slTriggerIndex: null, tpTriggerIndex: null };
+        }
+
+        var isLong = ptIsLongTradeOrder(orderType);
+        var result = { outcome: 'in trade', slTriggerIndex: null, tpTriggerIndex: null };
+        // Include the entry-trigger candle so an exit occurring on the same bar is
+        // not silently left open. If both levels touch in that bar, SL wins above.
+        for (var i = trigger; i < candles.length; i++) {
+            var candle = candles[i];
+            if (!candle) continue;
+            var high = Number(candle.high);
+            var low = Number(candle.low);
+            if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+            var stopTouched = isLong ? low <= stop : high >= stop;
+            var targetTouched = isLong ? high >= target : low <= target;
+            if (!stopTouched && !targetTouched) continue;
+            if (stopTouched) {
+                result.outcome = 'stoploss hit';
+                result.slTriggerIndex = i;
+            } else {
+                result.outcome = 'take profit reached';
+                result.tpTriggerIndex = i;
+            }
+            break;
+        }
+        return result;
     }
 
     function ptBuildRootTradeData(roots, candles) {
@@ -5236,20 +5594,32 @@ try {
             if (!encoded) return null;
             var parts = String(encoded).split('|'); if (parts.length < 3) return null;
             var parentTarget = parts[0] === 'parent';
-            var source = parentTarget ? root : tradeSource(root);
+            var source = parentTarget ? (root.parentTradeRoot || root) : tradeSource(root);
             var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parentTarget ? parts[1] : parts[0]);});
             if(!tree) return null;
             var kind = parentTarget ? parts[2] : parts[1];
             var fallbackId = parentTarget ? parts[3] : parts[2];
             var c=tree[kind]; if(!c) return null;
-            var identity = String(c.selectedExistingId || (kind==='reference' ? c.existingCandleId : null) || c.offsetTo || c.id || fallbackId);
-            return parentTarget ? 'parent:' + identity : identity;
+            // Resolve the identity of the selected candle, not the candle it is
+            // offset from. A newly-created reference/offset has its own ID (CR3);
+            // offsetTo is only its relationship to the existing anchor (CR2).
+            // Using offsetTo here makes Entry at CR3 resolve to CR2, which then
+            // allows CR3 itself to be incorrectly selected as the next trigger.
+            var identity;
+            if (kind === 'main') {
+                identity = c.selectedExistingId || c.offsetTo || c.id || fallbackId;
+            } else if ((kind === 'reference' || kind === 'offset') && c.referenceMode === 'new_offset') {
+                identity = c.id || fallbackId;
+            } else {
+                identity = c.selectedExistingId || c.existingCandleId || c.id || fallbackId;
+            }
+            return parentTarget ? 'parent:' + identity : String(identity);
         }
         function stamp(c) { if(!c) return '—'; var v=c.time; if(typeof v==='number') return new Date(v < 1e12 ? v*1000 : v).toISOString(); return String(v||'—'); }
         function targetLabel(root, encoded) {
             if(!encoded) return '—';
             var parts=String(encoded).split('|'), parentTarget=parts[0]==='parent';
-            var source=parentTarget ? root : tradeSource(root);
+            var source=parentTarget ? (root.parentTradeRoot || root) : tradeSource(root);
             var tree=(source.trees||[]).find(function(t){return String(t.id)===String(parentTarget ? parts[1] : parts[0]);});
             var c=tree&&tree[parentTarget ? parts[2] : parts[1]];
             return (c&&c.name ? c.name : (parentTarget ? parts[3] : parts[2])||'—') + (parentTarget ? ' (root)' : '');
@@ -5297,39 +5667,34 @@ try {
                 families = families.filter(function (family) { return !family.noTrade; });
             families.forEach(function(family, famIndex){
                 var map=family.map||{};
-                var entryIndex=resolveTradeTargetIndex(entryKey,family,candles,root.entryPriceLevel||'high');
+                var entryAtIndex=resolveTradeTargetIndex(entryKey,family,candles,root.entryPriceLevel||'high');
                 var slIndex=resolveTradeTargetIndex(slKey,family,candles,root.stoplossPriceLevel||'high');
                 var tpIndex=tpKey?resolveTradeTargetIndex(tpKey,family,candles,root.takeProfitPriceLevel||'high'):null;
-                if(entryIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
-                var entryC=candles[entryIndex], slC=candles[slIndex], tpC=tpIndex!=null?candles[tpIndex]:null;
-                if(!entryC||!slC) return;
-                function matchedTradeLevel(key, configuredLevel, family) {
-                    var parts=String(key||'').split('|');
-                    if(parts.length<3 || parts[0]==='parent') return configuredLevel||'high';
-                    var treeId=String(parts[0]), kind=String(parts[1]);
-                    var tree=(source.trees||[]).find(function(t){return String(t.id)===treeId;});
-                    if(!tree) return configuredLevel||'high';
-                    var identity=kind==='main' ? String((tree.main||{}).selectedExistingId||(tree.main||{}).offsetTo||(tree.main||{}).id) :
-                        String((tree.reference||{}).referenceMode!=='new_offset'&&((tree.reference||{}).selectedExistingId||(tree.reference||{}).existingCandleId)?((tree.reference||{}).selectedExistingId||(tree.reference||{}).existingCandleId):(tree.reference||{}).id);
-                    var conds=[];
-                    (family.conditions||[]).forEach(function(c){if(String(c.mainIdentity)===identity||String(c.referenceIdentity)===identity) conds.push(c);});
-                    if(!conds.length) return configuredLevel||'high';
-                    var c=conds[conds.length-1];
-                    return String(c.mainIdentity)===identity ? (c.mainPriceLevel||configuredLevel||'high') : (c.referencePriceLevel||configuredLevel||'high');
-                }
-                var entryResolvedLevel=matchedTradeLevel(root.entryFrom,root.entryPriceLevel,family);
-                var slResolvedLevel=matchedTradeLevel(root.stoplossFrom,root.stoplossPriceLevel,family);
-                var tpResolvedLevel=matchedTradeLevel(root.takeProfitFrom,root.takeProfitPriceLevel,family);
-                var entryPrice=ptPrice(entryC,entryResolvedLevel), slPrice=ptPrice(slC,slResolvedLevel);
-                var order=String(root.orderType||'buy').toLowerCase();
-                var isLong=['buy','buy-limit','buy-stop'].indexOf(order)>=0;
-                var triggerIndex=null;
-                // Entry candle A is excluded: scan from the immediately following candle.
-                for(var i=entryIndex+1;i<candles.length;i++){
-                    var candle=candles[i];
-                    var triggerHit=['buy','buy-limit','sell-stop'].indexOf(order)>=0 ? Number(candle.low)<entryPrice : Number(candle.high)>entryPrice;
-                    if(triggerHit){triggerIndex=i;break;}
-                }
+                if(entryAtIndex==null || slIndex==null || (root.takeProfitType!=='risk_reward' && tpIndex==null)) return;
+                var entryAtC=candles[entryAtIndex], slC=candles[slIndex], tpC=tpIndex!=null?candles[tpIndex]:null;
+                if(!entryAtC||!slC) return;
+                // Every trade price level is an independent, explicit trade setting.
+                // Never substitute a tree-condition level for Entry, Stoploss or TP.
+                // The selected level is passed unchanged to ptPrice(), which derives
+                // center/wick-center prices directly from the selected candle's OHLC.
+                var entryResolvedLevel=String(root.entryPriceLevel || 'high').toLowerCase().trim();
+                var slResolvedLevel=String(root.stoplossPriceLevel || 'high').toLowerCase().trim();
+                var tpResolvedLevel=String(root.takeProfitPriceLevel || 'high').toLowerCase().trim();
+                var entryPrice=ptPrice(entryAtC,entryResolvedLevel), slPrice=ptPrice(slC,slResolvedLevel);
+                if (entryPrice == null || !Number.isFinite(Number(entryPrice)) ||
+                    slPrice == null || !Number.isFinite(Number(slPrice))) return;
+                var order=ptNormalizeTradeOrder(root.orderType||'buy');
+                var isLong=ptIsLongTradeOrder(order);
+                var isShort=!isLong;
+                // Never use Entry at as its own trigger, and never substitute the
+                // anchor candle when no later trigger exists. A pending trade must
+                // have triggerIndex/entryIndex = null until a qualifying later bar.
+                var triggerIndex=ptFindEntryTriggerIndex(candles,entryAtIndex,entryPrice,order);
+                // Maintain the invariant even if a future resolver returns a bad
+                // index: an execution candle must be strictly after Entry at.
+                if (triggerIndex != null && Number(triggerIndex) <= Number(entryAtIndex)) triggerIndex = null;
+                var actualEntryIndex = triggerIndex;
+                var entryC = triggerIndex != null ? candles[triggerIndex] : null;
                 var rr=root.takeProfitType==='risk_reward'?Number(window.PT_PROVIDER_RISK_REWARD || root.riskReward || 0):null;
                 var riskDistanceForTarget=Math.abs(entryPrice-slPrice);
                 var configuredTpPrice = root.takeProfitType==='risk_reward'
@@ -5345,25 +5710,17 @@ try {
                     var actualReward=isLong ? Number(tpPrice)-entryPrice : entryPrice-Number(tpPrice);
                     if(!(actualReward>=riskDistanceForTarget)) { tpPrice=minimumTarget; minimumRiskRewardApplied=true; }
                 }
-                var slTrigger=null,tpTrigger=null,outcome=triggerIndex==null?'pending entry':'in trade';
-                if(triggerIndex!=null){
-                    for(var j=triggerIndex;j<candles.length;j++){
-                        var cj=candles[j], slHit=isLong?Number(cj.low)<=slPrice:Number(cj.high)>=slPrice,
-                            tpHit=isLong?Number(cj.high)>=tpPrice:Number(cj.low)<=tpPrice;
-                        if(slHit||tpHit){
-                            if(slHit){outcome='stoploss hit';slTrigger=j;}
-                            else {outcome='take profit reached';tpTrigger=j;}
-                            break;
-                        }
-                    }
-                }
+                var tradeState=ptEvaluateTradeOutcome(candles,triggerIndex,slPrice,tpPrice,order);
+                var slTrigger=tradeState.slTriggerIndex;
+                var tpTrigger=tradeState.tpTriggerIndex;
+                var outcome=tradeState.outcome;
                 var riskDistance=Math.abs(entryPrice-slPrice);
                 var rewardDistance=(tpPrice!==null && Number.isFinite(Number(tpPrice)))?Math.abs(Number(tpPrice)-entryPrice):null;
                 var familyRiskReward=(riskDistance>0 && rewardDistance!==null)?(rewardDistance/riskDistance):null;
-                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:famIndex+1,timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),sourceTimeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),dataMode:'main',orderType:order,
-                    entryIndex:entryIndex,entryName:targetLabel(root,root.entryFrom),entryPrice:entryPrice,entryTime:stamp(entryC),
+                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:(family.familyNumber != null ? Number(family.familyNumber) : famIndex+1),timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),sourceTimeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),dataMode:'main',orderType:order,
+                    entryIndex:actualEntryIndex,entryAtIndex:entryAtIndex,entryName:targetLabel(root,root.entryFrom),entryPriceLevel:entryResolvedLevel,entryPrice:entryPrice,entryTime:entryC?stamp(entryC):null,entryAtTime:stamp(entryAtC),
                     slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
-                    riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
+                    riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,isShort:isShort,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
                     triggerIndex:triggerIndex,entryTriggerTime:triggerIndex!=null?stamp(candles[triggerIndex]):null,slTriggerIndex:slTrigger,tpTriggerIndex:tpTrigger,outcome:outcome,
                     slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null});
             });
@@ -5509,10 +5866,14 @@ try {
         }
         if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
 
-        var entryIndex = Number(trade.triggerIndex != null ? trade.triggerIndex : trade.entryIndex);
-        if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) {
-            entryIndex = Number(trade.entryIndex);
-        }
+        var actualTriggerIndex = trade.triggerIndex != null ? Number(trade.triggerIndex) :
+            (trade.entryIndex != null ? Number(trade.entryIndex) : NaN);
+        var anchorOnly = !Number.isFinite(actualTriggerIndex) || actualTriggerIndex < 0 ||
+            actualTriggerIndex >= PT_CANDLES.length ||
+            (trade.entryAtIndex != null && actualTriggerIndex <= Number(trade.entryAtIndex));
+        var entryIndex = anchorOnly
+            ? Number(trade.entryAtIndex != null ? trade.entryAtIndex : trade.entrySourceIndex)
+            : actualTriggerIndex;
         if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) return;
 
         var slPrice = Number(trade.slPrice);
@@ -5594,21 +5955,28 @@ try {
             priceMax = Math.max(priceMax, targetPrice);
         }
         var centerPrice = (entryPrice + slPrice) / 2;
-        PT_LOCATE_ARROW = {
-            rootId: String(rootId),
-            familyNumber: Number(familyNumber),
-            index: targetIndex,
-            slPrice: slPrice,
-            targetPrice: targetPrice,
-            hasStoplossTrigger: hasStoplossTrigger,
-            entryPrice: entryPrice,
-            centerPrice: centerPrice,
-            priceMin: priceMin,
-            priceMax: priceMax,
-            direction: direction,
-            startedAt: Date.now(),
-            expiresAt: Date.now() + 4000
-        };
+        // A pending order has no execution candle. Centre the chart on its
+        // anchor for inspection, but never place the entry/SL locate arrow on
+        // that anchor as though an order had been filled there.
+        if (anchorOnly && !hasStoplossTrigger) {
+            PT_LOCATE_ARROW = null;
+        } else {
+            PT_LOCATE_ARROW = {
+                rootId: String(rootId),
+                familyNumber: Number(familyNumber),
+                index: targetIndex,
+                slPrice: slPrice,
+                targetPrice: targetPrice,
+                hasStoplossTrigger: hasStoplossTrigger,
+                entryPrice: entryPrice,
+                centerPrice: centerPrice,
+                priceMin: priceMin,
+                priceMax: priceMax,
+                direction: direction,
+                startedAt: Date.now(),
+                expiresAt: Date.now() + 4000
+            };
+        }
 
         window.ptCloseRootsData();
         PT_HOVER_INDEX = entryIndex;
@@ -5632,8 +6000,9 @@ try {
         var roots=configuredRoots.filter(function(root){
             if(root.applyToChart===false || root.applyToChart===0 || root.applyToChart==='0') return false;
             var nativeMatch = ptNormTfList(root).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
-            var confirmationMatch = root.tradeFor === 'root_confirmation' && root.confirmationRoot && root.useForTrades &&
-                (root.confirmationRoot.timeframes || []).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
+            var confirmationMatch = root.tradeFor === 'root_confirmation' && ptGetConfirmationRoots(root).some(function(cr){
+                return cr && cr.useForTrades && (cr.timeframes || []).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
+            });
             return nativeMatch || confirmationMatch;
         });
         var rootIds=new Set(roots.map(function(root){return String(root.id);}));
@@ -5654,7 +6023,10 @@ try {
             var sl=items.filter(function(t){return t.outcome==='stoploss hit';}).length;
             var tp=items.filter(function(t){return t.outcome==='take profit reached';}).length;
             var pending=items.filter(function(t){return t.outcome==='pending entry';}).length;
-            var active=items.filter(function(t){return t.outcome==='in trade';}).length;
+            var inTradeItems=items.filter(function(t){return t.outcome==='in trade';});
+            var active=inTradeItems.length;
+            var longInTrade=inTradeItems.filter(function(t){return t.isLong===true || (t.isLong==null && ptIsLongTradeOrder(t.orderType));}).length;
+            var shortInTrade=inTradeItems.filter(function(t){return t.isShort===true || (t.isShort==null && !ptIsLongTradeOrder(t.orderType));}).length;
             var winsR=items.reduce(function(sum,t){return sum+(t.outcome==='take profit reached'&&Number.isFinite(Number(t.riskReward))?Number(t.riskReward):0);},0);
             var netR=winsR-sl, sequence=closed(items), lossRun=0,winRun=0,maxLoss=0,maxWin=0;
             // Virtual balance starts at 100%. Each stoploss subtracts 1 percentage point
@@ -5699,14 +6071,40 @@ try {
                 }
                 if(equity>=100) activeDrawdownTrades=[];
             });
-            return {sl:sl,tp:tp,pending:pending,active:active,total:items.length,closed:sl+tp,winRate:(sl+tp)>0?tp/(sl+tp)*100:0,
+            return {sl:sl,tp:tp,pending:pending,active:active,longInTrade:longInTrade,shortInTrade:shortInTrade,total:items.length,closed:sl+tp,winRate:(sl+tp)>0?tp/(sl+tp)*100:0,
                 winsR:winsR,lostR:sl,netR:netR,maxLoss:maxLoss,maxWin:maxWin,maxDrawdown:maxDrawdown,accountLostAt:accountLostAt,
                 currentVirtualBalance:currentVirtualBalance,highestPeakBalance:highestPeakBalance,
                 highestRevenuePeak:Math.max(0,highestPeakBalance-100),highestRevenuePeakTrades:highestRevenuePeakTrades,
                 highestDrawdownTrades:highestDrawdownTrades,highestDrawdownLostRisks:highestDrawdownLostRisks,highestDrawdownRewards:highestDrawdownRewards};
         }
 
-                function card(label,value,cls,icon,detail){return '<div class="pt-rd-stat '+cls+'"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+value+'</div>'+(detail?'<div class="pt-rd-stat-label">'+detail+'</div>':'')+'</div></div>';}
+        function card(label,value,cls,icon,detail){return '<div class="pt-rd-stat '+cls+'"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div class="pt-rd-state-content"><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+value+'</div>'+(detail?'<div class="pt-rd-stat-label">'+detail+'</div>':'')+'</div></div>';}
+        function statusCard(label,items,outcome,cls,icon,scopeKey){
+            var matched=(items||[]).filter(function(t){return t.outcome===outcome;});
+            var safeScope=String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
+            var safeOutcome=String(outcome).replace(/[^a-zA-Z0-9_-]/g,'-');
+            var key='pt-status-'+safeScope+'-'+safeOutcome;
+            var ordered=matched.slice().sort(function(a,b){
+                var ai=a.triggerIndex!=null?a.triggerIndex:(a.entryIndex!=null?a.entryIndex:(a.entryAtIndex||0));
+                var bi=b.triggerIndex!=null?b.triggerIndex:(b.entryIndex!=null?b.entryIndex:(b.entryAtIndex||0));
+                return Number(ai||0)-Number(bi||0);
+            });
+            var sequenceHtml=ordered.length
+                ? '<div class="pt-dd-sequence">'+ordered.map(function(t){
+                    var rootId=ptEscapeHtml(t.rootId);
+                    var family=Number(t.familyNumber||0);
+                    var tf=ptEscapeHtml(t.sourceTimeframe||t.timeframe||'');
+                    var confirmationName=t.confirmationRootName?' · '+ptEscapeHtml(t.confirmationRootName):'';
+                    var chipClass=outcome==='stoploss hit'?'loss':(outcome==='take profit reached'?'profit':(outcome==='in trade'?'profit':'pending'));
+                    return '<button type="button" class="pt-dd-chip '+chipClass+'" title="Locate Root '+rootId+' · Family '+family+' on chart" onclick="ptLocateTrade(\''+rootId+'\','+family+',\''+tf+'\')">Root '+rootId+' · Family #'+ptEscapeHtml(family)+confirmationName+'</button>';
+                }).join('')+'</div>'
+                : '<div class="pt-dd-empty">No trades in this category.</div>';
+            return '<div class="pt-rd-stat '+cls+' pt-rd-drawdown-card" id="'+key+'">'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+matched.length+'</div><div class="pt-rd-stat-label">'+(matched.length===1?'1 trade family':matched.length+' trade families')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">'+label+' trades</div>'+sequenceHtml+
+                '<div class="pt-dd-totals"><div><span>Trade families</span><strong>'+matched.length+'</strong></div><div><span>Status</span><strong>'+ptEscapeHtml(label)+'</strong></div></div>'+
+                '</div></div>';
+        }
         function drawdownCard(x,scopeKey){
             var key='pt-dd-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
             var sequenceHtml=x.highestDrawdownTrades.length
@@ -5715,9 +6113,9 @@ try {
             var rewards=(x.highestDrawdownRewards>=0?'+':'')+fmtRR(x.highestDrawdownRewards)+'R';
             return '<div class="pt-rd-stat loss pt-rd-drawdown-card" id="'+key+'">'+
                 '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-chart-line"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Drawdown</div><div class="pt-rd-stat-value">'+fmtRR(x.maxDrawdown)+'%</div><div class="pt-rd-stat-label">'+ptEscapeHtml(x.accountLostAt?'Account exhausted at '+x.accountLostAt:'Fixed 100% balance ceiling · wins restore balance but never exceed 100%')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
-                '<div class="pt-dd-details" hidden><div class="pt-dd-detail-heading">Trades making up the highest drawdown</div>'+sequenceHtml+
+                '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">Trades making up the highest drawdown</div>'+sequenceHtml+
                 '<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+fmtRR(x.highestDrawdownLostRisks)+'R</strong></div><div><span>Risk rewards</span><strong>'+rewards+'</strong></div></div>'+
-                '<button type="button" class="pt-dd-button secondary" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button></div></div>';
+                '</div></div>';
         }
         function highestRevenuePeakCard(x,scopeKey){
             var key='pt-peak-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
@@ -5728,9 +6126,9 @@ try {
                 : '<div class="pt-dd-empty">No profitable peak above the initial 100% balance has been recorded.</div>';
             return '<div class="pt-rd-stat profit pt-rd-drawdown-card" id="'+key+'">'+
                 '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-arrow-trend-up"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Revenue Peak</div><div class="pt-rd-stat-value">+'+fmtRR(x.highestRevenuePeak)+'%</div><div class="pt-rd-stat-label">Highest balance reached: '+fmtRR(x.highestPeakBalance)+'%</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
-                '<div class="pt-dd-details" hidden><div class="pt-dd-detail-heading">Trades contributing to the highest revenue peak</div>'+sequenceHtml+
+                '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">Trades contributing to the highest revenue peak</div>'+sequenceHtml+
                 '<div class="pt-dd-totals"><div><span>Peak revenue above 100%</span><strong>+'+fmtRR(x.highestRevenuePeak)+'%</strong></div><div><span>Peak balance</span><strong>'+fmtRR(x.highestPeakBalance)+'%</strong></div></div>'+
-                '<button type="button" class="pt-dd-button secondary" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button></div></div>';
+                '</div></div>';
         }
         window.ptToggleDrawdown=function(key,showDetails){
             var card=document.getElementById(key); if(!card)return;
@@ -5756,7 +6154,7 @@ try {
         function ptTradeDate(t){
             var idx=t.slTriggerIndex!=null?t.slTriggerIndex:(t.tpTriggerIndex!=null?t.tpTriggerIndex:(t.triggerIndex!=null?t.triggerIndex:t.entryIndex));
             var c=(idx!=null&&PT_CANDLES[idx])?PT_CANDLES[idx]:null;
-            var raw=c?(c.time||c.open_time): (t.slTriggerTime||t.tpTriggerTime||t.entryTriggerTime||t.entryTime);
+            var raw=c?(c.time||c.open_time): (t.slTriggerTime||t.tpTriggerTime||t.entryTriggerTime||t.entryTime||t.entryAtTime);
             if(!raw)return null;
             var d=new Date(String(raw).replace(' ','T'));
             return Number.isNaN(d.getTime())?null:d;
@@ -5859,17 +6257,17 @@ try {
             return '<button type="button" class="pt-dd-button pt-provision-toggle" onclick="ptProvisionToggle(\''+scopeKey+'\',true)">Trades Provision</button>'+
                 '<div id="pt-summary-'+key+'"><div class="pt-rd-dashboard">'+
                 card('Total Trades',x.total,'pending','fa-list-check','Total matched families')+
-                card('Stoploss hit',x.sl,'loss','fa-arrow-trend-down')+
+                statusCard('Stoploss hit',items,'stoploss hit','loss','fa-arrow-trend-down',scopeKey)+
                 card('Lost Risks',fmtRR(x.lostR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+x.sl+' losing families')+
-                card('Profit reached',x.tp,'profit','fa-arrow-trend-up')+
+                statusCard('Profit reached',items,'take profit reached','profit','fa-arrow-trend-up',scopeKey)+
                 card('Risk rewards',(x.winsR>=0?'+':'')+fmtRR(x.winsR)+'R','profit','fa-gift','Sum of '+x.tp+' winning families')+
                 card('Win rate',fmtRR(x.winRate)+'%','active','fa-bullseye',x.tp+' wins / '+x.closed+' closed')+
                 card('Consecutive Loss',x.maxLoss,'loss','fa-arrow-trend-down','Longest losing streak before a profitable trade')+
                 card('Consecutive Win',x.maxWin,'profit','fa-trophy','Longest winning streak without a stoploss')+
                 drawdownCard(x,scopeKey)+highestRevenuePeakCard(x,scopeKey)+
                 card('Current virtual balance',fmtRR(x.currentVirtualBalance)+'%',x.currentVirtualBalance>=100?'profit':'loss','fa-scale-balanced','100% baseline − all lost risks + all profitable risk rewards')+
-                card('Pending entries',x.pending,'pending','fa-hourglass-half')+
-                card('In trade',x.active,'active','fa-chart-line')+'</div></div>'+
+                statusCard('Pending entries',items,'pending entry','pending','fa-hourglass-half',scopeKey)+
+                statusCard('In trade',items,'in trade','active','fa-chart-line',scopeKey)+'</div></div>'+
                 '<div class="pt-provision-panel" id="pt-provision-'+key+'" hidden><div class="pt-provision-nav"><strong>Trades Provision</strong><button type="button" class="pt-dd-button secondary" onclick="ptProvisionToggle(\''+scopeKey+'\',false)">Back to summary</button></div></div>';
         }
         // Restore the global summary for all native root trade families on the viewed
@@ -5890,7 +6288,7 @@ try {
             var rs=stats(items);
             // Each root's detailed summary lives inside its foldable content.
             html+='<details class="pt-rd-root"><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+items.length+' families · <b class="is-profit">'+rs.tp+' profit</b> · <b class="is-loss">'+rs.sl+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
-            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rs.pending+'</b></span><span>In trade <b>'+rs.active+'</b></span><span>Closed <b>'+rs.closed+'</b></span></div>';
+            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rs.pending+'</b></span><span>In trade <b>'+rs.active+'</b></span><span>Long in trade <b>'+rs.longInTrade+'</b></span><span>Short in trade <b>'+rs.shortInTrade+'</b></span><span>Closed <b>'+rs.closed+'</b></span></div>';
             html+=dashboard(items,'root-'+root.id);
             if(!items.length){html+='<div class="pt-rd-empty">No complete matched trade families for this root in the current timeframe.</div>';}
             // Render individual trade families newest-first; analytics above retain their own chronological order.
@@ -5902,9 +6300,9 @@ try {
             displayItems.forEach(function(t){
                 var stateClass=t.outcome==='stoploss hit'?'loss':(t.outcome==='take profit reached'?'profit':(t.outcome==='in trade'?'active':'pending'));
                 var rrDisplay=(t.riskReward!==null && Number.isFinite(Number(t.riskReward)))?'1 : '+Number(t.riskReward).toLocaleString(undefined,{maximumFractionDigits:3}):'1 : unavailable';
-                html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span></div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
-                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime)+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level · minimum 1:1 enforced')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
-                html+='<div class="pt-rd-details"><div><span>Entry at</span><b>'+ptEscapeHtml(t.entryName)+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
+                html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span>'+(t.confirmationRootName?'<span class="pt-rd-order">'+ptEscapeHtml(t.confirmationRootName)+'</span>':'')+'</div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
+                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime||'Awaiting entry trigger')+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level · minimum 1:1 enforced')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
+                html+='<div class="pt-rd-details"><div><span>Entry at (anchor candle)</span><b>'+ptEscapeHtml(t.entryName)+' · '+ptEscapeHtml(t.entryAtTime||'—')+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
                 if(t.tpType==='risk reward') html+='<div><span>Take profit type</span><b>Risk/reward target</b></div>';
                 else html+='<div><span>Take profit at</span><b>'+ptEscapeHtml(t.tpName||'—')+' · '+ptEscapeHtml(t.tpTime||'—')+'</b></div>';
                 html+='<div><span>Family Risk Reward</span><b>'+ptEscapeHtml(rrDisplay)+'</b></div>';
@@ -5938,23 +6336,61 @@ try {
         var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
         var idx = Math.floor((x - baseX) / step);
         if (idx < 0 || idx >= PT_CANDLES.length) idx = -1;
-        var hoveredFamily = null;
-        if (idx >= 0 && Array.isArray(PT_ROOT_TRADE_DATA)) {
-            hoveredFamily = PT_ROOT_TRADE_DATA.find(function(t) {
-                if (!t.minimumRiskRewardApplied) return false;
-                var endIndex = Math.max(Number(t.slTriggerIndex == null ? t.entryIndex : t.slTriggerIndex),
-                                        Number(t.tpTriggerIndex == null ? t.entryIndex : t.tpTriggerIndex),
-                                        Number(t.triggerIndex == null ? t.entryIndex : t.triggerIndex));
-                return idx >= Math.min(Number(t.entryIndex), Number(t.triggerIndex == null ? t.entryIndex : t.triggerIndex)) && idx <= endIndex;
-            }) || null;
+
+        var hoveredFamilyInfo = null;
+        if (idx >= 0 && Array.isArray(PT_HOVER_FAMILY_MATCHES)) {
+            var candidates = PT_HOVER_FAMILY_MATCHES.filter(function (family) {
+                var values = Object.keys(family.map || {}).map(function (key) { return Number(family.map[key]); }).filter(Number.isFinite);
+                if (!values.length) return false;
+                var first = Math.min.apply(Math, values), last = Math.max.apply(Math, values);
+                return idx >= first && idx <= last && String(family.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
+            });
+            candidates.sort(function (a, b) {
+                function span(f) { var v=Object.keys(f.map||{}).map(function(k){return Number(f.map[k]);}).filter(Number.isFinite);return v.length?Math.max.apply(Math,v)-Math.min.apply(Math,v):Infinity; }
+                return span(a)-span(b);
+            });
+            hoveredFamilyInfo = candidates[0] || null;
         }
-        ptShowFamilyHoverNote(hoveredFamily,e.clientX,e.clientY);
+
+        var hoveredTrade = null;
+        if (idx >= 0) {
+            var tradeRows = (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []).concat(
+                (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function (t) {
+                    return t && t.dataMode === 'confirmation' && String(t.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
+                })
+            );
+            if (hoveredFamilyInfo) {
+                hoveredTrade = tradeRows.find(function (t) {
+                    return String(t.rootId) === String(hoveredFamilyInfo.rootId) &&
+                        Number(t.familyNumber) === Number(hoveredFamilyInfo.familyNumber) &&
+                        (!hoveredFamilyInfo.confirmationRootId || String(t.confirmationRootId || '') === String(hoveredFamilyInfo.confirmationRootId));
+                }) || null;
+            }
+            if (!hoveredTrade) {
+                hoveredTrade = tradeRows.find(function (t) {
+                    var fallbackIndex = t.entryIndex != null ? Number(t.entryIndex) : Number(t.entryAtIndex);
+                    var first = Number(t.entryAtIndex != null ? t.entryAtIndex : fallbackIndex);
+                    var last = Math.max(
+                        t.slTriggerIndex == null ? fallbackIndex : Number(t.slTriggerIndex),
+                        t.tpTriggerIndex == null ? fallbackIndex : Number(t.tpTriggerIndex),
+                        t.triggerIndex == null ? fallbackIndex : Number(t.triggerIndex)
+                    );
+                    return Number.isFinite(first) && Number.isFinite(last) && idx >= Math.min(first, last) && idx <= Math.max(first, last) && !!t.minimumRiskRewardApplied;
+                }) || null;
+            }
+        }
+        ptShowFamilyHoverNote(hoveredFamilyInfo, hoveredTrade, e.clientX, e.clientY);
         var inPlotHorizontally = (x >= PT_PADDING_LEFT && x <= (PT_CANVAS.clientWidth - PT_PADDING_RIGHT));
         var newCursorY = inPlotHorizontally ? y : null;
         var changed = (idx !== PT_HOVER_INDEX) || (newCursorY !== PT_CURSOR_Y);
         if (changed) { PT_HOVER_INDEX = idx; PT_CURSOR_Y = newCursorY; ptScheduleDraw(); ptUpdateReadout(); }
     }
-    function ptHandleMouseLeave() {
+    function ptHandleMouseLeave(event) {
+        var nextTarget = event && event.relatedTarget;
+        // The hover note is an extension of the chart hover. Allow the pointer to enter
+        // it so long content can be scrolled without the chart immediately hiding it.
+        if (PT_FAMILY_HOVER_NOTE && nextTarget &&
+            (nextTarget === PT_FAMILY_HOVER_NOTE || PT_FAMILY_HOVER_NOTE.contains(nextTarget))) return;
         if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none';
         if (PT_HOVER_INDEX !== -1 || PT_CURSOR_Y !== null) {
             PT_HOVER_INDEX = -1; PT_CURSOR_Y = null;
@@ -6831,17 +7267,20 @@ try {
                 grid.appendChild(mkField('Offset Candle Type', offsetTypeSel));
             }
 
-            // The first main tree always visibly displays its fixed search direction.
-            // It is read-only and has exactly one option: left and right. All other
-            // main rows can search only left or right.
-            var positionOptions = opts.isFirstTree
+            // Parent-root first main is intentionally fixed to left_and_right.
+            // Confirmation-root first mains expose all three directions, while later
+            // main rows continue to expose left/right as before.
+            var fixedParentFirstTree = opts.isFirstTree && !root.isConfirmationRoot;
+            var positionOptions = fixedParentFirstTree
                 ? [{value:'left_and_right', label:'left and right'}]
-                : [{value:'left', label:'left'}, {value:'right', label:'right'}];
-            var mainPositionDefault = opts.isFirstTree ? 'left_and_right' : 'left';
-            if (opts.isFirstTree) row.position = 'left_and_right';
+                : (opts.isFirstTree && root.isConfirmationRoot
+                    ? [{value:'left_and_right', label:'left and right'}, {value:'left', label:'left'}, {value:'right', label:'right'}]
+                    : [{value:'left', label:'left'}, {value:'right', label:'right'}]);
+            var mainPositionDefault = fixedParentFirstTree ? 'left_and_right' : (opts.isFirstTree ? 'left_and_right' : 'left');
+            if (fixedParentFirstTree) row.position = 'left_and_right';
             var posSel = mkSelect('cfg_main_pos_' + row.id, positionOptions,
-                opts.isFirstTree ? 'left_and_right' : (row.position || mainPositionDefault),
-                opts.isFirstTree, function () {
+                fixedParentFirstTree ? 'left_and_right' : (row.position || mainPositionDefault),
+                fixedParentFirstTree, function () {
                     row.position = posSel.value;
                     opts.onValueChange();
                 });
@@ -7373,39 +7812,86 @@ try {
             treeFoot.appendChild(addTreeBtn);
             content.appendChild(treeFoot);
 
-            // Confirmation-root configuration is visually separate and uses the same tree editor.
-            if (!root.confirmationRoot) root.confirmationRoot = {
-                id: root.id * 1000 + 1, name: 'Confirmation for root ' + root.id,
-                timeframes: [], anchorCandleId: '', anchorCandleName: '',
-                anchorTime: 'open_time', trees: [], drawings: []
-            };
-            var confirmationRoot = root.confirmationRoot;
-            confirmationRoot.isConfirmationRoot = true;
-            confirmationRoot.parentRoot = root;
-            confirmationRoot.parentRootId = root.id;
+            // Confirmation roots are independent OR alternatives. Each one owns its
+            // timeframe selection, anchor, trees and (when selected) its own trade setup.
+            var confirmationRoots = ptGetConfirmationRoots(root);
+            confirmationRoots.forEach(function (cr) {
+                cr.isConfirmationRoot = true;
+                cr.parentRoot = root;
+                cr.parentRootId = root.id;
+                cr.enabled = cr.enabled !== false;
+                cr.timeframes = Array.isArray(cr.timeframes) ? cr.timeframes : [];
+                cr.trees = Array.isArray(cr.trees) ? cr.trees : [];
+                cr.drawings = Array.isArray(cr.drawings) ? cr.drawings : [];
+                if (!cr.trees.length) cr.trees.push(createTree(cr));
+            });
+
             var confirmationWrap = document.createElement('section');
             confirmationWrap.className = 'pt-cfg-confirmation-section';
             confirmationWrap.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:16px;padding:14px;border:1px solid #e0b400;border-radius:12px;background:rgba(255,193,7,.10);min-width:0;';
             var confirmationTitle = document.createElement('div');
-            confirmationTitle.textContent = 'CONFIRMATION ROOT';
+            confirmationTitle.textContent = 'CONFIRMATION ROOTS — OR (FIRST MATCH PER FAMILY WINS)';
             confirmationTitle.style.cssText = 'font-size:.82rem;font-weight:900;letter-spacing:.08em;color:#b8860b;';
             confirmationWrap.appendChild(confirmationTitle);
+            var confirmationHelp = document.createElement('div');
+            confirmationHelp.textContent = 'Each confirmation root is an alternative. When multiple roots match the same family, only the one that occurs first in the lower timeframe is applied; all other confirmation matches for that family are ignored.';
+            confirmationHelp.style.cssText = 'font-size:.82rem;line-height:1.45;opacity:.82;';
+            confirmationWrap.appendChild(confirmationHelp);
             var addConfirmationBtn = document.createElement('button');
             addConfirmationBtn.type = 'button';
             addConfirmationBtn.className = 'pt-cfg-btn';
             addConfirmationBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add confirmation root';
             addConfirmationBtn.addEventListener('click', function () {
-                confirmationRoot.enabled = true;
-                if (!confirmationRoot.trees.length) confirmationRoot.trees.push(createTree(confirmationRoot));
+                createConfirmationRoot(root);
                 root.expanded = true;
                 onChange();
             });
             confirmationWrap.appendChild(addConfirmationBtn);
-            if (confirmationRoot.enabled || confirmationRoot.trees.length) {
+
+            confirmationRoots.forEach(function (confirmationRoot, confirmationIndex) {
+                var confirmationCard = document.createElement('section');
+                confirmationCard.className = 'pt-cfg-confirmation-root-card';
+                confirmationCard.style.cssText = 'display:flex;flex-direction:column;gap:12px;padding:13px;border:1px solid rgba(224,180,0,.55);border-radius:10px;background:rgba(255,193,7,.10);min-width:0;';
+                var confirmationHead = document.createElement('div');
+                confirmationHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;';
+                var confirmationLabel = document.createElement('strong');
+                confirmationLabel.textContent = (confirmationRoot.name || ('Confirmation Root ' + (confirmationIndex + 1))) + ' · ID ' + confirmationRoot.id;
+                confirmationHead.appendChild(confirmationLabel);
+                var removeConfirmationBtn = document.createElement('button');
+                removeConfirmationBtn.type = 'button';
+                removeConfirmationBtn.className = 'pt-cfg-btn danger';
+                removeConfirmationBtn.innerHTML = '<i class="fa-solid fa-trash"></i> Remove confirmation root';
+                removeConfirmationBtn.addEventListener('click', function () {
+                    var ix = confirmationRoots.indexOf(confirmationRoot);
+                    if (ix >= 0) confirmationRoots.splice(ix, 1);
+                    root.confirmationRoots = confirmationRoots;
+                    root.confirmationRoot = confirmationRoots[0] || null;
+                    onChange();
+                });
+                confirmationHead.appendChild(removeConfirmationBtn);
+                confirmationCard.appendChild(confirmationHead);
+
+                var confirmationNameField = document.createElement('label');
+                confirmationNameField.style.cssText = 'display:flex;flex-direction:column;gap:6px;font-weight:700;';
+                confirmationNameField.textContent = 'Confirmation root name';
+                var confirmationNameInput = document.createElement('input');
+                confirmationNameInput.type = 'text';
+                confirmationNameInput.maxLength = 160;
+                confirmationNameInput.className = 'pt-cfg-input';
+                confirmationNameInput.placeholder = 'Give this confirmation root a distinct name';
+                confirmationNameInput.value = confirmationRoot.name || ('Confirmation Root ' + (confirmationIndex + 1));
+                confirmationNameInput.addEventListener('input', function () {
+                    confirmationRoot.name = confirmationNameInput.value;
+                    confirmationLabel.textContent = (confirmationNameInput.value.trim() || ('Confirmation Root ' + (confirmationIndex + 1))) + ' · ID ' + confirmationRoot.id;
+                    updateFootStatus();
+                });
+                confirmationNameField.appendChild(confirmationNameInput);
+                confirmationCard.appendChild(confirmationNameField);
+
                 var tfLabel = document.createElement('div');
                 tfLabel.textContent = 'Select confirmation timeframes (parent-root timeframes are excluded)';
                 tfLabel.style.fontWeight = '700';
-                confirmationWrap.appendChild(tfLabel);
+                confirmationCard.appendChild(tfLabel);
                 var tfList = document.createElement('div');
                 tfList.className = 'pt-root-timeframe-list';
                 (PT_ALL_TIMEFRAMES || []).filter(function (tf) {
@@ -7427,20 +7913,18 @@ try {
                     var span = document.createElement('span'); span.textContent = tf; item.appendChild(span);
                     tfList.appendChild(item);
                 });
-                confirmationWrap.appendChild(tfList);
+                confirmationCard.appendChild(tfList);
 
-                confirmationRoot.parentRoot = root;
-                confirmationRoot.parentRootId = root.id;
                 var confirmationTrees = document.createElement('div');
                 confirmationTrees.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
                 confirmationRoot.trees.forEach(function (tree, idx) {
                     confirmationTrees.appendChild(buildTree(confirmationRoot, tree, idx, onChange, onValueChange));
                 });
-                confirmationWrap.appendChild(confirmationTrees);
-                // Drawings for either source live in the parent root's blue SET DRAWINGS
-                // section. The Draw for selector chooses root candles or confirmation candles.
+                confirmationCard.appendChild(confirmationTrees);
+
                 var addConfirmationTree = document.createElement('button');
-                addConfirmationTree.type = 'button'; addConfirmationTree.className = 'pt-cfg-btn';
+                addConfirmationTree.type = 'button';
+                addConfirmationTree.className = 'pt-cfg-btn';
                 addConfirmationTree.innerHTML = '<i class="fa-solid fa-plus"></i> New confirmation tree';
                 addConfirmationTree.addEventListener('click', function () {
                     if (!confirmationRoot.trees.length || treeIsConfigured(confirmationRoot, confirmationRoot.trees[confirmationRoot.trees.length - 1], confirmationRoot.trees.length - 1)) {
@@ -7450,87 +7934,106 @@ try {
                         setFootStatus('Complete the current confirmation tree before adding another.', 'error');
                     }
                 });
-                confirmationWrap.appendChild(addConfirmationTree);
-            }
+                confirmationCard.appendChild(addConfirmationTree);
+
+                if (root.tradeFor === 'root_confirmation') {
+                    confirmationCard.appendChild(buildTradeEditor(confirmationRoot, confirmationRoot, true));
+                }
+                confirmationWrap.appendChild(confirmationCard);
+            });
             content.appendChild(confirmationWrap);
 
-            // Trade settings are grouped inside one green outer border.
-            var tradeSection = document.createElement('section');
-            tradeSection.className = 'pt-cfg-trade-section';
-            tradeSection.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:16px;padding:14px;border:1px solid rgba(18,163,107,.48);border-radius:12px;background:rgba(18,163,107,.07);min-width:0;';
-            var tradeToggle = document.createElement('div');
-            tradeToggle.className = 'pt-cfg-root-grid pt-cfg-trade-toggle-section';
-            tradeToggle.style.cssText = 'margin:0;padding:0;border:0;background:transparent;';
-            var useSel = mkSelect('cfg_use_' + root.id,
-                [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
-                String(root.useForTrades ? 1 : 0), false, function (e) {
-                    root.useForTrades = (e.target.value === '1');
-                    onChange();
-                });
-            var tradeToggleLabel = mkField('SET TRADES — Use this root for trades', useSel);
-            tradeToggleLabel.style.fontWeight = '800';
-            tradeToggle.appendChild(tradeToggleLabel);
-            tradeSection.appendChild(tradeToggle);
+            // Trade destination is selected once per parent root. A parent root gets
+            // one trade setup; choosing root confirmation gives every confirmation root
+            // its own independent trade setup (one per alternative, never one per family).
+            function buildTradeEditor(tradeConfig, targetRoot, isConfirmationMode) {
+                var tradeSection = document.createElement('section');
+                tradeSection.className = 'pt-cfg-trade-section';
+                tradeSection.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:12px;padding:14px;border:1px solid rgba(18,163,107,.48);border-radius:12px;background:rgba(18,163,107,.07);min-width:0;';
+                var prefix = 'cfg_trade_' + root.id + '_' + (isConfirmationMode ? String(tradeConfig.id) : 'main');
+                var useSel = mkSelect(prefix + '_use',
+                    [{value:'1', label:'Yes'}, {value:'0', label:'No'}],
+                    String(tradeConfig.useForTrades ? 1 : 0), false, function (e) {
+                        tradeConfig.useForTrades = (e.target.value === '1');
+                        onChange();
+                    });
+                var tradeToggleLabel = mkField(isConfirmationMode
+                    ? ('SET TRADES — Use confirmation root ' + tradeConfig.id + ' for trades')
+                    : 'SET TRADES — Use this root for trades', useSel);
+                tradeToggleLabel.style.fontWeight = '800';
+                tradeSection.appendChild(tradeToggleLabel);
+
+                if (tradeConfig.useForTrades) {
+                    var tradeGrid = document.createElement('div');
+                    tradeGrid.className = 'pt-cfg-root-grid pt-cfg-trade-grid';
+                    function candleTargetsOptions(includeParentRoot) {
+                        var options = [{value:'', label:'— select candle —'}];
+                        (targetRoot.trees || []).forEach(function (tree) {
+                            ['main','reference','offset'].forEach(function (kind) {
+                                var candle = tree[kind];
+                                if (!candle || !candle.name) return;
+                                options.push({value:tree.id + '|' + kind + '|' + candle.id,
+                                    label:candle.name + ' (' + (isConfirmationMode ? 'confirmation · ' : '') + kind + ' · tree ' + tree.id + ')'});
+                            });
+                        });
+                        // Entry remains anchored to a confirmation candle; SL/TP may
+                        // additionally reference a projected parent-root candle.
+                        if (isConfirmationMode && includeParentRoot) {
+                            root.trees.forEach(function (tree) {
+                                ['main','reference','offset'].forEach(function (kind) {
+                                    var candle = tree[kind];
+                                    if (!candle || !candle.name) return;
+                                    options.push({value:'parent|' + tree.id + '|' + kind + '|' + candle.id,
+                                        label:candle.name + ' (root · ' + kind + ' · tree ' + tree.id + ')'});
+                                });
+                            });
+                        }
+                        return options;
+                    }
+                    var orderTypeSel = mkSelect(prefix + '_ordertype', ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'].map(function(v){return {value:v,label:v};}), tradeConfig.orderType || 'buy', false, function(e){ tradeConfig.orderType=e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Order type', orderTypeSel));
+                    var entryFromSel = mkSelect(prefix + '_entryfrom', candleTargetsOptions(false), tradeConfig.entryFrom || '', false, function (e) { tradeConfig.entryFrom = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Entry at', entryFromSel));
+                    var entryPlSel = mkSelect(prefix + '_entrypl', PRICE_LEVELS, tradeConfig.entryPriceLevel || 'high', false, function (e) { tradeConfig.entryPriceLevel = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Entry Price level', entryPlSel));
+                    var slFromSel = mkSelect(prefix + '_slfrom', candleTargetsOptions(true), tradeConfig.stoplossFrom || '', false, function (e) { tradeConfig.stoplossFrom = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Stoploss at', slFromSel));
+                    var slPlSel = mkSelect(prefix + '_slpl', PRICE_LEVELS, tradeConfig.stoplossPriceLevel || 'high', false, function (e) { tradeConfig.stoplossPriceLevel = e.target.value; onValueChange(); });
+                    tradeGrid.appendChild(mkField('Stoploss Price level', slPlSel));
+                    var tpTypeSel = mkSelect(prefix + '_tptype', TP_TYPES, tradeConfig.takeProfitType || 'risk_reward', false, function (e) { tradeConfig.takeProfitType = e.target.value; onChange(); });
+                    tradeGrid.appendChild(mkField('Take Profit type', tpTypeSel));
+                    if (tradeConfig.takeProfitType !== 'risk_reward') {
+                        var tpFromSel = mkSelect(prefix + '_tpfrom', candleTargetsOptions(true), tradeConfig.takeProfitFrom || '', false, function (e) { tradeConfig.takeProfitFrom = e.target.value; onValueChange(); });
+                        tradeGrid.appendChild(mkField('Take profit at', tpFromSel));
+                        var tpPlSel = mkSelect(prefix + '_tppl', PRICE_LEVELS, tradeConfig.takeProfitPriceLevel || 'high', false, function (e) { tradeConfig.takeProfitPriceLevel = e.target.value; onValueChange(); });
+                        tradeGrid.appendChild(mkField('Take Profit Price level', tpPlSel));
+                    }
+                    tradeSection.appendChild(tradeGrid);
+                }
+                return tradeSection;
+            }
+
+            var tradeDestinationSection = document.createElement('section');
+            tradeDestinationSection.className = 'pt-cfg-trade-section';
+            tradeDestinationSection.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:16px;padding:14px;border:1px solid rgba(18,163,107,.48);border-radius:12px;background:rgba(18,163,107,.07);min-width:0;';
             var tradeSourceSel = mkSelect('cfg_trade_for_' + root.id,
                 [{value:'root',label:'root'},{value:'root_confirmation',label:'root confirmation'}],
                 root.tradeFor || 'root', false, function () {
                     root.tradeFor = tradeSourceSel.value;
                     onChange();
                 });
-            tradeSection.appendChild(mkField('Set Trades for', tradeSourceSel));
-
-            // Trade-entry controls are deliberately placed below all trees and above Drawings.
-            // They are not rendered at all unless "Use this root for trades" is Yes.
-            if (root.useForTrades) {
-                var tradeGrid = document.createElement('div');
-                tradeGrid.className = 'pt-cfg-root-grid pt-cfg-trade-grid';
-                function candleTargetsOptions(includeParentRoot) {
-                    var opts = [{value:'', label:'— select candle —'}];
-                    var confirmationMode = root.tradeFor === 'root_confirmation' && root.confirmationRoot;
-                    var sourceRoot = confirmationMode ? root.confirmationRoot : root;
-                    sourceRoot.trees.forEach(function (tree) {
-                        ['main','reference','offset'].forEach(function (kind) {
-                            var candle = tree[kind];
-                            if (!candle || !candle.name) return;
-                            opts.push({value:tree.id + '|' + kind + '|' + candle.id,
-                                label:candle.name + ' (' + (confirmationMode ? 'confirmation · ' : '') + kind + ' · tree ' + tree.id + ')'});
-                        });
-                    });
-                    // Entry must be anchored to a lower-timeframe confirmation candle only.
-                    // SL/TP can also reference the parent/root candle's projected price level.
-                    if (confirmationMode && includeParentRoot) {
-                        root.trees.forEach(function (tree) {
-                            ['main','reference','offset'].forEach(function (kind) {
-                                var candle = tree[kind];
-                                if (!candle || !candle.name) return;
-                                opts.push({value:'parent|' + tree.id + '|' + kind + '|' + candle.id,
-                                    label:candle.name + ' (root · ' + kind + ' · tree ' + tree.id + ')'});
-                            });
-                        });
-                    }
-                    return opts;
-                }
-                var orderTypeSel = mkSelect('cfg_ordertype_' + root.id, ['buy','sell','buy-limit','sell-limit','buy-stop','sell-stop'].map(function(v){return {value:v,label:v};}), root.orderType || 'buy', false, function(e){ root.orderType=e.target.value; onValueChange(); });
-                tradeGrid.appendChild(mkField('Order type', orderTypeSel));
-                var entryFromSel = mkSelect('cfg_entryfrom_' + root.id, candleTargetsOptions(false), root.entryFrom || '', false, function (e) { root.entryFrom = e.target.value; onValueChange(); });
-                tradeGrid.appendChild(mkField('Entry at', entryFromSel));
-                var entryPlSel = mkSelect('cfg_entrypl_' + root.id, PRICE_LEVELS, root.entryPriceLevel || 'high', false, function (e) { root.entryPriceLevel = e.target.value; onValueChange(); });
-                tradeGrid.appendChild(mkField('Entry Price level', entryPlSel));
-                var slFromSel = mkSelect('cfg_slfrom_' + root.id, candleTargetsOptions(true), root.stoplossFrom || '', false, function (e) { root.stoplossFrom = e.target.value; onValueChange(); });
-                tradeGrid.appendChild(mkField('Stoploss at', slFromSel));
-                var slPlSel = mkSelect('cfg_slpl_' + root.id, PRICE_LEVELS, root.stoplossPriceLevel || 'high', false, function (e) { root.stoplossPriceLevel = e.target.value; onValueChange(); });
-                tradeGrid.appendChild(mkField('Stoploss Price level', slPlSel));
-                var tpTypeSel = mkSelect('cfg_tptype_' + root.id, TP_TYPES, root.takeProfitType || 'risk_reward', false, function (e) { root.takeProfitType = e.target.value; onChange(); });
-                tradeGrid.appendChild(mkField('Take Profit type', tpTypeSel));
-                if (root.takeProfitType !== 'risk_reward') {
-                    var tpFromSel = mkSelect('cfg_tpfrom_' + root.id, candleTargetsOptions(true), root.takeProfitFrom || '', false, function (e) { root.takeProfitFrom = e.target.value; onValueChange(); });
-                    tradeGrid.appendChild(mkField('Take profit at', tpFromSel));
-                    var tpPlSel = mkSelect('cfg_tppl_' + root.id, PRICE_LEVELS, root.takeProfitPriceLevel || 'high', false, function (e) { root.takeProfitPriceLevel = e.target.value; onValueChange(); });
-                    tradeGrid.appendChild(mkField('Take Profit Price level', tpPlSel));
-                }
-                tradeSection.appendChild(tradeGrid);
+            tradeDestinationSection.appendChild(mkField('Set Trades for', tradeSourceSel));
+            if (root.tradeFor === 'root') {
+                tradeDestinationSection.appendChild(buildTradeEditor(root, root, false));
+            } else {
+                var tradeInfo = document.createElement('div');
+                tradeInfo.textContent = confirmationRoots.length
+                    ? 'Configure trades separately inside each confirmation root above. Only the confirmation root selected first for a family can create that family’s trade.'
+                    : 'Add one or more confirmation roots above. Each confirmation root will have its own trade settings.';
+                tradeInfo.style.cssText = 'font-size:.82rem;line-height:1.45;opacity:.82;';
+                tradeDestinationSection.appendChild(tradeInfo);
             }
-            content.appendChild(tradeSection);
+            content.appendChild(tradeDestinationSection);
 
             // Drawings title, entries and add button are all inside one blue outer border.
             var drawsWrap = document.createElement('section');
@@ -7801,6 +8304,41 @@ try {
             };
         }
 
+        function createConfirmationRoot(parentRoot) {
+            var existing = ptGetConfirmationRoots(parentRoot);
+            var nextId = Math.max(1, Number(parentRoot.id || 1) * 1000 + 1);
+            while (existing.some(function (item) { return Number(item.id) === nextId; })) nextId++;
+            var cr = {
+                id: nextId,
+                name: 'Confirmation Root ' + (existing.length + 1),
+                enabled: true,
+                isConfirmationRoot: true,
+                parentRoot: parentRoot,
+                parentRootId: parentRoot.id,
+                timeframes: [],
+                anchorCandleId: '',
+                anchorCandleName: '',
+                anchorTime: 'open_time',
+                useForTrades: false,
+                entryFrom: '',
+                orderType: 'buy',
+                entryTriggerAfter: '',
+                entryPriceLevel: 'high',
+                stoplossFrom: '',
+                stoplossPriceLevel: 'high',
+                takeProfitFrom: '',
+                takeProfitType: 'risk_reward',
+                takeProfitPriceLevel: 'high',
+                trees: [],
+                drawings: []
+            };
+            cr.trees.push(createTree(cr));
+            existing.push(cr);
+            parentRoot.confirmationRoots = existing;
+            parentRoot.confirmationRoot = existing[0] || null;
+            return cr;
+        }
+
         function createDrawing() {
             return {
                 id: PT_CFG.nextOffsetId++,
@@ -7833,11 +8371,8 @@ try {
                 takeProfitPriceLevel: 'high',
                 applyToChart: true,
                 tradeFor: 'root',
-                confirmationRoot: {
-                    id: id * 1000 + 1, name: 'Confirmation for root ' + id,
-                    timeframes: [], anchorCandleId: '', anchorCandleName: '',
-                    anchorTime: 'open_time', trees: [], drawings: []
-                },
+                confirmationRoots: [],
+                confirmationRoot: null,
                 trees: [],
                 drawings: []
             };
@@ -7854,30 +8389,28 @@ try {
                     root_name: root.name || '',
                     timeframes: Array.isArray(root.timeframes) ? root.timeframes : [],
                     timeframe: Array.isArray(root.timeframes) ? JSON.stringify(root.timeframes) : '',
-                    use_for_trades: root.useForTrades ? 1 : 0,
+                    use_for_trades: (root.tradeFor || 'root') === 'root' && root.useForTrades ? 1 : 0,
                     apply_to_chart: root.applyToChart ? 1 : 0,
                     trade_for: root.tradeFor || 'root',
-                    confirmation_root_id: root.confirmationRoot ? root.confirmationRoot.id : null,
+                    confirmation_root_id: ptGetConfirmationRoots(root)[0] ? ptGetConfirmationRoots(root)[0].id : null,
                     confirmation_tree_id: null,
-                    confirmation_timeframes: root.confirmationRoot ? root.confirmationRoot.timeframes : [],
-                    confirmation_anchor_candle_id: root.confirmationRoot ? (root.confirmationRoot.anchorCandleId || null) : null,
-                    confirmation_anchor_candle_name: root.confirmationRoot ? (root.confirmationRoot.anchorCandleName || '') : '',
-                    confirmation_anchor_time: root.confirmationRoot ? (root.confirmationRoot.anchorTime || 'open_time') : 'open_time',
-                    entry_at: root.entryFrom || '',
-                    order_type: root.orderType || 'buy',
-                    entry_order_type: root.orderType || 'buy',
-                    entry_trigger_after: root.entryTriggerAfter || '',
-                    entry_price_level: root.entryPriceLevel || '',
-                    stoploss_at: root.stoplossFrom || '',
-                    stoploss_price_level: root.stoplossPriceLevel || '',
-                    take_profit_at: root.takeProfitFrom || '',
-                    take_profit_type: root.takeProfitType || 'risk_reward',
-                    take_profit_price_level:
-                        root.takeProfitType === 'risk_reward'
-                            ? null
-                            : (root.takeProfitPriceLevel || ''),
+                    confirmation_timeframes: ptGetConfirmationRoots(root)[0] ? ptGetConfirmationRoots(root)[0].timeframes : [],
+                    confirmation_anchor_candle_id: ptGetConfirmationRoots(root)[0] ? (ptGetConfirmationRoots(root)[0].anchorCandleId || null) : null,
+                    confirmation_anchor_candle_name: ptGetConfirmationRoots(root)[0] ? (ptGetConfirmationRoots(root)[0].anchorCandleName || '') : '',
+                    confirmation_anchor_time: ptGetConfirmationRoots(root)[0] ? (ptGetConfirmationRoots(root)[0].anchorTime || 'open_time') : 'open_time',
+                    entry_at: (root.tradeFor || 'root') === 'root' ? (root.entryFrom || '') : '',
+                    order_type: (root.tradeFor || 'root') === 'root' ? (root.orderType || 'buy') : 'buy',
+                    entry_order_type: (root.tradeFor || 'root') === 'root' ? (root.orderType || 'buy') : 'buy',
+                    entry_trigger_after: (root.tradeFor || 'root') === 'root' ? (root.entryTriggerAfter || '') : '',
+                    entry_price_level: (root.tradeFor || 'root') === 'root' ? (root.entryPriceLevel || '') : '',
+                    stoploss_at: (root.tradeFor || 'root') === 'root' ? (root.stoplossFrom || '') : '',
+                    stoploss_price_level: (root.tradeFor || 'root') === 'root' ? (root.stoplossPriceLevel || '') : '',
+                    take_profit_at: (root.tradeFor || 'root') === 'root' ? (root.takeProfitFrom || '') : '',
+                    take_profit_type: (root.tradeFor || 'root') === 'root' ? (root.takeProfitType || 'risk_reward') : 'risk_reward',
+                    take_profit_price_level: (root.tradeFor || 'root') === 'root' && root.takeProfitType !== 'risk_reward' ? (root.takeProfitPriceLevel || '') : null,
                     trees: [],
-                    drawings: []
+                    drawings: [],
+                    confirmation_roots: []
                 };
 
                 root.trees.forEach(function (tree, treeIndex) {
@@ -7970,16 +8503,32 @@ try {
                     });
                 });
 
-                if (root.confirmationRoot && root.confirmationRoot.enabled) {
-                    var cr = root.confirmationRoot;
+                var confirmationRootsToSave = ptGetConfirmationRoots(root);
+                confirmationRootsToSave.forEach(function (cr, confirmationIndex) {
+                    if (!cr || cr.enabled === false) return;
+                    cr.isConfirmationRoot = true;
+                    cr.parentRoot = root;
+                    cr.parentRootId = root.id;
                     var crOut = {
-                        id: cr.id || (root.id * 1000 + 1),
-                        root_name: cr.name || ('Confirmation for root ' + root.id),
+                        id: cr.id || (root.id * 1000 + confirmationIndex + 1),
+                        root_name: cr.name || ('Confirmation ' + (confirmationIndex + 1) + ' for root ' + root.id),
                         timeframes: Array.isArray(cr.timeframes) ? cr.timeframes : [],
                         timeframe: Array.isArray(cr.timeframes) ? JSON.stringify(cr.timeframes) : '',
                         trees: [], drawings: [],
                         apply_to_chart: root.applyToChart ? 1 : 0,
-                        use_for_trades: 0,
+                        use_for_trades: (root.tradeFor === 'root_confirmation' && cr.useForTrades) ? 1 : 0,
+                        trade_for: 'root_confirmation',
+                        entry_at: cr.entryFrom || '',
+                        order_type: cr.orderType || 'buy',
+                        entry_order_type: cr.orderType || 'buy',
+                        entry_trigger_after: cr.entryTriggerAfter || '',
+                        entry_price_level: cr.entryPriceLevel || '',
+                        stoploss_at: cr.stoplossFrom || '',
+                        stoploss_price_level: cr.stoplossPriceLevel || '',
+                        take_profit_at: cr.takeProfitFrom || '',
+                        take_profit_type: cr.takeProfitType || 'risk_reward',
+                        take_profit_price_level: cr.takeProfitType === 'risk_reward' ? null : (cr.takeProfitPriceLevel || ''),
+                        risk_reward: cr.riskReward != null ? cr.riskReward : null,
                         _parent_root_id: root.id,
                         anchor_candle_id: cr.anchorCandleId || null,
                         anchor_candle_name: cr.anchorCandleName || '',
@@ -8036,16 +8585,24 @@ try {
                             }
                         });
                     });
-                    rootOut.confirmation_root = crOut;
+                    rootOut.confirmation_roots.push(crOut);
+                });
+                if (rootOut.confirmation_roots.length === 1) {
+                    // Keep the singular alias for any older endpoint still consuming it.
+                    rootOut.confirmation_root = rootOut.confirmation_roots[0];
                 }
                 rootsOut.push(rootOut);
             });
 
-            var treeCount = 0, rowCount = 0;
+            var mainTreeCount = 0, confirmationTreeCount = 0;
             PT_CFG.roots.forEach(function (r) {
-                treeCount += r.trees.length;
-                rowCount  += r.trees.length * 2;
+                mainTreeCount += r.trees.filter(function(tree, index){return treeIsConfigured(r, tree, index);}).length;
+                ptGetConfirmationRoots(r).forEach(function(cr){
+                    confirmationTreeCount += (cr.trees || []).filter(function(tree, index){return treeIsConfigured(cr, tree, index);}).length;
+                });
             });
+            var treeCount = mainTreeCount + confirmationTreeCount;
+            var rowCount = treeCount * 2;
 
             return {
                 programme_id: PT_PROGRAMME_ID,
@@ -8054,7 +8611,9 @@ try {
                 meta: {
                     root_count: PT_CFG.roots.length,
                     tree_count: treeCount,
-                    row_count:  rowCount
+                    main_tree_count: mainTreeCount,
+                    confirmation_tree_count: confirmationTreeCount,
+                    row_count: rowCount
                 }
             };
         }
@@ -8083,6 +8642,10 @@ try {
             PT_CFG.roots.forEach(function (r) {
                 trees += r.trees.length;
                 rows  += r.trees.length * 2;
+                ptGetConfirmationRoots(r).forEach(function(cr){
+                    trees += (cr.trees || []).length;
+                    rows += (cr.trees || []).length * 2;
+                });
             });
             setFootStatus(
                 PT_CFG.roots.length + ' root(s) · ' +
@@ -8168,7 +8731,7 @@ try {
                     setFootStatus(
                         'Saved: ' + data.meta.root_count + ' root(s), ' +
                         data.meta.tree_count + ' tree(s), ' +
-                        data.meta.row_count + ' row(s).',
+                        Number(data.meta.total_row_count != null ? data.meta.total_row_count : (Number(data.meta.row_count || 0) + Number(data.meta.confirmation_row_count || 0))) + ' row(s).',
                         'ok'
                     );
                     setTimeout(function () {
@@ -8265,18 +8828,11 @@ try {
                         takeProfitFrom: row.take_profit_at || row.take_profit_from || '',
                         takeProfitType: (String(row.take_profit_type || '').toLowerCase().replace(/\s+/g, '_') === 'price_levels') ? 'price_levels' : 'risk_reward',
                         takeProfitPriceLevel: row.take_profit_price_level || 'high',
+                        riskReward: row.risk_reward != null ? Number(row.risk_reward) : null,
                         applyToChart: ptDbBool(row.apply_to_chart != null ? row.apply_to_chart : row.run_in_python),
                         tradeFor: row.trade_for || 'root',
-                        confirmationRoot: {
-                            id: parseInt(row.confirmation_root_id, 10) || (rid * 1000 + 1),
-                            name: 'Confirmation for root ' + rid,
-                            timeframes: ptParseSavedTimeframes(row.confirmation_timeframes),
-                            anchorCandleId: row.confirmation_anchor_candle_id || '',
-                            anchorCandleName: row.confirmation_anchor_candle_name || '',
-                            anchorTime: row.confirmation_anchor_time || 'open_time',
-                            enabled: !!(row.confirmation_root_id || row.confirmation_anchor_candle_id || row.confirmation_timeframes),
-                            trees: [], drawings: []
-                        },
+                        confirmationRoots: [],
+                        confirmationRoot: null,
                         trees: [], drawings: []
                     };
                     rootMap[rid] = root;
@@ -8284,24 +8840,50 @@ try {
                     PT_CFG.nextRootId = Math.max(PT_CFG.nextRootId, rid + 1);
                 }
                 var currentRoot = rootMap[rid];
-                if (!currentRoot.confirmationRoot) currentRoot.confirmationRoot = {
-                    id: parseInt(row.confirmation_root_id, 10) || (rid * 1000 + 1),
-                    name: 'Confirmation for root ' + rid,
-                    timeframes: ptParseSavedTimeframes(row.confirmation_timeframes),
-                    anchorCandleId: row.confirmation_anchor_candle_id || '',
-                    anchorCandleName: row.confirmation_anchor_candle_name || '',
-                    anchorTime: row.confirmation_anchor_time || 'open_time',
-                    enabled: false, trees: [], drawings: []
-                };
                 var targetRoot = currentRoot;
                 if (isConfirmationRow) {
-                    var cr = currentRoot.confirmationRoot;
-                    cr.id = parseInt(row.confirmation_root_id, 10) || cr.id;
+                    var confirmationRootId = parseInt(row.confirmation_root_id, 10) || (rid * 1000 + 1);
+                    var confirmationRootsForParent = ptGetConfirmationRoots(currentRoot);
+                    var cr = confirmationRootsForParent.find(function(item){return Number(item.id) === confirmationRootId;});
+                    if (!cr) {
+                        cr = {
+                            id: confirmationRootId,
+                            name: row.root_name || ('Confirmation Root ' + (confirmationRootsForParent.length + 1)),
+                            enabled: true,
+                            isConfirmationRoot: true,
+                            parentRoot: currentRoot,
+                            parentRootId: rid,
+                            timeframes: [],
+                            anchorCandleId: '',
+                            anchorCandleName: '',
+                            anchorTime: 'open_time',
+                            useForTrades: false,
+                            entryFrom: '', orderType: 'buy', entryTriggerAfter: '', entryPriceLevel: 'high',
+                            stoplossFrom: '', stoplossPriceLevel: 'high', takeProfitFrom: '',
+                            takeProfitType: 'risk_reward', takeProfitPriceLevel: 'high', riskReward: null,
+                            trees: [], drawings: []
+                        };
+                        confirmationRootsForParent.push(cr);
+                    }
                     cr.enabled = true;
+                    cr.name = row.root_name || cr.name || ('Confirmation Root ' + (confirmationRootsForParent.indexOf(cr) + 1));
                     cr.timeframes = ptParseSavedTimeframes(row.confirmation_timeframes || row.timeframe);
                     cr.anchorCandleId = row.confirmation_anchor_candle_id || cr.anchorCandleId || '';
                     cr.anchorCandleName = row.confirmation_anchor_candle_name || cr.anchorCandleName || '';
                     cr.anchorTime = row.confirmation_anchor_time || cr.anchorTime || 'open_time';
+                    cr.useForTrades = ptDbBool(row.use_for_trade);
+                    cr.entryFrom = row.entry_at || row.entry_from || cr.entryFrom || '';
+                    cr.orderType = row.order_type || row.entry_order_type || cr.orderType || 'buy';
+                    cr.entryTriggerAfter = row.entry_trigger_after || cr.entryTriggerAfter || '';
+                    cr.entryPriceLevel = row.entry_price_level || cr.entryPriceLevel || 'high';
+                    cr.stoplossFrom = row.stoploss_at || row.stoploss_from || cr.stoplossFrom || '';
+                    cr.stoplossPriceLevel = row.stoploss_price_level || cr.stoplossPriceLevel || 'high';
+                    cr.takeProfitFrom = row.take_profit_at || row.take_profit_from || cr.takeProfitFrom || '';
+                    cr.takeProfitType = (String(row.take_profit_type || '').toLowerCase().replace(/\s+/g, '_') === 'price_levels') ? 'price_levels' : (cr.takeProfitType || 'risk_reward');
+                    cr.takeProfitPriceLevel = row.take_profit_price_level || cr.takeProfitPriceLevel || 'high';
+                    cr.riskReward = row.risk_reward != null ? Number(row.risk_reward) : cr.riskReward;
+                    currentRoot.confirmationRoots = confirmationRootsForParent;
+                    currentRoot.confirmationRoot = confirmationRootsForParent[0] || null;
                     targetRoot = cr;
                 }
 
@@ -8343,7 +8925,9 @@ try {
                             textColor: row.text_color || 'purple',
                             mainCandleType: row.main_candle_type || DEFAULT_CANDLE_TYPE,
                             offsetCandle: row.offset_candle || '',
-                            position: targetRoot.trees.length ? (row.position === 'right' ? 'right' : 'left') : 'left_and_right',
+                            position: targetRoot.trees.length
+                                ? (row.position === 'right' ? 'right' : 'left')
+                                : (isConfirmationRow && ['left','right','left_and_right'].indexOf(row.position) >= 0 ? row.position : 'left_and_right'),
                             offsetTo: row.offset_to || null,
                             offsetToName: row.offset_candle_name || '',
                             offsetToKind: '',
@@ -8507,10 +9091,27 @@ try {
             PT_CFG.roots.forEach(function (root) {
                 root.trees.sort(function (a, b) { return a.id - b.id; });
                 if (!root.trees.length) root.trees.push(createTree(root));
-                if (root.confirmationRoot) {
-                    root.confirmationRoot.trees.sort(function (a, b) { return a.id - b.id; });
-                    root.confirmationRoot.drawings = root.confirmationRoot.drawings || [];
+                var restoredConfirmationRoots = ptGetConfirmationRoots(root);
+                // Older configurations stored confirmation trade settings on the parent
+                // root. Move that one legacy setup to the first confirmation alternative.
+                if (root.tradeFor === 'root_confirmation' && root.useForTrades && restoredConfirmationRoots.length &&
+                    !restoredConfirmationRoots.some(function(cr){return !!cr.useForTrades;})) {
+                    var legacyCr = restoredConfirmationRoots[0];
+                    legacyCr.useForTrades = true;
+                    ['entryFrom','orderType','entryTriggerAfter','entryPriceLevel','stoplossFrom','stoplossPriceLevel','takeProfitFrom','takeProfitType','takeProfitPriceLevel','riskReward'].forEach(function(key){
+                        if (root[key] !== undefined && root[key] !== null && root[key] !== '') legacyCr[key] = root[key];
+                    });
+                    root.useForTrades = false;
                 }
+                restoredConfirmationRoots.forEach(function(cr){
+                    cr.isConfirmationRoot = true;
+                    cr.parentRoot = root;
+                    cr.parentRootId = root.id;
+                    cr.trees.sort(function (a, b) { return a.id - b.id; });
+                    cr.drawings = cr.drawings || [];
+                });
+                root.confirmationRoots = restoredConfirmationRoots;
+                root.confirmationRoot = restoredConfirmationRoots[0] || null;
             });
             PT_CFG_LOADED = true;
         }
@@ -8573,21 +9174,31 @@ try {
             if (add) add.disabled = locked;
             if (save) save.disabled = locked || !PT_CFG.roots.length;
         }
+        function ptShowConfigLoading(show, message) {
+            var overlay = el('ptCfgLoadingOverlay');
+            var label = el('ptCfgLoadingText');
+            if (label && message) label.textContent = message;
+            if (overlay) overlay.hidden = !show;
+        }
         window.ptOpenConfigModal = function () {
             var m = el('ptConfigModal');
             if (!m) return;
-            // Open immediately. Lock/approval state is already rendered from the server,
-            // and every protected server action validates it again.
+            // Fold every expanded root and render that state BEFORE the modal becomes visible.
+            PT_CFG.roots.forEach(function (root) { root.expanded = false; });
+            render();
+            setFootStatus('');
+            ptShowConfigLoading(true, 'Loading saved configuration…');
             m.classList.add('active');
             try { parent.postMessage({type:'trainingControlsOpen', open:true}, '*'); } catch(e) {}
             ptApplyRootLock();
-            setFootStatus('Loading saved configuration…');
             ptLoadSavedConfiguration(true).then(function () {
                 render(); ptApplyRootLock(); updateFootStatus();
+                ptShowConfigLoading(false);
                 if (!PT_CFG.roots.length) setFootStatus('No saved configuration yet. Add a root to begin.');
                 else setFootStatus(PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED ? 'Roots are locked. Unlock roots to make changes.' : 'Saved configuration loaded.', 'ok');
             }).catch(function (error) {
                 render(); ptApplyRootLock();
+                ptShowConfigLoading(false);
                 setFootStatus((error && error.message) || 'Could not load saved configuration.', 'error');
             });
         };
