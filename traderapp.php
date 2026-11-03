@@ -586,7 +586,7 @@ $defaultTab = $_GET['tab'] ?? 'signals';
 
 $tabSrc = [
     'signals'                    => 'signals_dashboard.php',
-    'training'                   => 'programme_training.php',
+    'training'                   => 'programme_training.php?embedded=1',
     'analytics'                  => 'programme_analytics.php',
     'vps'                        => 'programme_vps.php',
     'menu'                       => 'programme_menu.php',
@@ -1682,6 +1682,11 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         'account_management':'Account Management'
     };
 
+    var activeShellTab = <?= json_encode($defaultTab) ?>;
+    var analyticsNestedView = false;
+    var trainingFrameReady = false;
+    var pendingAnalyticsLocate = null;
+
     window.__harvhubModalOpen = false;
 
     function setModalOpen(isOpen) {
@@ -1706,6 +1711,12 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 
         if (TABS_NO_CHROME.indexOf(tab) !== -1) {
             showBrandHeader = false; showNav = false; showPageHeader = false;
+        }
+
+        if (tab === 'analytics' && analyticsNestedView) {
+            showBrandHeader = false;
+            showNav = false;
+            showPageHeader = false;
         }
 
         document.body.classList.toggle('tab-training', tab === 'training');
@@ -1850,9 +1861,22 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     function requestSwitch(tab) { if (!frames[tab]) return; switchTab(tab); }
     function requestLogout() { window.location.href = 'traderapp.php?logout=1'; }
 
+    function syncTrainingFrameActivity() {
+        var trainingFrame = frames.training;
+        if (!trainingFrame || !trainingFrame.contentWindow) return;
+        try {
+            trainingFrame.contentWindow.postMessage({
+                type: 'programmeTrainingVisibility',
+                active: activeShellTab === 'training'
+            }, '*');
+        } catch (e) {}
+    }
+
     function onLoad(e) {
+        if (e.target === frames.training) trainingFrameReady = false;
         pushTheme(e.target);
         injectNavShim(e.target);
+        if (e.target === frames.training) syncTrainingFrameActivity();
         loaded++;
         if (loaded >= names.length) {
             loader.classList.add('hidden');
@@ -1868,6 +1892,10 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 
     function switchTab(tab) {
         if (!frames[tab]) return;
+        activeShellTab = tab;
+        // Programme Training runs inside a persistent iframe. Explicitly suspend
+        // its background work whenever another workspace tab becomes active.
+        syncTrainingFrameActivity();
         if (tab !== 'training') document.body.classList.remove('training-controls-open');
         names.forEach(function (k) { frames[k].classList.toggle('active', k === tab); });
         if (navTabNames.indexOf(tab) !== -1) lastNavTab = tab;
@@ -1884,6 +1912,14 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         if (!window.__harvhubModalOpen) { showNav(); showHeader(); }
     }
 
+    function forwardPendingAnalyticsLocate() {
+        if (!pendingAnalyticsLocate || !trainingFrameReady || !frames.training || !frames.training.contentWindow) return;
+        try {
+            frames.training.contentWindow.postMessage({type:'programmeAnalyticsLocate',trade:pendingAnalyticsLocate}, '*');
+            pendingAnalyticsLocate = null;
+        } catch (e) {}
+    }
+
     navItems.forEach(function (b) {
         b.addEventListener('click', function () {
             document.body.classList.remove('training-controls-open');
@@ -1894,6 +1930,37 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
         if (e.data.type === 'switchTab' && frames[e.data.tab]) switchTab(e.data.tab);
+        // Analytics internal pages temporarily take over the viewport. Only the
+        // analytics iframe may toggle this shell state.
+        if (e.data.type === 'programmeAnalyticsView' && frames.analytics && e.source === frames.analytics.contentWindow) {
+            analyticsNestedView = e.data.nested === true;
+            if (activeShellTab === 'analytics') applyChromeForTab('analytics');
+        }
+        // Programme Training announces when its Locate receiver is installed.
+        // Queue external requests until that handshake arrives; no fixed sleep is used.
+        if (e.data.type === 'programmeTrainingReady' && frames.training && e.source === frames.training.contentWindow) {
+            trainingFrameReady = true;
+            forwardPendingAnalyticsLocate();
+        }
+        // Analytics requests are accepted only from the analytics iframe.
+        if (e.data.type === 'programmeAnalyticsLocate' && frames.analytics && e.source === frames.analytics.contentWindow) {
+            var analyticsTrade = e.data.trade || {};
+            analyticsTrade.request_id = analyticsTrade.request_id || ('pa-' + Date.now());
+            pendingAnalyticsLocate = analyticsTrade;
+            switchTab('training');
+            forwardPendingAnalyticsLocate();
+        }
+        // Other trusted workspace pages may request a chart locate too. They use
+        // programmeTrainingLocate and the same root/confirmation/timeframe/trade ID.
+        if (e.data.type === 'programmeTrainingLocate' && names.some(function(name){
+            return name !== 'training' && frames[name] && e.source === frames[name].contentWindow;
+        })) {
+            var externalTrade = e.data.trade || e.data;
+            externalTrade.request_id = externalTrade.request_id || ('external-' + Date.now());
+            pendingAnalyticsLocate = externalTrade;
+            switchTab('training');
+            forwardPendingAnalyticsLocate();
+        }
         if (e.data.type === 'bodyClass') {
             if (Array.isArray(e.data.remove)) e.data.remove.forEach(function (c) { document.body.classList.remove(c); });
             if (Array.isArray(e.data.add))    e.data.add.forEach(function (c) { document.body.classList.add(c); });

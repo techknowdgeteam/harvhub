@@ -270,6 +270,12 @@ usort($selectedTimeframes, function ($a, $b) {
 $selectedTimeframes = array_values(array_unique($selectedTimeframes));
 
 // Portable UTF-8-safe truncation: do not require the optional mbstring extension.
+function ptReleaseSessionLock() {
+    if (function_exists('session_status') && session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
 function ptTextSubstr($value, $length) {
     $value = (string)$value;
     if (function_exists('mb_substr')) return mb_substr($value, 0, $length, 'UTF-8');
@@ -344,6 +350,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['load_configuration'])
         echo json_encode(['success' => false, 'message' => 'Not authenticated.', 'rows' => []]);
         exit;
     }
+    ptReleaseSessionLock();
 
     $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
     if ($reqProgrammeId <= 0) {
@@ -447,6 +454,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
 
     $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
     $rawPayload = (string)($_POST['payload'] ?? '');
+    $ptRootsUnlockedForSave = $reqProgrammeId > 0 && !empty($_SESSION['pt_roots_unlocked'][$reqProgrammeId]);
+    ptReleaseSessionLock();
     if ($reqProgrammeId <= 0 || $rawPayload === '') {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Programme and configuration payload are required.']);
@@ -468,7 +477,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     $lockCheck = $pdo->prepare('SELECT advertisement, server_advertisement_approval FROM programme WHERE id = ? AND userid = ? LIMIT 1');
     $lockCheck->execute([$reqProgrammeId, $userId]);
     $lockState = $lockCheck->fetch(PDO::FETCH_ASSOC) ?: [];
-    if ((int)($lockState['advertisement'] ?? 0) === 1 && (int)($lockState['server_advertisement_approval'] ?? 0) === 1 && empty($_SESSION['pt_roots_unlocked'][$reqProgrammeId])) {
+    if ((int)($lockState['advertisement'] ?? 0) === 1 && (int)($lockState['server_advertisement_approval'] ?? 0) === 1 && !$ptRootsUnlockedForSave) {
         http_response_code(403);
         echo json_encode(['success' => false, 'message' => 'Roots are locked. Verify your account password before saving changes.']);
         exit;
@@ -931,6 +940,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_live_state'])) {
     if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.']); exit; }
 
     $liveProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
+    ptReleaseSessionLock();
     if ($liveProgrammeId <= 0) {
         echo json_encode(['success'=>false,'message'=>'No programme selected.']); exit;
     }
@@ -978,6 +988,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_live_state'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['count_candles'])) {
     header('Content-Type: application/json');
     if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','total'=>0]); exit; }
+    ptReleaseSessionLock();
 
     $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
     $symbol         = trim((string)($_POST['symbol'] ?? ''));
@@ -1009,6 +1020,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['count_candles'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
     header('Content-Type: application/json');
     if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','candles'=>[],'has_more'=>false]); exit; }
+    ptReleaseSessionLock();
 
     $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
     $symbol         = trim((string)($_POST['symbol'] ?? ''));
@@ -1098,6 +1110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_latest'])) {
     header('Content-Type: application/json');
     if (!isset($_SESSION['user_email'])) { echo json_encode(['success'=>false,'message'=>'Not authenticated.','candles'=>[]]); exit; }
+    ptReleaseSessionLock();
 
     $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
     $symbol         = trim((string)($_POST['symbol'] ?? ''));
@@ -1277,6 +1290,9 @@ try {
         display: flex;
         align-items: center;
         gap: 10px;
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
         flex-wrap: nowrap;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
@@ -1285,9 +1301,9 @@ try {
     .pt-controls-btn-row::-webkit-scrollbar { display:none; width:0; height:0; }
     .pt-controls-btn-row { scrollbar-width:none; -ms-overflow-style:none; padding-left:34px; padding-right:34px; }
     .pt-controls { position:relative; }
-    .pt-control-scroll-arrow { position:absolute; top:var(--pt-control-arrow-top, 0px); transform:none; z-index:30; width:34px; height:var(--pt-control-arrow-height, 42px); display:grid; place-items:center; border:1px solid var(--pt-border); border-radius:10px; background:var(--pt-card); color:var(--pt-text); box-shadow:0 3px 12px rgba(0,0,0,.18); cursor:pointer; }
-    .pt-control-scroll-arrow.left { left:4px; }
-    .pt-control-scroll-arrow.right { right:4px; }
+    .pt-control-scroll-arrow { position:absolute; top:var(--pt-control-arrow-top, 0px); transform:none; z-index:30; width:30px; height:var(--pt-control-arrow-height, 42px); display:grid; place-items:center; border:1px solid var(--pt-border); border-radius:10px; background:var(--pt-card); color:var(--pt-text); box-shadow:0 3px 12px rgba(0,0,0,.18); cursor:pointer; }
+    .pt-control-scroll-arrow.left { left:2px; }
+    .pt-control-scroll-arrow.right { right:2px; }
     .pt-control-scroll-arrow[hidden] { display:none !important; }
     .pt-crosshair-toggle { gap:6px; }
     .pt-crosshair-toggle[aria-pressed="true"] { background:var(--pt-accent); color:#fff; border-color:var(--pt-accent); }
@@ -2711,6 +2727,28 @@ try {
     var PT_CURRENT_SYMBOL    = '';
     var PT_CURRENT_TIMEFRAME = '';
 
+    // The shell keeps tab iframes alive. Embedded Training must therefore wait
+    // for an explicit active-tab signal before starting any background work.
+    var PT_IS_EMBEDDED = false;
+    try { PT_IS_EMBEDDED = new URLSearchParams(window.location.search).get('embedded') === '1'; } catch (_) {}
+    var PT_PAGE_ACTIVE = !PT_IS_EMBEDDED;
+    var PT_DOM_READY = false;
+    var PT_WORK_ENABLED = false;
+    var PT_CHART_STARTED = false;
+    var PT_PAGE_WORK_REQUESTS = new Set();
+    var PT_PROJECTION_WORK_REQUESTS = new Set();
+    var PT_LIVE_REQUEST_ID = 0;
+    var PT_REFRESH_REQUEST_ID = 0;
+    var PT_AUTO_LOAD_TIMER = null;
+    var PT_DRAW_FRAME = null;
+    var PT_PROJECTION_REFRESH_PENDING = false;
+    var PT_PROJECTION_PRESERVE_PENDING = true;
+    var PT_PROJECTION_REFRESH_BUSY = false;
+    var PT_OLDER_LOAD_PENDING = false;
+    var PT_PENDING_LIVE_CANDLES = null;
+    var PT_INTERACTION_HELD = false;
+    var PT_INTERACTION_SETTLE_MS = 360;
+
     var PT_PROGRAMME_ID      = <?= (int)$programmeId ?>;
     var PT_PROGRAMME_NAME    = <?= json_encode($programmeName) ?>;
     var PT_PROVIDER_RISK_REWARD = <?= $providerRiskReward === null ? 'null' : json_encode($providerRiskReward) ?>;
@@ -2758,7 +2796,12 @@ try {
     var PT_CANVAS      = null;
     var PT_CTX         = null;
     var PT_HOVER_INDEX = -1;
-    var PT_CURSOR_Y    = null;
+    // Crosshair screen coordinates are independent of candle lookup. This keeps
+    // both guide lines visible over the price axis and in blank space beyond the
+    // first/last candle, where PT_HOVER_INDEX is correctly -1.
+    var PT_CURSOR_X = null;
+    var PT_CURSOR_Y = null;
+    var PT_CROSSHAIR_ACTIVE = false;
     var PT_MOBILE_CROSSHAIR_MODE = false;
 
     var PT_LOAD_TOKEN         = 0;
@@ -2799,20 +2842,31 @@ try {
     var PT_FAST_INTERACTION_TIMER = null;
     function ptBeginFastInteraction() {
         PT_FAST_INTERACTION = true;
+        ptPauseProjectionForInteraction();
         if (PT_FAST_INTERACTION_TIMER) clearTimeout(PT_FAST_INTERACTION_TIMER);
-        PT_FAST_INTERACTION_TIMER = setTimeout(function () {
+        function settleInteraction() {
+            if (PT_INTERACTION_HELD) {
+                PT_FAST_INTERACTION_TIMER = setTimeout(settleInteraction, PT_INTERACTION_SETTLE_MS);
+                return;
+            }
             PT_FAST_INTERACTION = false;
             PT_FAST_INTERACTION_TIMER = null;
+            // Draw the responsive candle/crosshair layer first. Background history and
+            // higher-timeframe projection resume only after the interaction has settled.
             ptScheduleDraw();
-        }, 140);
+            window.setTimeout(ptFlushDeferredTrainingWork, 90);
+        }
+        PT_FAST_INTERACTION_TIMER = setTimeout(settleInteraction, PT_INTERACTION_SETTLE_MS);
     }
 
     var PT_DRAW_SCHEDULED = false;
     function ptScheduleDraw() {
-        if (PT_DRAW_SCHEDULED) return;
+        if (!ptPageCanWork() || PT_DRAW_SCHEDULED) return;
         PT_DRAW_SCHEDULED = true;
-        requestAnimationFrame(function () {
+        PT_DRAW_FRAME = requestAnimationFrame(function () {
+            PT_DRAW_FRAME = null;
             PT_DRAW_SCHEDULED = false;
+            if (!ptPageCanWork()) return;
             ptDrawChart();
         });
     }
@@ -2851,6 +2905,204 @@ try {
             }
         } catch (e) {}
     }
+
+    function ptPageCanWork() {
+        return PT_WORK_ENABLED && !document.hidden;
+    }
+
+    // Only chart/live-data requests use this wrapper. User-initiated saves and
+    // configuration actions are deliberately left alone so tab navigation does
+    // not cancel a change the user explicitly asked to persist.
+    function ptFetchPageWork(url, options) {
+        if (!ptPageCanWork()) {
+            var inactiveError = new Error('Programme Training is inactive.');
+            inactiveError.name = 'AbortError';
+            return Promise.reject(inactiveError);
+        }
+        var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        if (controller) PT_PAGE_WORK_REQUESTS.add(controller);
+        var requestOptions = Object.assign({}, options || {});
+        if (controller) requestOptions.signal = controller.signal;
+
+        // Keep the abort controller registered until the response body has been
+        // parsed; a tab switch between headers and JSON parsing can still abort it.
+        return fetch(url, requestOptions)
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (controller) PT_PAGE_WORK_REQUESTS.delete(controller);
+                return data;
+            }, function (error) {
+                if (controller) PT_PAGE_WORK_REQUESTS.delete(controller);
+                throw error;
+            });
+    }
+
+    function ptAbortPageWorkRequests() {
+        PT_PAGE_WORK_REQUESTS.forEach(function (controller) {
+            try { controller.abort(); } catch (_) {}
+        });
+        PT_PAGE_WORK_REQUESTS.clear();
+    }
+
+    // Projection fetches have their own abort group so they can yield immediately
+    // to chart movement without cancelling the visible candle-history request.
+    function ptFetchProjectionWork(url, options) {
+        if (!ptPageCanWork() || PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+            var inactiveError = new Error('Projection paused during chart interaction.');
+            inactiveError.name = 'AbortError';
+            return Promise.reject(inactiveError);
+        }
+        var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        if (controller) PT_PROJECTION_WORK_REQUESTS.add(controller);
+        var requestOptions = Object.assign({}, options || {});
+        if (controller) requestOptions.signal = controller.signal;
+        return fetch(url, requestOptions)
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (controller) PT_PROJECTION_WORK_REQUESTS.delete(controller);
+                return data;
+            }, function (error) {
+                if (controller) PT_PROJECTION_WORK_REQUESTS.delete(controller);
+                throw error;
+            });
+    }
+
+    function ptAbortProjectionWorkRequests() {
+        PT_PROJECTION_WORK_REQUESTS.forEach(function (controller) {
+            try { controller.abort(); } catch (_) {}
+        });
+        PT_PROJECTION_WORK_REQUESTS.clear();
+    }
+
+    function ptQueueProjectionRefresh(preserveCompletedCache) {
+        if (!PT_PROJECTION_REFRESH_PENDING) {
+            PT_PROJECTION_PRESERVE_PENDING = !!preserveCompletedCache;
+        } else {
+            // A request requiring a fresh cache takes precedence over a preserve request.
+            PT_PROJECTION_PRESERVE_PENDING = PT_PROJECTION_PRESERVE_PENDING && !!preserveCompletedCache;
+        }
+        PT_PROJECTION_REFRESH_PENDING = true;
+    }
+
+    function ptPauseProjectionForInteraction() {
+        if (!PT_PROJECTION_REFRESH_BUSY && PT_PROJECTION_WORK_REQUESTS.size === 0) return;
+        PT_PROJECTION_REQUEST_TOKEN++;
+        PT_PROJECTION_REFRESH_BUSY = false;
+        ptAbortProjectionWorkRequests();
+        PT_BG_TF_PROMISES = Object.create(null);
+        ptQueueProjectionRefresh(true);
+    }
+
+    function ptFlushDeferredTrainingWork() {
+        if (!ptPageCanWork() || PT_FAST_INTERACTION || PT_INTERACTION_HELD) return;
+        if (PT_PENDING_LIVE_CANDLES && PT_PENDING_LIVE_CANDLES.length) {
+            var pendingCandles = PT_PENDING_LIVE_CANDLES;
+            PT_PENDING_LIVE_CANDLES = null;
+            ptAppendLiveCandles(pendingCandles);
+        }
+        if (PT_OLDER_LOAD_PENDING) {
+            PT_OLDER_LOAD_PENDING = false;
+            ptMaybeLoadOlder(true);
+        }
+        if (PT_PROJECTION_REFRESH_PENDING) {
+            var preserveCache = PT_PROJECTION_PRESERVE_PENDING;
+            PT_PROJECTION_REFRESH_PENDING = false;
+            PT_PROJECTION_PRESERVE_PENDING = true;
+            ptRefreshHigherTimeframeProjection(preserveCache);
+        }
+    }
+
+    function ptCancelAutoLoadTimer() {
+        if (PT_AUTO_LOAD_TIMER !== null) {
+            clearTimeout(PT_AUTO_LOAD_TIMER);
+            PT_AUTO_LOAD_TIMER = null;
+        }
+    }
+
+    function ptScheduleAutoLoad(token, delay) {
+        if (!ptPageCanWork() || token !== PT_LOAD_TOKEN) return;
+        ptCancelAutoLoadTimer();
+        PT_AUTO_LOAD_TIMER = setTimeout(function () {
+            PT_AUTO_LOAD_TIMER = null;
+            if (ptPageCanWork() && token === PT_LOAD_TOKEN) ptAutoLoadUpToTarget(token);
+        }, delay);
+    }
+
+    function ptSuspendPageWork() {
+        // Invalidate every continuation first, then abort any browser requests.
+        // Already-loaded candles remain in memory so Training can continue later.
+        ptStopLiveState();
+        ptStopCandleRefresh();
+        PT_LOAD_TOKEN++;
+        PT_PROJECTION_REQUEST_TOKEN++;
+        PT_IS_LOADING_OLDER = false;
+        PT_PROJECTION_REFRESH_BUSY = false;
+        PT_PROJECTION_REFRESH_PENDING = false;
+        PT_PROJECTION_PRESERVE_PENDING = true;
+        PT_OLDER_LOAD_PENDING = PT_HAS_MORE_OLDER;
+        PT_REFRESH_INFLIGHT = false;
+        PT_BG_TF_PROMISES = Object.create(null);
+        ptCancelAutoLoadTimer();
+        ptAbortProjectionWorkRequests();
+        ptAbortPageWorkRequests();
+
+        if (PT_FAST_INTERACTION_TIMER) {
+            clearTimeout(PT_FAST_INTERACTION_TIMER);
+            PT_FAST_INTERACTION_TIMER = null;
+        }
+        PT_FAST_INTERACTION = false;
+        PT_INTERACTION_HELD = false;
+        if (PT_DRAW_FRAME !== null) {
+            cancelAnimationFrame(PT_DRAW_FRAME);
+            PT_DRAW_FRAME = null;
+        }
+        PT_DRAW_SCHEDULED = false;
+        if (typeof ptStopLocateArrowAnimation === 'function') ptStopLocateArrowAnimation();
+        PT_LOCATE_ARROW = null;
+    }
+
+    function ptResumePageWork() {
+        if (!ptPageCanWork()) return;
+
+        if (PT_PROGRAMME_ID > 0) {
+            ptStartLiveState();
+            ptStartCandleRefresh();
+        }
+
+        // Restart only an interrupted initial fetch. If the first page was
+        // already received, preserve its candles and continue older-page loading.
+        if (!PT_CHART_STARTED || !PT_INITIAL_LOADED) {
+            PT_CHART_STARTED = true;
+            ptLoadChart();
+        } else if (PT_CANDLES.length && PT_HAS_MORE_OLDER &&
+                   (PT_REQUESTED_AMOUNT === null || PT_CANDLES.length < PT_REQUESTED_AMOUNT)) {
+            ptAutoLoadUpToTarget(PT_LOAD_TOKEN);
+        }
+
+        if (PT_HAS_BROKER && PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
+            ptRefreshHigherTimeframeProjection(true);
+        }
+        if (PT_CANDLES.length) ptScheduleDraw();
+    }
+
+    function ptSyncPageWorkState() {
+        // Parent messages can arrive before DOMContentLoaded; wait until symbol/timeframe
+        // controls and chart state have been initialized before starting any work.
+        var shouldRun = PT_PAGE_ACTIVE && PT_DOM_READY && !document.hidden;
+        if (shouldRun === PT_WORK_ENABLED) return;
+        PT_WORK_ENABLED = shouldRun;
+        if (shouldRun) ptResumePageWork();
+        else ptSuspendPageWork();
+    }
+
+    // This message is sent by traderapp.php every time the shell changes tabs.
+    window.addEventListener('message', function (event) {
+        if (event.source !== window.parent || !event.data || typeof event.data !== 'object') return;
+        if (event.data.type !== 'programmeTrainingVisibility') return;
+        PT_PAGE_ACTIVE = event.data.active === true;
+        ptSyncPageWorkState();
+    });
+    document.addEventListener('visibilitychange', ptSyncPageWorkState);
 
     // ==================== FULLSCREEN ====================
     function ptToggleFullscreen() {
@@ -2939,9 +3191,7 @@ try {
 
         if (!PT_HAS_BROKER) {
             ptShowEmpty('Please connect your Broker to see chart.');
-        } else if (PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
-            ptLoadChart();
-        } else {
+        } else if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
             ptShowEmpty('No symbol or timeframe selected. Configure them in the Signals dashboard.');
         }
 
@@ -2952,10 +3202,10 @@ try {
             }
         });
 
-        if (PT_PROGRAMME_ID > 0) {
-            ptStartLiveState();
-            ptStartCandleRefresh();
-        }
+        // Standalone pages activate immediately. The shell-embedded page waits
+        // until traderapp.php confirms that Training is the selected tab.
+        PT_DOM_READY = true;
+        ptSyncPageWorkState();
     });
 
     // ==================== LIVE STATE (config) ====================
@@ -2969,22 +3219,25 @@ try {
     }
 
     function ptFetchLiveState() {
-        if (!PT_LIVE_RUNNING) return;
+        if (!PT_LIVE_RUNNING || !ptPageCanWork()) return;
+        if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) { ptScheduleNextLiveState(); return; }
 
+        var requestId = ++PT_LIVE_REQUEST_ID;
         var body = 'get_live_state=1';
-        fetch(window.location.pathname, {
+        ptFetchPageWork(window.location.pathname, {
             method: 'POST',
             headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
-        .then(function (r) { return r.json(); })
         .then(function (data) {
+            if (requestId !== PT_LIVE_REQUEST_ID || !PT_LIVE_RUNNING || !ptPageCanWork()) return;
             if (!data || !data.success) {
                 PT_LIVE_FAIL_COUNT++;
                 ptScheduleNextLiveState();
                 return;
             }
             PT_LIVE_FAIL_COUNT = 0;
+            if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) { ptScheduleNextLiveState(); return; }
 
             var newSig = ptStateSignature(data);
             if (newSig !== PT_LAST_STATE_SIG) {
@@ -2993,14 +3246,15 @@ try {
             }
             ptScheduleNextLiveState();
         })
-        .catch(function () {
+        .catch(function (error) {
+            if (requestId !== PT_LIVE_REQUEST_ID || !PT_LIVE_RUNNING || !ptPageCanWork() || (error && error.name === 'AbortError')) return;
             PT_LIVE_FAIL_COUNT++;
             ptScheduleNextLiveState();
         });
     }
 
     function ptScheduleNextLiveState() {
-        if (!PT_LIVE_RUNNING) return;
+        if (!PT_LIVE_RUNNING || !ptPageCanWork()) return;
         if (PT_LIVE_INTERVAL) clearTimeout(PT_LIVE_INTERVAL);
 
         var delay = PT_LIVE_BASE_MS;
@@ -3012,6 +3266,7 @@ try {
     }
 
     function ptStartLiveState() {
+        if (!ptPageCanWork() || PT_PROGRAMME_ID <= 0) return;
         PT_LIVE_RUNNING = true;
         PT_LIVE_FAIL_COUNT = 0;
         if (PT_LIVE_INTERVAL) clearTimeout(PT_LIVE_INTERVAL);
@@ -3020,30 +3275,22 @@ try {
 
     function ptStopLiveState() {
         PT_LIVE_RUNNING = false;
+        PT_LIVE_REQUEST_ID++;
         if (PT_LIVE_INTERVAL) {
             clearTimeout(PT_LIVE_INTERVAL);
             PT_LIVE_INTERVAL = null;
         }
     }
 
-    document.addEventListener('visibilitychange', function () {
-        if (document.hidden) {
-            ptStopLiveState();
-            ptStopCandleRefresh();
-        } else if (PT_PROGRAMME_ID > 0) {
-            ptStartLiveState();
-            ptStartCandleRefresh();
-        }
-    });
-
     window.addEventListener('focus', function () {
+        if (!ptPageCanWork()) return;
         if (PT_LIVE_RUNNING) ptFetchLiveState();
         if (PT_REFRESH_RUNNING) ptFetchLatestCandles();
     });
 
     window.addEventListener('beforeunload', function () {
-        ptStopLiveState();
-        ptStopCandleRefresh();
+        PT_WORK_ENABLED = false;
+        ptSuspendPageWork();
     });
 
     function ptApplyLiveState(state) {
@@ -3125,7 +3372,7 @@ try {
 
     // ==================== LIVE CANDLE REFRESH (tail) ====================
     function ptStartCandleRefresh() {
-        if (PT_REFRESH_RUNNING) return;
+        if (!ptPageCanWork() || PT_REFRESH_RUNNING) return;
         if (!PT_HAS_BROKER) return;
         if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) return;
         PT_REFRESH_RUNNING = true;
@@ -3135,6 +3382,7 @@ try {
 
     function ptStopCandleRefresh() {
         PT_REFRESH_RUNNING = false;
+        PT_REFRESH_REQUEST_ID++;
         if (PT_REFRESH_INTERVAL) {
             clearTimeout(PT_REFRESH_INTERVAL);
             PT_REFRESH_INTERVAL = null;
@@ -3142,7 +3390,7 @@ try {
     }
 
     function ptScheduleNextCandleRefresh() {
-        if (!PT_REFRESH_RUNNING) return;
+        if (!PT_REFRESH_RUNNING || !ptPageCanWork()) return;
         if (PT_REFRESH_INTERVAL) clearTimeout(PT_REFRESH_INTERVAL);
         PT_REFRESH_INTERVAL = setTimeout(ptFetchLatestCandles, PT_REFRESH_MS);
     }
@@ -3161,7 +3409,8 @@ try {
     }
 
     function ptFetchLatestCandles() {
-        if (!PT_REFRESH_RUNNING) return;
+        if (!PT_REFRESH_RUNNING || !ptPageCanWork()) return;
+        if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) { ptScheduleNextCandleRefresh(); return; }
         if (PT_REFRESH_INFLIGHT) return;
         if (!PT_HAS_BROKER) { ptScheduleNextCandleRefresh(); return; }
         if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
@@ -3181,19 +3430,20 @@ try {
         if (afterTs !== '') body += '&after_ts=' + encodeURIComponent(afterTs);
 
         PT_REFRESH_INFLIGHT = true;
+        var myRequestId = ++PT_REFRESH_REQUEST_ID;
         var myToken = PT_LOAD_TOKEN;
         var mySym   = PT_CURRENT_SYMBOL;
         var myTf    = PT_CURRENT_TIMEFRAME;
 
-        fetch('programme_training.php', {
+        ptFetchPageWork('programme_training.php', {
             method: 'POST',
             headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
-        .then(function (r) { return r.json(); })
         .then(function (data) {
+            if (myRequestId !== PT_REFRESH_REQUEST_ID) return;
             PT_REFRESH_INFLIGHT = false;
-            if (!PT_REFRESH_RUNNING) return;
+            if (!PT_REFRESH_RUNNING || !ptPageCanWork()) return;
             if (myToken !== PT_LOAD_TOKEN) { ptScheduleNextCandleRefresh(); return; }
             if (mySym !== PT_CURRENT_SYMBOL || myTf !== PT_CURRENT_TIMEFRAME) {
                 ptScheduleNextCandleRefresh();
@@ -3202,11 +3452,19 @@ try {
             if (!data || !data.success) { ptScheduleNextCandleRefresh(); return; }
 
             var chunk = Array.isArray(data.candles) ? data.candles : [];
-            if (chunk.length) ptAppendLiveCandles(chunk);
+            if (chunk.length) {
+                if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+                    PT_PENDING_LIVE_CANDLES = (PT_PENDING_LIVE_CANDLES || []).concat(chunk);
+                } else {
+                    ptAppendLiveCandles(chunk);
+                }
+            }
             ptScheduleNextCandleRefresh();
         })
-        .catch(function () {
+        .catch(function (error) {
+            if (myRequestId !== PT_REFRESH_REQUEST_ID) return;
             PT_REFRESH_INFLIGHT = false;
+            if (!PT_REFRESH_RUNNING || !ptPageCanWork() || (error && error.name === 'AbortError')) return;
             ptScheduleNextCandleRefresh();
         });
     }
@@ -3287,6 +3545,7 @@ try {
         return names.sort(function (a,b) { return ptTfMilliseconds(a)-ptTfMilliseconds(b); });
     }
     function ptFetchBackgroundTimeframe(tf, token) {
+        if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return Promise.resolve([]);
         var key = [PT_PROGRAMME_ID, PT_CURRENT_SYMBOL, tf].join('|');
         if (PT_BG_TF_PROMISES[key]) return PT_BG_TF_PROMISES[key];
         var result = [], before = '';
@@ -3295,11 +3554,11 @@ try {
                 + '&symbol=' + encodeURIComponent(PT_CURRENT_SYMBOL)
                 + '&timeframe=' + encodeURIComponent(tf) + '&limit=2000'
                 + (before ? '&before=' + encodeURIComponent(before) : '');
-            return fetch('programme_training.php', {
+            return ptFetchProjectionWork('programme_training.php', {
                 method:'POST',
                 headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
                 body:body
-            }).then(function(r){return r.json();}).then(function(data){
+            }).then(function(data){
                 if (token !== PT_PROJECTION_REQUEST_TOKEN) return result;
                 if (!data || !data.success) throw new Error((data && data.message) || ('Could not load ' + tf + ' candles'));
                 var chunk = Array.isArray(data.candles) ? data.candles : [];
@@ -3311,15 +3570,18 @@ try {
                 return result;
             });
         }
-        PT_BG_TF_PROMISES[key] = page().then(function(candles){
+        var requestPromise = page().then(function(candles){
             if (token === PT_PROJECTION_REQUEST_TOKEN) PT_BG_TF_DATA[tf] = candles || [];
-            delete PT_BG_TF_PROMISES[key];
+            if (PT_BG_TF_PROMISES[key] === requestPromise) delete PT_BG_TF_PROMISES[key];
             return candles || [];
         }).catch(function(err){
-            delete PT_BG_TF_PROMISES[key];
+            // An aborted older request must not delete a newer retry stored under
+            // the same timeframe key after the user returns to Training.
+            if (PT_BG_TF_PROMISES[key] === requestPromise) delete PT_BG_TF_PROMISES[key];
             throw err;
         });
-        return PT_BG_TF_PROMISES[key];
+        PT_BG_TF_PROMISES[key] = requestPromise;
+        return requestPromise;
     }
     function ptBuildProjectionMap(higherCandles, lowerCandles) {
         // Parse candle timestamps once. The old implementation reparsed every
@@ -3400,19 +3662,29 @@ try {
         }
         return ptPrice((fallbackCandles || PT_CANDLES)[index], level);
     }
-    function ptRefreshHigherTimeframeProjection() {
-        if (!PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) return;
+    function ptRefreshHigherTimeframeProjection(preserveCompletedCache) {
+        if (!ptPageCanWork() || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) return;
+        if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+            ptQueueProjectionRefresh(!!preserveCompletedCache);
+            return;
+        }
         var token = ++PT_PROJECTION_REQUEST_TOKEN;
-        PT_BG_TF_DATA = Object.create(null);
+        PT_PROJECTION_REFRESH_BUSY = true;
+        if (!preserveCompletedCache) PT_BG_TF_DATA = Object.create(null);
         PT_BG_TF_PROMISES = Object.create(null);
         var configPromise = (typeof ptLoadSavedConfiguration === 'function')
             ? ptLoadSavedConfiguration(false).catch(function(){ return null; })
             : Promise.resolve(null);
         configPromise.then(function(){
-            if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+            if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return;
+            if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+                PT_PROJECTION_REFRESH_BUSY = false;
+                ptQueueProjectionRefresh(!!preserveCompletedCache);
+                return;
+            }
             var config = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
             var tfs = ptProjectionRootsForCurrentView(config);
-            if (!tfs.length) { ptProjectionStatus('', ''); return; }
+            if (!tfs.length) { PT_PROJECTION_REFRESH_BUSY = false; ptProjectionStatus('', ''); return; }
             var rootNames = [];
             (config.roots || []).forEach(function(root){
                 if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
@@ -3420,13 +3692,19 @@ try {
                     rootNames.push(root.name || root.root_name || ('Root ' + root.id));
             });
             ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — loading higher-timeframe candles…');
-            return Promise.all(tfs.map(function(tf){ return ptFetchBackgroundTimeframe(tf, token); }))
+            var missingTimeframes = preserveCompletedCache
+                ? tfs.filter(function (tf) { return !Array.isArray(PT_BG_TF_DATA[tf]); })
+                : tfs;
+            return Promise.all(missingTimeframes.map(function(tf){ return ptFetchBackgroundTimeframe(tf, token); }))
                 .then(function(){
                     if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+                    PT_PROJECTION_REFRESH_BUSY = false;
                     ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — ready', 'done');
                     ptScheduleDraw();
                 }).catch(function(err){
                     if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+                    PT_PROJECTION_REFRESH_BUSY = false;
+                    if (err && err.name === 'AbortError') return;
                     ptProjectionStatus('Projection loading failed: ' + (err.message || 'unknown error'), 'error');
                     console.warn('Higher-timeframe projection load failed', err);
                 });
@@ -3683,6 +3961,8 @@ try {
 
     // ==================== LOAD CHART ====================
     function ptLoadChart() {
+        if (!ptPageCanWork()) return;
+        PT_CHART_STARTED = true;
         if (!PT_HAS_BROKER) {
             ptShowEmpty('Please connect your Broker to see chart.');
             return;
@@ -3691,7 +3971,9 @@ try {
         PT_LOAD_TOKEN++;
         PT_CANDLES = [];
         PT_HOVER_INDEX = -1;
+        PT_CURSOR_X = null;
         PT_CURSOR_Y = null;
+        PT_CROSSHAIR_ACTIVE = false;
         PT_HAS_MORE_OLDER = true;
         PT_IS_LOADING_OLDER = false;
         PT_INITIAL_LOADED = false;
@@ -3702,6 +3984,7 @@ try {
     }
 
     function ptFetchChunk(before, token, isInitial) {
+        if (!ptPageCanWork() || token !== PT_LOAD_TOKEN) return;
         if (!PT_HAS_BROKER) {
             PT_HAS_MORE_OLDER = false;
             PT_IS_LOADING_OLDER = false;
@@ -3725,14 +4008,13 @@ try {
                  + '&limit='     + pageSize;
         if (before) body += '&before=' + encodeURIComponent(before);
 
-        fetch('programme_training.php', {
+        ptFetchPageWork('programme_training.php', {
             method: 'POST',
             headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
-        .then(function (r) { return r.json(); })
         .then(function (data) {
-            if (token !== PT_LOAD_TOKEN) return;
+            if (!ptPageCanWork() || token !== PT_LOAD_TOKEN) return;
             if (!PT_HAS_BROKER) {
                 PT_CANDLES = [];
                 ptClearCanvas();
@@ -3792,12 +4074,17 @@ try {
                 ptSetBgLoadingText('Stopped loading (network/DB limit).');
                 return;
             }
-            if (PT_CANDLES.length) setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
+            if (PT_CANDLES.length) ptScheduleAutoLoad(token, 800);
             else ptShowEmpty('Network error loading candles.');
         });
     }
 
     function ptAutoLoadUpToTarget(token) {
+        if (!ptPageCanWork() || token !== PT_LOAD_TOKEN) return;
+        if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+            PT_OLDER_LOAD_PENDING = true;
+            return;
+        }
         if (!PT_HAS_BROKER) {
             PT_HAS_MORE_OLDER = false;
             PT_IS_LOADING_OLDER = false;
@@ -3840,15 +4127,14 @@ try {
                  + '&limit='     + pageSize
                  + '&before='    + encodeURIComponent(oldest);
 
-        fetch('programme_training.php', {
+        ptFetchPageWork('programme_training.php', {
             method: 'POST',
             headers: { 'Content-Type':'application/x-www-form-urlencoded', 'X-Requested-With':'XMLHttpRequest' },
             body: body
         })
-        .then(function (r) { return r.json(); })
         .then(function (data) {
+            if (token !== PT_LOAD_TOKEN || !ptPageCanWork()) return;
             PT_IS_LOADING_OLDER = false;
-            if (token !== PT_LOAD_TOKEN) return;
             if (!PT_HAS_BROKER) {
                 PT_CANDLES = [];
                 ptClearCanvas();
@@ -3863,7 +4149,7 @@ try {
                     PT_HAS_MORE_OLDER = false;
                     ptShowBgLoading(true, true);
                     ptSetBgLoadingText('Stopped loading (server limit).');
-                } else setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
+                } else ptScheduleAutoLoad(token, 800);
                 return;
             }
             PT_CONSECUTIVE_ERRORS = 0;
@@ -3883,16 +4169,17 @@ try {
                 ptShowBgLoading(false);
                 return;
             }
-            setTimeout(function () { ptAutoLoadUpToTarget(token); }, 25);
+            ptScheduleAutoLoad(token, 25);
         })
-        .catch(function () {
+        .catch(function (error) {
+            if (token !== PT_LOAD_TOKEN || !ptPageCanWork() || (error && error.name === 'AbortError')) return;
             PT_IS_LOADING_OLDER = false;
             PT_CONSECUTIVE_ERRORS++;
             if (PT_CONSECUTIVE_ERRORS >= PT_MAX_CONSECUTIVE_ERRORS) {
                 PT_HAS_MORE_OLDER = false;
                 ptShowBgLoading(true, true);
                 ptSetBgLoadingText('Stopped loading (network/DB limit).');
-            } else setTimeout(function () { ptAutoLoadUpToTarget(token); }, 800);
+            } else ptScheduleAutoLoad(token, 800);
         });
     }
 
@@ -3962,7 +4249,11 @@ try {
     window.ptJumpToLatest = ptJumpToLatest;
 
     // ==================== LAZY LOAD OLDER ====================
-    function ptMaybeLoadOlder() {
+    function ptMaybeLoadOlder(allowDuringInteraction) {
+        if (!allowDuringInteraction && (PT_FAST_INTERACTION || PT_INTERACTION_HELD)) {
+            PT_OLDER_LOAD_PENDING = true;
+            return;
+        }
         if (!PT_HAS_BROKER) return;
         if (!PT_INITIAL_LOADED) return;
         if (!PT_HAS_MORE_OLDER) return;
@@ -3987,6 +4278,92 @@ try {
     function ptClearCanvas() {
         if (!PT_CTX || !PT_CANVAS) return;
         PT_CTX.clearRect(0, 0, PT_CANVAS.width, PT_CANVAS.height);
+    }
+
+    // ==================== CROSSHAIR DRAW HELPER ====================
+    // Draw both crosshair legs in canvas coordinates, not candle-index coordinates.
+    // They deliberately span the entire canvas so neither axis gutter nor an empty
+    // future/past region can truncate the visual guide.
+    function ptDrawCrosshairOverlay(viewportW, viewportH, chartTop, chartBottom, baseX, step, yToP) {
+        if (!PT_CROSSHAIR_ACTIVE || !PT_CTX) return;
+
+        var rawX = (PT_CURSOR_X !== null && PT_CURSOR_X !== undefined)
+            ? Number(PT_CURSOR_X) : NaN;
+        if (!Number.isFinite(rawX) && PT_HOVER_INDEX >= 0 && PT_HOVER_INDEX < PT_CANDLES.length) {
+            rawX = baseX + PT_HOVER_INDEX * step + step / 2;
+        }
+        if (!Number.isFinite(rawX)) rawX = viewportW / 2;
+        // Keep the one-pixel stroke inside the bitmap so it remains visible even
+        // when the pointer is directly against the left or right canvas edge.
+        var crosshairX = Math.max(0.5, Math.min(Math.max(0.5, viewportW - 0.5), rawX));
+
+        var rawY = (PT_CURSOR_Y !== null && PT_CURSOR_Y !== undefined)
+            ? Number(PT_CURSOR_Y) : NaN;
+        if (!Number.isFinite(rawY)) rawY = (chartTop + chartBottom) / 2;
+        var crosshairY = Math.max(chartTop, Math.min(chartBottom, rawY));
+
+        PT_CTX.save();
+        PT_CTX.strokeStyle = 'rgba(128,128,128,0.82)';
+        PT_CTX.lineWidth = 1;
+        PT_CTX.setLineDash([3, 3]);
+        PT_CTX.beginPath();
+        // Vertical leg: top-to-bottom of the complete chart canvas.
+        PT_CTX.moveTo(crosshairX, 0.5);
+        PT_CTX.lineTo(crosshairX, Math.max(0.5, viewportH - 0.5));
+        // Horizontal leg: left-to-right of the complete chart canvas, including
+        // the left price-label gutter and the empty area after the final candle.
+        PT_CTX.moveTo(0.5, crosshairY);
+        PT_CTX.lineTo(Math.max(0.5, viewportW - 0.5), crosshairY);
+        PT_CTX.stroke();
+        PT_CTX.setLineDash([]);
+
+        var ls = ptLabelStyles();
+        PT_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+        PT_CTX.textBaseline = 'middle';
+        PT_CTX.textAlign = 'center';
+
+        // Time label is meaningful only when the pointer maps to a real candle.
+        if (PT_HOVER_INDEX >= 0 && PT_HOVER_INDEX < PT_CANDLES.length) {
+            var labelText = ptFormatTime(PT_CANDLES[PT_HOVER_INDEX].time).slice(5, 16);
+            var padX = 8;
+            var textW = PT_CTX.measureText(labelText).width;
+            var boxW = textW + padX * 2;
+            var boxH = 20;
+            var chipX = crosshairX - boxW / 2;
+            var chipY = (chartBottom + (viewportH - PT_PADDING_BOTTOM)) / 2 - boxH / 2;
+            chipX = Math.max(0, Math.min(Math.max(0, viewportW - boxW), chipX));
+            chipY = Math.max(0, Math.min(Math.max(0, viewportH - boxH), chipY));
+            PT_CTX.fillStyle = ls.bg;
+            ptRoundRect(PT_CTX, chipX, chipY, boxW, boxH, 4);
+            PT_CTX.fill();
+            PT_CTX.strokeStyle = ls.border;
+            PT_CTX.lineWidth = 1;
+            PT_CTX.stroke();
+            PT_CTX.fillStyle = ls.bgText;
+            PT_CTX.fillText(labelText, chipX + boxW / 2, chipY + boxH / 2 + 0.5);
+        }
+
+        // Price label remains available even when the pointer is in empty candle
+        // space, because the Y coordinate is converted using the retained scale.
+        if (typeof yToP === 'function') {
+            var priceText = ptFormatPrice(yToP(crosshairY));
+            var padX2 = 6;
+            var boxH2 = 20;
+            var textW2 = PT_CTX.measureText(priceText).width;
+            var boxW2 = textW2 + padX2 * 2;
+            var chipX2 = viewportW - PT_PADDING_RIGHT + Math.max(0, (PT_PADDING_RIGHT - boxW2) / 2);
+            chipX2 = Math.max(0, Math.min(Math.max(0, viewportW - boxW2), chipX2));
+            var chipY2 = Math.max(0, Math.min(Math.max(0, viewportH - boxH2), crosshairY - boxH2 / 2));
+            PT_CTX.fillStyle = ls.bg;
+            ptRoundRect(PT_CTX, chipX2, chipY2, boxW2, boxH2, 4);
+            PT_CTX.fill();
+            PT_CTX.strokeStyle = ls.border;
+            PT_CTX.lineWidth = 1;
+            PT_CTX.stroke();
+            PT_CTX.fillStyle = ls.bgText;
+            PT_CTX.fillText(priceText, chipX2 + boxW2 / 2, chipY2 + boxH2 / 2 + 0.5);
+        }
+        PT_CTX.restore();
     }
 
     // ==================== DRAW ====================
@@ -4015,33 +4392,88 @@ try {
         PT_CTX.setTransform(dpr, 0, 0, dpr, 0, 0);
         PT_CTX.clearRect(0, 0, viewportW, viewportH);
 
-        if (!PT_CANDLES.length) { ptUpdateJumpLatestVisibility(); return; }
-
         var styles = getComputedStyle(document.body);
         var accent   = (styles.getPropertyValue('--pt-accent') || '#12a36b').trim() || '#12a36b';
         var textMut  = (styles.getPropertyValue('--pt-muted')  || '#60736d').trim() || '#60736d';
         var bg       = (styles.getPropertyValue('--pt-card')   || '#ffffff').trim() || '#ffffff';
-
         PT_CTX.fillStyle = bg;
         PT_CTX.fillRect(0, 0, viewportW, viewportH);
 
+        var chartTop = PT_PADDING_TOP;
+        var chartBottom = viewportH - PT_PADDING_BOTTOM;
+        var chartHeight = chartBottom - chartTop;
+        if (chartHeight <= 0 || viewportW <= 0 || viewportH <= 0) {
+            ptUpdateJumpLatestVisibility();
+            return;
+        }
+
+        // With no candle records at all, still honour an active crosshair. This
+        // branch is mainly for the short interval while a symbol/timeframe reloads.
+        if (!PT_CANDLES.length) {
+            PT_CANVAS._ptStep = ptStep();
+            PT_CANVAS._ptBaseX = PT_PADDING_LEFT + PT_VIRTUAL_PAD - PT_VIEW.offsetX;
+            PT_CANVAS._ptChartTop = chartTop;
+            PT_CANVAS._ptChartBot = chartBottom;
+            ptDrawCrosshairOverlay(viewportW, viewportH, chartTop, chartBottom,
+                PT_CANVAS._ptBaseX, PT_CANVAS._ptStep, null);
+            ptUpdateJumpLatestVisibility();
+            return;
+        }
+
         var step = ptStep();
-        var cw   = PT_VIEW.candleWidth;
+        var cw = PT_VIEW.candleWidth;
         var half = cw / 2;
         var baseX = PT_PADDING_LEFT + PT_VIRTUAL_PAD - PT_VIEW.offsetX;
 
         var firstVisible = Math.max(0, Math.floor((PT_VIEW.offsetX - PT_PADDING_LEFT - PT_VIRTUAL_PAD) / step));
-        var lastVisible  = Math.min(PT_CANDLES.length - 1,
-                            Math.ceil((PT_VIEW.offsetX + viewportW - PT_PADDING_LEFT - PT_VIRTUAL_PAD) / step));
-        if (lastVisible < firstVisible) { ptUpdateJumpLatestVisibility(); return; }
+        var lastVisible = Math.min(PT_CANDLES.length - 1,
+            Math.ceil((PT_VIEW.offsetX + viewportW - PT_PADDING_LEFT - PT_VIRTUAL_PAD) / step));
+        var hasVisibleCandles = lastVisible >= firstVisible;
 
-        var minPrice = Infinity, maxPrice = -Infinity;
-        for (var i = firstVisible; i <= lastVisible; i++) {
-            var c = PT_CANDLES[i];
-            if (c.low  < minPrice) minPrice = c.low;
-            if (c.high > maxPrice) maxPrice = c.high;
+        // The chart can be panned into the virtual area past the last candle (or
+        // before the first one). Do not abort rendering there. Retain a meaningful
+        // price scale from the nearest boundary candle while the crosshair remains
+        // free to move anywhere on screen.
+        var scaleFirst = firstVisible;
+        var scaleLast = lastVisible;
+        if (!hasVisibleCandles) {
+            var approximateCenterIndex = Math.floor((viewportW / 2 - baseX) / step);
+            var scaleAnchorIndex = Math.max(0, Math.min(PT_CANDLES.length - 1, approximateCenterIndex));
+            scaleFirst = scaleAnchorIndex;
+            scaleLast = scaleAnchorIndex;
         }
-        if (!isFinite(minPrice) || !isFinite(maxPrice)) { ptUpdateJumpLatestVisibility(); return; }
+
+        var minPrice = Infinity;
+        var maxPrice = -Infinity;
+        for (var i = scaleFirst; i <= scaleLast; i++) {
+            var c = PT_CANDLES[i];
+            if (!c) continue;
+            var candleLow = Number(c.low);
+            var candleHigh = Number(c.high);
+            if (Number.isFinite(candleLow)) minPrice = Math.min(minPrice, candleLow);
+            if (Number.isFinite(candleHigh)) maxPrice = Math.max(maxPrice, candleHigh);
+        }
+        if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) {
+            // Defensive fallback for sparse/malformed windows: use the latest
+            // valid candle rather than hiding the chart and its crosshair.
+            for (var fallbackIndex = PT_CANDLES.length - 1; fallbackIndex >= 0; fallbackIndex--) {
+                var fallbackCandle = PT_CANDLES[fallbackIndex];
+                if (!fallbackCandle) continue;
+                var fallbackLow = Number(fallbackCandle.low);
+                var fallbackHigh = Number(fallbackCandle.high);
+                if (Number.isFinite(fallbackLow) && Number.isFinite(fallbackHigh)) {
+                    minPrice = Math.min(fallbackLow, fallbackHigh);
+                    maxPrice = Math.max(fallbackLow, fallbackHigh);
+                    break;
+                }
+            }
+        }
+        if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) {
+            ptDrawCrosshairOverlay(viewportW, viewportH, chartTop, chartBottom, baseX, step, null);
+            ptUpdateJumpLatestVisibility();
+            return;
+        }
+
         // While locating a trade, include its entry, stop-loss and take-profit prices
         // in the scale calculation so the complete trade area remains visible.
         if (PT_LOCATE_ARROW) {
@@ -4049,11 +4481,6 @@ try {
             if (Number.isFinite(Number(PT_LOCATE_ARROW.priceMax))) maxPrice = Math.max(maxPrice, Number(PT_LOCATE_ARROW.priceMax));
         }
         if (minPrice === maxPrice) { minPrice -= 1; maxPrice += 1; }
-
-        var chartTop    = PT_PADDING_TOP;
-        var chartBottom = viewportH - PT_PADDING_BOTTOM;
-        var chartHeight = chartBottom - chartTop;
-        if (chartHeight <= 0) { ptUpdateJumpLatestVisibility(); return; }
 
         var rawRange = maxPrice - minPrice;
         var padRatio = 0.05 * PT_VIEW.priceScale;
@@ -4063,7 +4490,8 @@ try {
         var halfRange = (rangeTop - rangeBot) / 2 * PT_VIEW.priceScale;
         rangeTop = mid + halfRange;
         rangeBot = mid - halfRange;
-        var range = rangeTop - rangeBot; if (range <= 0) range = 1;
+        var range = rangeTop - rangeBot;
+        if (range <= 0) range = 1;
 
         // During trade location, pan the existing price scale vertically so the
         // entry/stop-loss area is centred. This changes offset only; priceScale and
@@ -4083,106 +4511,58 @@ try {
 
         PT_CTX.fillStyle = textMut;
         PT_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-        PT_CTX.textBaseline = 'middle'; PT_CTX.textAlign = 'right';
+        PT_CTX.textBaseline = 'middle';
+        PT_CTX.textAlign = 'right';
         var gridLines = 6;
         for (var g = 0; g <= gridLines; g++) {
             var t = g / gridLines;
-            var y = chartTop + t * chartHeight;
+            var gridY = chartTop + t * chartHeight;
             var price = pTop - t * pRange;
-            PT_CTX.fillText(ptFormatPrice(price), PT_PADDING_LEFT - 8, y);
+            PT_CTX.fillText(ptFormatPrice(price), PT_PADDING_LEFT - 8, gridY);
         }
 
-        for (var k = firstVisible; k <= lastVisible; k++) {
-            var cd = PT_CANDLES[k];
-            var cx = baseX + k * step + step / 2;
-            var yHigh = pToY(cd.high), yLow = pToY(cd.low);
-            var yOpen = pToY(cd.open), yClose = pToY(cd.close);
-            var up = cd.close >= cd.open;
-            var color = up ? accent : '#e74c3c';
-            PT_CTX.strokeStyle = color;
-            PT_CTX.lineWidth = Math.max(1, Math.min(2, cw * 0.15));
-            PT_CTX.beginPath(); PT_CTX.moveTo(cx, yHigh); PT_CTX.lineTo(cx, yLow); PT_CTX.stroke();
-            var bodyTop = Math.min(yOpen, yClose);
-            var bodyH   = Math.max(1, Math.abs(yClose - yOpen));
-            PT_CTX.fillStyle = color;
-            PT_CTX.fillRect(cx - half, bodyTop, cw, bodyH);
+        if (hasVisibleCandles) {
+            for (var k = firstVisible; k <= lastVisible; k++) {
+                var cd = PT_CANDLES[k];
+                if (!cd) continue;
+                var cx = baseX + k * step + step / 2;
+                var yHigh = pToY(cd.high), yLow = pToY(cd.low);
+                var yOpen = pToY(cd.open), yClose = pToY(cd.close);
+                var up = cd.close >= cd.open;
+                var color = up ? accent : '#e74c3c';
+                PT_CTX.strokeStyle = color;
+                PT_CTX.lineWidth = Math.max(1, Math.min(2, cw * 0.15));
+                PT_CTX.beginPath();
+                PT_CTX.moveTo(cx, yHigh);
+                PT_CTX.lineTo(cx, yLow);
+                PT_CTX.stroke();
+                var bodyTop = Math.min(yOpen, yClose);
+                var bodyH = Math.max(1, Math.abs(yClose - yOpen));
+                PT_CTX.fillStyle = color;
+                PT_CTX.fillRect(cx - half, bodyTop, cw, bodyH);
+            }
+
+            PT_CTX.fillStyle = textMut;
+            PT_CTX.textAlign = 'center';
+            PT_CTX.textBaseline = 'top';
+            PT_CTX.font = '10px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            var labelStep = Math.max(1, Math.round(100 / step));
+            var labelStart = Math.ceil(firstVisible / labelStep) * labelStep;
+            for (var m = labelStart; m <= lastVisible; m += labelStep) {
+                var cdx = baseX + m * step + step / 2;
+                var tLabel = ptFormatTime(PT_CANDLES[m].time).slice(5, 16);
+                PT_CTX.fillText(tLabel, cdx, chartBottom + 6);
+            }
         }
 
-        PT_CTX.fillStyle = textMut;
-        PT_CTX.textAlign = 'center'; PT_CTX.textBaseline = 'top';
-        PT_CTX.font = '10px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-        var labelStep = Math.max(1, Math.round(100 / step));
-        var labelStart = Math.ceil(firstVisible / labelStep) * labelStep;
-        for (var m = labelStart; m <= lastVisible; m += labelStep) {
-            var cdx = baseX + m * step + step / 2;
-            var tLabel = ptFormatTime(PT_CANDLES[m].time).slice(5, 16);
-            PT_CTX.fillText(tLabel, cdx, chartBottom + 6);
-        }
-
-        var hasV = PT_HOVER_INDEX >= 0 && PT_HOVER_INDEX < PT_CANDLES.length;
-        var hasH = PT_CURSOR_Y !== null && PT_CURSOR_Y >= chartTop && PT_CURSOR_Y <= chartBottom;
-        var chColor = 'rgba(128,128,128,0.7)';
-
-        if (hasV) {
-            var hx = baseX + PT_HOVER_INDEX * step + step / 2;
-            PT_CTX.strokeStyle = chColor; PT_CTX.lineWidth = 1;
-            PT_CTX.setLineDash([3, 3]);
-            PT_CTX.beginPath(); PT_CTX.moveTo(hx, chartTop); PT_CTX.lineTo(hx, chartBottom); PT_CTX.stroke();
-            PT_CTX.setLineDash([]);
-            var labelText = ptFormatTime(PT_CANDLES[PT_HOVER_INDEX].time).slice(5, 16);
-            var ls = ptLabelStyles();
-            PT_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-            PT_CTX.textBaseline = 'middle'; PT_CTX.textAlign = 'center';
-            var padX = 8, textW = PT_CTX.measureText(labelText).width;
-            var boxW  = textW + padX * 2, boxH = 20;
-            var chipX = hx - boxW / 2;
-            var chipY = (chartBottom + (viewportH - PT_PADDING_BOTTOM)) / 2 - boxH / 2;
-            if (chipX < 0) chipX = 0;
-            if (chipX + boxW > viewportW) chipX = viewportW - boxW;
-            PT_CTX.fillStyle = ls.bg;
-            ptRoundRect(PT_CTX, chipX, chipY, boxW, boxH, 4); PT_CTX.fill();
-            PT_CTX.strokeStyle = ls.border; PT_CTX.lineWidth = 1; PT_CTX.stroke();
-            PT_CTX.fillStyle = ls.bgText;
-            PT_CTX.fillText(labelText, chipX + boxW / 2, chipY + boxH / 2 + 0.5);
-        }
-        if (hasH) {
-            PT_CTX.strokeStyle = chColor; PT_CTX.lineWidth = 1;
-            PT_CTX.setLineDash([3, 3]);
-            PT_CTX.beginPath(); PT_CTX.moveTo(PT_PADDING_LEFT, PT_CURSOR_Y);
-            PT_CTX.lineTo(viewportW - PT_PADDING_RIGHT, PT_CURSOR_Y); PT_CTX.stroke();
-            PT_CTX.setLineDash([]);
-            var priceVal = yToP(PT_CURSOR_Y);
-            var priceText = ptFormatPrice(priceVal);
-            var ls2 = ptLabelStyles();
-            PT_CTX.font = '11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-            PT_CTX.textBaseline = 'middle'; PT_CTX.textAlign = 'center';
-            var padX2 = 6, boxH2 = 20;
-            var textW2 = PT_CTX.measureText(priceText).width;
-            var boxW2  = textW2 + padX2 * 2;
-            var gutterLeft  = viewportW - PT_PADDING_RIGHT;
-            var gutterWidth = PT_PADDING_RIGHT;
-            var chipX2 = gutterLeft + Math.max(0, (gutterWidth - boxW2) / 2);
-            if (chipX2 + boxW2 > viewportW - 2) chipX2 = viewportW - 2 - boxW2;
-            var chipY2 = PT_CURSOR_Y - boxH2 / 2;
-            if (chipY2 < 0) chipY2 = 0;
-            if (chipY2 + boxH2 > viewportH) chipY2 = viewportH - boxH2;
-            PT_CTX.fillStyle = ls2.bg;
-            ptRoundRect(PT_CTX, chipX2, chipY2, boxW2, boxH2, 4); PT_CTX.fill();
-            PT_CTX.strokeStyle = ls2.border; PT_CTX.lineWidth = 1; PT_CTX.stroke();
-            PT_CTX.fillStyle = ls2.bgText;
-            PT_CTX.fillText(priceText, chipX2 + boxW2 / 2, chipY2 + boxH2 / 2 + 0.5);
-        }
-
-        PT_CANVAS._ptStep     = step;
-        PT_CANVAS._ptBaseX    = baseX;
+        PT_CANVAS._ptStep = step;
+        PT_CANVAS._ptBaseX = baseX;
         PT_CANVAS._ptChartTop = chartTop;
-
         PT_CANVAS._ptChartBot = chartBottom;
 
         // Heavy matcher/projection work is intentionally excluded from active gesture
-        // frames. This keeps pointer movement smooth; the complete overlay is restored
-        // once the gesture has been idle for 140ms.
-        if (!PT_FAST_INTERACTION) {
+        // frames. Do not invoke range-based overlays when there are no candles in view.
+        if (!PT_FAST_INTERACTION && hasVisibleCandles) {
             ptApplyTrainingOverlay({
                 ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
                 firstVisible: firstVisible, lastVisible: lastVisible,
@@ -4190,7 +4570,7 @@ try {
                 viewportW: viewportW, viewportH: viewportH
             });
 
-            // Animated trade locator is deliberately drawn last, above candles and drawings.
+            // Animated trade locator is deliberately drawn above candles and drawings.
             ptDrawLocateArrow({
                 ctx: PT_CTX, baseX: baseX, step: step, candleWidth: cw,
                 pToY: pToY, chartTop: chartTop, chartBottom: chartBottom,
@@ -4198,6 +4578,10 @@ try {
             });
         }
 
+        // Paint crosshair last so drawings/projections cannot cover either leg.
+        // Its coordinates are not derived from the candle index, so it continues
+        // through the left price gutter and the candle-free region at the right.
+        ptDrawCrosshairOverlay(viewportW, viewportH, chartTop, chartBottom, baseX, step, yToP);
         ptUpdateJumpLatestVisibility();
     }
 
@@ -4411,7 +4795,12 @@ try {
     }
     function ptApplyTrainingOverlay(geo) {
         PT_VIRTUAL_MATCHES = [];
-        if (!PT_PROJECTION_RENDER_PASS) PT_HOVER_FAMILY_MATCHES = [];
+        if (!PT_PROJECTION_RENDER_PASS) {
+            PT_HOVER_FAMILY_MATCHES = [];
+            PT_HOVER_LOOKUP_INDEX = -2;
+            PT_HOVERED_FAMILY_INFO = null;
+            PT_HOVERED_TRADE_INFO = null;
+        }
         if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
         var config = (typeof window.ptGetTrainingConfiguration === 'function')
             ? window.ptGetTrainingConfiguration() : null;
@@ -5235,7 +5624,7 @@ try {
                             // Open confirmation positions extend through the latest lower-timeframe candle.
                             var endIdx=t.outcome==='take profit reached'?t.tpTriggerIndex:(t.outcome==='stoploss hit'?t.slTriggerIndex:lowerCandlesForConfirmation.length-1);
                             if(endIdx==null || endIdx<0) endIdx=lowerCandlesForConfirmation.length-1;
-                            var bx=directX(t.entryIndex)+Number(PT_VIEW.candleWidth||5)/2, ex=directX(endIdx)+Number(PT_VIEW.candleWidth||5)/2;
+                            var bx=directX(t.entryIndex)-Number(PT_VIEW.candleWidth||5)/2, ex=directX(endIdx)+Number(PT_VIEW.candleWidth||5)/2;
                             var ey=geo.pToY(t.entryPrice), sy=geo.pToY(t.slPrice), ty=geo.pToY(t.tpPrice);
                             ctx.save();ctx.strokeStyle='#888888';ctx.lineWidth=0.8;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(bx,ey);ctx.lineTo(ex,ey);ctx.stroke();ctx.setLineDash([]);
                             ctx.fillStyle='rgba(235,64,75,.18)';ctx.fillRect(bx,Math.min(ey,sy),Math.max(1,ex-bx),Math.max(1,Math.abs(sy-ey)));
@@ -5269,13 +5658,13 @@ try {
         PT_ROOT_TRADE_DATA.forEach(function (trade) {
             if (trade.timeframe !== String(PT_CURRENT_TIMEFRAME).toLowerCase()) return;
             if (trade.entryIndex == null) return;
-            // Start at the RIGHT edge of the actual entry-trigger candle. While pending,
-            // use the configured Entry at anchor as the provisional start. End at the
-            // right edge of the SL/TP exit candle, trigger candle, or latest loaded candle.
+            // Start at the LEFT edge of the actual entry-trigger candle body so the
+            // long/short risk-reward drawing begins on the trigger candle itself. End at
+            // the right edge of the SL/TP exit candle, trigger candle, or latest loaded candle.
             var firstTradeIndex = trade.entryIndex;
             if (firstTradeIndex < 0 || firstTradeIndex >= PT_CANDLES.length) return;
             var firstTradeCenterX = ptOverlayX(geo, firstTradeIndex);
-            var boxStart = firstTradeCenterX + tradeCandleWidth / 2;
+            var boxStart = firstTradeCenterX - tradeCandleWidth / 2;
             var exitIndex = trade.outcome === 'take profit reached' ? trade.tpTriggerIndex :
                 (trade.outcome === 'stoploss hit' ? trade.slTriggerIndex : null);
             // Open positions extend through the newest candle; closed positions stop at their actual exit.
@@ -5439,7 +5828,9 @@ try {
             PT_FAMILY_HOVER_NOTE.addEventListener('mouseleave', function () {
                 PT_FAMILY_HOVER_NOTE.style.display = 'none';
                 PT_HOVER_INDEX = -1;
+                PT_CURSOR_X = null;
                 PT_CURSOR_Y = null;
+                PT_CROSSHAIR_ACTIVE = false;
                 ptScheduleDraw();
                 ptUpdateReadout();
             });
@@ -5584,8 +5975,34 @@ try {
         return result;
     }
 
+    function ptBuildChartTradeId(record) {
+        if (!record) return '';
+        var confirmationId = Number(record.confirmationRootId || 0);
+        var tradeType = (record.dataMode === 'confirmation' || confirmationId > 0) ? 'confirmation' : 'root';
+        return [
+            tradeType,
+            String(record.rootId == null ? '' : record.rootId),
+            String(confirmationId),
+            String(record.timeframe || '').toLowerCase(),
+            String(record.familyNumber == null ? '' : record.familyNumber)
+        ].join('|');
+    }
+
     function ptBuildRootTradeData(roots, candles) {
         var records = [];
+        // Stable cross-engine identity: same root, target timeframe, confirmation
+        // root and candle_records IDs are serialized by programme_execution.py.
+        function ptBuildAnalyticsFamilySignature(root, family, sourceCandles) {
+            var map = family && family.map ? family.map : {};
+            var pairs = Object.keys(map).sort().map(function(identity) {
+                var index = Number(map[identity]);
+                var candle = Number.isInteger(index) && index >= 0 ? sourceCandles[index] : null;
+                return String(identity) + '=' + (candle && candle.id != null ? String(candle.id) : '');
+            });
+            return 'root=' + String(root.id) + ';tf=' + String(PT_CURRENT_TIMEFRAME || '').toLowerCase() +
+                ';cr=' + String(family && family.confirmationRootId ? family.confirmationRootId : 0) +
+                ';map=' + pairs.join(',');
+        }
         function tradeSource(root) {
             return root.tradeFor === 'root_confirmation' && root.confirmationRoot
                 ? root.confirmationRoot : root;
@@ -5717,12 +6134,18 @@ try {
                 var riskDistance=Math.abs(entryPrice-slPrice);
                 var rewardDistance=(tpPrice!==null && Number.isFinite(Number(tpPrice)))?Math.abs(Number(tpPrice)-entryPrice):null;
                 var familyRiskReward=(riskDistance>0 && rewardDistance!==null)?(rewardDistance/riskDistance):null;
-                records.push({rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:(family.familyNumber != null ? Number(family.familyNumber) : famIndex+1),timeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),sourceTimeframe:String(PT_CURRENT_TIMEFRAME).toLowerCase(),dataMode:'main',orderType:order,
+                var resolvedFamilyNumber = (family.familyNumber != null ? Number(family.familyNumber) : famIndex+1);
+                var resolvedFamilySignature = ptBuildAnalyticsFamilySignature(root,family,candles);
+                var resolvedConfirmationRootId = Number(family.confirmationRootId || 0);
+                var resolvedChartTimeframe = String(PT_CURRENT_TIMEFRAME).toLowerCase();
+                var tradeRecord = {rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:resolvedFamilyNumber,confirmationRootId:resolvedConfirmationRootId||null,familySignature:resolvedFamilySignature,timeframe:resolvedChartTimeframe,sourceTimeframe:resolvedChartTimeframe,dataMode:'main',orderType:order,
                     entryIndex:actualEntryIndex,entryAtIndex:entryAtIndex,entryName:targetLabel(root,root.entryFrom),entryPriceLevel:entryResolvedLevel,entryPrice:entryPrice,entryTime:entryC?stamp(entryC):null,entryAtTime:stamp(entryAtC),
                     slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
                     riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,isShort:isShort,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
                     triggerIndex:triggerIndex,entryTriggerTime:triggerIndex!=null?stamp(candles[triggerIndex]):null,slTriggerIndex:slTrigger,tpTriggerIndex:tpTrigger,outcome:outcome,
-                    slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null});
+                    slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null};
+                tradeRecord.chartTradeId = ptBuildChartTradeId(tradeRecord);
+                records.push(tradeRecord);
             });
         });
         return records;
@@ -5827,6 +6250,10 @@ try {
     function ptRunLocateArrowAnimation() {
         ptStopLocateArrowAnimation();
         function frame() {
+            if (!ptPageCanWork()) {
+                PT_LOCATE_ANIMATION_FRAME = null;
+                return;
+            }
             if (!PT_LOCATE_ARROW || Date.now() >= PT_LOCATE_ARROW.expiresAt) {
                 PT_LOCATE_ARROW = null;
                 PT_LOCATE_ANIMATION_FRAME = null;
@@ -5840,31 +6267,36 @@ try {
     }
 
     // Close the records modal, zoom to the full trade area, and point to its entry trigger.
-    window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe){
-        // Native trades live in PT_MAIN_TRADE_DATA. Root-confirmation trades are
-        // generated while projecting their parent root onto the lower timeframe and
-        // stored separately in PT_PROJECTED_TRADE_DATA with dataMode='confirmation'.
-        // Search both collections so a Roots Data click can locate the exact
-        // confirmation family on the currently displayed lower-timeframe chart.
-        var nativeRecords = Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA :
-            (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []);
-        var confirmationRecords = (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function(t){
-            return t && t.dataMode === 'confirmation';
-        });
-        var records = nativeRecords.concat(confirmationRecords).filter(function(t){
-            return String(t.timeframe||'').toLowerCase()===String(PT_CURRENT_TIMEFRAME||'').toLowerCase() &&
-                t.dataMode !== 'projected';
-        });
-        var trade=records.find(function(t){
-            return String(t.rootId)===String(rootId)&&Number(t.familyNumber)===Number(familyNumber)&&(!sourceTimeframe||String(t.sourceTimeframe||'')===String(sourceTimeframe));
-        });
-        if(!trade) return;
+    window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe,familySignature){
+        // The argument may be an already-resolved chart trade object. Analytics
+        // uses this path after an exact trade identity lookup; legacy chart buttons
+        // may continue using the four-argument form below.
+        var trade = rootId && typeof rootId === 'object' ? rootId : null;
+        if (!trade) {
+            var nativeRecords = Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA :
+                (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []);
+            var confirmationRecords = (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function(t){
+                return t && t.dataMode === 'confirmation';
+            });
+            var records = nativeRecords.concat(confirmationRecords).filter(function(t){
+                return String(t.timeframe||'').toLowerCase()===String(PT_CURRENT_TIMEFRAME||'').toLowerCase() &&
+                    t.dataMode !== 'projected';
+            });
+            trade=records.find(function(t){
+                if (String(t.rootId) !== String(rootId)) return false;
+                if (familySignature) return String(t.familySignature || '') === String(familySignature) &&
+                    (!sourceTimeframe || String(t.sourceTimeframe || '').toLowerCase() === String(sourceTimeframe).toLowerCase());
+                return Number(t.familyNumber) === Number(familyNumber) &&
+                    (!sourceTimeframe || String(t.sourceTimeframe || '').toLowerCase() === String(sourceTimeframe).toLowerCase());
+            });
+        }
+        if(!trade) return false;
         var expectedTimeframe = String(trade.timeframe || (trade.dataMode === 'projected' ? PT_CURRENT_TIMEFRAME : '')).toLowerCase();
         if (expectedTimeframe && expectedTimeframe !== String(PT_CURRENT_TIMEFRAME).toLowerCase()) {
             alert('You have to switch to ' + expectedTimeframe.toUpperCase() + ' to view this trade.');
-            return;
+            return false;
         }
-        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
+        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return false;
 
         var actualTriggerIndex = trade.triggerIndex != null ? Number(trade.triggerIndex) :
             (trade.entryIndex != null ? Number(trade.entryIndex) : NaN);
@@ -5874,7 +6306,7 @@ try {
         var entryIndex = anchorOnly
             ? Number(trade.entryAtIndex != null ? trade.entryAtIndex : trade.entrySourceIndex)
             : actualTriggerIndex;
-        if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) return;
+        if(!Number.isFinite(entryIndex) || entryIndex < 0 || entryIndex >= PT_CANDLES.length) return false;
 
         var slPrice = Number(trade.slPrice);
         var entryPrice = Number(trade.entryPrice);
@@ -5897,7 +6329,7 @@ try {
         var maxIndex = Math.max.apply(Math, indices);
         var span = Math.max(1, maxIndex - minIndex + 1);
         var card = document.getElementById('ptChartCard');
-        if(!card) return;
+        if(!card) return false;
 
         var locateIndex = hasStoplossTrigger ? slTriggerIndex : entryIndex;
         var vw = card.clientWidth;
@@ -5936,7 +6368,7 @@ try {
         var isBuy = slPrice < entryPrice;
         var direction = isSell ? 'down' : (isBuy ? 'up' : (String(trade.orderType || '').toLowerCase().indexOf('sell') === 0 ? 'down' : 'up'));
         var targetIndex = hasStoplossTrigger ? slTriggerIndex : entryIndex;
-        var targetPrice = slPrice;
+        var targetPrice = (anchorOnly && !hasStoplossTrigger) ? entryPrice : slPrice;
         if (hasStoplossTrigger) {
             var stoplossTriggerCandle = PT_CANDLES[slTriggerIndex];
             targetPrice = direction === 'down'
@@ -5955,32 +6387,30 @@ try {
             priceMax = Math.max(priceMax, targetPrice);
         }
         var centerPrice = (entryPrice + slPrice) / 2;
-        // A pending order has no execution candle. Centre the chart on its
-        // anchor for inspection, but never place the entry/SL locate arrow on
-        // that anchor as though an order had been filled there.
-        if (anchorOnly && !hasStoplossTrigger) {
-            PT_LOCATE_ARROW = null;
-        } else {
-            PT_LOCATE_ARROW = {
-                rootId: String(rootId),
-                familyNumber: Number(familyNumber),
-                index: targetIndex,
-                slPrice: slPrice,
-                targetPrice: targetPrice,
-                hasStoplossTrigger: hasStoplossTrigger,
-                entryPrice: entryPrice,
-                centerPrice: centerPrice,
-                priceMin: priceMin,
-                priceMax: priceMax,
-                direction: direction,
-                startedAt: Date.now(),
-                expiresAt: Date.now() + 4000
-            };
-        }
+        // A pending order has no execution candle. Its locate arrow points to
+        // the configured Entry-at anchor and entry price, not to a filled trade.
+        PT_LOCATE_ARROW = {
+            rootId: String(trade.rootId == null ? rootId : trade.rootId),
+            familyNumber: Number(trade.familyNumber == null ? familyNumber : trade.familyNumber),
+            index: targetIndex,
+            slPrice: slPrice,
+            targetPrice: targetPrice,
+            hasStoplossTrigger: hasStoplossTrigger,
+            isPendingAnchor: anchorOnly && !hasStoplossTrigger,
+            entryPrice: entryPrice,
+            centerPrice: centerPrice,
+            priceMin: priceMin,
+            priceMax: priceMax,
+            direction: direction,
+            startedAt: Date.now(),
+            expiresAt: Date.now() + 4000
+        };
 
         window.ptCloseRootsData();
         PT_HOVER_INDEX = entryIndex;
+        PT_CURSOR_X = PT_PADDING_LEFT + PT_VIRTUAL_PAD - PT_VIEW.offsetX + entryIndex * ptStep() + ptStep() / 2;
         PT_CURSOR_Y = null;
+        PT_CROSSHAIR_ACTIVE = true;
         ptStopLocateArrowAnimation();
 
         window.requestAnimationFrame(function(){
@@ -5990,6 +6420,7 @@ try {
             if(typeof ptUpdateJumpLatestVisibility==='function') ptUpdateJumpLatestVisibility();
             ptRunLocateArrowAnimation();
         });
+        return true;
     };
     window.ptRefreshRootsData=function(){
         // Opening a data modal must not trigger a full chart rasterization.
@@ -6326,6 +6757,9 @@ try {
     window.ptGetVirtualCandleJson = ptGetVirtualCandleJson;
 
     // ==================== HOVER ====================
+    var PT_HOVER_LOOKUP_INDEX = -2;
+    var PT_HOVERED_FAMILY_INFO = null;
+    var PT_HOVERED_TRADE_INFO = null;
     function ptHandleMouseMove(e) {
         if (!PT_CANVAS || !PT_CANDLES.length) return;
         if (PT_DRAG_STATE.mode) return;
@@ -6337,53 +6771,68 @@ try {
         var idx = Math.floor((x - baseX) / step);
         if (idx < 0 || idx >= PT_CANDLES.length) idx = -1;
 
-        var hoveredFamilyInfo = null;
-        if (idx >= 0 && Array.isArray(PT_HOVER_FAMILY_MATCHES)) {
-            var candidates = PT_HOVER_FAMILY_MATCHES.filter(function (family) {
-                var values = Object.keys(family.map || {}).map(function (key) { return Number(family.map[key]); }).filter(Number.isFinite);
-                if (!values.length) return false;
-                var first = Math.min.apply(Math, values), last = Math.max.apply(Math, values);
-                return idx >= first && idx <= last && String(family.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
-            });
-            candidates.sort(function (a, b) {
-                function span(f) { var v=Object.keys(f.map||{}).map(function(k){return Number(f.map[k]);}).filter(Number.isFinite);return v.length?Math.max.apply(Math,v)-Math.min.apply(Math,v):Infinity; }
-                return span(a)-span(b);
-            });
-            hoveredFamilyInfo = candidates[0] || null;
-        }
+        if (idx !== PT_HOVER_LOOKUP_INDEX) {
+            PT_HOVER_LOOKUP_INDEX = idx;
+            PT_HOVERED_FAMILY_INFO = null;
+            PT_HOVERED_TRADE_INFO = null;
+            if (idx >= 0 && Array.isArray(PT_HOVER_FAMILY_MATCHES)) {
+                var candidates = PT_HOVER_FAMILY_MATCHES.filter(function (family) {
+                    var values = Object.keys(family.map || {}).map(function (key) { return Number(family.map[key]); }).filter(Number.isFinite);
+                    if (!values.length) return false;
+                    var first = Math.min.apply(Math, values), last = Math.max.apply(Math, values);
+                    return idx >= first && idx <= last && String(family.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
+                });
+                candidates.sort(function (a, b) {
+                    function span(f) { var v=Object.keys(f.map||{}).map(function(k){return Number(f.map[k]);}).filter(Number.isFinite);return v.length?Math.max.apply(Math,v)-Math.min.apply(Math,v):Infinity; }
+                    return span(a)-span(b);
+                });
+                PT_HOVERED_FAMILY_INFO = candidates[0] || null;
+            }
 
-        var hoveredTrade = null;
-        if (idx >= 0) {
-            var tradeRows = (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []).concat(
-                (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function (t) {
-                    return t && t.dataMode === 'confirmation' && String(t.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
-                })
-            );
-            if (hoveredFamilyInfo) {
-                hoveredTrade = tradeRows.find(function (t) {
-                    return String(t.rootId) === String(hoveredFamilyInfo.rootId) &&
-                        Number(t.familyNumber) === Number(hoveredFamilyInfo.familyNumber) &&
-                        (!hoveredFamilyInfo.confirmationRootId || String(t.confirmationRootId || '') === String(hoveredFamilyInfo.confirmationRootId));
-                }) || null;
-            }
-            if (!hoveredTrade) {
-                hoveredTrade = tradeRows.find(function (t) {
-                    var fallbackIndex = t.entryIndex != null ? Number(t.entryIndex) : Number(t.entryAtIndex);
-                    var first = Number(t.entryAtIndex != null ? t.entryAtIndex : fallbackIndex);
-                    var last = Math.max(
-                        t.slTriggerIndex == null ? fallbackIndex : Number(t.slTriggerIndex),
-                        t.tpTriggerIndex == null ? fallbackIndex : Number(t.tpTriggerIndex),
-                        t.triggerIndex == null ? fallbackIndex : Number(t.triggerIndex)
-                    );
-                    return Number.isFinite(first) && Number.isFinite(last) && idx >= Math.min(first, last) && idx <= Math.max(first, last) && !!t.minimumRiskRewardApplied;
-                }) || null;
+            if (idx >= 0) {
+                var tradeRows = (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []).concat(
+                    (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : []).filter(function (t) {
+                        return t && t.dataMode === 'confirmation' && String(t.timeframe || '').toLowerCase() === String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
+                    })
+                );
+                if (PT_HOVERED_FAMILY_INFO) {
+                    PT_HOVERED_TRADE_INFO = tradeRows.find(function (t) {
+                        return String(t.rootId) === String(PT_HOVERED_FAMILY_INFO.rootId) &&
+                            Number(t.familyNumber) === Number(PT_HOVERED_FAMILY_INFO.familyNumber) &&
+                            (!PT_HOVERED_FAMILY_INFO.confirmationRootId || String(t.confirmationRootId || '') === String(PT_HOVERED_FAMILY_INFO.confirmationRootId));
+                    }) || null;
+                }
+                if (!PT_HOVERED_TRADE_INFO) {
+                    PT_HOVERED_TRADE_INFO = tradeRows.find(function (t) {
+                        var fallbackIndex = t.entryIndex != null ? Number(t.entryIndex) : Number(t.entryAtIndex);
+                        var first = Number(t.entryAtIndex != null ? t.entryAtIndex : fallbackIndex);
+                        var last = Math.max(
+                            t.slTriggerIndex == null ? fallbackIndex : Number(t.slTriggerIndex),
+                            t.tpTriggerIndex == null ? fallbackIndex : Number(t.tpTriggerIndex),
+                            t.triggerIndex == null ? fallbackIndex : Number(t.triggerIndex)
+                        );
+                        return Number.isFinite(first) && Number.isFinite(last) && idx >= Math.min(first, last) && idx <= Math.max(first, last) && !!t.minimumRiskRewardApplied;
+                    }) || null;
+                }
             }
         }
-        ptShowFamilyHoverNote(hoveredFamilyInfo, hoveredTrade, e.clientX, e.clientY);
-        var inPlotHorizontally = (x >= PT_PADDING_LEFT && x <= (PT_CANVAS.clientWidth - PT_PADDING_RIGHT));
-        var newCursorY = inPlotHorizontally ? y : null;
-        var changed = (idx !== PT_HOVER_INDEX) || (newCursorY !== PT_CURSOR_Y);
-        if (changed) { PT_HOVER_INDEX = idx; PT_CURSOR_Y = newCursorY; ptScheduleDraw(); ptUpdateReadout(); }
+        ptShowFamilyHoverNote(PT_HOVERED_FAMILY_INFO, PT_HOVERED_TRADE_INFO, e.clientX, e.clientY);
+        // Preserve both pointer coordinates even when there is no candle under X.
+        // Candle hover lookup is used only for OHLC/time readouts and trade notes.
+        var newCursorX = x;
+        var newCursorY = y;
+        var changed = (idx !== PT_HOVER_INDEX) ||
+            (newCursorX !== PT_CURSOR_X) ||
+            (newCursorY !== PT_CURSOR_Y) ||
+            !PT_CROSSHAIR_ACTIVE;
+        if (changed) {
+            ptBeginFastInteraction();
+            PT_HOVER_INDEX = idx;
+            PT_CURSOR_X = newCursorX;
+            PT_CURSOR_Y = newCursorY;
+            PT_CROSSHAIR_ACTIVE = true;
+            ptScheduleDraw(); ptUpdateReadout();
+        }
     }
     function ptHandleMouseLeave(event) {
         var nextTarget = event && event.relatedTarget;
@@ -6392,8 +6841,12 @@ try {
         if (PT_FAMILY_HOVER_NOTE && nextTarget &&
             (nextTarget === PT_FAMILY_HOVER_NOTE || PT_FAMILY_HOVER_NOTE.contains(nextTarget))) return;
         if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display='none';
-        if (PT_HOVER_INDEX !== -1 || PT_CURSOR_Y !== null) {
-            PT_HOVER_INDEX = -1; PT_CURSOR_Y = null;
+        if (PT_CROSSHAIR_ACTIVE || PT_HOVER_INDEX !== -1 || PT_CURSOR_X !== null || PT_CURSOR_Y !== null) {
+            ptBeginFastInteraction();
+            PT_HOVER_INDEX = -1;
+            PT_CURSOR_X = null;
+            PT_CURSOR_Y = null;
+            PT_CROSSHAIR_ACTIVE = false;
             ptScheduleDraw(); ptUpdateReadout();
         }
     }
@@ -6417,12 +6870,14 @@ try {
     // ==================== PAN + PINCH + DOUBLE-CLICK ====================
     var PT_DRAG_STATE = { mode: null, startX: 0, startY: 0, startOffsetX: 0, startOffsetY: 0, moved: false, downAt: 0 };
     var PT_TOUCH_STATE = { pointers: {}, pinchStartDist: 0, pinchStartCandleWidth: 0, pinchMidX: 0, _lastPan: null,
-        crosshairTimer:null, crosshairActive:false, touchStartX:0, touchStartY:0, latestTouchX:0, latestTouchY:0 };
+        crosshairTimer:null, crosshairActive:false, crosshairDragActive:false, crosshairGrabOffsetX:0, crosshairGrabOffsetY:0,
+        touchStartX:0, touchStartY:0, latestTouchX:0, latestTouchY:0 };
 
     function ptAttachCanvasEvents() {
         PT_CANVAS.addEventListener('mousedown', function (e) {
             if (e.button !== 0) return;
             PT_DRAG_STATE.mode = 'pan';
+            PT_INTERACTION_HELD = true;
             ptBeginFastInteraction();
             PT_DRAG_STATE.startX = e.clientX;
             PT_DRAG_STATE.startY = e.clientY;
@@ -6452,7 +6907,9 @@ try {
         window.addEventListener('mouseup', function () {
             if (PT_DRAG_STATE.mode === 'pan') {
                 PT_DRAG_STATE.mode = null;
+                PT_INTERACTION_HELD = false;
                 PT_CANVAS.classList.remove('pt-grabbing');
+                ptBeginFastInteraction();
             }
         });
 
@@ -6487,68 +6944,102 @@ try {
 
         PT_CANVAS.addEventListener('touchstart', function (e) {
             ptBeginFastInteraction();
-            if (e.touches.length === 1) {
-                var firstTouch=e.touches[0];
-                PT_TOUCH_STATE.touchStartX=PT_TOUCH_STATE.latestTouchX=firstTouch.clientX;
-                PT_TOUCH_STATE.touchStartY=PT_TOUCH_STATE.latestTouchY=firstTouch.clientY;
-                PT_TOUCH_STATE.crosshairActive=false;
-                if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
-                PT_TOUCH_STATE.crosshairTimer=setTimeout(function(){
-                    if (!PT_TOUCH_STATE.pointers || Object.keys(PT_TOUCH_STATE.pointers).length!==1) return;
-                    PT_TOUCH_STATE.crosshairActive=true;
-                    var rect=PT_CANVAS.getBoundingClientRect();
-                    var x=PT_TOUCH_STATE.latestTouchX-rect.left,y=PT_TOUCH_STATE.latestTouchY-rect.top;
-                    var step=PT_CANVAS._ptStep||ptStep(),baseX=PT_CANVAS._ptBaseX||(PT_PADDING_LEFT+PT_VIRTUAL_PAD);
-                    var idx=Math.floor((x-baseX)/step);PT_HOVER_INDEX=(idx>=0&&idx<PT_CANDLES.length)?idx:-1;
-                    PT_CURSOR_Y=(x>=PT_PADDING_LEFT&&x<=PT_CANVAS.clientWidth-PT_PADDING_RIGHT)?y:null;
-                    ptScheduleDraw();ptUpdateReadout();
-                },5000);
-            } else {
-                if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
-                PT_TOUCH_STATE.crosshairActive=false;
-            }
             for (var i = 0; i < e.changedTouches.length; i++) {
                 var t = e.changedTouches[i];
                 PT_TOUCH_STATE.pointers[t.identifier] = { x: t.clientX, y: t.clientY };
             }
             ptUpdatePinchBaseline();
             e.preventDefault();
-            if (PT_MOBILE_CROSSHAIR_MODE && e.touches.length === 1) {
-                var selectedTouch = e.touches[0];
-                PT_TOUCH_STATE.crosshairActive = true;
-                PT_TOUCH_STATE.latestTouchX = selectedTouch.clientX;
-                PT_TOUCH_STATE.latestTouchY = selectedTouch.clientY;
-                ptSetMobileCrosshairAt(selectedTouch.clientX, selectedTouch.clientY);
-                PT_TOUCH_STATE._lastPan = null;
-                return;
+            if (e.touches.length) PT_INTERACTION_HELD = true;
+
+            if (e.touches.length === 1) {
+                var firstTouch = e.touches[0];
+                PT_TOUCH_STATE.touchStartX = PT_TOUCH_STATE.latestTouchX = firstTouch.clientX;
+                PT_TOUCH_STATE.touchStartY = PT_TOUCH_STATE.latestTouchY = firstTouch.clientY;
+
+                if (PT_TOUCH_STATE.crosshairTimer) {
+                    clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                    PT_TOUCH_STATE.crosshairTimer = null;
+                }
+
+                if (PT_MOBILE_CROSSHAIR_MODE) {
+                    PT_INTERACTION_HELD = true;
+                    // Crosshair mode is a grab tool: only touching the existing vertical
+                    // line starts a drag. The finger-to-crosshair offset is preserved, so
+                    // grabbing the lower leg never snaps the intersection to the finger.
+                    PT_TOUCH_STATE.crosshairDragActive = ptBeginMobileCrosshairDrag(firstTouch);
+                    PT_TOUCH_STATE._lastPan = null;
+                    return;
+                }
+
+                PT_TOUCH_STATE.crosshairActive = false;
+                PT_TOUCH_STATE.crosshairDragActive = false;
+                PT_TOUCH_STATE.crosshairTimer = setTimeout(function () {
+                    if (!PT_TOUCH_STATE.pointers || Object.keys(PT_TOUCH_STATE.pointers).length !== 1) return;
+                    PT_TOUCH_STATE.crosshairActive = true;
+                    var rect = PT_CANVAS.getBoundingClientRect();
+                    var x = PT_TOUCH_STATE.latestTouchX - rect.left;
+                    var y = PT_TOUCH_STATE.latestTouchY - rect.top;
+                    var step = PT_CANVAS._ptStep || ptStep();
+                    var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
+                    var idx = Math.floor((x - baseX) / step);
+                    PT_HOVER_INDEX = (idx >= 0 && idx < PT_CANDLES.length) ? idx : -1;
+                    PT_CURSOR_X = x;
+                    PT_CURSOR_Y = y;
+                    PT_CROSSHAIR_ACTIVE = true;
+                    ptScheduleDraw();
+                    ptUpdateReadout();
+                }, 5000);
+            } else {
+                PT_INTERACTION_HELD = true;
+                if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                PT_TOUCH_STATE.crosshairTimer = null;
+                PT_TOUCH_STATE.crosshairDragActive = false;
+                // Keep the crosshair visible while a two-finger pinch is performed.
             }
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchmove', function (e) {
             e.preventDefault();
             ptBeginFastInteraction();
+
             if (PT_MOBILE_CROSSHAIR_MODE && e.touches.length === 1) {
                 var crosshairTouch = e.touches[0];
-                PT_TOUCH_STATE.crosshairActive = true;
                 PT_TOUCH_STATE.latestTouchX = crosshairTouch.clientX;
                 PT_TOUCH_STATE.latestTouchY = crosshairTouch.clientY;
-                ptSetMobileCrosshairAt(crosshairTouch.clientX, crosshairTouch.clientY);
+                if (PT_TOUCH_STATE.crosshairDragActive) {
+                    ptSetMobileCrosshairAt(
+                        crosshairTouch.clientX - PT_TOUCH_STATE.crosshairGrabOffsetX,
+                        crosshairTouch.clientY - PT_TOUCH_STATE.crosshairGrabOffsetY
+                    );
+                }
                 PT_TOUCH_STATE._lastPan = null;
                 return;
             }
-            if (e.touches.length===1) { PT_TOUCH_STATE.latestTouchX=e.touches[0].clientX; PT_TOUCH_STATE.latestTouchY=e.touches[0].clientY; }
-            if (PT_TOUCH_STATE.crosshairActive && e.touches.length===1) {
-                var touch=e.touches[0],rect=PT_CANVAS.getBoundingClientRect(),x=touch.clientX-rect.left,y=touch.clientY-rect.top;
-                var step=PT_CANVAS._ptStep||ptStep(),baseX=PT_CANVAS._ptBaseX||(PT_PADDING_LEFT+PT_VIRTUAL_PAD);
-                var idx=Math.floor((x-baseX)/step);PT_HOVER_INDEX=(idx>=0&&idx<PT_CANDLES.length)?idx:-1;
-                PT_CURSOR_Y=(x>=PT_PADDING_LEFT&&x<=PT_CANVAS.clientWidth-PT_PADDING_RIGHT)?y:null;
-                ptScheduleDraw();ptUpdateReadout();
+
+            if (e.touches.length === 1) {
+                PT_TOUCH_STATE.latestTouchX = e.touches[0].clientX;
+                PT_TOUCH_STATE.latestTouchY = e.touches[0].clientY;
+            }
+            if (PT_TOUCH_STATE.crosshairActive && e.touches.length === 1) {
+                var touch = e.touches[0], rect = PT_CANVAS.getBoundingClientRect();
+                var x = touch.clientX - rect.left, y = touch.clientY - rect.top;
+                var step = PT_CANVAS._ptStep || ptStep();
+                var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
+                var idx = Math.floor((x - baseX) / step);
+                PT_HOVER_INDEX = (idx >= 0 && idx < PT_CANDLES.length) ? idx : -1;
+                PT_CURSOR_X = x;
+                PT_CURSOR_Y = y;
+                PT_CROSSHAIR_ACTIVE = true;
+                ptScheduleDraw();
+                ptUpdateReadout();
                 return;
             }
-            if (PT_TOUCH_STATE.crosshairTimer && e.touches.length===1) {
-                var moving=e.touches[0];
-                if (Math.hypot(moving.clientX-PT_TOUCH_STATE.touchStartX,moving.clientY-PT_TOUCH_STATE.touchStartY)>18) {
-                    clearTimeout(PT_TOUCH_STATE.crosshairTimer);PT_TOUCH_STATE.crosshairTimer=null;
+            if (PT_TOUCH_STATE.crosshairTimer && e.touches.length === 1) {
+                var moving = e.touches[0];
+                if (Math.hypot(moving.clientX - PT_TOUCH_STATE.touchStartX, moving.clientY - PT_TOUCH_STATE.touchStartY) > 18) {
+                    clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                    PT_TOUCH_STATE.crosshairTimer = null;
                 }
             }
             for (var i = 0; i < e.changedTouches.length; i++) {
@@ -6562,10 +7053,13 @@ try {
                 if (PT_TOUCH_STATE._lastPan) {
                     var dx = p.x - PT_TOUCH_STATE._lastPan.x;
                     var dy = p.y - PT_TOUCH_STATE._lastPan.y;
-                    PT_VIEW.offsetX -= dx; PT_VIEW.offsetY += dy;
+                    PT_VIEW.offsetX -= dx;
+                    PT_VIEW.offsetY += dy;
                     PT_FOLLOW_LATEST = false;
-                    ptClampOffsetX(); ptClampOffsetY();
-                    ptScheduleDraw(); ptMaybeLoadOlder();
+                    ptClampOffsetX();
+                    ptClampOffsetY();
+                    ptScheduleDraw();
+                    ptMaybeLoadOlder();
                 }
                 PT_TOUCH_STATE._lastPan = { x: p.x, y: p.y };
                 PT_TOUCH_STATE.pinchStartDist = 0;
@@ -6591,32 +7085,59 @@ try {
                     var stepAfter = ptStep();
                     PT_VIEW.offsetX = PT_PADDING_LEFT + PT_VIRTUAL_PAD + idxUnder * stepAfter - mx;
                     PT_FOLLOW_LATEST = false;
-                    ptClampOffsetX(); ptScheduleDraw(); ptMaybeLoadOlder();
+                    ptClampOffsetX();
+                    ptScheduleDraw();
+                    ptMaybeLoadOlder();
                 }
                 PT_TOUCH_STATE._lastPan = null;
             }
         }, { passive: false });
 
         PT_CANVAS.addEventListener('touchend', function (e) {
-            if (PT_TOUCH_STATE.crosshairTimer) { clearTimeout(PT_TOUCH_STATE.crosshairTimer); PT_TOUCH_STATE.crosshairTimer=null; }
-            if (PT_TOUCH_STATE.crosshairActive) {
-                PT_TOUCH_STATE.crosshairActive=false;PT_HOVER_INDEX=-1;PT_CURSOR_Y=null;
-                ptScheduleDraw();ptUpdateReadout();
+            if (PT_TOUCH_STATE.crosshairTimer) {
+                clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                PT_TOUCH_STATE.crosshairTimer = null;
             }
             for (var i = 0; i < e.changedTouches.length; i++) {
                 var t = e.changedTouches[i];
                 delete PT_TOUCH_STATE.pointers[t.identifier];
             }
+            PT_TOUCH_STATE.crosshairDragActive = false;
             PT_TOUCH_STATE.pinchStartDist = 0;
             PT_TOUCH_STATE._lastPan = null;
+            if (e.touches.length === 0) {
+                PT_INTERACTION_HELD = false;
+                if (!PT_MOBILE_CROSSHAIR_MODE && PT_TOUCH_STATE.crosshairActive) {
+                    PT_TOUCH_STATE.crosshairActive = false;
+                    PT_HOVER_INDEX = -1;
+                    PT_CURSOR_X = null;
+                    PT_CURSOR_Y = null;
+                    PT_CROSSHAIR_ACTIVE = false;
+                    ptScheduleDraw();
+                    ptUpdateReadout();
+                }
+                ptBeginFastInteraction();
+            }
             ptUpdatePinchBaseline();
         });
         PT_CANVAS.addEventListener('touchcancel', function () {
             if (PT_TOUCH_STATE.crosshairTimer) clearTimeout(PT_TOUCH_STATE.crosshairTimer);
-            PT_TOUCH_STATE.crosshairTimer=null;PT_TOUCH_STATE.crosshairActive=false;PT_HOVER_INDEX=-1;PT_CURSOR_Y=null;
+            PT_TOUCH_STATE.crosshairTimer = null;
+            PT_TOUCH_STATE.crosshairDragActive = false;
             PT_TOUCH_STATE.pointers = {};
             PT_TOUCH_STATE.pinchStartDist = 0;
             PT_TOUCH_STATE._lastPan = null;
+            PT_INTERACTION_HELD = false;
+            if (!PT_MOBILE_CROSSHAIR_MODE) {
+                PT_TOUCH_STATE.crosshairActive = false;
+                PT_HOVER_INDEX = -1;
+                PT_CURSOR_X = null;
+                PT_CURSOR_Y = null;
+                PT_CROSSHAIR_ACTIVE = false;
+                ptScheduleDraw();
+                ptUpdateReadout();
+            }
+            ptBeginFastInteraction();
         });
 
         PT_CANVAS.addEventListener('mousemove', ptHandleMouseMove);
@@ -6714,6 +7235,141 @@ try {
     window.ptPickTimeframe        = ptPickTimeframe;
     window.ptSelectTimeframe      = ptSelectTimeframe;
     window.ptOpenCandleDetail     = ptOpenCandleDetailModal;
+
+    // External Locate requests are queued until candles and projections are ready.
+    // Identity includes trade type, parent root, confirmation root (if any),
+    // target chart timeframe and the chart's own family number.
+    var PT_ANALYTICS_LOCATE_TOKEN = 0;
+    function ptFindAnalyticsChartTrade(payload) {
+        payload = payload || {};
+        var rootId = String(payload.root_id == null ? '' : payload.root_id);
+        var confirmationId = Number(payload.confirmation_root_id || 0);
+        var isConfirmation = payload.is_confirmation === true ||
+            String(payload.trade_type || '').toLowerCase() === 'confirmation' || confirmationId > 0;
+        var requestedType = isConfirmation ? 'confirmation' : 'root';
+        var timeframe = String(payload.chart_timeframe || payload.timeframe || '').trim().toLowerCase();
+        var chartTradeId = String(payload.chart_trade_id || payload.trade_id || payload.chartTradeId || '');
+        var familyNumber = Number(payload.family_number);
+        var familySignature = String(payload.family_signature || '');
+        var candidates;
+        if (isConfirmation) {
+            candidates = (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : [])
+                .concat(Array.isArray(PT_CONFIRMATION_TRADE_DATA) ? PT_CONFIRMATION_TRADE_DATA : [])
+                .filter(function(t){ return t && t.dataMode === 'confirmation'; });
+        } else {
+            candidates = Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA :
+                (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []);
+            candidates = candidates.filter(function(t){ return t && t.dataMode !== 'confirmation' && t.dataMode !== 'projected'; });
+        }
+        var exact = candidates.find(function(t) {
+            var recordType = (t.dataMode === 'confirmation' || Number(t.confirmationRootId || 0) > 0) ? 'confirmation' : 'root';
+            if (recordType !== requestedType) return false;
+            if (String(t.rootId == null ? '' : t.rootId) !== rootId) return false;
+            if (Number(t.confirmationRootId || 0) !== confirmationId) return false;
+            if (String(t.timeframe || '').toLowerCase() !== timeframe) return false;
+            var resolvedId = String(t.chartTradeId || ptBuildChartTradeId(t));
+            if (chartTradeId && resolvedId === chartTradeId) return true;
+            // Compatibility fallback for older analytics records. The type, root,
+            // confirmation and timeframe checks above remain mandatory.
+            if (familySignature && String(t.familySignature || '') === familySignature) return true;
+            return Number.isFinite(familyNumber) && Number(t.familyNumber) === familyNumber;
+        });
+        return exact || null;
+    }
+
+    window.ptLocateAnalyticsFamily = function(payload) {
+        payload = payload || {};
+        var symbol = String(payload.symbol || '').trim();
+        var timeframe = String(payload.chart_timeframe || payload.timeframe || '').trim().toLowerCase();
+        var token = ++PT_ANALYTICS_LOCATE_TOKEN;
+        if (!PT_HAS_BROKER) { alert('Connect your broker before locating this trade.'); return false; }
+        if (!symbol || !timeframe || !payload.root_id || payload.family_number == null) {
+            alert('The Locate request is missing its symbol, timeframe or trade identity.'); return false;
+        }
+        if (PT_ALL_SYMBOLS.indexOf(symbol) < 0) { alert('The symbol ' + symbol + ' is not selected for this programme.'); return false; }
+        if (!PT_ALL_TIMEFRAMES.some(function(tf){ return String(tf).toLowerCase() === timeframe; })) {
+            alert('The timeframe ' + timeframe.toUpperCase() + ' is not selected for this programme.'); return false;
+        }
+        var changed = symbol !== PT_CURRENT_SYMBOL || timeframe !== String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
+        if (changed) {
+            PT_CURRENT_SYMBOL = symbol;
+            PT_CURRENT_TIMEFRAME = timeframe;
+            PT_REQUESTED_AMOUNT = PT_DEFAULT_AMOUNT;
+            if (typeof ptCloseSymbolModal === 'function') ptCloseSymbolModal();
+            if (typeof ptCloseTimeframeModal === 'function') ptCloseTimeframeModal();
+            if (typeof ptUpdateSymbolLabel === 'function') ptUpdateSymbolLabel();
+            if (typeof ptRenderTimeframeStrip === 'function') ptRenderTimeframeStrip();
+            if (typeof ptUpdateTimeframeLabel === 'function') ptUpdateTimeframeLabel();
+            ptLoadChart();
+            ptRefreshHigherTimeframeProjection();
+        } else if ((payload.is_confirmation === true || Number(payload.confirmation_root_id || 0) > 0) && !PT_PROJECTION_REFRESH_BUSY) {
+            // Refresh the cached higher-timeframe projection for confirmation trades,
+            // even when the user was already on the target timeframe.
+            ptRefreshHigherTimeframeProjection(true);
+        }
+
+        var attempts = 0;
+        var maxAttempts = 240;
+        function retryLocate() {
+            if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+            attempts++;
+            var chartReady = String(PT_CURRENT_SYMBOL) === symbol &&
+                String(PT_CURRENT_TIMEFRAME || '').toLowerCase() === timeframe &&
+                Array.isArray(PT_CANDLES) && PT_CANDLES.length > 0 && PT_INITIAL_LOADED;
+            var projectionReady = !PT_PROJECTION_REFRESH_BUSY && !PT_PROJECTION_RENDER_PASS &&
+                !PT_FAST_INTERACTION && !PT_INTERACTION_HELD;
+            if (chartReady && projectionReady) {
+                // Allow the most recent chart draw to rebuild both native and
+                // confirmation trade arrays before doing the exact ID comparison.
+                ptScheduleDraw();
+                requestAnimationFrame(function(){
+                    requestAnimationFrame(function(){
+                        if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+                        if (PT_PROJECTION_REFRESH_BUSY || PT_PROJECTION_RENDER_PASS || PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+                            window.setTimeout(retryLocate, 400);
+                            return;
+                        }
+                        var trade = ptFindAnalyticsChartTrade(payload);
+                        if (trade && window.ptLocateTrade(trade) === true) {
+                            try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:true,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||''}, '*'); } catch(e) {}
+                            return;
+                        }
+                        if (attempts >= maxAttempts) {
+                            try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:false,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||'',message:'Trade identity was not present in the completed chart projection.'}, '*'); } catch(e) {}
+                            alert('The requested trade was not found after the chart and projections finished loading. Check the selected root/confirmation, timeframe and trade family ID.');
+                            return;
+                        }
+                        window.setTimeout(retryLocate, 400);
+                    });
+                });
+                return;
+            }
+            if (attempts >= maxAttempts) {
+                try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:false,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||'',message:'Chart or projection readiness timed out.'}, '*'); } catch(e) {}
+                alert('Programme Training is still waiting for the requested chart projection. The trade was not located.');
+                return;
+            }
+            window.setTimeout(retryLocate, 400);
+        }
+        window.setTimeout(retryLocate, 100);
+        return true;
+    };
+    window.addEventListener('message', function(e) {
+        if (!e.data || typeof e.data !== 'object') return;
+        if (e.data.type === 'programmeAnalyticsLocate' || e.data.type === 'programmeTrainingLocate') {
+            // A direct request from another page must activate this iframe first;
+            // otherwise the chart's visibility guard can suspend its projection work.
+            try { window.parent.postMessage({type:'switchTab',tab:'training'}, '*'); } catch(err) {}
+            window.ptLocateAnalyticsFamily(e.data.trade || e.data);
+        }
+    });
+    // Announce readiness after the full page load so the shell cannot deliver a
+    // request while later Programme Training scripts are still being evaluated.
+    function ptAnnounceTrainingReady() {
+        try { window.parent.postMessage({type:'programmeTrainingReady'}, '*'); } catch(e) {}
+    }
+    if (document.readyState === 'complete') ptAnnounceTrainingReady();
+    else window.addEventListener('load', ptAnnounceTrainingReady, {once:true});
     window.ptCloseCandleDetail    = ptCloseCandleDetailModal;
 
     /* =================================================================
@@ -9325,8 +9981,10 @@ try {
         var controls = row.closest('.pt-controls');
         if (controls) { controls.style.setProperty('--pt-control-arrow-top', row.offsetTop + 'px'); controls.style.setProperty('--pt-control-arrow-height', Math.max(1, row.offsetHeight) + 'px'); }
         var hasOverflow = max > 2;
-        left.hidden = !hasOverflow || row.scrollLeft <= 2;
-        right.hidden = !hasOverflow || row.scrollLeft >= max - 2;
+        // Show both edge arrows together. The left arrow occupies the existing
+        // reserved gutter, so the Symbol button starts immediately beside it.
+        left.hidden = !hasOverflow;
+        right.hidden = !hasOverflow;
     }
     function ptScrollControls(direction) {
         var row = document.getElementById('ptControlsButtonRow');
@@ -9341,25 +9999,63 @@ try {
         if (button) {
             button.setAttribute('aria-pressed', PT_MOBILE_CROSSHAIR_MODE ? 'true' : 'false');
             button.title = PT_MOBILE_CROSSHAIR_MODE
-                ? 'Crosshair mode is on. Touch or move on the chart to position it; toggle off to pan.'
+                ? 'Crosshair mode is on. Drag the vertical line to move it; touching elsewhere will not reposition it.'
                 : 'Toggle mobile crosshair mode';
         }
+        PT_TOUCH_STATE.crosshairDragActive = false;
         if (!PT_MOBILE_CROSSHAIR_MODE) {
             PT_TOUCH_STATE.crosshairActive = false;
+            PT_HOVER_INDEX = -1;
+            PT_CURSOR_X = null;
+            PT_CURSOR_Y = null;
+            PT_CROSSHAIR_ACTIVE = false;
+            ptScheduleDraw();
+            ptUpdateReadout();
         } else if (PT_CANVAS && PT_CANDLES.length) {
             var rect = PT_CANVAS.getBoundingClientRect();
+            PT_TOUCH_STATE.crosshairActive = true;
             ptSetMobileCrosshairAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
         }
     };
+    function ptMobileCrosshairAnchor() {
+        if (!PT_CANVAS || !PT_CROSSHAIR_ACTIVE) return null;
+        var rect = PT_CANVAS.getBoundingClientRect();
+        var chartTop = Number.isFinite(Number(PT_CANVAS._ptChartTop)) ? Number(PT_CANVAS._ptChartTop) : PT_PADDING_TOP;
+        var chartBottom = Number.isFinite(Number(PT_CANVAS._ptChartBot)) ? Number(PT_CANVAS._ptChartBot) : (PT_CANVAS.clientHeight - PT_PADDING_BOTTOM);
+        var storedX = (PT_CURSOR_X !== null && PT_CURSOR_X !== undefined) ? Number(PT_CURSOR_X) : PT_CANVAS.clientWidth / 2;
+        var x = rect.left + Math.max(0, Math.min(PT_CANVAS.clientWidth, storedX));
+        var rawY = PT_CURSOR_Y == null ? (chartTop + chartBottom) / 2 : Number(PT_CURSOR_Y);
+        var cursorY = Number.isFinite(rawY)
+            ? Math.max(chartTop, Math.min(chartBottom, rawY))
+            : (chartTop + chartBottom) / 2;
+        var y = rect.top + cursorY;
+        return { x:x, y:y, rect:rect, chartTop:chartTop, chartBottom:chartBottom };
+    }
+    function ptBeginMobileCrosshairDrag(touch) {
+        var anchor = ptMobileCrosshairAnchor();
+        if (!anchor || !touch) return false;
+        var touchY = touch.clientY - anchor.rect.top;
+        // The vertical guide now spans the full canvas, so allow grabs along the
+        // full screen-height leg (with a small forgiving touch margin).
+        var withinVerticalLeg = touchY >= -24 && touchY <= anchor.rect.height + 24;
+        var hitRadius = 30;
+        if (!withinVerticalLeg || Math.abs(touch.clientX - anchor.x) > hitRadius) return false;
+        PT_TOUCH_STATE.crosshairActive = true;
+        PT_TOUCH_STATE.crosshairGrabOffsetX = touch.clientX - anchor.x;
+        PT_TOUCH_STATE.crosshairGrabOffsetY = touch.clientY - anchor.y;
+        return true;
+    }
     function ptSetMobileCrosshairAt(clientX, clientY) {
-        if (!PT_CANVAS || !PT_CANDLES.length) return;
+        if (!PT_CANVAS) return;
         var rect = PT_CANVAS.getBoundingClientRect();
         var x = clientX - rect.left, y = clientY - rect.top;
         var step = PT_CANVAS._ptStep || ptStep();
         var baseX = PT_CANVAS._ptBaseX || (PT_PADDING_LEFT + PT_VIRTUAL_PAD);
         var idx = Math.floor((x - baseX) / step);
         PT_HOVER_INDEX = (idx >= 0 && idx < PT_CANDLES.length) ? idx : -1;
-        PT_CURSOR_Y = (x >= PT_PADDING_LEFT && x <= PT_CANVAS.clientWidth - PT_PADDING_RIGHT) ? y : null;
+        PT_CURSOR_X = x;
+        PT_CURSOR_Y = y;
+        PT_CROSSHAIR_ACTIVE = true;
         ptScheduleDraw();
         ptUpdateReadout();
     }

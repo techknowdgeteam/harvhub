@@ -1,5 +1,6 @@
 <!--dev_style.php---->
 <style>
+    .pa-root-row{grid-template-columns:minmax(0,1fr);margin-top:60px;}
     /* ============================================================
     STYLE SHEET 1: ROOT VARIABLES, GLOBAL RESET, MODALS, SCROLLBARS
     ============================================================ */
