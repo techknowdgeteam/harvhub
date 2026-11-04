@@ -7237,9 +7237,21 @@ try {
     window.ptOpenCandleDetail     = ptOpenCandleDetailModal;
 
     // External Locate requests are queued until candles and projections are ready.
-    // Identity includes trade type, parent root, confirmation root (if any),
-    // target chart timeframe and the chart's own family number.
+    // Programme Analytics and Signals Dashboard share this exact chart identity path.
     var PT_ANALYTICS_LOCATE_TOKEN = 0;
+    function ptPostAnalyticsLocateResult(payload, success, reason, message) {
+        payload = payload || {};
+        try {
+            window.parent.postMessage({
+                type:'programmeTrainingLocateResult',
+                success:success === true,
+                reason:reason || '',
+                message:message || '',
+                chart_trade_id:payload.chart_trade_id || payload.trade_id || '',
+                request_id:payload.request_id || ''
+            }, '*');
+        } catch(e) {}
+    }
     function ptFindAnalyticsChartTrade(payload) {
         payload = payload || {};
         var rootId = String(payload.root_id == null ? '' : payload.root_id);
@@ -7269,8 +7281,6 @@ try {
             if (String(t.timeframe || '').toLowerCase() !== timeframe) return false;
             var resolvedId = String(t.chartTradeId || ptBuildChartTradeId(t));
             if (chartTradeId && resolvedId === chartTradeId) return true;
-            // Compatibility fallback for older analytics records. The type, root,
-            // confirmation and timeframe checks above remain mandatory.
             if (familySignature && String(t.familySignature || '') === familySignature) return true;
             return Number.isFinite(familyNumber) && Number(t.familyNumber) === familyNumber;
         });
@@ -7281,15 +7291,32 @@ try {
         payload = payload || {};
         var symbol = String(payload.symbol || '').trim();
         var timeframe = String(payload.chart_timeframe || payload.timeframe || '').trim().toLowerCase();
+        var confirmationPresent = Object.prototype.hasOwnProperty.call(payload, 'confirmation_root_id') &&
+            payload.confirmation_root_id !== null && payload.confirmation_root_id !== '';
+        var rootId = Number(payload.root_id || 0);
+        var confirmationId = confirmationPresent ? Number(payload.confirmation_root_id || 0) : NaN;
+        var familyNumber = Number(payload.family_number);
+        var chartTradeId = String(payload.chart_trade_id || payload.trade_id || payload.chartTradeId || '').trim();
         var token = ++PT_ANALYTICS_LOCATE_TOKEN;
-        if (!PT_HAS_BROKER) { alert('Connect your broker before locating this trade.'); return false; }
-        if (!symbol || !timeframe || !payload.root_id || payload.family_number == null) {
-            alert('The Locate request is missing its symbol, timeframe or trade identity.'); return false;
+
+        if (!symbol || !timeframe || rootId <= 0 || !confirmationPresent || !Number.isFinite(confirmationId) ||
+            !Number.isFinite(familyNumber) || familyNumber <= 0 || !chartTradeId) {
+            ptPostAnalyticsLocateResult(payload, false, 'unidentifiable', 'The trade identity is incomplete.');
+            return false;
         }
-        if (PT_ALL_SYMBOLS.indexOf(symbol) < 0) { alert('The symbol ' + symbol + ' is not selected for this programme.'); return false; }
+        if (!PT_HAS_BROKER) {
+            ptPostAnalyticsLocateResult(payload, false, 'not_found', 'Connect your broker before locating this trade.');
+            return false;
+        }
+        if (PT_ALL_SYMBOLS.indexOf(symbol) < 0) {
+            ptPostAnalyticsLocateResult(payload, false, 'not_found', 'The requested symbol is not selected for this programme.');
+            return false;
+        }
         if (!PT_ALL_TIMEFRAMES.some(function(tf){ return String(tf).toLowerCase() === timeframe; })) {
-            alert('The timeframe ' + timeframe.toUpperCase() + ' is not selected for this programme.'); return false;
+            ptPostAnalyticsLocateResult(payload, false, 'not_found', 'The requested timeframe is not selected for this programme.');
+            return false;
         }
+
         var changed = symbol !== PT_CURRENT_SYMBOL || timeframe !== String(PT_CURRENT_TIMEFRAME || '').toLowerCase();
         if (changed) {
             PT_CURRENT_SYMBOL = symbol;
@@ -7302,25 +7329,32 @@ try {
             if (typeof ptUpdateTimeframeLabel === 'function') ptUpdateTimeframeLabel();
             ptLoadChart();
             ptRefreshHigherTimeframeProjection();
-        } else if ((payload.is_confirmation === true || Number(payload.confirmation_root_id || 0) > 0) && !PT_PROJECTION_REFRESH_BUSY) {
-            // Refresh the cached higher-timeframe projection for confirmation trades,
-            // even when the user was already on the target timeframe.
+        } else if ((payload.is_confirmation === true || confirmationId > 0) && !PT_PROJECTION_REFRESH_BUSY) {
             ptRefreshHigherTimeframeProjection(true);
         }
 
         var attempts = 0;
         var maxAttempts = 240;
+        function candleForTradeIsMissing() {
+            var outcome = String(payload.outcome || '').trim().toLowerCase();
+            var isPending = outcome === 'pending entry';
+            var expectedTime = isPending ? String(payload.entry_anchor_time || '') : String(payload.entry_trigger_time || '');
+            if (!expectedTime) return true;
+            return ptIndexForTradeTime(expectedTime) < 0;
+        }
         function retryLocate() {
             if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
             attempts++;
-            var chartReady = String(PT_CURRENT_SYMBOL) === symbol &&
-                String(PT_CURRENT_TIMEFRAME || '').toLowerCase() === timeframe &&
-                Array.isArray(PT_CANDLES) && PT_CANDLES.length > 0 && PT_INITIAL_LOADED;
+            var chartSelectionMatches = String(PT_CURRENT_SYMBOL) === symbol &&
+                String(PT_CURRENT_TIMEFRAME || '').toLowerCase() === timeframe;
+            var chartReady = chartSelectionMatches && Array.isArray(PT_CANDLES) && PT_CANDLES.length > 0 && PT_INITIAL_LOADED;
             var projectionReady = !PT_PROJECTION_REFRESH_BUSY && !PT_PROJECTION_RENDER_PASS &&
                 !PT_FAST_INTERACTION && !PT_INTERACTION_HELD;
+            if (chartSelectionMatches && PT_INITIAL_LOADED && Array.isArray(PT_CANDLES) && PT_CANDLES.length === 0 && projectionReady) {
+                ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'No candle records are available for this trade timeframe.');
+                return;
+            }
             if (chartReady && projectionReady) {
-                // Allow the most recent chart draw to rebuild both native and
-                // confirmation trade arrays before doing the exact ID comparison.
                 ptScheduleDraw();
                 requestAnimationFrame(function(){
                     requestAnimationFrame(function(){
@@ -7329,14 +7363,17 @@ try {
                             window.setTimeout(retryLocate, 400);
                             return;
                         }
+                        if (candleForTradeIsMissing()) {
+                            ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'The entry trigger candle is no longer present in chart data.');
+                            return;
+                        }
                         var trade = ptFindAnalyticsChartTrade(payload);
                         if (trade && window.ptLocateTrade(trade) === true) {
-                            try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:true,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||''}, '*'); } catch(e) {}
+                            ptPostAnalyticsLocateResult(payload, true, '', '');
                             return;
                         }
                         if (attempts >= maxAttempts) {
-                            try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:false,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||'',message:'Trade identity was not present in the completed chart projection.'}, '*'); } catch(e) {}
-                            alert('The requested trade was not found after the chart and projections finished loading. Check the selected root/confirmation, timeframe and trade family ID.');
+                            ptPostAnalyticsLocateResult(payload, false, 'not_found', 'The matching chart trade was not found.');
                             return;
                         }
                         window.setTimeout(retryLocate, 400);
@@ -7345,8 +7382,7 @@ try {
                 return;
             }
             if (attempts >= maxAttempts) {
-                try { window.parent.postMessage({type:'programmeTrainingLocateResult',success:false,chart_trade_id:payload.chart_trade_id||'',request_id:payload.request_id||'',message:'Chart or projection readiness timed out.'}, '*'); } catch(e) {}
-                alert('Programme Training is still waiting for the requested chart projection. The trade was not located.');
+                ptPostAnalyticsLocateResult(payload, false, 'not_found', 'Chart or projection readiness timed out.');
                 return;
             }
             window.setTimeout(retryLocate, 400);
@@ -7357,8 +7393,6 @@ try {
     window.addEventListener('message', function(e) {
         if (!e.data || typeof e.data !== 'object') return;
         if (e.data.type === 'programmeAnalyticsLocate' || e.data.type === 'programmeTrainingLocate') {
-            // A direct request from another page must activate this iframe first;
-            // otherwise the chart's visibility guard can suspend its projection work.
             try { window.parent.postMessage({type:'switchTab',tab:'training'}, '*'); } catch(err) {}
             window.ptLocateAnalyticsFamily(e.data.trade || e.data);
         }

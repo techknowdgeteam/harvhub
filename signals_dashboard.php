@@ -96,6 +96,44 @@ if ($selectedProgrammeId > 0) {
     $programme = $q->fetch(PDO::FETCH_ASSOC);
 }
 
+if ($programme) {
+    try {
+        $tradeTable = $pdo->query("SHOW TABLES LIKE 'programme_trades'")->fetchColumn();
+        if ($tradeTable) {
+            $tradeColumns = $pdo->query("SHOW COLUMNS FROM `programme_trades`")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('contract_id', $tradeColumns, true)) {
+                $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `contract_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `programmeid`");
+            }
+            $pdo->exec("CREATE TABLE IF NOT EXISTS `programme_trade_chart_identity` (
+                `programme_trade_id` BIGINT(20) UNSIGNED NOT NULL,
+                `userid` BIGINT(20) UNSIGNED NOT NULL,
+                `programmeid` BIGINT(20) UNSIGNED NOT NULL,
+                `contract_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1,
+                `identity_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                `chart_trade_id` VARCHAR(255) NULL DEFAULT NULL,
+                `root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
+                `confirmation_root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
+                `family_number` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
+                `family_signature` TEXT NULL,
+                `symbol` VARCHAR(64) NOT NULL,
+                `timeframe` VARCHAR(32) NOT NULL,
+                `source_timeframe` VARCHAR(32) NULL DEFAULT NULL,
+                `entry_anchor_time` VARCHAR(40) NULL DEFAULT NULL,
+                `entry_trigger_time` VARCHAR(40) NULL DEFAULT NULL,
+                `outcome` VARCHAR(64) NULL DEFAULT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`programme_trade_id`),
+                UNIQUE KEY `uniq_programme_trade_chart_identity` (`userid`,`programmeid`,`identity_hash`),
+                KEY `idx_programme_trade_chart_root` (`userid`,`programmeid`,`root_id`,`confirmation_root_id`),
+                KEY `idx_programme_trade_chart_contract` (`userid`,`programmeid`,`contract_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        }
+    } catch (Throwable $migrationError) {
+        error_log('Signals Dashboard programme trade identity migration failed: ' . $migrationError->getMessage());
+    }
+}
+
 function esc_h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function jres($a){ header('Content-Type: application/json'); echo json_encode($a); exit; }
 
@@ -308,6 +346,937 @@ function classifyDealState($acceptedAt, $contractDuration) {
 
     return ['state' => $state, 'end' => $end, 'diff' => $diff, 'start' => $start];
 }
+
+/**
+ * Live provision challenge comparison.
+ *
+ * Main-root and confirmation-root trades are intentionally read in one
+ * combined stream. Historical rows (live_trades = 0) never participate.
+ */
+/**
+ * Period-based signal provision challenge engine.
+ * The live analytics stream is combined across all main roots and confirmations.
+ * Only live_trades=1 rows from signal_testing_started_at through the challenge end
+ * are used. Restricted dates and weekdays are frozen when the test starts.
+ */
+function spc_ensureLiveTradesColumn(PDO $pdo): bool {
+    try {
+        $table = $pdo->query("SHOW TABLES LIKE 'programme_analytics'");
+        if (!$table || !$table->fetchColumn()) return false;
+        $columns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('live_trades', $columns, true)) {
+            $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `live_trades` TINYINT(1) NOT NULL DEFAULT 0");
+            $columns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
+        }
+        return in_array('live_trades', $columns, true);
+    } catch (Throwable $e) {
+        error_log('[signals challenge] live_trades schema check failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+function spc_ensureChallengeSchema(PDO $pdo): bool {
+    static $ready = null;
+    if ($ready !== null) return $ready;
+    try {
+        $table = $pdo->query("SHOW TABLES LIKE 'signals_provider_interest'");
+        if (!$table || !$table->fetchColumn()) return $ready = false;
+        $definitions = [
+            'daily_progress_json' => 'LONGTEXT NULL',
+            'weekly_progress_json' => 'LONGTEXT NULL',
+            'monthly_progress_json' => 'LONGTEXT NULL',
+            'challenge_restricted_dates_json' => 'LONGTEXT NULL',
+            'challenge_restricted_days_json' => 'LONGTEXT NULL',
+            'challenge_duration_days' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'challenge_end_at' => 'DATETIME NULL',
+            'challenge_timezone' => 'VARCHAR(64) NULL',
+            'challenge_total_periods' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'challenge_completed_periods' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'challenge_current_period_index' => 'INT NOT NULL DEFAULT -1',
+            'challenge_failed_period_index' => 'INT NULL DEFAULT NULL',
+            'challenge_failed_at' => 'DATETIME NULL',
+            'challenge_failure_reason' => 'TEXT NULL',
+            'challenge_completed_at' => 'DATETIME NULL',
+            'challenge_last_evaluated_at' => 'DATETIME NULL'
+        ];
+        $columns = $pdo->query("SHOW COLUMNS FROM `signals_provider_interest`")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($definitions as $column => $definition) {
+            if (!in_array($column, $columns, true)) {
+                $pdo->exec("ALTER TABLE `signals_provider_interest` ADD COLUMN `{$column}` {$definition}");
+                $columns[] = $column;
+            }
+        }
+        return $ready = spc_ensureLiveTradesColumn($pdo);
+    } catch (Throwable $e) {
+        error_log('[signals challenge] additive challenge schema migration failed: ' . $e->getMessage());
+        return $ready = false;
+    }
+}
+
+function spc_encode($value): string {
+    $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    return $json === false ? '[]' : $json;
+}
+
+function spc_timezone(string $name): DateTimeZone {
+    try { return new DateTimeZone(trim($name) !== '' ? trim($name) : 'UTC'); }
+    catch (Throwable $e) { return new DateTimeZone('UTC'); }
+}
+
+function spc_parseDateTime($value, DateTimeZone $timezone): ?DateTimeImmutable {
+    if ($value instanceof DateTimeInterface) {
+        return (new DateTimeImmutable($value->format('Y-m-d H:i:s.uP')))->setTimezone($timezone);
+    }
+    $raw = trim((string)$value);
+    if ($raw === '') return null;
+    try { return new DateTimeImmutable($raw, $timezone); }
+    catch (Throwable $e) { return null; }
+}
+
+function spc_firstRowValue(array $row, array $keys) {
+    foreach ($keys as $key) {
+        if (array_key_exists($key, $row) && $row[$key] !== null && $row[$key] !== '') return $row[$key];
+    }
+    return null;
+}
+
+function spc_normalizeOutcome($raw): string {
+    $value = strtolower(trim((string)$raw));
+    $value = preg_replace('/[\\s_-]+/', ' ', $value);
+    $aliases = [
+        'breakeven' => 'closed flat', 'break even' => 'closed flat',
+        'closed at breakeven' => 'closed flat', 'closed breakeven' => 'closed flat',
+        'closed profit' => 'closed in profit', 'profit' => 'closed in profit',
+        'profitable' => 'closed in profit', 'closed loss' => 'closed in loss',
+        'loss' => 'closed in loss', 'losing' => 'closed in loss'
+    ];
+    return $aliases[$value] ?? $value;
+}
+
+function spc_durationDays(string $period, array $serverConfig = []): int {
+    $period = strtolower(trim($period));
+    if ($period === 'weekly') $value = (int)($serverConfig['weekly_challenge_duration'] ?? 60);
+    elseif ($period === 'monthly') $value = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
+    else $value = (int)($serverConfig['day_challenge_duration'] ?? 30);
+    if ($value <= 0) $value = $period === 'weekly' ? 60 : ($period === 'monthly' ? 90 : 30);
+    return max(1, min(366, $value));
+}
+
+function spc_periodCount(string $period, int $durationDays): int {
+    $period = strtolower(trim($period));
+    if ($period === 'weekly') return max(1, (int)round($durationDays / 7.5)); // 60 days = 8 challenge weeks.
+    if ($period === 'monthly') return max(1, (int)round($durationDays / 30)); // 90 days = 3 challenge months.
+    return max(1, $durationDays);
+}
+
+function spc_normalizeDayName($raw): string {
+    $v = strtolower(trim((string)$raw));
+    $map = [
+        '0'=>'sunday','sun'=>'sunday','sunday'=>'sunday',
+        '1'=>'monday','mon'=>'monday','monday'=>'monday',
+        '2'=>'tuesday','tue'=>'tuesday','tues'=>'tuesday','tuesday'=>'tuesday',
+        '3'=>'wednesday','wed'=>'wednesday','weds'=>'wednesday','wednesday'=>'wednesday',
+        '4'=>'thursday','thu'=>'thursday','thur'=>'thursday','thurs'=>'thursday','thursday'=>'thursday',
+        '5'=>'friday','fri'=>'friday','friday'=>'friday',
+        '6'=>'saturday','sat'=>'saturday','saturday'=>'saturday'
+    ];
+    return $map[$v] ?? '';
+}
+
+function spc_getRestrictedCalendar(PDO $pdo, int $userId, int $programmeId, string $email = ''): array {
+    $dates = [];
+    $days = [];
+    if ($programmeId <= 0) return ['dates'=>[], 'days'=>[]];
+
+    $developerIds = [];
+    if (trim($email) !== '') {
+        try {
+            $developerQuery = $pdo->prepare("SELECT id FROM developers WHERE LOWER(email) = ? LIMIT 1");
+            $developerQuery->execute([strtolower(trim($email))]);
+            $developerId = (int)$developerQuery->fetchColumn();
+            if ($developerId > 0) $developerIds[] = $developerId;
+        } catch (Throwable $e) {}
+    }
+    // Restricted calendar rows are owned by developers. Fall back to the
+    // HarvHub user id only on installations where no developer record exists.
+    if (!$developerIds && $userId > 0) $developerIds[] = $userId;
+    $developerIds = array_values(array_unique(array_filter(array_map('intval', $developerIds))));
+    if (!$developerIds) return ['dates'=>[], 'days'=>[]];
+
+    $idPlaceholders = implode(',', array_fill(0, count($developerIds), '?'));
+    try {
+        $dateTable = $pdo->query("SHOW TABLES LIKE 'accountmanagement_restricted_dates'");
+        if ($dateTable && $dateTable->fetchColumn()) {
+            $cols = $pdo->query("SHOW COLUMNS FROM `accountmanagement_restricted_dates`")->fetchAll(PDO::FETCH_COLUMN);
+            if (in_array('developerid', $cols, true) && in_array('programme_id', $cols, true) && in_array('restricted_date', $cols, true)) {
+                $q = $pdo->prepare("SELECT `restricted_date` FROM `accountmanagement_restricted_dates` WHERE `developerid` IN ({$idPlaceholders}) AND `programme_id` = ?");
+                $q->execute(array_merge($developerIds, [$programmeId]));
+                foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $rawDate) {
+                    $date = substr(trim((string)$rawDate), 0, 10);
+                    if (preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $date)) $dates[$date] = $date;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('[signals challenge] restricted-date lookup failed: ' . $e->getMessage());
+    }
+
+    try {
+        $dayTable = $pdo->query("SHOW TABLES LIKE 'accountmanagement_restricted_days'");
+        if ($dayTable && $dayTable->fetchColumn()) {
+            $cols = $pdo->query("SHOW COLUMNS FROM `accountmanagement_restricted_days`")->fetchAll(PDO::FETCH_COLUMN);
+            if (in_array('developerid', $cols, true) && in_array('programme_id', $cols, true) && in_array('day', $cols, true)) {
+                $q = $pdo->prepare("SELECT `day` FROM `accountmanagement_restricted_days` WHERE `developerid` IN ({$idPlaceholders}) AND `programme_id` = ?");
+                $q->execute(array_merge($developerIds, [$programmeId]));
+                foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $rawDay) {
+                    $day = spc_normalizeDayName($rawDay);
+                    if ($day !== '') $days[$day] = $day;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('[signals challenge] restricted-day lookup failed: ' . $e->getMessage());
+    }
+
+    $dates = array_values($dates);
+    $days = array_values($days);
+    sort($dates);
+    sort($days);
+    return ['dates'=>$dates, 'days'=>$days];
+}
+
+function spc_periodLabel(string $period, int $index): string {
+    $prefix = $period === 'weekly' ? 'Week' : ($period === 'monthly' ? 'Month' : 'Day');
+    return $prefix . ' ' . ($index + 1);
+}
+
+function spc_restrictionDetail(string $date, bool $restrictedDate, bool $restrictedDay, string $weekday): array {
+    $reasons = [];
+    if ($restrictedDate) $reasons[] = 'restricted date';
+    if ($restrictedDay) $reasons[] = 'restricted day';
+    return [
+        'date' => $date,
+        'weekday' => ucfirst($weekday),
+        'reason' => implode(' + ', $reasons),
+        'label' => $date . ' (' . ucfirst($weekday) . ' — ' . implode(' + ', $reasons) . ')'
+    ];
+}
+
+function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, int $durationDays, array $restricted, DateTimeImmutable $now): array {
+    $period = in_array($period, ['daily','weekly','monthly'], true) ? $period : 'daily';
+    $durationDays = max(1, $durationDays);
+    $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
+    $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
+    $windowStart = $startAt->setTime(0, 0, 0);
+    $restrictedDayLabels = array_map('ucfirst', array_keys($restrictedDaySet));
+    $count = $period === 'daily' ? $durationDays : spc_periodCount($period, $durationDays);
+    $periods = [];
+
+    // Keep every calendar checkpoint in the sequence. Restricted days remain
+    // visible as skipped cards, but do not count toward required checkpoints.
+    for ($i = 0; $i < $count; $i++) {
+        if ($period === 'daily') {
+            $offsetStart = $i;
+            $offsetEndExclusive = $i + 1;
+        } else {
+            $offsetStart = (int)floor(($i * $durationDays) / $count);
+            $offsetEndExclusive = (int)floor((($i + 1) * $durationDays) / $count);
+            if ($offsetEndExclusive <= $offsetStart) $offsetEndExclusive = $offsetStart + 1;
+        }
+
+        $periodStart = $windowStart->modify('+' . $offsetStart . ' days');
+        $periodEnd = $windowStart->modify('+' . $offsetEndExclusive . ' days');
+        $activeDates = [];
+        $excludedDetails = [];
+        $calendarRestrictedDays = [];
+
+        for ($dayOffset = $offsetStart; $dayOffset < $offsetEndExclusive; $dayOffset++) {
+            $dateObject = $windowStart->modify('+' . $dayOffset . ' days');
+            $date = $dateObject->format('Y-m-d');
+            $weekday = strtolower($dateObject->format('l'));
+            $isRestrictedDate = isset($restrictedDateSet[$date]);
+            $isRestrictedDay = isset($restrictedDaySet[$weekday]);
+
+            if ($isRestrictedDate || $isRestrictedDay) {
+                if ($isRestrictedDate) $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
+                if ($isRestrictedDay) $calendarRestrictedDays[$weekday] = ucfirst($weekday);
+            } else {
+                $activeDates[] = $date;
+            }
+        }
+
+        $calendarDays = max(0, $offsetEndExclusive - $offsetStart);
+        $eligibleDays = count($activeDates);
+        $periods[] = [
+            'index' => $i,
+            'label' => spc_periodLabel($period, $i),
+            'start_date' => $periodStart->format('Y-m-d'),
+            'end_date' => $periodEnd->modify('-1 day')->format('Y-m-d'),
+            'start_at' => $periodStart->format('Y-m-d H:i:s'),
+            'end_at' => $periodEnd->format('Y-m-d H:i:s'),
+            'calendar_days' => $calendarDays,
+            'eligible_days' => $eligibleDays,
+            'active_dates' => $activeDates,
+            'excluded_dates' => $excludedDetails,
+            // Show the programme's configured restricted weekdays on each card;
+            // the excluded date list above is scoped to this exact checkpoint.
+            'excluded_days' => $restrictedDayLabels,
+            'progress' => 0,
+            'status' => 'locked',
+            'locked' => true,
+            'skipped' => $eligibleDays === 0,
+            'trades' => 0,
+            'wins' => 0,
+            'consecutive_losses' => 0,
+            'trades_passed' => false,
+            'wins_passed' => false,
+            'loss_gate_passed' => false,
+            'requirements_met' => false
+        ];
+    }
+
+    return $periods;
+}
+
+function spc_previewLookbackStart(DateTimeImmutable $now, string $period): DateTimeImmutable {
+    $period = strtolower(trim($period));
+    if ($period === 'monthly') return $now->modify('-2 months');
+    if ($period === 'weekly') return $now->modify('-14 days');
+    return $now->modify('-7 days');
+}
+
+function spc_buildPreviewPeriod(string $period, DateTimeImmutable $lookbackStart, DateTimeImmutable $now, array $restricted): array {
+    $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
+    $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
+    $calendarStart = $lookbackStart->setTime(0, 0, 0);
+    $calendarEnd = $now->setTime(0, 0, 0);
+    $activeDates = [];
+    $excludedDetails = [];
+    $cursor = $calendarStart;
+    while ($cursor <= $calendarEnd) {
+        $date = $cursor->format('Y-m-d');
+        $weekday = strtolower($cursor->format('l'));
+        $isRestrictedDate = isset($restrictedDateSet[$date]);
+        $isRestrictedDay = isset($restrictedDaySet[$weekday]);
+        if ($isRestrictedDate || $isRestrictedDay) {
+            // Restricted Dates lists only dates explicitly configured in the
+            // account-management calendar. Recurring weekday exclusions appear
+            // separately in Restricted Days.
+            if ($isRestrictedDate) $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
+        } else {
+            $activeDates[] = $date;
+        }
+        $cursor = $cursor->modify('+1 day');
+    }
+    $restrictedDayLabels = array_map('ucfirst', array_keys($restrictedDaySet));
+    $label = $period === 'weekly' ? 'Current Week — 14-Day Preview' : ($period === 'monthly' ? 'Current Month — 2-Month Preview' : 'Current Day — 7-Day Preview');
+    return [
+        'index' => 0,
+        'label' => $label,
+        'start_date' => $lookbackStart->format('Y-m-d'),
+        'end_date' => $now->format('Y-m-d'),
+        'start_at' => $lookbackStart->format('Y-m-d H:i:s'),
+        'end_at' => $now->modify('+1 second')->format('Y-m-d H:i:s'),
+        'calendar_days' => (int)$calendarStart->diff($calendarEnd)->days + 1,
+        'eligible_days' => count($activeDates),
+        'active_dates' => $activeDates,
+        'excluded_dates' => $excludedDetails,
+        'excluded_days' => $restrictedDayLabels,
+        'progress' => 0,
+        'status' => 'preview',
+        'locked' => false,
+        'skipped' => count($activeDates) === 0,
+        'preview' => true,
+        'trades' => 0,
+        'wins' => 0,
+        'consecutive_losses' => 0,
+        'trades_passed' => false,
+        'wins_passed' => false,
+        'loss_gate_passed' => false,
+        'requirements_met' => false
+    ];
+}
+
+function spc_countEligibleDays(DateTimeImmutable $startAt, int $durationDays, array $restricted): int {
+    $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
+    $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
+    $eligible = 0;
+    $start = $startAt->setTime(0, 0, 0);
+    for ($i = 0; $i < max(1, $durationDays); $i++) {
+        $date = $start->modify('+' . $i . ' days');
+        $iso = $date->format('Y-m-d');
+        $weekday = strtolower($date->format('l'));
+        if (isset($restrictedDateSet[$iso]) || isset($restrictedDaySet[$weekday])) continue;
+        $eligible++;
+    }
+    return $eligible;
+}
+
+
+function spc_previewLookbackDescription(string $period): string {
+    if ($period === 'monthly') return 'Pre-test live-trade look-back: the last 2 months.';
+    if ($period === 'weekly') return 'Pre-test live-trade look-back: the last 14 days (2 weeks).';
+    return 'Pre-test live-trade look-back: the last 7 days (1 week).';
+}
+
+function spc_durationDescription(string $period, int $durationDays, int $eligibleDays): string {
+    $period = strtolower(trim($period));
+    if ($period === 'weekly') {
+        $count = spc_periodCount('weekly', $durationDays);
+        return $count . ' Weeks Duration Provision. Each week must meet the provision challenge, excluding the restricted days and dates in each week. (' . $eligibleDays . ' eligible days within ' . $durationDays . ' calendar days.)';
+    }
+    if ($period === 'monthly') {
+        $count = spc_periodCount('monthly', $durationDays);
+        return $count . ' Months Duration Provision. Each month must meet the provision challenge, excluding the restricted days and dates in each month. (' . $eligibleDays . ' eligible days within ' . $durationDays . ' calendar days.)';
+    }
+    return $eligibleDays . ' Days Duration Provision. Each day must meet the provision challenge. (' . $durationDays . ' calendar days before restricted dates and days are excluded.)';
+}
+
+function spc_getLiveProvisionEvents(PDO $pdo, int $userId, int $programmeId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, DateTimeZone $timezone): array {
+    $result = ['tracking_available'=>false, 'events'=>[]];
+    if ($userId <= 0 || $programmeId <= 0 || !spc_ensureLiveTradesColumn($pdo)) return $result;
+    try {
+        $columns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
+        foreach (['programme_id','userid','live_trades','trade_configured'] as $required) {
+            if (!in_array($required, $columns, true)) return $result;
+        }
+        $where = ['`programme_id` = ?', '`userid` = ?', '`live_trades` = 1', '`trade_configured` = 1'];
+        if (in_array('matched_family', $columns, true)) $where[] = 'COALESCE(`matched_family`, 1) <> 0';
+        $orderColumn = in_array('created_at', $columns, true) ? 'created_at' : (in_array('id', $columns, true) ? 'id' : 'root_id');
+        $q = $pdo->prepare('SELECT * FROM `programme_analytics` WHERE ' . implode(' AND ', $where) . ' ORDER BY `' . $orderColumn . '` ASC');
+        $q->execute([$programmeId, $userId]);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        $startTs = $startAt->getTimestamp();
+        $endTs = $endAt->getTimestamp();
+        foreach ($rows as $index => $row) {
+            if ((int)($row['live_trades'] ?? 0) !== 1 || (int)($row['trade_configured'] ?? 0) !== 1) continue;
+            if (array_key_exists('matched_family', $row) && (int)$row['matched_family'] === 0) continue;
+            $tradeTimeRaw = spc_firstRowValue($row, ['entry_trigger_time','entry_anchor_time','event_time','trade_time','open_time','created_at']);
+            $tradeTime = spc_parseDateTime($tradeTimeRaw, $timezone);
+            if (!$tradeTime) continue;
+            $tradeTs = $tradeTime->getTimestamp();
+            if ($tradeTs < $startTs || $tradeTs >= $endTs) continue;
+
+            $outcome = spc_normalizeOutcome($row['outcome'] ?? '');
+            $pnlValue = spc_firstRowValue($row, ['pnl','profit_loss','profitandloss']);
+            $pnl = ($pnlValue !== null && is_numeric($pnlValue)) ? (float)$pnlValue : null;
+            $type = '';
+            if (in_array($outcome, ['take profit reached','closed in profit'], true)) $type = 'win';
+            elseif (in_array($outcome, ['stoploss hit','closed in loss'], true)) $type = 'loss';
+            elseif ($outcome === 'closed flat') $type = 'flat';
+            elseif (in_array($outcome, ['closed','position closed','manual close','manually closed'], true)) {
+                if ($pnl !== null && $pnl > 0) $type = 'win';
+                elseif ($pnl !== null && $pnl < 0) $type = 'loss';
+                elseif ($pnl !== null && $pnl == 0) $type = 'flat';
+            }
+
+            if ($type === 'loss') {
+                $eventTimeRaw = spc_firstRowValue($row, ['stoploss_trigger_time','close_time','closed_at','event_time','entry_trigger_time','entry_anchor_time','created_at']);
+            } elseif ($type === 'win') {
+                $eventTimeRaw = spc_firstRowValue($row, ['take_profit_trigger_time','close_time','closed_at','event_time','entry_trigger_time','entry_anchor_time','created_at']);
+            } elseif ($type === 'flat') {
+                $eventTimeRaw = spc_firstRowValue($row, ['breakeven_trigger_time','close_time','closed_at','event_time','entry_trigger_time','entry_anchor_time','created_at']);
+            } else {
+                $eventTimeRaw = $tradeTimeRaw;
+            }
+            $eventTime = spc_parseDateTime($eventTimeRaw, $timezone);
+            $result['events'][] = [
+                'type' => $type,
+                'trade_date' => $tradeTime->format('Y-m-d'),
+                'trade_timestamp' => $tradeTs,
+                'event_timestamp' => $eventTime ? $eventTime->getTimestamp() : $tradeTs,
+                'row_id' => (int)($row['id'] ?? $index),
+                'index' => $index
+            ];
+        }
+        $result['tracking_available'] = true;
+    } catch (Throwable $e) {
+        error_log('[signals challenge] live analytics read failed: ' . $e->getMessage());
+    }
+    return $result;
+}
+
+function spc_computePeriodStats(array $events, array $period): array {
+    $dateSet = array_fill_keys($period['active_dates'] ?? [], true);
+    $selected = [];
+    $trades = 0;
+    foreach ($events as $event) {
+        if (!isset($dateSet[$event['trade_date'] ?? ''])) continue;
+        $trades++;
+        if (in_array($event['type'] ?? '', ['win','loss','flat'], true)) $selected[] = $event;
+    }
+    usort($selected, static function($a, $b) {
+        if ($a['event_timestamp'] !== $b['event_timestamp']) return $a['event_timestamp'] <=> $b['event_timestamp'];
+        if ($a['row_id'] !== $b['row_id']) return $a['row_id'] <=> $b['row_id'];
+        return $a['index'] <=> $b['index'];
+    });
+    $wins = 0;
+    $losses = 0;
+    $run = 0;
+    $maxRun = 0;
+    foreach ($selected as $event) {
+        if ($event['type'] === 'win') {
+            $wins++;
+            $run = 0;
+        } elseif ($event['type'] === 'loss') {
+            $losses++;
+            $run++;
+            $maxRun = max($maxRun, $run);
+        } else {
+            $run = 0;
+        }
+    }
+    return ['trades'=>$trades, 'wins'=>$wins, 'losses'=>$losses, 'consecutive_losses'=>$maxRun];
+}
+
+function spc_progressColumn(string $period): string {
+    return $period === 'weekly' ? 'weekly_progress_json' : ($period === 'monthly' ? 'monthly_progress_json' : 'daily_progress_json');
+}
+
+function spc_periodStorage(array $periods): array {
+    $out = [];
+    foreach ($periods as $p) {
+        $out[] = [
+            'index' => (int)$p['index'], 'label' => (string)$p['label'],
+            'start_date' => (string)$p['start_date'], 'end_date' => (string)$p['end_date'],
+            'progress' => (int)($p['progress'] ?? 0), 'status' => (string)($p['status'] ?? ''),
+            'skipped' => !empty($p['skipped']), 'trades' => (int)($p['trades'] ?? 0),
+            'wins' => (int)($p['wins'] ?? 0), 'consecutive_losses' => (int)($p['consecutive_losses'] ?? 0),
+            'eligible_days' => (int)($p['eligible_days'] ?? 0),
+            'excluded_dates' => array_values($p['excluded_dates'] ?? []),
+            'excluded_days' => array_values($p['excluded_days'] ?? [])
+        ];
+    }
+    return $out;
+}
+
+function spc_savePeriodProgress(PDO $pdo, int $interestId, int $userId, int $programmeId, string $period, array $periods, int $completed, int $total, int $currentIndex, string $nowText): void {
+    $daily = $period === 'daily' ? spc_encode(spc_periodStorage($periods)) : '[]';
+    $weekly = $period === 'weekly' ? spc_encode(spc_periodStorage($periods)) : '[]';
+    $monthly = $period === 'monthly' ? spc_encode(spc_periodStorage($periods)) : '[]';
+    $q = $pdo->prepare("UPDATE `signals_provider_interest`
+        SET `daily_progress_json` = ?, `weekly_progress_json` = ?, `monthly_progress_json` = ?,
+            `challenge_total_periods` = ?, `challenge_completed_periods` = ?,
+            `challenge_current_period_index` = ?, `challenge_last_evaluated_at` = ?, `updated_at` = CURRENT_TIMESTAMP
+        WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ?");
+    $q->execute([$daily,$weekly,$monthly,$total,$completed,$currentIndex,$nowText,$interestId,$userId,$programmeId]);
+}
+
+function spc_startProvisionTest(PDO $pdo, int $userId, int $programmeId, array $interest, array $programme, array $serverConfig = [], string $email = ''): array {
+    if (!spc_ensureChallengeSchema($pdo)) return ['success'=>false, 'message'=>'The challenge progress schema or live programme analytics is not available.'];
+    $period = strtolower(trim((string)($interest['trades_provision'] ?? 'daily')));
+    if (!in_array($period, ['daily','weekly','monthly'], true)) $period = 'daily';
+    $duration = spc_durationDays($period, $serverConfig);
+    $timezoneName = trim((string)($programme['timezone'] ?? ''));
+    $timezone = spc_timezone($timezoneName);
+    $now = new DateTimeImmutable('now', $timezone);
+    $endAt = $now->setTime(0, 0, 0)->modify('+' . $duration . ' days');
+    $restricted = spc_getRestrictedCalendar($pdo, $userId, $programmeId, $email);
+    $periods = spc_buildChallengePeriods($now, $period, $duration, $restricted, $now);
+    $totalRequired = 0;
+    foreach ($periods as $p) if ((int)$p['eligible_days'] > 0) $totalRequired++;
+    if ($totalRequired <= 0) {
+        return ['success'=>false, 'message'=>'Every day in this challenge window is restricted. Adjust the restricted dates/days before beginning the test.'];
+    }
+    $initial = [];
+    foreach ($periods as $p) {
+        $initial[] = [
+            'index'=>(int)$p['index'], 'label'=>$p['label'], 'start_date'=>$p['start_date'],
+            'end_date'=>$p['end_date'], 'progress'=>((int)$p['eligible_days'] <= 0 ? 1 : 0), 'status'=>((int)$p['eligible_days'] <= 0 ? 'restricted' : 'locked'),
+            'skipped'=>((int)$p['eligible_days'] <= 0), 'trades'=>0, 'wins'=>0,
+            'consecutive_losses'=>0, 'eligible_days'=>(int)$p['eligible_days'],
+            'excluded_dates'=>$p['excluded_dates'], 'excluded_days'=>$p['excluded_days']
+        ];
+    }
+    $zero = '[]';
+    $daily = $period === 'daily' ? spc_encode($initial) : $zero;
+    $weekly = $period === 'weekly' ? spc_encode($initial) : $zero;
+    $monthly = $period === 'monthly' ? spc_encode($initial) : $zero;
+    $q = $pdo->prepare("UPDATE `signals_provider_interest`
+        SET `begin_test` = 1, `interest_status` = 'ongoing', `signal_testing_started_at` = ?,
+            `daily_progress_json` = ?, `weekly_progress_json` = ?, `monthly_progress_json` = ?,
+            `challenge_restricted_dates_json` = ?, `challenge_restricted_days_json` = ?,
+            `challenge_duration_days` = ?, `challenge_end_at` = ?, `challenge_timezone` = ?,
+            `challenge_total_periods` = ?, `challenge_completed_periods` = 0,
+            `challenge_current_period_index` = 0, `challenge_failed_period_index` = NULL,
+            `challenge_failed_at` = NULL, `challenge_failure_reason` = NULL,
+            `challenge_completed_at` = NULL, `challenge_last_evaluated_at` = NULL,
+            `updated_at` = CURRENT_TIMESTAMP
+        WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ?");
+    $q->execute([
+        $now->format('Y-m-d H:i:s'), $daily, $weekly, $monthly,
+        spc_encode($restricted['dates']), spc_encode($restricted['days']),
+        $duration, $endAt->format('Y-m-d H:i:s'), $timezone->getName(),
+        $totalRequired, (int)$interest['id'], $userId, $programmeId
+    ]);
+    return ['success'=>true, 'message'=>'Challenge test started.', 'started_at'=>$now->format('Y-m-d H:i:s'), 'end_at'=>$endAt->format('Y-m-d H:i:s'), 'duration_days'=>$duration, 'total_periods'=>$totalRequired];
+}
+
+function spc_decodeStringList($raw): array {
+    if (is_array($raw)) $decoded = $raw;
+    else {
+        $decoded = json_decode((string)$raw, true);
+        if (!is_array($decoded)) $decoded = [];
+    }
+    $out = [];
+    foreach ($decoded as $value) {
+        if (!is_scalar($value)) continue;
+        $value = trim((string)$value);
+        if ($value !== '') $out[$value] = $value;
+    }
+    return array_values($out);
+}
+
+function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $interest, array $programme, array $serverConfig = [], string $email = ''): array {
+    spc_ensureChallengeSchema($pdo);
+    $period = strtolower(trim((string)($interest['trades_provision'] ?? 'daily')));
+    if (!in_array($period, ['daily','weekly','monthly'], true)) $period = 'daily';
+
+    $beginTest = (int)($interest['begin_test'] ?? 0);
+    $currentStatus = strtolower(trim((string)($interest['interest_status'] ?? 'interested')));
+    $alreadyFailed = in_array($currentStatus, ['failed','breached'], true);
+    $alreadyPassed = $currentStatus === 'passed';
+    $advertisement = (int)($programme['advertisement'] ?? 0);
+    $timezoneName = trim((string)($interest['challenge_timezone'] ?? $programme['timezone'] ?? ''));
+    $timezone = spc_timezone($timezoneName);
+    $now = new DateTimeImmutable('now', $timezone);
+
+    $duration = (int)($interest['challenge_duration_days'] ?? 0);
+    if ($duration <= 0) $duration = spc_durationDays($period, $serverConfig);
+
+    $startedAtRaw = trim((string)($interest['signal_testing_started_at'] ?? ''));
+    $storedStartAt = $startedAtRaw !== '' ? spc_parseDateTime($startedAtRaw, $timezone) : null;
+    $hasChallengeRun = ($storedStartAt !== null) && ($beginTest === 1 || $alreadyFailed || $alreadyPassed || $currentStatus === 'ongoing');
+    $hasStarted = ($beginTest === 1 && $storedStartAt !== null && !$alreadyFailed);
+    $previewMode = (!$hasChallengeRun && !$alreadyFailed && !$alreadyPassed && in_array($currentStatus, ['interested','pending','active'], true));
+
+    $startAt = $hasChallengeRun ? $storedStartAt : $now->setTime(0, 0, 0);
+    if (!$startAt) $startAt = $now->setTime(0, 0, 0);
+    $endAt = spc_parseDateTime($interest['challenge_end_at'] ?? '', $timezone);
+    if (!$endAt) $endAt = $startAt->setTime(0, 0, 0)->modify('+' . $duration . ' days');
+
+    $snapshotDatesRaw = trim((string)($interest['challenge_restricted_dates_json'] ?? ''));
+    $snapshotDaysRaw = trim((string)($interest['challenge_restricted_days_json'] ?? ''));
+    $hasRestrictionSnapshot = ($hasChallengeRun && $snapshotDatesRaw !== '' && $snapshotDaysRaw !== '');
+    if ($hasRestrictionSnapshot) {
+        $restricted = [
+            'dates' => spc_decodeStringList($snapshotDatesRaw),
+            'days' => spc_decodeStringList($snapshotDaysRaw)
+        ];
+    } else {
+        $restricted = spc_getRestrictedCalendar($pdo, $userId, $programmeId, $email);
+    }
+
+    $tracking = ['tracking_available'=>false, 'events'=>[]];
+    $periods = [];
+    $currentIndex = -1;
+    $lookbackStart = null;
+    $lookbackEnd = null;
+
+    if ($hasChallengeRun) {
+        $periods = spc_buildChallengePeriods($startAt, $period, $duration, $restricted, $now);
+        foreach ($periods as $idx => $p) {
+            $pStart = spc_parseDateTime($p['start_at'], $timezone);
+            $pEnd = spc_parseDateTime($p['end_at'], $timezone);
+            if ($pStart && $pEnd && $now >= $pStart && $now < $pEnd) { $currentIndex = $idx; break; }
+        }
+        if ($currentIndex < 0 && !empty($periods)) {
+            foreach ($periods as $idx => $p) {
+                $pStart = spc_parseDateTime($p['start_at'], $timezone);
+                if ($pStart && $now < $pStart) { $currentIndex = $idx; break; }
+            }
+            if ($currentIndex < 0) $currentIndex = count($periods) - 1;
+        }
+        if ($hasStarted && !$alreadyFailed && !$alreadyPassed) {
+            // Programme comparison begins at midnight of signal_testing_started_at's
+            // date, so live trades earlier on the button-click date are included.
+            $comparisonStart = $startAt->setTime(0, 0, 0);
+            $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $comparisonStart, $endAt, $timezone);
+        }
+    } elseif ($previewMode) {
+        // Before Begin Test, keep dummy readings live using the requested rolling
+        // limits: daily=7 days, weekly=14 days, monthly=2 months. Preview is read-only.
+        $lookbackStart = spc_previewLookbackStart($now, $period);
+        $lookbackEnd = $now->modify('+1 second');
+        $previewPeriod = spc_buildPreviewPeriod($period, $lookbackStart, $now, $restricted);
+        $periods = [$previewPeriod];
+        $currentIndex = 0;
+        $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $lookbackStart, $lookbackEnd, $timezone);
+    } else {
+        // A failed/breached row retains its last challenge calendar, but its
+        // checkpoint readings stay reset until the user explicitly restarts it.
+        $periods = spc_buildChallengePeriods($startAt, $period, $duration, $restricted, $now);
+        $currentIndex = (int)($interest['challenge_failed_period_index'] ?? 0);
+        if ($currentIndex < 0 || $currentIndex >= count($periods)) $currentIndex = 0;
+    }
+
+    $minimumTrades = max(0, (int)($interest['trades_count'] ?? 0));
+    $minimumWins = max(0, (int)($interest['expected_win_count'] ?? 0));
+    $maximumLosses = max(0, (int)($interest['consecutive_expected_loss'] ?? 0));
+    $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
+    $failedIndex = null;
+    $failureReason = trim((string)($interest['challenge_failure_reason'] ?? ''));
+
+    foreach ($periods as $idx => &$p) {
+        $pStart = spc_parseDateTime($p['start_at'] ?? '', $timezone);
+        $pEnd = spc_parseDateTime($p['end_at'] ?? '', $timezone);
+        $isFuture = ($pStart !== null && $now < $pStart);
+        $isClosed = ($pEnd !== null && $now >= $pEnd);
+        $p['locked'] = $hasChallengeRun ? $isFuture : false;
+        if ($alreadyFailed) $p['locked'] = false;
+        $p['status'] = $p['locked'] ? 'locked' : ($previewMode ? 'preview' : 'active');
+        $p['progress'] = 0;
+        $p['skipped'] = ((int)($p['eligible_days'] ?? 0) === 0);
+        $stats = ['trades'=>0,'wins'=>0,'losses'=>0,'consecutive_losses'=>0];
+
+        if (($hasStarted || $previewMode) && !$p['locked'] && !$alreadyFailed && !$alreadyPassed && !empty($tracking['tracking_available'])) {
+            $stats = spc_computePeriodStats($tracking['events'], $p);
+        }
+
+        $p['trades'] = (int)$stats['trades'];
+        $p['wins'] = (int)$stats['wins'];
+        $p['consecutive_losses'] = (int)$stats['consecutive_losses'];
+        $p['trades_passed'] = ($minimumTrades > 0 && $stats['trades'] >= $minimumTrades);
+        $p['wins_passed'] = ($minimumWins > 0 && $stats['wins'] >= $minimumWins);
+        $p['loss_gate_passed'] = ($maximumLosses > 0 && $stats['consecutive_losses'] < $maximumLosses);
+        $p['requirements_met'] = ($p['trades_passed'] && $p['wins_passed'] && $p['loss_gate_passed']);
+
+        $aggregate['trades'] += $stats['trades'];
+        $aggregate['wins'] += $stats['wins'];
+        $aggregate['consecutive_losses'] = max($aggregate['consecutive_losses'], $stats['consecutive_losses']);
+
+        if ($alreadyFailed) {
+            $p['progress'] = 0;
+            $p['status'] = ((int)($interest['challenge_failed_period_index'] ?? -1) === $idx) ? 'failed' : 'reset';
+            $p['trades'] = $p['wins'] = $p['consecutive_losses'] = 0;
+            $p['trades_passed'] = $p['wins_passed'] = $p['loss_gate_passed'] = $p['requirements_met'] = false;
+            continue;
+        }
+
+        if ($p['skipped']) {
+            // Entirely restricted checkpoint: excluded from the challenge duration.
+            $p['progress'] = ($hasStarted || $alreadyPassed) ? 1 : 0;
+            $p['status'] = 'restricted';
+            continue;
+        }
+
+        // Dummy readings can show whether the provision would currently pass,
+        // but they must never fail the interest or publish the programme.
+        if ($previewMode) {
+            $p['status'] = 'preview';
+            $p['progress'] = 0;
+            continue;
+        }
+
+        if (!$hasStarted || $p['locked'] || $alreadyPassed) continue;
+
+        if ($maximumLosses > 0 && $stats['consecutive_losses'] >= $maximumLosses) {
+            $failedIndex = $idx;
+            $failureReason = 'The maximum consecutive-loss limit was reached in ' . $p['label'] . '.';
+            break;
+        }
+        if ($isClosed) {
+            if ($p['requirements_met']) {
+                $p['progress'] = 1;
+                $p['status'] = 'passed';
+            } else {
+                $failedIndex = $idx;
+                $failureReason = $p['label'] . ' ended without meeting the minimum trades and expected-win requirements.';
+                break;
+            }
+        } elseif ($p['requirements_met']) {
+            $p['progress'] = 1;
+            $p['status'] = 'requirements_met';
+        }
+    }
+    unset($p);
+
+    $plannedPeriods = spc_buildChallengePeriods($startAt, $period, $duration, $restricted, $now);
+    $totalRequired = 0;
+    $completedRequired = 0;
+    if ($hasChallengeRun) {
+        foreach ($periods as $p) {
+            if ((int)($p['eligible_days'] ?? 0) <= 0) continue;
+            $totalRequired++;
+            if ((int)($p['progress'] ?? 0) === 1) $completedRequired++;
+        }
+    } else {
+        foreach ($plannedPeriods as $p) if ((int)($p['eligible_days'] ?? 0) > 0) $totalRequired++;
+    }
+
+    $failureStatus = $advertisement === 1 ? 'breached' : 'failed';
+    $nowText = $now->format('Y-m-d H:i:s');
+    if ($hasStarted && !$alreadyFailed && !$alreadyPassed && !empty($tracking['tracking_available']) && $failedIndex !== null) {
+        $resetPeriods = $periods;
+        foreach ($resetPeriods as &$rp) {
+            $rp['progress'] = 0;
+            $rp['status'] = ((int)$rp['index'] === (int)$failedIndex) ? 'failed' : 'reset';
+            $rp['locked'] = false;
+            $rp['trades'] = $rp['wins'] = $rp['consecutive_losses'] = 0;
+            $rp['trades_passed'] = $rp['wins_passed'] = $rp['loss_gate_passed'] = $rp['requirements_met'] = false;
+        }
+        unset($rp);
+        $zeroDaily = $period === 'daily' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
+        $zeroWeekly = $period === 'weekly' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
+        $zeroMonthly = $period === 'monthly' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
+        try {
+            $u = $pdo->prepare("UPDATE `signals_provider_interest`
+                SET `interest_status` = ?, `begin_test` = 0,
+                    `daily_progress_json` = ?, `weekly_progress_json` = ?, `monthly_progress_json` = ?,
+                    `challenge_completed_periods` = 0, `challenge_failed_period_index` = ?,
+                    `challenge_failed_at` = ?, `challenge_failure_reason` = ?,
+                    `challenge_current_period_index` = ?, `challenge_completed_at` = NULL,
+                    `challenge_last_evaluated_at` = ?, `updated_at` = CURRENT_TIMESTAMP
+                WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ? AND `begin_test` = 1");
+            $u->execute([$failureStatus,$zeroDaily,$zeroWeekly,$zeroMonthly,$failedIndex,$nowText,$failureReason,$failedIndex,$nowText,(int)$interest['id'],$userId,$programmeId]);
+            $interest['interest_status'] = $failureStatus;
+            $interest['begin_test'] = 0;
+            $interest['challenge_failure_reason'] = $failureReason;
+            $interest['challenge_failed_period_index'] = $failedIndex;
+            $interest['challenge_failed_at'] = $nowText;
+            $interest['challenge_completed_periods'] = 0;
+            $periods = $resetPeriods;
+            $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
+            $completedRequired = 0;
+            $alreadyFailed = true;
+            $hasStarted = false;
+        } catch (Throwable $e) {
+            error_log('[signals challenge] failed-state persistence failed: ' . $e->getMessage());
+        }
+    }
+
+    $allPeriodsDone = $hasStarted && $now >= $endAt && $failedIndex === null && !empty($tracking['tracking_available']);
+    if ($allPeriodsDone) {
+        foreach ($periods as $p) {
+            if ((int)($p['eligible_days'] ?? 0) > 0 && (int)($p['progress'] ?? 0) !== 1) { $allPeriodsDone = false; break; }
+        }
+    }
+
+    if ($hasStarted && !$alreadyFailed && !$alreadyPassed && $allPeriodsDone) {
+        foreach ($periods as &$p) {
+            $p['progress'] = 1;
+            $p['status'] = ((int)($p['eligible_days'] ?? 0) > 0) ? 'passed' : 'restricted';
+            $p['locked'] = false;
+        }
+        unset($p);
+        try {
+            spc_savePeriodProgress($pdo,(int)$interest['id'],$userId,$programmeId,$period,$periods,$totalRequired,$totalRequired,count($periods)-1,$nowText);
+            $u = $pdo->prepare("UPDATE `signals_provider_interest` SET `interest_status` = 'passed', `begin_test` = 1,
+                `challenge_completed_periods` = ?, `challenge_total_periods` = ?, `challenge_current_period_index` = ?,
+                `challenge_completed_at` = ?, `challenge_last_evaluated_at` = ?, `updated_at` = CURRENT_TIMESTAMP
+                WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ? AND `begin_test` = 1");
+            $u->execute([$totalRequired,$totalRequired,count($periods)-1,$nowText,$nowText,(int)$interest['id'],$userId,$programmeId]);
+            $interest['interest_status'] = 'passed';
+            $interest['challenge_completed_periods'] = $totalRequired;
+            $interest['challenge_total_periods'] = $totalRequired;
+            $interest['challenge_completed_at'] = $nowText;
+            $interest['challenge_current_period_index'] = count($periods)-1;
+            $u2 = $pdo->prepare("UPDATE `programme` SET `advertisement` = 1 WHERE `id` = ? AND `userid` = ?");
+            $u2->execute([$programmeId,$userId]);
+            $advertisement = 1;
+            $alreadyPassed = true;
+        } catch (Throwable $e) {
+            error_log('[signals challenge] passing-state persistence failed: ' . $e->getMessage());
+        }
+    } elseif ($hasStarted && !$alreadyFailed && !$alreadyPassed && !empty($tracking['tracking_available'])) {
+        try {
+            spc_savePeriodProgress($pdo,(int)$interest['id'],$userId,$programmeId,$period,$periods,$completedRequired,$totalRequired,max(0,$currentIndex),$nowText);
+            $interest['challenge_completed_periods'] = $completedRequired;
+            $interest['challenge_total_periods'] = $totalRequired;
+            $interest['challenge_current_period_index'] = max(0,$currentIndex);
+        } catch (Throwable $e) {
+            error_log('[signals challenge] progress persistence failed: ' . $e->getMessage());
+        }
+    }
+
+    if ($alreadyFailed) {
+        $failureReason = $failureReason !== '' ? $failureReason : 'Your challenge failed, you can restart or join a new provision challenge.';
+        $failIndex = $interest['challenge_failed_period_index'] ?? $failedIndex;
+        foreach ($periods as &$p) {
+            $p['locked'] = false;
+            $p['progress'] = 0;
+            $p['status'] = ($failIndex !== null && (int)$p['index'] === (int)$failIndex) ? 'failed' : 'reset';
+            $p['trades'] = $p['wins'] = $p['consecutive_losses'] = 0;
+            $p['trades_passed'] = $p['wins_passed'] = $p['loss_gate_passed'] = $p['requirements_met'] = false;
+        }
+        unset($p);
+        $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
+        $completedRequired = 0;
+    }
+
+    if ($alreadyPassed) {
+        foreach ($periods as &$p) {
+            $p['locked'] = false;
+            $p['progress'] = 1;
+            $p['status'] = ((int)($p['eligible_days'] ?? 0) > 0) ? 'passed' : 'restricted';
+        }
+        unset($p);
+        $completedRequired = $totalRequired;
+    }
+
+    $selectedIndex = $currentIndex;
+    if (($alreadyFailed || $alreadyPassed) && !empty($periods)) {
+        $selectedIndex = $alreadyFailed
+            ? (int)($interest['challenge_failed_period_index'] ?? 0)
+            : (count($periods) - 1);
+    }
+    if ($selectedIndex < 0 && !empty($periods)) $selectedIndex = 0;
+    if (!empty($periods) && $selectedIndex >= count($periods)) $selectedIndex = count($periods) - 1;
+
+    $restrictionStart = $hasChallengeRun ? $startAt : ($lookbackStart ?: spc_previewLookbackStart($now, $period));
+    $restrictionEnd = $hasChallengeRun ? $endAt : ($lookbackEnd ?: $now->modify('+1 second'));
+    $restrictionStartDate = $restrictionStart->format('Y-m-d');
+    $restrictionEndDate = $hasChallengeRun ? $restrictionEnd->format('Y-m-d') : $now->format('Y-m-d');
+    $windowRestrictedDates = array_values(array_filter($restricted['dates'] ?? [], static function ($date) use ($restrictionStartDate, $restrictionEndDate, $hasChallengeRun) {
+        $date = substr(trim((string)$date), 0, 10);
+        return $hasChallengeRun
+            ? ($date >= $restrictionStartDate && $date < $restrictionEndDate)
+            : ($date >= $restrictionStartDate && $date <= $restrictionEndDate);
+    }));
+
+    $periodStats = $periods[$selectedIndex] ?? null;
+    $tradesPassed = $periodStats ? !empty($periodStats['trades_passed']) : false;
+    $winsPassed = $periodStats ? !empty($periodStats['wins_passed']) : false;
+    $lossGatePassed = $periodStats ? !empty($periodStats['loss_gate_passed']) : false;
+    $allRequirementsMet = $periodStats ? !empty($periodStats['requirements_met']) : false;
+    $durationAnchor = $hasChallengeRun ? $startAt : $now->setTime(0, 0, 0);
+    $eligibleDurationDays = spc_countEligibleDays($durationAnchor, $duration, $restricted);
+    $durationDescription = spc_durationDescription($period, $duration, $eligibleDurationDays);
+    $begun = $hasChallengeRun || $beginTest === 1;
+
+    return [
+        'interest'=>$interest, 'stats'=>$aggregate,
+        'minimum_trades'=>$minimumTrades, 'minimum_wins'=>$minimumWins,
+        'maximum_consecutive_losses'=>$maximumLosses,
+        'trades_passed'=>$tradesPassed, 'wins_passed'=>$winsPassed,
+        'loss_gate_passed'=>$lossGatePassed, 'all_requirements_met'=>$allRequirementsMet,
+        'loss_limit_reached'=>($alreadyFailed || ($periodStats && $maximumLosses > 0 && (int)$periodStats['consecutive_losses'] >= $maximumLosses)),
+        'read_only'=>!$hasStarted, 'begin_test'=>(int)($interest['begin_test'] ?? 0),
+        'challenge_begun'=>$begun,
+        'challenge_begun_label'=>$begun ? 'Provision challenge has begun' : 'Provision challenge hasn\'t begun',
+        'challenge_preview'=>$previewMode,
+        'lookback_description'=>$previewMode ? spc_previewLookbackDescription($period) : '',
+        'advertisement'=>$advertisement, 'programme_advertised'=>$advertisement === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1,
+        'period'=>$period, 'duration_days'=>$duration, 'duration_period_count'=>spc_periodCount($period, $duration),
+        'duration_eligible_days'=>$eligibleDurationDays, 'duration_description'=>$durationDescription,
+        'timezone'=>$timezone->getName(),
+        'tracking_available'=>!empty($tracking['tracking_available']),
+        'periods'=>$periods, 'current_period_index'=>$selectedIndex,
+        'total_periods'=>$totalRequired, 'completed_periods'=>$completedRequired,
+        'failure_reason'=>$alreadyFailed ? $failureReason : '',
+        'failed_period_index'=>$alreadyFailed ? ($interest['challenge_failed_period_index'] ?? $failedIndex) : null,
+        'challenge_started_at'=>$hasChallengeRun ? $startAt->format('Y-m-d H:i:s') : null,
+        'challenge_end_at'=>$hasChallengeRun ? $endAt->format('Y-m-d H:i:s') : null,
+        'lookback_start'=>$previewMode && $lookbackStart ? $lookbackStart->format('Y-m-d H:i:s') : null,
+        'lookback_end'=>$previewMode && $lookbackEnd ? $lookbackEnd->format('Y-m-d H:i:s') : null,
+        'restricted_dates'=>$windowRestrictedDates, 'restricted_days'=>$restricted['days'],
+        'failed'=>$alreadyFailed, 'passed'=>$alreadyPassed
+    ];
+}
+
+// Run the additive migration once per request before AJAX handlers or page rendering.
+spc_ensureChallengeSchema($pdo);
+
 
 function getSignalProviderInterest($pdo, $userId, $programmeId) {
     try {
@@ -588,7 +1557,7 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
 
         $iq = $pdo->prepare("
             SELECT id, tradeid, investor_id, investor_sub_account_id,
-                   modify_trade, orderstatus, pnl, pnl_risk_reward
+                   contract_id, modify_trade, orderstatus, pnl, pnl_risk_reward
             FROM programme_trades
             WHERE userid = ? AND programmeid = ? AND investor_id IS NOT NULL
         ");
@@ -606,10 +1575,10 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
         $insStmt = $pdo->prepare("
             INSERT INTO programme_trades
                 (userid, programmeid, investor_id, investor_sub_account_id,
-                 tradeid, ordertype, symbol, entry, stoploss, takeprofit,
+                 tradeid, contract_id, ordertype, symbol, entry, stoploss, takeprofit,
                  orderstatus, trade_risk_reward, interest_risk_reward, interest_risk_reward_type,
                  pnl, pnl_risk_reward, modify_trade, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         foreach ($activeInvestors as $inv) {
@@ -626,17 +1595,20 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
                     $invPnl     = $existing['pnl'] ?? null;
                     $progPrr    = $pt['pnl_risk_reward'] ?? null;
                     $invPrr     = $existing['pnl_risk_reward'] ?? null;
+                    $progContract = (int)($pt['contract_id'] ?? 1);
+                    $invContract  = (int)($existing['contract_id'] ?? 0);
 
                     if (
                         $progModify !== $invModify ||
                         $progStatus !== $invStatus ||
                         (string)$progPnl !== (string)$invPnl ||
-                        (string)$progPrr !== (string)$invPrr
+                        (string)$progPrr !== (string)$invPrr ||
+                        $progContract !== $invContract
                     ) {
                         try {
                             $u = $pdo->prepare("
                                 UPDATE programme_trades
-                                SET modify_trade = ?, orderstatus = ?, pnl = ?, pnl_risk_reward = ?
+                                SET modify_trade = ?, orderstatus = ?, pnl = ?, pnl_risk_reward = ?, contract_id = ?
                                 WHERE id = ?
                             ");
                             $u->execute([
@@ -644,6 +1616,7 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
                                 $progStatus !== '' ? $progStatus : null,
                                 $progPnl,
                                 $progPrr,
+                                $progContract,
                                 (int)$existing['id']
                             ]);
                         } catch (Throwable $e) {}
@@ -658,6 +1631,7 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
                         $inv['investor_id'],
                         $inv['sub_account_id'] ?: null,
                         $tid,
+                        $pt['contract_id'] ?? 1,
                         $pt['ordertype'] ?? null,
                         $pt['symbol'] ?? null,
                         $pt['entry'] ?? null,
@@ -778,7 +1752,7 @@ function propagateTradeToInvestors($pdo, $userId, $programmeId, $tradeId, $chang
     } catch (Throwable $e) {}
 }
 
-function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) {
+function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, $serverConfig, $hasVps, $hasBroker, $email = '') {
     $state = [
         'advertisement' => 0,
         'interest_status' => '',
@@ -804,8 +1778,29 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
 
     if (!$programme) return $state;
 
-    // A programme is advertised only when both the advertisement flag and
-    // the server-side approval flag are enabled. Approval is decided elsewhere.
+    // Evaluate the latest provision from combined LIVE analytics rows only.
+    // This remains read-only until the user explicitly begins the test.
+    if ($interest) {
+        $provisionEvaluation = spc_evaluateProvision(
+            $pdo,
+            (int)$userId,
+            (int)$programme['id'],
+            $interest,
+            $programme,
+            $serverConfig,
+            $email
+        );
+        $interest = $provisionEvaluation['interest'];
+        $programme['advertisement'] = (int)$provisionEvaluation['advertisement'];
+        $state['provision_evaluation'] = $provisionEvaluation;
+        $state['challenge_begun'] = !empty($provisionEvaluation['challenge_begun']);
+        $state['challenge_begun_label'] = (string)($provisionEvaluation['challenge_begun_label'] ?? 'Provision challenge hasn\'t begun');
+        $state['challenge_duration_description'] = (string)($provisionEvaluation['duration_description'] ?? '');
+        $state['challenge_preview'] = !empty($provisionEvaluation['challenge_preview']);
+        $state['challenge_lookback_description'] = (string)($provisionEvaluation['lookback_description'] ?? '');
+    }
+
+    // Publication in the investor UI still respects the independent server approval gate.
     $advertisement = ((int)($programme['advertisement'] ?? 0) === 1
         && (int)($programme['server_advertisement_approval'] ?? 0) === 1) ? 1 : 0;
     $interestStatus = $interest ? (string)($interest['interest_status'] ?? '') : '';
@@ -836,15 +1831,16 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $state['vps_request_count'] = countProgrammeVpsRequests($pdo, $programmeId);
     }
 
-    $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed';
+    $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed' || $interestStatus === 'cancelled';
 
-    $buildChallengeChevron = function ($periodLabel, $indicatorType = 'challenge') {
+    $buildChallengeChevron = function ($periodLabel, $indicatorType = 'challenge', $progressText = '') {
         $label = trim((string)$periodLabel);
         if ($label === '') $label = 'Signals';
         $safe = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+        $safeProgress = trim((string)$progressText) !== '' ? ' · ' . htmlspecialchars((string)$progressText, ENT_QUOTES, 'UTF-8') : '';
         $indicatorType = strtolower(trim((string)$indicatorType)) === 'provision' ? 'provision' : 'challenge';
         return '<button type="button" class="sd-challenge-chevron" onclick="sdGoToChallenges()">'
-             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals ' . $indicatorType . '</span>'
+             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals ' . $indicatorType . $safeProgress . '</span>'
              .   '<span class="sd-challenge-chevron-right"><i class="fa-solid fa-chevron-right"></i></span>'
              . '</button>';
     };
@@ -867,6 +1863,11 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $challengeDuration = 0;
     }
     $state['challenge_duration'] = $challengeDuration;
+    $challengeProgressText = '';
+    if (isset($provisionEvaluation) && !empty($provisionEvaluation['total_periods'])) {
+        $challengeProgressText = (int)$provisionEvaluation['completed_periods'] . '/' . (int)$provisionEvaluation['total_periods'] . ' checkpoints';
+    }
+    $state['challenge_progress_text'] = $challengeProgressText;
 
     if ($advertisement === 0 && $noInterest) {
         if (!$hasVps) {
@@ -893,13 +1894,17 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $state['show_explore_challenges'] = true;
         $state['show_session_modal'] = shouldShowSignalsSessionModalOnce((int)$userId, $programmeId, 'failed:' . $programmeId);
         $state['session_modal_title'] = 'Challenge Failed';
-        $state['session_modal_message'] = 'Your programme failed to meet up the challenge. Train your programme or join a new challenge.';
+        $state['session_modal_message'] = 'Your challenge failed, you can restart or join a new provision challenge.';
         $state['session_modal_class'] = 'warning';
         $state['session_modal_key']   = 'failed:' . $programmeId;
-        $state['greeting_sub'] = "Your programme failed the challenge. Train or join a new challenge.";
+        $state['greeting_sub'] = 'Your challenge failed, you can restart or join a new provision challenge.';
     }
 
     // Do not change advertisement here; server-side approval controls publication.
+
+    if ($advertisement === 0 && $interestStatus === 'passed' && (int)($programme['advertisement'] ?? 0) === 1) {
+        $state['greeting_sub'] = 'Provision challenge passed. Programme advertisement is awaiting server approval.';
+    }
 
     if ($advertisement === 1 && $interestStatus === 'passed') {
         $progName = $programme['program_name'] ?: 'Programme';
@@ -920,13 +1925,14 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
             } else {
                 $state['show_begin_test'] = true;
                 $state['greeting_sub'] = '';
-                $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+                $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
 
                 $interestId = $interest ? (int)($interest['id'] ?? 0) : 0;
                 $modalKey = 'begin_test:' . $programmeId . ':' . $interestId;
                 $state['show_session_modal'] = shouldShowSignalsSessionModalOnce((int)$userId, $programmeId, $modalKey);
                 $state['session_modal_title'] = 'Begin Your Challenge Test';
-                $state['session_modal_message'] = 'You have shown interest in a challenge. Once you agree to begin the test, live trades will be generated from your trained programme for the next ' . $challengeDuration . ' days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.';
+                $checkpointUnit = $period === 'monthly' ? 'month' : ($period === 'weekly' ? 'week' : 'day');
+                $state['session_modal_message'] = 'You have shown interest in a challenge. Live trade counts are already previewed using the recent ' . ($period === 'monthly' ? '2-month' : ($period === 'weekly' ? '14-day' : '7-day')) . ' look-back. Once you agree to begin the test, the ' . $challengeDuration . '-day challenge window starts and every eligible ' . $checkpointUnit . ' checkpoint must meet its requirements before the programme can be advertised.';
                 $state['session_modal_class'] = 'info';
                 $state['session_modal_key'] = $modalKey;
             }
@@ -941,12 +1947,12 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
     // independent of whether the Begin Test action is currently available.
     if ($advertisement === 0 && $interestStatus === 'interested') {
         $state['greeting_sub'] = '';
-        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
     }
 
     if ($advertisement === 0 && $interestStatus === 'ongoing') {
         $state['greeting_sub'] = '';
-        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily');
+        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
     }
 
     // Published programmes must keep both indicators visible: the publication
@@ -956,7 +1962,7 @@ function determineSignalsDashboardState($pdo, $userId, $programme, $interest, $s
         $state['greeting_sub'] = 'Programme is advertised';
         $state['greeting_sub_html'] =
             '<span class="sd-advertised-indicator" style="display:block;font-weight:700;margin-bottom:4px;">Advertised</span>'
-            . $buildChallengeChevron($periodLabel ?: 'Daily', 'provision');
+            . $buildChallengeChevron($periodLabel ?: 'Daily', 'provision', $challengeProgressText);
     }
 
     if ($state['greeting_sub_html'] === '') {
@@ -1195,13 +2201,34 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                 $html .=     '<div><div class="sd-t-label">Interest risk reward type</div><b>' . esc_h($irrType) . '</b></div>';
 
                 if ($statusLower === 'closed') {
-                    $pnlVal = $t['pnl'] !== null ? (float)$t['pnl'] : 0.0;
+                    $pnlRaw = $t['pnl'] ?? null;
+                    $chartOutcome = strtolower(trim((string)($t['chart_outcome'] ?? '')));
+                    $chartOutcome = preg_replace('/[\s_-]+/', ' ', $chartOutcome);
                     $prrVal = $t['pnl_risk_reward'] !== null ? (float)$t['pnl_risk_reward'] : null;
                     $prrTxt = $prrVal !== null ? number_format($prrVal, 2) : '—';
 
-                    if ($pnlVal > 0.01)      { $pnlLabel = 'Closed in Profit'; $pnlClass = 'is-profit'; }
-                    elseif ($pnlVal < -0.01) { $pnlLabel = 'Closed in Loss';   $pnlClass = 'is-loss'; }
-                    else                     { $pnlLabel = 'Closed Flat';      $pnlClass = 'is-flat'; }
+                    // An actual PnL value is authoritative: every positive value
+                    // is profit, every negative value is loss, and exactly zero
+                    // is breakeven. Only use the Programme Analytics outcome when
+                    // the synchronized trade has no PnL value at all.
+                    if ($pnlRaw !== null && $pnlRaw !== '' && is_numeric($pnlRaw)) {
+                        $pnlVal = (float)$pnlRaw;
+                        if ($pnlVal > 0.0)      { $pnlLabel = 'Closed in Profit'; $pnlClass = 'is-profit'; }
+                        elseif ($pnlVal < 0.0)  { $pnlLabel = 'Closed in Loss';   $pnlClass = 'is-loss'; }
+                        else                    { $pnlLabel = 'Closed Flat';      $pnlClass = 'is-flat'; }
+                    } elseif (in_array($chartOutcome, ['take profit reached', 'closed in profit', 'closed profit', 'profit'], true)) {
+                        $pnlLabel = 'Closed in Profit';
+                        $pnlClass = 'is-profit';
+                    } elseif (in_array($chartOutcome, ['stoploss hit', 'closed in loss', 'closed loss', 'loss'], true)) {
+                        $pnlLabel = 'Closed in Loss';
+                        $pnlClass = 'is-loss';
+                    } elseif (in_array($chartOutcome, ['closed flat', 'breakeven', 'break even', 'closed at breakeven'], true)) {
+                        $pnlLabel = 'Closed Flat';
+                        $pnlClass = 'is-flat';
+                    } else {
+                        $pnlLabel = 'Outcome unavailable';
+                        $pnlClass = 'is-unknown';
+                    }
 
                     $html .= '<div><div class="sd-t-label">Outcome</div><b class="sd-pnl-outcome ' . $pnlClass . '">' . esc_h($pnlLabel) . '</b></div>';
                     $html .= '<div><div class="sd-t-label">PnL risk reward</div><b> 1:' . esc_h($prrTxt) . '</b></div>';
@@ -1239,6 +2266,32 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                     $html .=   '</div>';
                 }
 
+                $chartRootId = isset($t['chart_root_id']) ? (int)$t['chart_root_id'] : 0;
+                $chartConfirmationRaw = $t['chart_confirmation_root_id'] ?? null;
+                $chartConfirmationId = ($chartConfirmationRaw === null || $chartConfirmationRaw === '') ? '' : (string)(int)$chartConfirmationRaw;
+                $chartFamilyNumber = isset($t['chart_family_number']) ? (int)$t['chart_family_number'] : 0;
+                $chartTradeId = trim((string)($t['chart_trade_id'] ?? ''));
+                $chartTimeframe = strtolower(trim((string)($t['chart_timeframe'] ?? $t['timeframe'] ?? '')));
+                $chartSymbol = trim((string)($t['chart_symbol'] ?? $t['symbol'] ?? ''));
+                $identityReady = $chartRootId > 0 && $chartConfirmationId !== '' && $chartFamilyNumber > 0 && $chartTradeId !== '' && $chartTimeframe !== '' && $chartSymbol !== '';
+                $html .= '<div class="sd-locate-trade-wrap">';
+                $html .= '<button type="button" class="sd-locate-trade-button" data-locate-programme-trade="1"'
+                    . ' data-trade-row-id="' . (int)$t['id'] . '"'
+                    . ' data-identity-ready="' . ($identityReady ? '1' : '0') . '"'
+                    . ' data-root-id="' . $chartRootId . '"'
+                    . ' data-confirmation-root-id="' . esc_h($chartConfirmationId) . '"'
+                    . ' data-family-number="' . $chartFamilyNumber . '"'
+                    . ' data-chart-trade-id="' . esc_h($chartTradeId) . '"'
+                    . ' data-family-signature="' . esc_h($t['chart_family_signature'] ?? '') . '"'
+                    . ' data-symbol="' . esc_h($chartSymbol) . '"'
+                    . ' data-timeframe="' . esc_h($chartTimeframe) . '"'
+                    . ' data-source-timeframe="' . esc_h($t['chart_source_timeframe'] ?? '') . '"'
+                    . ' data-entry-anchor-time="' . esc_h($t['chart_entry_anchor_time'] ?? '') . '"'
+                    . ' data-entry-trigger-time="' . esc_h($t['chart_entry_trigger_time'] ?? '') . '"'
+                    . ' data-outcome="' . esc_h($t['chart_outcome'] ?? '') . '">'
+                    . '<i class="fa-solid fa-crosshairs"></i> Locate on chart</button>';
+                $html .= '</div>';
+
                 $html .= '</div>';
             }
             $html .= '</div>';
@@ -1253,9 +2306,29 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
 function fetchActiveProgrammeTrades($pdo, $userId, $programmeId, $limit = 400) {
     $trades = [];
     try {
+        $mappingExists = false;
+        try {
+            $mapCheck = $pdo->query("SHOW TABLES LIKE 'programme_trade_chart_identity'");
+            $mappingExists = (bool)($mapCheck ? $mapCheck->fetchColumn() : false);
+        } catch (Throwable $e) {}
+        $identitySelect = $mappingExists ? ",
+                c.root_id AS chart_root_id,
+                c.confirmation_root_id AS chart_confirmation_root_id,
+                c.family_number AS chart_family_number,
+                c.chart_trade_id AS chart_trade_id,
+                c.family_signature AS chart_family_signature,
+                c.symbol AS chart_symbol,
+                c.timeframe AS chart_timeframe,
+                c.source_timeframe AS chart_source_timeframe,
+                c.entry_anchor_time AS chart_entry_anchor_time,
+                c.entry_trigger_time AS chart_entry_trigger_time,
+                c.outcome AS chart_outcome" : '';
+        $identityJoin = $mappingExists ? " LEFT JOIN programme_trade_chart_identity c
+                ON c.programme_trade_id = t.id AND c.userid = t.userid AND c.programmeid = t.programmeid" : '';
         $s = $pdo->prepare("
-            SELECT t.*
+            SELECT t.* {$identitySelect}
             FROM programme_trades t
+            {$identityJoin}
             WHERE t.userid = ? AND t.programmeid = ?
             ORDER BY t.created_at DESC
             LIMIT " . (int)$limit . "
@@ -1646,8 +2719,10 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     syncInterestRiskRewardIntoTrades($pdo, $userId, $programmeId, $interest);
 
     $serverConfig = getServerAccountConfig($pdo);
-    $signalsState = determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker);
+    $signalsState = determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker, $email);
 
+    $state['published'] = ((int)($programme['advertisement'] ?? 0) === 1
+        && (int)($programme['server_advertisement_approval'] ?? 0) === 1);
     $state['signals_state'] = $signalsState;
     $state['greeting_sub_html'] = $signalsState['greeting_sub_html'];
     $state['greeting_banners_html'] = $signalsState['greeting_banners_html'];
@@ -1680,6 +2755,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $interest = getSignalProviderInterest($pdo, $userId, (int)$programme['id']);
             if (!$interest) jres(['success' => false, 'message' => 'No challenge interest found.']);
+            $interestStatus = strtolower(trim((string)($interest['interest_status'] ?? '')));
+            if (!in_array($interestStatus, ['interested','pending','active'], true) || (int)($interest['begin_test'] ?? 0) === 1) {
+                jres(['success' => false, 'message' => 'This provision is not available to begin. Use Restart Challenge from Signals Provision Request when a challenge has failed.']);
+            }
 
             $interestId = (int)$interest['id'];
 
@@ -1691,8 +2770,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 jres(['success' => false, 'message' => 'You haven’t configured your programme for trading yet.']);
             }
 
-            $upd = $pdo->prepare("UPDATE signals_provider_interest SET begin_test = 1, interest_status = 'ongoing', signal_testing_started_at = NOW() WHERE id = ?");
-            $upd->execute([$interestId]);
+            $testStart = spc_startProvisionTest($pdo, (int)$userId, (int)$programme['id'], $interest, $programme, getServerAccountConfig($pdo), $email);
+            if (empty($testStart['success'])) {
+                jres(['success' => false, 'message' => (string)($testStart['message'] ?? 'Unable to start the challenge test.')]);
+            }
+            $refreshInterest = getSignalProviderInterest($pdo, (int)$userId, (int)$programme['id']);
+            if ($refreshInterest) {
+                $evaluation = spc_evaluateProvision($pdo, (int)$userId, (int)$programme['id'], $refreshInterest, $programme, getServerAccountConfig($pdo), $email);
+                $refreshInterest = $evaluation['interest'];
+            }
 
             try {
                 recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
@@ -1706,7 +2792,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ]);
             } catch (Throwable $e) {}
 
-            jres(['success' => true, 'message' => 'Test started.']);
+            jres(['success' => true, 'message' => 'Test started.', 'challenge' => $testStart, 'interest' => $refreshInterest ?? null]);
         } catch (Throwable $e) {
             jres(['success' => false, 'message' => 'Failed to start test.']);
         }
@@ -2133,7 +3219,9 @@ if ($programme) {
 }
 
 $serverConfig = getServerAccountConfig($pdo);
-$signalsState = $programme ? determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker) : [];
+$signalsState = $programme ? determineSignalsDashboardState($pdo, $userId, $programme, $interest, $serverConfig, $hasVps, $hasBroker, $email) : [];
+$published = $programme && (int)($programme['advertisement'] ?? 0) === 1
+    && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
 
 $greetingSub = $signalsState['greeting_sub'] ?? '';
 $greetingSubHtml = $signalsState['greeting_sub_html'] ?? ($greetingSub);
@@ -2308,6 +3396,9 @@ if ($programme && !empty($email)) {
     .sd-trade-modal-card .sd-t-label { font-size: .6rem; color: var(--sd-muted); text-transform: uppercase; font-weight: 700; letter-spacing: .5px; margin-bottom: 2px; }
     .sd-trade-modal-card .sd-t-label + b { font-size: .84rem; font-weight: 800; word-break: break-word; display: block; }
     .sd-trade-modify { padding-top: 10px; border-top: 1px dashed var(--sd-border); }
+    .sd-locate-trade-wrap { padding-top: 10px; margin-top: 10px; border-top: 1px dashed var(--sd-border); }
+    .sd-locate-trade-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 100%; border: 1px solid var(--sd-accent); border-radius: 9px; background: transparent; color: var(--sd-accent); padding: 9px 12px; font: inherit; font-size: .76rem; font-weight: 850; cursor: pointer; }
+    .sd-locate-trade-button:active { transform: translateY(1px); }
 
     .sd-order-status { font-weight: 800; }
     .sd-order-status.is-running { color: var(--sd-success, #2ecc71); }
@@ -2323,6 +3414,7 @@ if ($programme && !empty($email)) {
     .sd-pnl-outcome.is-profit { color: var(--sd-success, #2ecc71); }
     .sd-pnl-outcome.is-loss   { color: var(--sd-danger, #df4e4e); }
     .sd-pnl-outcome.is-flat   { color: var(--sd-muted, #60736d); }
+.sd-pnl-outcome.is-unknown { color: var(--sd-muted, #60736d); }
     body.dark-mode .sd-pnl-outcome.is-profit { color: #4ade80; }
     body.dark-mode .sd-pnl-outcome.is-loss   { color: #ff8080; }
     body.dark-mode .sd-pnl-outcome.is-flat   { color: #93a8a1; }
@@ -3584,9 +4676,62 @@ if ($programme && !empty($email)) {
         });
     }
 
+    document.addEventListener('click', function (e) {
+        var button = e.target.closest('[data-locate-programme-trade]');
+        if (!button) return;
+        if (button.dataset.identityReady !== '1') {
+            window.sdAlert('Trade record cannot be identified', 'error', 'Trade location');
+            return;
+        }
+        var rootId = parseInt(button.dataset.rootId || '0', 10) || 0;
+        var confirmationRaw = button.getAttribute('data-confirmation-root-id');
+        var confirmationId = confirmationRaw === null || confirmationRaw === '' ? null : (parseInt(confirmationRaw, 10) || 0);
+        var familyNumber = parseInt(button.dataset.familyNumber || '0', 10) || 0;
+        var timeframe = String(button.dataset.timeframe || '').toLowerCase();
+        var symbol = String(button.dataset.symbol || '').trim();
+        var chartTradeId = String(button.dataset.chartTradeId || '').trim();
+        if (rootId <= 0 || confirmationId === null || familyNumber <= 0 || !timeframe || !symbol || !chartTradeId) {
+            window.sdAlert('Trade record cannot be identified', 'error', 'Trade location');
+            return;
+        }
+        var tradeType = confirmationId > 0 ? 'confirmation' : 'root';
+        var requestId = 'sd-' + String(Date.now()) + '-' + String(button.dataset.tradeRowId || '0');
+        window.parent.postMessage({
+            type: 'programmeTrainingLocate',
+            trade: {
+                programme_id: <?= (int)($programme['id'] ?? 0) ?>,
+                programme_trade_row_id: parseInt(button.dataset.tradeRowId || '0', 10) || 0,
+                trade_type: tradeType,
+                is_confirmation: confirmationId > 0,
+                root_id: rootId,
+                confirmation_root_id: confirmationId,
+                family_number: familyNumber,
+                chart_trade_id: chartTradeId,
+                trade_id: chartTradeId,
+                request_id: requestId,
+                family_signature: button.dataset.familySignature || '',
+                symbol: symbol,
+                timeframe: timeframe,
+                chart_timeframe: timeframe,
+                source_timeframe: button.dataset.sourceTimeframe || '',
+                entry_anchor_time: button.dataset.entryAnchorTime || '',
+                entry_trigger_time: button.dataset.entryTriggerTime || '',
+                outcome: button.dataset.outcome || ''
+            }
+        }, '*');
+    });
+
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
         if (e.data.type === 'theme') document.body.classList.toggle('dark-mode', !!e.data.dark);
+        if (e.data.type === 'programmeTradeLocateResult' && e.data.success !== true) {
+            var locateMessages = {
+                not_found: "This trade can't be found",
+                no_chart_data: 'This trade no longer exists on the chart data',
+                unidentifiable: 'Trade record cannot be identified'
+            };
+            window.sdAlert(locateMessages[e.data.reason] || locateMessages.not_found, 'error', 'Trade location');
+        }
     });
     try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
 })();

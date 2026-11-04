@@ -1913,10 +1913,10 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
 
     function forwardPendingAnalyticsLocate() {
-        if (!pendingAnalyticsLocate || !trainingFrameReady || !frames.training || !frames.training.contentWindow) return;
+        if (!pendingAnalyticsLocate || pendingAnalyticsLocate.sent || !trainingFrameReady || !frames.training || !frames.training.contentWindow) return;
         try {
-            frames.training.contentWindow.postMessage({type:'programmeAnalyticsLocate',trade:pendingAnalyticsLocate}, '*');
-            pendingAnalyticsLocate = null;
+            frames.training.contentWindow.postMessage({type:'programmeAnalyticsLocate',trade:pendingAnalyticsLocate.trade}, '*');
+            pendingAnalyticsLocate.sent = true;
         } catch (e) {}
     }
 
@@ -1946,7 +1946,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         if (e.data.type === 'programmeAnalyticsLocate' && frames.analytics && e.source === frames.analytics.contentWindow) {
             var analyticsTrade = e.data.trade || {};
             analyticsTrade.request_id = analyticsTrade.request_id || ('pa-' + Date.now());
-            pendingAnalyticsLocate = analyticsTrade;
+            pendingAnalyticsLocate = {trade:analyticsTrade,sourceTab:'analytics',request_id:analyticsTrade.request_id,sent:false};
             switchTab('training');
             forwardPendingAnalyticsLocate();
         }
@@ -1956,10 +1956,30 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             return name !== 'training' && frames[name] && e.source === frames[name].contentWindow;
         })) {
             var externalTrade = e.data.trade || e.data;
+            var externalSourceTab = names.find(function(name){ return name !== 'training' && frames[name] && e.source === frames[name].contentWindow; }) || 'signals';
             externalTrade.request_id = externalTrade.request_id || ('external-' + Date.now());
-            pendingAnalyticsLocate = externalTrade;
+            pendingAnalyticsLocate = {trade:externalTrade,sourceTab:externalSourceTab,request_id:externalTrade.request_id,sent:false};
             switchTab('training');
             forwardPendingAnalyticsLocate();
+        }
+        if (e.data.type === 'programmeTrainingLocateResult' && frames.training && e.source === frames.training.contentWindow) {
+            var pendingLocate = pendingAnalyticsLocate;
+            if (!pendingLocate) return;
+            if (e.data.request_id && String(e.data.request_id) !== String(pendingLocate.request_id)) return;
+            pendingAnalyticsLocate = null;
+            if (e.data.success === true) return;
+            var returnTab = frames[pendingLocate.sourceTab] ? pendingLocate.sourceTab : 'analytics';
+            switchTab(returnTab);
+            try {
+                frames[returnTab].contentWindow.postMessage({
+                    type:'programmeTradeLocateResult',
+                    success:false,
+                    reason:e.data.reason || 'not_found',
+                    message:e.data.message || '',
+                    request_id:pendingLocate.request_id,
+                    chart_trade_id:e.data.chart_trade_id || ''
+                }, '*');
+            } catch (err) {}
         }
         if (e.data.type === 'bodyClass') {
             if (Array.isArray(e.data.remove)) e.data.remove.forEach(function (c) { document.body.classList.remove(c); });
