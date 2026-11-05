@@ -1685,6 +1685,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     var activeShellTab = <?= json_encode($defaultTab) ?>;
     var VPS_RETURN_ALLOWED = ['signals', 'menu', 'training', 'analytics'];
     var vpsReturnTab = 'signals';
+    var ACCOUNT_MANAGEMENT_RETURN_ALLOWED = ['menu', 'signals_provision_request'];
+    var accountManagementReturnTab = 'menu';
     var BROKER_RETURN_ALLOWED = [
         'signals', 'menu', 'training', 'analytics', 'vps',
         'disconnect_trader_broker', 'signals_provision_request',
@@ -1699,6 +1701,14 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             vpsReturnTab = queryReturnTab;
         } else if (activeShellTab === 'vps' && VPS_RETURN_ALLOWED.indexOf(storedReturnTab) !== -1) {
             vpsReturnTab = storedReturnTab;
+        }
+
+        var accountManagementQueryReturnTab = shellUrl.searchParams.get('account_management_from') || '';
+        var storedAccountManagementReturnTab = sessionStorage.getItem('harvhub_account_management_return_tab') || '';
+        if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(accountManagementQueryReturnTab) !== -1) {
+            accountManagementReturnTab = accountManagementQueryReturnTab;
+        } else if (activeShellTab === 'account_management' && ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(storedAccountManagementReturnTab) !== -1) {
+            accountManagementReturnTab = storedAccountManagementReturnTab;
         }
 
         var brokerQueryReturnTab = shellUrl.searchParams.get('broker_from') || '';
@@ -1947,6 +1957,21 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             try { sessionStorage.removeItem('harvhub_programme_vps_return_tab'); } catch (e) {}
         }
 
+        if (tab === 'account_management' && previousTab !== 'account_management') {
+            // Record the exact source page: either Programme Menu or Signals Provision Request.
+            var explicitAccountSource = String(requestedSourceTab || '');
+            if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(explicitAccountSource) !== -1) {
+                accountManagementReturnTab = explicitAccountSource;
+            } else if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(previousTab) !== -1) {
+                accountManagementReturnTab = previousTab;
+            } else {
+                accountManagementReturnTab = 'menu';
+            }
+            try { sessionStorage.setItem('harvhub_account_management_return_tab', accountManagementReturnTab); } catch (e) {}
+        } else if (previousTab === 'account_management' && tab !== 'account_management') {
+            try { sessionStorage.removeItem('harvhub_account_management_return_tab'); } catch (e) {}
+        }
+
         if (tab === 'connect_trader_broker' && previousTab !== 'connect_trader_broker') {
             var explicitBrokerSource = String(requestedSourceTab || '');
             if (BROKER_RETURN_ALLOWED.indexOf(explicitBrokerSource) !== -1) {
@@ -1979,6 +2004,11 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 url.searchParams.set('vps_from', vpsReturnTab);
             } else {
                 url.searchParams.delete('vps_from');
+            }
+            if (tab === 'account_management') {
+                url.searchParams.set('account_management_from', accountManagementReturnTab);
+            } else {
+                url.searchParams.delete('account_management_from');
             }
             if (tab === 'connect_trader_broker') {
                 url.searchParams.set('broker_from', brokerReturnTab);
@@ -2032,6 +2062,23 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             }
             var vpsDestination = VPS_RETURN_ALLOWED.indexOf(vpsReturnTab) !== -1 ? vpsReturnTab : 'signals';
             switchTab(vpsDestination);
+        }
+        if (e.data.type === 'programmeAccountManagementBack' && frames.account_management && e.source === frames.account_management.contentWindow) {
+            var requestedAccountReturnTab = String(e.data.returnTab || '');
+            if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(requestedAccountReturnTab) !== -1) {
+                accountManagementReturnTab = requestedAccountReturnTab;
+            } else {
+                try {
+                    var currentAccountShellUrl = new URL(window.location.href);
+                    var accountUrlReturnTab = currentAccountShellUrl.searchParams.get('account_management_from') || '';
+                    var storedAccountReturnTab = sessionStorage.getItem('harvhub_account_management_return_tab') || '';
+                    if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(accountUrlReturnTab) !== -1) accountManagementReturnTab = accountUrlReturnTab;
+                    else if (ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(storedAccountReturnTab) !== -1) accountManagementReturnTab = storedAccountReturnTab;
+                } catch (err) {}
+            }
+            var accountManagementDestination = ACCOUNT_MANAGEMENT_RETURN_ALLOWED.indexOf(accountManagementReturnTab) !== -1
+                ? accountManagementReturnTab : 'menu';
+            switchTab(accountManagementDestination);
         }
         if (e.data.type === 'programmeBrokerBack' && frames.connect_trader_broker && e.source === frames.connect_trader_broker.contentWindow) {
             var requestedBrokerReturnTab = String(e.data.returnTab || '');

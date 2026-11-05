@@ -3579,7 +3579,7 @@ if ($programme && !empty($email)) {
     </div>
 
     <div class="sd-tabs">
-        <button class="sd-tab active" data-tab="trades">Trades</button>
+        <button class="sd-tab active" data-tab="trades">Signals</button>
         <button class="sd-tab" data-tab="configuration">Configuration</button>
     </div>
 
@@ -3587,9 +3587,9 @@ if ($programme && !empty($email)) {
         <div class="sd-card">
             <div class="sd-card-head">
                 <div>
-                    <div class="sd-card-title">Trades</div>
+                    <div class="sd-card-title">Signals</div>
                     <div class="sd-card-desc" id="sdTradesCardDesc">
-                        Trades generated from this programme for <?= count($activeInvestorIdSet) ?> active investor<?= count($activeInvestorIdSet) === 1 ? '' : 's' ?>
+                        Signals generated from this programme for <?= count($activeInvestorIdSet) ?> active investor<?= count($activeInvestorIdSet) === 1 ? '' : 's' ?>
                     </div>
                 </div>
             </div>

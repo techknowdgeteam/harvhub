@@ -136,9 +136,12 @@ try {
     $serverConfig = $q->fetch(PDO::FETCH_ASSOC) ?: [];
 } catch (Throwable $e) {}
 
-$dayDuration     = (int)($serverConfig['day_challenge_duration'] ?? 30);
-$weeklyDuration  = (int)($serverConfig['weekly_challenge_duration'] ?? 60);
-$monthlyDuration = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
+// Challenge durations are controlled exclusively by server_account.
+// Missing or invalid settings are treated as unconfigured, never replaced
+// with hard-coded challenge durations.
+$dayDuration     = max(0, (int)($serverConfig['day_challenge_duration'] ?? 0));
+$weeklyDuration  = max(0, (int)($serverConfig['weekly_challenge_duration'] ?? 0));
+$monthlyDuration = max(0, (int)($serverConfig['monthly_challenge_duration'] ?? 0));
 
 $trainingReadiness = getProgrammeTrainingReadiness($pdo, $userId, (int)($programme['id'] ?? 0));
 $programmeHasVps = false;
@@ -315,18 +318,23 @@ function spc_normalizeOutcome($raw): string {
 
 function spc_durationDays(string $period, array $serverConfig = []): int {
     $period = strtolower(trim($period));
-    if ($period === 'weekly') $value = (int)($serverConfig['weekly_challenge_duration'] ?? 60);
-    elseif ($period === 'monthly') $value = (int)($serverConfig['monthly_challenge_duration'] ?? 90);
-    else $value = (int)($serverConfig['day_challenge_duration'] ?? 30);
-    if ($value <= 0) $value = $period === 'weekly' ? 60 : ($period === 'monthly' ? 90 : 30);
-    return max(1, min(366, $value));
+    if ($period === 'weekly') $value = (int)($serverConfig['weekly_challenge_duration'] ?? 0);
+    elseif ($period === 'monthly') $value = (int)($serverConfig['monthly_challenge_duration'] ?? 0);
+    else $value = (int)($serverConfig['day_challenge_duration'] ?? 0);
+
+    return max(0, $value);
 }
 
 function spc_periodCount(string $period, int $durationDays): int {
     $period = strtolower(trim($period));
-    if ($period === 'weekly') return max(1, (int)round($durationDays / 7.5)); // 60 days = 8 challenge weeks.
-    if ($period === 'monthly') return max(1, (int)round($durationDays / 30)); // 90 days = 3 challenge months.
-    return max(1, $durationDays);
+    $durationDays = max(0, $durationDays);
+    if ($durationDays <= 0) return 0;
+
+    // Period counts are derived from the server-configured duration. The
+    // resulting checkpoints are then distributed over that exact duration.
+    if ($period === 'weekly') return max(1, (int)ceil($durationDays / 7));
+    if ($period === 'monthly') return max(1, (int)ceil($durationDays / 30));
+    return $durationDays;
 }
 
 function spc_normalizeDayName($raw): string {
@@ -424,7 +432,8 @@ function spc_restrictionDetail(string $date, bool $restrictedDate, bool $restric
 
 function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, int $durationDays, array $restricted, DateTimeImmutable $now): array {
     $period = in_array($period, ['daily','weekly','monthly'], true) ? $period : 'daily';
-    $durationDays = max(1, $durationDays);
+    $durationDays = max(0, $durationDays);
+    if ($durationDays <= 0) return [];
     $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
     $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
     $windowStart = $startAt->setTime(0, 0, 0);
@@ -438,12 +447,17 @@ function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, i
     $periods = [];
     $cursor = $windowStart;
     for ($i = 0; $i < $count; $i++) {
-        // Distribute the configured eligible-day requirement across checkpoints.
-        // For example, 60 weekly days / 8 checkpoints becomes 7 or 8 eligible
-        // days per checkpoint; restricted dates extend the calendar end.
-        $offsetStart = (int)floor(($i * $durationDays) / $count);
-        $offsetEndExclusive = (int)floor((($i + 1) * $durationDays) / $count);
-        $targetEligibleDays = max(1, $offsetEndExclusive - $offsetStart);
+        // Each checkpoint consumes its provision-unit eligible-day target.
+        // Restricted dates extend the calendar window without reducing that
+        // target, and each next checkpoint starts after the previous one ends.
+        if ($period === 'daily') {
+            $targetEligibleDays = 1;
+        } elseif ($period === 'weekly') {
+            $targetEligibleDays = min(7, max(0, $durationDays - ($i * 7)));
+        } else {
+            $targetEligibleDays = min(30, max(0, $durationDays - ($i * 30)));
+        }
+        if ($targetEligibleDays <= 0) break;
 
         $periodStart = $cursor;
         $activeDates = [];
@@ -640,7 +654,7 @@ function spc_durationDescription(string $period, int $durationDays, int $eligibl
     $calendarDays = max($requiredDays, (int)($calendarDays ?? $durationDays));
     $excludedDays = max(0, $calendarDays - $requiredDays);
     $windowText = $calendarDays . ' calendar days (' . $requiredDays . ' required eligible days + ' . $excludedDays . ' restricted days)';
-    $restrictionExplanation = 'Restricted weekdays and specific restricted dates are excluded only from trade collection; they are not subtracted from the required eligible-day total. Every unique calendar date excluded by either rule extends the overall end date by one calendar day. If one date matches both a restricted weekday and an explicit restricted date, it is counted only once. For example, 60 required eligible days plus 10 unique restricted dates means a 70-calendar-day window: 10 excluded dates and all 60 eligible days still required.';
+    $restrictionExplanation = 'Restricted weekdays and specific restricted dates are excluded only from trade collection; they are not subtracted from the required eligible-day total. Every unique calendar date excluded by either rule extends the overall end date by one calendar day. If one date matches both a restricted weekday and an explicit restricted date, it is counted only once.';
 
     if ($period === 'weekly') {
         $count = spc_periodCount('weekly', $durationDays);
@@ -761,8 +775,15 @@ function spc_periodStorage(array $periods): array {
             'index' => (int)$p['index'], 'label' => (string)$p['label'],
             'start_date' => (string)$p['start_date'], 'end_date' => (string)$p['end_date'],
             'progress' => (int)($p['progress'] ?? 0), 'status' => (string)($p['status'] ?? ''),
-            'skipped' => !empty($p['skipped']), 'trades' => (int)($p['trades'] ?? 0),
-            'wins' => (int)($p['wins'] ?? 0), 'consecutive_losses' => (int)($p['consecutive_losses'] ?? 0),
+            'locked' => !empty($p['locked']),
+            'skipped' => !empty($p['skipped']),
+            'trades' => (int)($p['trades'] ?? 0), 'wins' => (int)($p['wins'] ?? 0),
+            'losses' => (int)($p['losses'] ?? 0),
+            'consecutive_losses' => (int)($p['consecutive_losses'] ?? 0),
+            'trades_passed' => !empty($p['trades_passed']),
+            'wins_passed' => !empty($p['wins_passed']),
+            'loss_gate_passed' => !empty($p['loss_gate_passed']),
+            'requirements_met' => !empty($p['requirements_met']),
             'eligible_days' => (int)($p['eligible_days'] ?? 0),
             'excluded_dates' => array_values($p['excluded_dates'] ?? []),
             'excluded_days' => array_values($p['excluded_days'] ?? [])
@@ -788,6 +809,9 @@ function spc_startProvisionTest(PDO $pdo, int $userId, int $programmeId, array $
     $period = strtolower(trim((string)($interest['trades_provision'] ?? 'daily')));
     if (!in_array($period, ['daily','weekly','monthly'], true)) $period = 'daily';
     $duration = spc_durationDays($period, $serverConfig);
+    if ($duration <= 0) {
+        return ['success'=>false, 'message'=>'The server has not configured a valid duration for this signals provision period. Please contact the administrator.'];
+    }
     $timezoneName = trim((string)($programme['timezone'] ?? ''));
     $timezone = spc_timezone($timezoneName);
     $now = new DateTimeImmutable('now', $timezone);
@@ -871,7 +895,7 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     $startedAtRaw = trim((string)($interest['signal_testing_started_at'] ?? ''));
     $storedStartAt = $startedAtRaw !== '' ? spc_parseDateTime($startedAtRaw, $timezone) : null;
     $hasChallengeRun = ($storedStartAt !== null) && ($beginTest === 1 || $alreadyFailed || $alreadyPassed || $currentStatus === 'ongoing');
-    $hasStarted = ($beginTest === 1 && $storedStartAt !== null && !$alreadyFailed);
+    $hasStarted = ($storedStartAt !== null && ($beginTest === 1 || $alreadyFailed || $currentStatus === 'ongoing') && !$alreadyPassed);
     $previewMode = (!$hasChallengeRun && !$alreadyFailed && !$alreadyPassed && in_array($currentStatus, ['interested','pending','active'], true));
 
     $startAt = $hasChallengeRun ? $storedStartAt : $now->setTime(0, 0, 0);
@@ -923,11 +947,19 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
             }
             if ($currentIndex < 0) $currentIndex = count($periods) - 1;
         }
-        if ($hasStarted && !$alreadyFailed && !$alreadyPassed) {
-            // Programme comparison begins at midnight of signal_testing_started_at's
-            // date, so live trades earlier on the button-click date are included.
-            $comparisonStart = $startAt->setTime(0, 0, 0);
-            $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $comparisonStart, $endAt, $timezone);
+        if ($hasStarted && !$alreadyPassed) {
+            // Start at the exact test-start timestamp. For a failed challenge,
+            // stop at the persisted failure time so later recordings cannot
+            // alter the frozen result displayed to the user.
+            $comparisonStart = $startAt;
+            $comparisonEnd = $endAt;
+            if ($alreadyFailed) {
+                $failureAt = spc_parseDateTime($interest['challenge_failed_at'] ?? '', $timezone);
+                $comparisonEnd = $failureAt ? $failureAt->modify('+1 second') : $now->modify('+1 second');
+                if ($comparisonEnd > $endAt) $comparisonEnd = $endAt;
+                if ($comparisonEnd <= $comparisonStart) $comparisonEnd = $now->modify('+1 second');
+            }
+            $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $comparisonStart, $comparisonEnd, $timezone);
         }
     } elseif ($previewMode) {
         // The lookback is a hard data limit, not one combined checkpoint.
@@ -957,8 +989,7 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
             if ($actualPreviewStart) $lookbackStart = $actualPreviewStart;
         }
     } else {
-        // A failed/breached row retains its last challenge calendar, but its
-        // checkpoint readings stay reset until the user explicitly restarts it.
+        // A failed/breached row retains its original challenge calendar and stored readings.
         $periods = spc_buildChallengePeriods($startAt, $period, $duration, $restricted, $now);
         $currentIndex = (int)($interest['challenge_failed_period_index'] ?? 0);
         if ($currentIndex < 0 || $currentIndex >= count($periods)) $currentIndex = 0;
@@ -970,25 +1001,130 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
     $failedIndex = null;
     $failureReason = trim((string)($interest['challenge_failure_reason'] ?? ''));
+    $storedFailedPeriods = [];
+    $storedFailedSnapshotHasMetrics = false;
+    $storedFailedSnapshotHasLegacyReset = false;
+    $recordedFailedIndex = (int)($interest['challenge_failed_period_index'] ?? 0);
+
+    if ($alreadyFailed) {
+        $progressColumn = spc_progressColumn($period);
+        $storedRows = json_decode((string)($interest[$progressColumn] ?? ''), true);
+        if (is_array($storedRows)) {
+            foreach ($storedRows as $storedRow) {
+                if (!is_array($storedRow)) continue;
+                $storedIndex = (int)($storedRow['index'] ?? -1);
+                if ($storedIndex < 0) continue;
+                $storedFailedPeriods[$storedIndex] = $storedRow;
+                if (strtolower(trim((string)($storedRow['status'] ?? ''))) === 'reset') {
+                    $storedFailedSnapshotHasLegacyReset = true;
+                }
+                if ((int)($storedRow['trades'] ?? 0) > 0
+                    || (int)($storedRow['wins'] ?? 0) > 0
+                    || (int)($storedRow['losses'] ?? 0) > 0
+                    || (int)($storedRow['consecutive_losses'] ?? 0) > 0
+                    || (int)($storedRow['progress'] ?? 0) > 0) {
+                    $storedFailedSnapshotHasMetrics = true;
+                }
+            }
+            // A non-empty snapshot from this version is valid even when every
+            // recorded count is legitimately zero. Previous reset logic marked
+            // all unaffected checkpoints as 'reset', which identifies legacy
+            // snapshots that should be reconstructed from analytics.
+            if ($storedFailedPeriods && !$storedFailedSnapshotHasLegacyReset) {
+                $storedFailedSnapshotHasMetrics = true;
+            }
+        }
+    }
 
     foreach ($periods as $idx => &$p) {
         $pStart = spc_parseDateTime($p['start_at'] ?? '', $timezone);
         $pEnd = spc_parseDateTime($p['end_at'] ?? '', $timezone);
         $isFuture = ($pStart !== null && $now < $pStart);
         $isClosed = ($pEnd !== null && $now >= $pEnd);
-        $p['locked'] = $hasChallengeRun ? $isFuture : false;
-        if ($alreadyFailed) $p['locked'] = false;
+        $p['locked'] = ($hasStarted && $isFuture && !$alreadyFailed);
+        if ($alreadyPassed) $p['locked'] = false;
         $p['status'] = $p['locked'] ? 'locked' : ($previewMode ? 'preview' : 'active');
         $p['progress'] = 0;
         $p['skipped'] = ((int)($p['eligible_days'] ?? 0) === 0);
         $stats = ['trades'=>0,'wins'=>0,'losses'=>0,'consecutive_losses'=>0];
 
-        if (($hasStarted || $previewMode) && !$p['locked'] && !$alreadyFailed && !$alreadyPassed && !empty($tracking['tracking_available'])) {
+        // A failed challenge is a frozen record. Prefer its persisted snapshot;
+        // if an older version had already zeroed that snapshot, reconstruct the
+        // historical values from analytics up to challenge_failed_at.
+        if ($alreadyFailed) {
+            $saved = $storedFailedPeriods[$idx] ?? null;
+            $useSavedSnapshot = $storedFailedSnapshotHasMetrics && is_array($saved);
+
+            if ($useSavedSnapshot) {
+                $stats = [
+                    'trades' => (int)($saved['trades'] ?? 0),
+                    'wins' => (int)($saved['wins'] ?? 0),
+                    'losses' => (int)($saved['losses'] ?? 0),
+                    'consecutive_losses' => (int)($saved['consecutive_losses'] ?? 0)
+                ];
+            } elseif ($idx <= $recordedFailedIndex && !$p['skipped'] && !empty($tracking['tracking_available'])) {
+                $stats = spc_computePeriodStats($tracking['events'], $p);
+            }
+
+            $p['trades'] = (int)$stats['trades'];
+            $p['wins'] = (int)$stats['wins'];
+            $p['losses'] = (int)$stats['losses'];
+            $p['consecutive_losses'] = (int)$stats['consecutive_losses'];
+            $p['trades_passed'] = ($minimumTrades > 0 && $stats['trades'] >= $minimumTrades);
+            $p['wins_passed'] = ($minimumWins > 0 && $stats['wins'] >= $minimumWins);
+            $p['loss_gate_passed'] = ($maximumLosses > 0 && $stats['consecutive_losses'] < $maximumLosses);
+            $p['requirements_met'] = ($p['trades_passed'] && $p['wins_passed'] && $p['loss_gate_passed']);
+
+            if (is_array($saved)) {
+                $p['progress'] = (int)($saved['progress'] ?? 0);
+                $p['excluded_dates'] = is_array($saved['excluded_dates'] ?? null) ? $saved['excluded_dates'] : ($p['excluded_dates'] ?? []);
+                $p['excluded_days'] = is_array($saved['excluded_days'] ?? null) ? $saved['excluded_days'] : ($p['excluded_days'] ?? []);
+            }
+
+            if ($p['skipped']) {
+                $p['progress'] = 1;
+                $p['status'] = 'restricted';
+                $p['locked'] = false;
+            } elseif ($idx === $recordedFailedIndex) {
+                $p['status'] = 'failed';
+                $p['locked'] = false;
+            } elseif ($idx > $recordedFailedIndex) {
+                // Checkpoints after the failed one never began and remain locked.
+                $p['status'] = 'locked';
+                $p['locked'] = true;
+                $p['progress'] = 0;
+            } else {
+                $savedStatus = strtolower(trim((string)($saved['status'] ?? '')));
+                if (in_array($savedStatus, ['passed','requirements_met','active','restricted'], true)) {
+                    $p['status'] = $savedStatus;
+                } elseif ((int)$p['progress'] === 1 || ($isClosed && $p['requirements_met'])) {
+                    $p['status'] = 'passed';
+                    $p['progress'] = 1;
+                } elseif ($p['requirements_met']) {
+                    $p['status'] = 'requirements_met';
+                } else {
+                    $p['status'] = 'active';
+                }
+                $p['locked'] = !empty($saved['locked']);
+            }
+
+            if ($idx <= $recordedFailedIndex) {
+                $aggregate['trades'] += $stats['trades'];
+                $aggregate['wins'] += $stats['wins'];
+                $aggregate['consecutive_losses'] = max($aggregate['consecutive_losses'], $stats['consecutive_losses']);
+            }
+            continue;
+        }
+
+        if (($hasStarted || $previewMode) && !$p['locked'] && !$alreadyPassed && !empty($tracking['tracking_available'])) {
             $stats = spc_computePeriodStats($tracking['events'], $p);
         }
 
+        // Assign all actual readings before evaluating the immediate failure gate.
+        // This ensures the breached checkpoint retains its red-bar value and X.
         $p['trades'] = (int)$stats['trades'];
         $p['wins'] = (int)$stats['wins'];
+        $p['losses'] = (int)$stats['losses'];
         $p['consecutive_losses'] = (int)$stats['consecutive_losses'];
         $p['trades_passed'] = ($minimumTrades > 0 && $stats['trades'] >= $minimumTrades);
         $p['wins_passed'] = ($minimumWins > 0 && $stats['wins'] >= $minimumWins);
@@ -999,23 +1135,13 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
         $aggregate['wins'] += $stats['wins'];
         $aggregate['consecutive_losses'] = max($aggregate['consecutive_losses'], $stats['consecutive_losses']);
 
-        if ($alreadyFailed) {
-            $p['progress'] = 0;
-            $p['status'] = ((int)($interest['challenge_failed_period_index'] ?? -1) === $idx) ? 'failed' : 'reset';
-            $p['trades'] = $p['wins'] = $p['consecutive_losses'] = 0;
-            $p['trades_passed'] = $p['wins_passed'] = $p['loss_gate_passed'] = $p['requirements_met'] = false;
-            continue;
-        }
-
         if ($p['skipped']) {
-            // Entirely restricted checkpoint: excluded from the challenge duration.
             $p['progress'] = ($hasStarted || $alreadyPassed) ? 1 : 0;
             $p['status'] = 'restricted';
             continue;
         }
 
-        // Dummy readings can show whether the provision would currently pass,
-        // but they must never fail the interest or publish the programme.
+        // Preview readings never fail or publish a programme.
         if ($previewMode) {
             $p['status'] = 'preview';
             $p['progress'] = 0;
@@ -1024,11 +1150,19 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
 
         if (!$hasStarted || $p['locked'] || $alreadyPassed) continue;
 
+        // Maximum consecutive losses is an immediate hard-fail gate. The live
+        // count is already assigned above, so it remains available after failure.
         if ($maximumLosses > 0 && $stats['consecutive_losses'] >= $maximumLosses) {
             $failedIndex = $idx;
             $failureReason = 'The maximum consecutive-loss limit was reached in ' . $p['label'] . '.';
+            $p['status'] = 'failed';
+            $p['progress'] = 0;
+            $p['locked'] = false;
+            $p['loss_gate_passed'] = false;
+            $p['requirements_met'] = false;
             break;
         }
+
         if ($isClosed) {
             if ($p['requirements_met']) {
                 $p['progress'] = 1;
@@ -1036,6 +1170,9 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
             } else {
                 $failedIndex = $idx;
                 $failureReason = $p['label'] . ' ended without meeting the minimum trades and expected-win requirements.';
+                $p['status'] = 'failed';
+                $p['progress'] = 0;
+                $p['locked'] = false;
                 break;
             }
         } elseif ($p['requirements_met']) {
@@ -1061,39 +1198,71 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     $failureStatus = $advertisement === 1 ? 'breached' : 'failed';
     $nowText = $now->format('Y-m-d H:i:s');
     if ($hasStarted && !$alreadyFailed && !$alreadyPassed && !empty($tracking['tracking_available']) && $failedIndex !== null) {
-        $resetPeriods = $periods;
-        foreach ($resetPeriods as &$rp) {
-            $rp['progress'] = 0;
-            $rp['status'] = ((int)$rp['index'] === (int)$failedIndex) ? 'failed' : 'reset';
-            $rp['locked'] = false;
-            $rp['trades'] = $rp['wins'] = $rp['consecutive_losses'] = 0;
-            $rp['trades_passed'] = $rp['wins_passed'] = $rp['loss_gate_passed'] = $rp['requirements_met'] = false;
+        // Freeze the actual readings as they stood at the point of failure.
+        // Earlier completed checkpoints, the failed checkpoint's values, and
+        // future locked checkpoints are all retained exactly as displayed.
+        if (isset($periods[$failedIndex])) {
+            $periods[$failedIndex]['status'] = 'failed';
+            $periods[$failedIndex]['locked'] = false;
         }
-        unset($rp);
-        $zeroDaily = $period === 'daily' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
-        $zeroWeekly = $period === 'weekly' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
-        $zeroMonthly = $period === 'monthly' ? spc_encode(spc_periodStorage($resetPeriods)) : '[]';
+
+        $completedRequired = 0;
+        foreach ($periods as $savedPeriod) {
+            if ((int)($savedPeriod['eligible_days'] ?? 0) <= 0) continue;
+            if ((int)($savedPeriod['progress'] ?? 0) === 1) $completedRequired++;
+        }
+
         try {
+            spc_savePeriodProgress(
+                $pdo,
+                (int)$interest['id'],
+                $userId,
+                $programmeId,
+                $period,
+                $periods,
+                $completedRequired,
+                $totalRequired,
+                $failedIndex,
+                $nowText
+            );
+
             $u = $pdo->prepare("UPDATE `signals_provider_interest`
-                SET `interest_status` = ?, `begin_test` = 0,
-                    `daily_progress_json` = ?, `weekly_progress_json` = ?, `monthly_progress_json` = ?,
-                    `challenge_completed_periods` = 0, `challenge_failed_period_index` = ?,
-                    `challenge_failed_at` = ?, `challenge_failure_reason` = ?,
-                    `challenge_current_period_index` = ?, `challenge_completed_at` = NULL,
-                    `challenge_last_evaluated_at` = ?, `updated_at` = CURRENT_TIMESTAMP
+                SET `interest_status` = ?, `begin_test` = 1,
+                    `challenge_completed_periods` = ?, `challenge_total_periods` = ?,
+                    `challenge_failed_period_index` = ?, `challenge_failed_at` = ?,
+                    `challenge_failure_reason` = ?, `challenge_current_period_index` = ?,
+                    `challenge_completed_at` = NULL, `challenge_last_evaluated_at` = ?,
+                    `updated_at` = CURRENT_TIMESTAMP
                 WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ? AND `begin_test` = 1");
-            $u->execute([$failureStatus,$zeroDaily,$zeroWeekly,$zeroMonthly,$failedIndex,$nowText,$failureReason,$failedIndex,$nowText,(int)$interest['id'],$userId,$programmeId]);
+            $u->execute([
+                $failureStatus,
+                $completedRequired,
+                $totalRequired,
+                $failedIndex,
+                $nowText,
+                $failureReason,
+                $failedIndex,
+                $nowText,
+                (int)$interest['id'],
+                $userId,
+                $programmeId
+            ]);
+
             $interest['interest_status'] = $failureStatus;
-            $interest['begin_test'] = 0;
+            $interest['begin_test'] = 1;
             $interest['challenge_failure_reason'] = $failureReason;
             $interest['challenge_failed_period_index'] = $failedIndex;
             $interest['challenge_failed_at'] = $nowText;
-            $interest['challenge_completed_periods'] = 0;
-            $periods = $resetPeriods;
-            $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
-            $completedRequired = 0;
+            $interest['challenge_completed_periods'] = $completedRequired;
+            $interest['challenge_total_periods'] = $totalRequired;
+            $interest['challenge_current_period_index'] = $failedIndex;
             $alreadyFailed = true;
-            $hasStarted = false;
+            $recordedFailedIndex = $failedIndex;
+            $storedFailedPeriods = [];
+            foreach (spc_periodStorage($periods) as $storedPeriod) {
+                $storedFailedPeriods[(int)$storedPeriod['index']] = $storedPeriod;
+            }
+            $storedFailedSnapshotHasMetrics = true;
         } catch (Throwable $e) {
             error_log('[signals challenge] failed-state persistence failed: ' . $e->getMessage());
         }
@@ -1144,18 +1313,35 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     }
 
     if ($alreadyFailed) {
-        $failureReason = $failureReason !== '' ? $failureReason : 'Your challenge failed, you can restart or join a new provision challenge.';
-        $failIndex = $interest['challenge_failed_period_index'] ?? $failedIndex;
-        foreach ($periods as &$p) {
-            $p['locked'] = false;
-            $p['progress'] = 0;
-            $p['status'] = ($failIndex !== null && (int)$p['index'] === (int)$failIndex) ? 'failed' : 'reset';
-            $p['trades'] = $p['wins'] = $p['consecutive_losses'] = 0;
-            $p['trades_passed'] = $p['wins_passed'] = $p['loss_gate_passed'] = $p['requirements_met'] = false;
+        // Do not clear or rebuild failed readings as zeros. They are immutable
+        // until the user manually cancels this provision interest.
+        $failureReason = $failureReason !== ''
+            ? $failureReason
+            : 'This signals provision challenge has failed. Its recorded checkpoint data has been retained.';
+
+        // Older versions cleared the saved JSON on failure. When possible,
+        // reconstruct and persist those legacy readings from the analytics
+        // records bounded by the recorded failure timestamp.
+        if (!$storedFailedSnapshotHasMetrics && !empty($tracking['tracking_available']) && !empty($periods)) {
+            try {
+                spc_savePeriodProgress(
+                    $pdo,
+                    (int)$interest['id'],
+                    $userId,
+                    $programmeId,
+                    $period,
+                    $periods,
+                    $completedRequired,
+                    $totalRequired,
+                    max(0, $recordedFailedIndex),
+                    $nowText
+                );
+                $interest['challenge_completed_periods'] = $completedRequired;
+                $interest['challenge_total_periods'] = $totalRequired;
+            } catch (Throwable $restoreError) {
+                error_log('[signals challenge] legacy failed snapshot restore failed: ' . $restoreError->getMessage());
+            }
         }
-        unset($p);
-        $aggregate = ['trades'=>0,'wins'=>0,'consecutive_losses'=>0];
-        $completedRequired = 0;
     }
 
     if ($alreadyPassed) {
@@ -1213,8 +1399,8 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
         'maximum_consecutive_losses'=>$maximumLosses,
         'trades_passed'=>$tradesPassed, 'wins_passed'=>$winsPassed,
         'loss_gate_passed'=>$lossGatePassed, 'all_requirements_met'=>$allRequirementsMet,
-        'loss_limit_reached'=>($alreadyFailed || ($periodStats && $maximumLosses > 0 && (int)$periodStats['consecutive_losses'] >= $maximumLosses)),
-        'read_only'=>!$hasStarted, 'begin_test'=>(int)($interest['begin_test'] ?? 0),
+        'loss_limit_reached'=>($periodStats && $maximumLosses > 0 && (int)$periodStats['consecutive_losses'] >= $maximumLosses),
+        'read_only'=>(!$hasStarted || $alreadyFailed || $alreadyPassed), 'begin_test'=>(int)($interest['begin_test'] ?? 0),
         'challenge_begun'=>$begun,
         'challenge_begun_label'=>$begun ? 'Provision challenge has begun' : 'Provision challenge hasn\'t begun',
         'challenge_preview'=>$previewMode,
@@ -1768,53 +1954,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
 
-    if ($action === 'restart_interest') {
-        if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
-        $interestId = (int)($_POST['interest_id'] ?? 0);
-        if ($interestId <= 0) jres(['success' => false, 'message' => 'Invalid provision.']);
-        try {
-            $q = $pdo->prepare("SELECT * FROM signals_provider_interest WHERE id = ? AND user_id = ? AND programme_id = ? LIMIT 1");
-            $q->execute([$interestId, $userId, (int)$programme['id']]);
-            $interest = $q->fetch(PDO::FETCH_ASSOC) ?: null;
-            if (!$interest) jres(['success' => false, 'message' => 'Provision interest not found.']);
-            if (strtolower((string)($interest['interest_status'] ?? '')) !== 'failed') {
-                jres(['success' => false, 'message' => 'Only a failed challenge can be restarted.']);
-            }
-            $readiness = getProgrammeTrainingReadiness($pdo, $userId, (int)$programme['id']);
-            if (empty($readiness['has_root'])) jres(['success' => false, 'message' => 'Train your programme before restarting the challenge.']);
-            if (empty($readiness['trades_configured'])) jres(['success' => false, 'message' => 'You haven’t configured your programme for trading yet.']);
-            $hasVps = false;
-            try {
-                $v = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
-                $v->execute([(int)$programme['id']]);
-                $hasVps = (bool)$v->fetchColumn();
-            } catch (Throwable $e) {}
-            if (!$hasVps) {
-                try {
-                    $v = $pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE follower_programme_id = ? AND host_status = 'active' LIMIT 1");
-                    $v->execute([(int)$programme['id']]);
-                    $hasVps = (bool)$v->fetchColumn();
-                } catch (Throwable $e) {}
-            }
-            $hasBroker = !empty($programme['broker']) && !empty($programme['server']) && !empty($programme['login']);
-            if (!$hasVps || !$hasBroker) jres(['success' => false, 'message' => 'Connect your ' . (!$hasVps ? 'VPS' : 'broker') . ' to restart the challenge.']);
-            $restart = spc_startProvisionTest($pdo, $userId, (int)$programme['id'], $interest, $programme, $serverConfig, $email);
-            if (empty($restart['success'])) jres(['success' => false, 'message' => (string)($restart['message'] ?? 'Unable to restart the challenge.')]);
-            try {
-                recordProgrammeNotification($pdo, (int)$programme['id'], $email, [
-                    'notification_key' => 'signals-test-restarted-' . (int)$programme['id'] . '-' . $interestId . '-' . date('YmdHis'),
-                    'title' => 'Challenge Restarted',
-                    'message' => 'Your failed signals provision challenge has been restarted.',
-                    'type' => 'success', 'section' => 'Signals', 'action_tab' => 'signals', 'force' => true
-                ]);
-            } catch (Throwable $e) {}
-            jres(['success' => true, 'message' => 'Your challenge has been restarted.', 'challenge' => $restart]);
-        } catch (Throwable $e) {
-            error_log('[signals_provision_request] restart challenge failed: ' . $e->getMessage());
-            jres(['success' => false, 'message' => 'Failed to restart challenge.']);
-        }
-    }
-
     if ($action === 'cancel_interest') {
         if (!$programme) jres(['success' => false, 'message' => 'No programme selected.']);
 
@@ -1909,6 +2048,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         --spr-page-pad: 20px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Hide every scrollbar without disabling scrolling. This applies to the
+       page, nested scroll areas, modal cards, tab strips and injected content. */
+    *, *::before, *::after {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+    }
+    *::-webkit-scrollbar,
+    *::-webkit-scrollbar-track,
+    *::-webkit-scrollbar-thumb,
+    *::-webkit-scrollbar-corner {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        background: transparent !important;
+    }
     html, body {
         background: var(--spr-bg); color: var(--spr-text);
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -2040,14 +2195,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         padding: 16px var(--spr-page-pad);
     }
 
+    /* Provision cards always stack their content first and actions underneath. */
     .spr-item {
         background: var(--spr-bg); border: 1px solid var(--spr-border);
         border-radius: var(--spr-radius); padding: 16px 20px;
-        display: flex; align-items: center; justify-content: space-between;
-        gap: 16px; box-shadow: var(--spr-shadow);
+        display: flex; flex-direction: column; align-items: stretch;
+        justify-content: flex-start; gap: 12px;
+        width: 100%; min-width: 0; box-shadow: var(--spr-shadow);
     }
 
-    .spr-item-main { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+    .spr-item-main {
+        display: flex; flex-direction: column; gap: 6px;
+        flex: 0 0 auto; width: 100%; min-width: 0;
+    }
     .spr-item-header { display: flex; flex-direction: column; gap: 2px; }
     .spr-item-title { font-size: 1rem; font-weight: 800; color: var(--spr-text); word-break: break-word; line-height: 1.25; }
     .spr-item-sub { font-size: .78rem; color: var(--spr-muted); }
@@ -2087,14 +2247,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .spr-restricted-list strong { display:block; color:var(--spr-text); font-size:.7rem; margin-bottom:4px; }
     .spr-restricted-list ul { margin-left:16px; display:grid; gap:2px; }
     .spr-restricted-list > div + div { margin-top:4px; }
+    .spr-restricted-settings-btn {
+        display:inline-flex; align-items:center; justify-content:center; gap:7px;
+        margin-top:10px; padding:7px 13px; min-height:32px;
+        border:1px solid var(--spr-border); border-radius:8px;
+        background:var(--spr-card); color:var(--spr-accent);
+        font-family:inherit; font-size:.7rem; font-weight:850;
+        cursor:pointer; transition:background .18s,border-color .18s,transform .15s;
+    }
+    .spr-restricted-settings-btn:hover {
+        background:var(--spr-soft); border-color:var(--spr-accent); transform:translateY(-1px);
+    }
     .spr-challenge-failed { padding:10px 12px; margin-top:10px; border:1px solid rgba(223,78,78,.35); border-radius:10px; color:var(--spr-danger); font-size:.79rem; font-weight:800; }
-    .spr-restart-btn { flex-shrink:0; padding:10px 22px; border:0; border-radius:10px; background:var(--spr-accent); color:#fff; font-weight:800; font-size:.85rem; cursor:pointer; font-family:inherit; white-space:nowrap; }
-    .spr-restart-btn:hover { background:var(--spr-accent-2); }
 
-    .spr-item-actions { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; align-self: center; }
+    .spr-item-actions {
+        display: flex; flex-direction: column; align-items: stretch;
+        gap: 8px; flex: 0 0 auto; align-self: stretch; width: 100%;
+        padding-top: 12px; border-top: 1px solid var(--spr-border);
+    }
 
     .spr-interested-btn {
-        flex-shrink: 0; align-self: center; padding: 10px 22px;
+        flex: 0 0 auto; align-self: stretch; width: 100%; padding: 10px 22px;
         border-radius: 10px; border: none; background: var(--spr-accent);
         color: #fff; font-weight: 800; font-size: .85rem; cursor: pointer; font-family: inherit;
         transition: background .18s, transform .15s, box-shadow .18s; white-space: nowrap;
@@ -2118,7 +2291,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     .spr-cancel-btn {
-        flex-shrink: 0; align-self: center; padding: 10px 22px;
+        flex: 0 0 auto; align-self: stretch; width: 100%; padding: 10px 22px;
         border-radius: 10px; border: none; background: var(--spr-danger);
         color: #fff; font-weight: 800; font-size: .85rem; cursor: pointer; font-family: inherit;
         transition: background .18s, transform .15s, box-shadow .18s; white-space: nowrap;
@@ -2127,15 +2300,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .spr-cancel-btn:active { transform: scale(.98); }
     .spr-cancel-btn:disabled { background: var(--spr-muted); cursor: not-allowed; opacity: .7; transform: none; box-shadow: none; }
     .spr-cancel-btn.is-readonly-provision, .spr-cancel-btn.is-readonly-provision:disabled { background: var(--spr-muted); color: #fff; opacity: .58; filter: none; cursor: not-allowed; pointer-events: none; transform: none; box-shadow: none; }
-    .spr-begin-test-btn { flex-shrink:0; padding:10px 22px; border:0; border-radius:10px; background:var(--spr-info); color:#fff; font-weight:800; font-size:.85rem; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .spr-begin-test-btn { flex:0 0 auto; align-self:stretch; width:100%; padding:10px 22px; border:0; border-radius:10px; background:var(--spr-info); color:#fff; font-weight:800; font-size:.85rem; cursor:pointer; font-family:inherit; white-space:nowrap; }
     .spr-begin-test-btn:hover { filter:brightness(.92); }
 
 
     @media (max-width: 640px) {
         :root { --spr-page-pad: 14px; }
         .spr-item { flex-direction: column; align-items: stretch; gap: 12px; }
-        .spr-interested-btn, .spr-cancel-btn, .spr-restart-btn { align-self: stretch; width: 100%; }
-        .spr-item-actions { width: 100%; }
+        .spr-interested-btn, .spr-cancel-btn, .spr-begin-test-btn { align-self: stretch; width: 100%; }
+        .spr-item-actions { width: 100%; align-self: stretch; }
         .spr-meta-row { gap: 6px 14px; }
         .spr-scroll-area { padding: 52px var(--spr-page-pad) 90px; }
         .spr-filter-float { top: calc(env(safe-area-inset-top, 0px) + 132px); }
@@ -2308,7 +2481,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <div class="spr-modal-card spr-confirm-card" style="text-align:center;">
         <div class="spr-confirm-icon" style="background:rgba(52,152,219,.12);color:#3498db;"><i class="fa-solid fa-play"></i></div>
         <div class="spr-confirm-title">Begin Test</div>
-        <div class="spr-confirm-text" id="sprBeginTestText">The test requires <?= (int)($dayDuration ?: 30) ?> eligible collection days. Restricted weekdays and dates are excluded from trade collection and extend the overall calendar window by their unique number of restricted dates.</div>
+        <div class="spr-confirm-text" id="sprBeginTestText">The test will use the duration configured by the server for this provision period. Restricted weekdays and dates are excluded from trade collection and extend the overall calendar window by their unique number of restricted dates.</div>
         <div class="spr-actions">
             <button class="spr-btn primary" id="sprConfirmBeginTestBtn">Confirm Test</button>
             <button class="spr-btn ghost" onclick="sprCloseModal('sprBeginTestModal')">Cancel</button>
@@ -2345,10 +2518,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     var INTERESTS = [];
     var PENDING_REQUEST = null;
     var PENDING_INTEREST_ID = null;
+    var PENDING_INTEREST_IS_FAILED = false;
     var ACTIVE_FILTERS = null;
     var MY_INTEREST = null;
     var SPR_SELECTED_PERIODS = {};
-    var SPR_BEGIN_ACTION = 'begin_test';
 
     var cancelFilterBtn = document.getElementById('sprCancelFilterBtn');
     var filterFloat = document.getElementById('sprFilterFloat');
@@ -2376,6 +2549,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         } catch (e) {}
         window.location.href = 'traderapp.php?tab=signals';
+    };
+
+    // Open the shared Programme Account Management tab from this source page.
+    // The shell records the sending iframe so its Back button can return here.
+    window.sprOpenAccountManagement = function () {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'switchTab',
+                    tab: 'account_management',
+                    sourceTab: 'signals_provision_request'
+                }, '*');
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'traderapp.php?tab=account_management&account_management_from=signals_provision_request';
     };
 
     window.sprOpenModal = function (id) {
@@ -2508,14 +2697,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var winsTarget = Math.max(0, parseInt(interest.expected_win, 10) || 0);
         var lossesLimit = Math.max(0, parseInt(interest.consecutive_loss, 10) || 0);
         var periods = Array.isArray(interest.challenge_periods) ? interest.challenge_periods : [];
-        var savedIndex = Object.prototype.hasOwnProperty.call(SPR_SELECTED_PERIODS, String(interest.id))
-            ? SPR_SELECTED_PERIODS[String(interest.id)] : parseInt(interest.challenge_current_period_index, 10);
+        var interestKey = String(interest.id);
+        // Unless the user deliberately navigates to another checkpoint, always
+        // follow the server's current checkpoint. This keeps the active day,
+        // week, or month selected as the challenge advances.
+        var savedIndex = Object.prototype.hasOwnProperty.call(SPR_SELECTED_PERIODS, interestKey)
+            ? SPR_SELECTED_PERIODS[interestKey] : parseInt(interest.challenge_current_period_index, 10);
         if (!Number.isFinite(savedIndex) || savedIndex < 0) savedIndex = 0;
         if (periods.length && savedIndex >= periods.length) savedIndex = periods.length - 1;
-        if (periods.length) SPR_SELECTED_PERIODS[String(interest.id)] = savedIndex;
         var moment = periods[savedIndex] || null;
         var locked = !!(moment && moment.locked);
-        var tracking = !!interest.challenge_tracking_available;
         var readonly = !!interest.provision_read_only;
         var liveTrades = moment ? Math.max(0, parseInt(moment.trades, 10) || 0) : 0;
         var liveWins = moment ? Math.max(0, parseInt(moment.wins, 10) || 0) : 0;
@@ -2529,13 +2720,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var lossFailed = lossesLimit > 0 && liveLosses >= lossesLimit;
 
         function progressBlock(label, current, target, percent, passed, isLoss) {
-            // Keep checkpoint readings private until this selected slice has
-            // at least one genuine live trade. Historical/dummy zeroes must
-            // not be presented as a real count.
-            var hasLiveTradeData = !!(tracking && moment && liveTrades > 0);
-            var countLocked = locked || !hasLiveTradeData;
-            var right = countLocked
-                ? '<i class="fa-solid fa-lock spr-progress-lock" aria-label="' + (locked ? 'Locked until this checkpoint begins' : 'Locked until live trade data is available') + '" title="' + (locked ? 'Locked until this checkpoint begins' : 'Locked until live trade data is available') + '"></i>'
+            // An active/current checkpoint is not locked merely because no
+            // live trade has been recorded yet. Only future checkpoints show
+            // the padlock; the current checkpoint displays its live zero count.
+            var right = locked
+                ? '<i class="fa-solid fa-lock spr-progress-lock" aria-label="Locked until this checkpoint begins" title="Locked until this checkpoint begins"></i>'
                 : '<span class="spr-progress-count">' + current + ' / ' + target + '</span>';
             var mark = locked
                 ? '<i class="fa-solid fa-lock spr-progress-lock" aria-hidden="true"></i>'
@@ -2554,7 +2743,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         var selectedLabel = moment ? moment.label : (periodLabel + ' Checkpoint');
-        var selectedRange = moment ? (moment.start_date + (moment.end_date && moment.end_date !== moment.start_date ? ' – ' + moment.end_date : '')) : '';
+        var selectedRange = '';
         var globalRestrictedDates = Array.isArray(interest.challenge_restricted_dates) ? interest.challenge_restricted_dates : [];
         var datesForCard = moment && Array.isArray(moment.excluded_dates) ? moment.excluded_dates : globalRestrictedDates;
         var restrictedDayRows = moment && Array.isArray(moment.excluded_days) ? moment.excluded_days : (interest.challenge_restricted_days || []);
@@ -2567,6 +2756,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (monthIndex < 0 || monthIndex > 11) return raw;
             return parts[2].padStart(2, '0') + ' ' + months[monthIndex] + ' ' + parts[0];
         }
+        if (moment) {
+            var displayStart = displayChallengeDate(moment.start_date);
+            var displayEnd = displayChallengeDate(moment.end_date || moment.start_date);
+            selectedRange = periodValue === 'daily'
+                ? displayStart
+                : displayStart + ' – ' + displayEnd;
+        }
         var restrictedDayText = restrictedDayRows.length
             ? restrictedDayRows.map(function (d) { return String(d).charAt(0).toUpperCase() + String(d).slice(1).toLowerCase(); }).join(', ')
             : 'None';
@@ -2576,6 +2772,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var restrictionsHtml = '<div class="spr-restricted-list">'
             + '<div><strong>Weekly Restricted Trading Days:</strong> ' + escapeHtml(restrictedDayText || 'None') + '</div>'
             + '<div><strong>Restricted Trading Dates:</strong> ' + escapeHtml(restrictedDateText || 'None') + '</div>'
+            + '<button type="button" class="spr-restricted-settings-btn" onclick="sprOpenAccountManagement()"><i class="fa-solid fa-gear" aria-hidden="true"></i> Settings</button>'
             + '</div>';
 
         var html = '';
@@ -2610,17 +2807,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         html +=     '</div>';
         html +=   '</div>';
         html +=   '<div class="spr-item-actions">';
+        var isFailedStatus = status === 'failed' || status === 'breached';
         var canBeginTest = !PROGRAMME_IS_ADVERTISED && status === 'interested' && (parseInt(interest.begin_test, 10) || 0) === 0
             && TRAINING_HAS_ROOT && TRAINING_TRADES_CONFIGURED && PROGRAMME_HAS_VPS && PROGRAMME_HAS_BROKER;
         if (canBeginTest) {
             html += '<button class="spr-begin-test-btn" onclick="sprBeginTest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-play"></i> Begin Test</button>';
         }
-        if (status === 'failed' || status === 'breached') {
-            html += '<div class="spr-failure-message">' + escapeHtml(interest.challenge_failure_reason || 'This signals provision challenge has failed.') + '</div>';
-            html += '<button class="spr-restart-btn" onclick="sprRestartInterest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-rotate-right"></i> Interested</button>';
+        if (isFailedStatus) {
+            html += '<div class="spr-failure-message">' + escapeHtml(interest.challenge_failure_reason || 'This signals provision challenge has failed. Recorded checkpoint data has been retained.') + '</div>';
         }
         if (['interested','pending','active','ongoing','failed','breached'].indexOf(status) !== -1) {
-            html += '<button class="spr-cancel-btn" type="button" onclick="sprCancelInterest(' + interest.id + ')">Cancel Provision</button>';
+            var cancelLabel = isFailedStatus ? 'Cancel failed interest' : 'Cancel Provision';
+            html += '<button class="spr-cancel-btn" type="button" onclick="sprCancelInterest(' + interest.id + ', ' + (isFailedStatus ? 'true' : 'false') + ')">' + cancelLabel + '</button>';
         }
         html +=   '</div>';
         html += '</div>';
@@ -2888,7 +3086,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (!PENDING_REQUEST) return;
 
         var period = CURRENT_PERIOD;
-        var duration = parseInt(CHALLENGE_DURATIONS[period], 10) || ({ daily: 30, weekly: 60, monthly: 90 }[period]);
+        var duration = Math.max(0, parseInt(CHALLENGE_DURATIONS[period], 10) || 0);
         var trades = parseInt(PENDING_REQUEST.trades_count, 10) || 0;
         var wins = parseInt(PENDING_REQUEST.expected_win, 10) || 0;
         var losses = parseInt(PENDING_REQUEST.consecutive_loss, 10) || 0;
@@ -2901,7 +3099,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 : 'Each trade will use its generated custom risk-to-reward ratio.');
 
         document.getElementById('sprConfirmInterestText').textContent =
-            'By joining this ' + period + ' challenge, your strategy\'s performance and compliance with the specified requirements will be evaluated over the next ' + duration + ' days. ' +
+            'By joining this ' + period + ' challenge, your strategy\'s performance and compliance with the specified requirements will be evaluated over ' +
+            (duration > 0 ? 'the server-configured duration of ' + duration + ' days. ' : 'the duration configured by the server. ') +
             'Minimum trades count: ' + trades + '. ' +
             'Minimum expected win count: ' + wins + '. ' +
             'Maximum expected consecutive losses: ' + losses + '. ' +
@@ -2950,51 +3149,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     };
 
     window.sprBeginTest = function (interestId, periodLabel) {
-        SPR_BEGIN_ACTION = 'begin_test';
         document.querySelector('#sprBeginTestModal .spr-confirm-title').textContent = 'Begin Test';
         document.getElementById('sprConfirmBeginTestBtn').textContent = 'Confirm Test';
-        var duration = parseInt(CHALLENGE_DURATIONS[String(periodLabel || 'Daily').toLowerCase()], 10) || 30;
+        var duration = Math.max(0, parseInt(CHALLENGE_DURATIONS[String(periodLabel || 'Daily').toLowerCase()], 10) || 0);
         document.getElementById('sprBeginTestText').textContent =
-            'The test requires ' + duration + ' eligible collection days. Restricted weekdays and specific restricted dates are not used for trade collection; each unique restricted calendar date extends the overall end date by one day. A date blocked by both a restricted weekday and a restricted date is counted only once. For example, 60 required days plus 10 unique restricted days means a 70-calendar-day window, with 10 dates excluded from collection and all 60 eligible days still required.';
+            (duration > 0 ? 'The test requires ' + duration + ' eligible collection days. ' : 'The duration for this provision period is not configured on the server. ') +
+            'Restricted weekdays and specific restricted dates are excluded from trade collection; every unique restricted calendar date extends the overall end date once. A date blocked by both restriction rules is counted only once.';
         window.SPR_BEGIN_TEST_INTEREST_ID = parseInt(interestId, 10) || 0;
-        sprOpenModal('sprBeginTestModal');
-    };
-
-    window.sprRestartInterest = function (interestId, periodLabel) {
-        SPR_BEGIN_ACTION = 'restart_interest';
-        window.SPR_BEGIN_TEST_INTEREST_ID = parseInt(interestId, 10) || 0;
-        document.querySelector('#sprBeginTestModal .spr-confirm-title').textContent = 'Restart Challenge';
-        document.getElementById('sprBeginTestText').textContent =
-            'Restarting will reset every daily, weekly, or monthly checkpoint to zero and begin a fresh ' + periodLabel.toLowerCase() + ' signals provision test. The required eligible collection days stay the same. Restricted weekdays and dates are skipped for trade collection and extend the calendar end date; a calendar date blocked by both rules counts once.';
-        document.getElementById('sprConfirmBeginTestBtn').textContent = 'Confirm Restart';
         sprOpenModal('sprBeginTestModal');
     };
 
     document.getElementById('sprConfirmBeginTestBtn').addEventListener('click', function () {
         var btn = this;
+        var targetInterestId = window.SPR_BEGIN_TEST_INTEREST_ID || 0;
         btn.disabled = true;
         btn.textContent = 'Starting…';
-        var actionName = SPR_BEGIN_ACTION === 'restart_interest' ? 'restart_interest' : 'begin_test';
-        post({ action: actionName, interest_id: window.SPR_BEGIN_TEST_INTEREST_ID || 0 }, function (d) {
+
+        post({ action: 'begin_test', interest_id: targetInterestId }, function (d) {
             btn.disabled = false;
             btn.textContent = 'Confirm Test';
-            SPR_BEGIN_ACTION = 'begin_test';
-            document.querySelector('#sprBeginTestModal .spr-confirm-title').textContent = 'Begin Test';
             if (d && d.success) {
+                delete SPR_SELECTED_PERIODS[String(targetInterestId)];
                 sprCloseModal('sprBeginTestModal');
-                sprAlert(actionName === 'restart_interest' ? 'Your challenge has been restarted and all checkpoints are reset.' : 'Your signals provision test has begun.', 'success', actionName === 'restart_interest' ? 'Challenge Restarted' : 'Test Started');
+                sprAlert('Your signals provision test has begun.', 'success', 'Test Started');
                 loadInterests();
             } else {
-                sprAlert((d && d.message) || 'Failed to begin test.', 'error', 'Could not begin test');
+                sprAlert((d && d.message) || 'Failed to begin the challenge test.', 'error', 'Could not begin test');
             }
         });
     });
 
-    window.sprCancelInterest = function (interestId) {
+    window.sprCancelInterest = function (interestId, isFailed) {
         PENDING_INTEREST_ID = interestId;
-        document.getElementById('sprCancelConfirmTitle').textContent = 'Cancel Provision Interest';
-        document.getElementById('sprCancelConfirmText').textContent =
-            'Cancel this provision challenge? Your current challenge will stop. You can then join a new provision challenge.';
+        PENDING_INTEREST_IS_FAILED = !!isFailed;
+        document.getElementById('sprCancelConfirmTitle').textContent = PENDING_INTEREST_IS_FAILED ? 'Cancel Failed Interest' : 'Cancel Provision Interest';
+        document.getElementById('sprCancelConfirmText').textContent = PENDING_INTEREST_IS_FAILED
+            ? 'Are you sure you want to cancel this failed interest completely? It will no longer remain as an active signals provision interest.'
+            : 'Cancel this provision challenge? Your current challenge will stop. You can then join a new provision challenge.';
+        document.getElementById('sprCancelInterestConfirmBtn').textContent = PENDING_INTEREST_IS_FAILED ? 'Yes, Cancel Failed Interest' : 'Yes, Cancel Provision';
         sprOpenModal('sprCancelConfirmModal');
     };
 
@@ -3006,16 +3198,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         post({ action: 'cancel_interest', interest_id: PENDING_INTEREST_ID }, function (d) {
             btn.disabled = false;
-            btn.textContent = 'Yes, Cancel Provision';
+            btn.textContent = PENDING_INTEREST_IS_FAILED ? 'Yes, Cancel Failed Interest' : 'Yes, Cancel Provision';
 
             if (d && d.success) {
                 sprCloseModal('sprCancelConfirmModal');
                 sprAlert(
-                    'Your provision interest has been cancelled. Your programme will need to embark on a new provision duration to participate again.',
+                    PENDING_INTEREST_IS_FAILED
+                        ? 'The failed provision interest has been cancelled completely.'
+                        : 'Your provision interest has been cancelled. Your programme will need to embark on a new provision duration to participate again.',
                     'warning',
-                    'Provision Cancelled'
+                    PENDING_INTEREST_IS_FAILED ? 'Failed Interest Cancelled' : 'Provision Cancelled'
                 );
                 PENDING_INTEREST_ID = null;
+                PENDING_INTEREST_IS_FAILED = false;
                 loadInterests();
             } else {
                 sprAlert((d && d.message) || 'Failed to cancel provision.', 'error', 'Could not cancel');
