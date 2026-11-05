@@ -1833,14 +1833,12 @@ function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, 
 
     $noInterest = empty($interest) || $interestStatus === '' || $interestStatus === 'breached' || $interestStatus === 'failed' || $interestStatus === 'cancelled';
 
-    $buildChallengeChevron = function ($periodLabel, $indicatorType = 'challenge', $progressText = '') {
+    $buildProvisionChevron = function ($periodLabel) {
         $label = trim((string)$periodLabel);
-        if ($label === '') $label = 'Signals';
+        if ($label === '') $label = 'Daily';
         $safe = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
-        $safeProgress = trim((string)$progressText) !== '' ? ' · ' . htmlspecialchars((string)$progressText, ENT_QUOTES, 'UTF-8') : '';
-        $indicatorType = strtolower(trim((string)$indicatorType)) === 'provision' ? 'provision' : 'challenge';
         return '<button type="button" class="sd-challenge-chevron" onclick="sdGoToChallenges()">'
-             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals ' . $indicatorType . $safeProgress . '</span>'
+             .   '<span class="sd-challenge-chevron-text">In a ' . $safe . ' signals provision</span>'
              .   '<span class="sd-challenge-chevron-right"><i class="fa-solid fa-chevron-right"></i></span>'
              . '</button>';
     };
@@ -1863,11 +1861,6 @@ function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, 
         $challengeDuration = 0;
     }
     $state['challenge_duration'] = $challengeDuration;
-    $challengeProgressText = '';
-    if (isset($provisionEvaluation) && !empty($provisionEvaluation['total_periods'])) {
-        $challengeProgressText = (int)$provisionEvaluation['completed_periods'] . '/' . (int)$provisionEvaluation['total_periods'] . ' checkpoints';
-    }
-    $state['challenge_progress_text'] = $challengeProgressText;
 
     if ($advertisement === 0 && $noInterest) {
         if (!$hasVps) {
@@ -1925,7 +1918,7 @@ function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, 
             } else {
                 $state['show_begin_test'] = true;
                 $state['greeting_sub'] = '';
-                $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
+                $state['greeting_sub_html'] = $buildProvisionChevron($periodLabel ?: 'Daily');
 
                 $interestId = $interest ? (int)($interest['id'] ?? 0) : 0;
                 $modalKey = 'begin_test:' . $programmeId . ':' . $interestId;
@@ -1942,17 +1935,17 @@ function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, 
         }
     }
 
-    // Keep the challenge-period indicator visible in the greeting card on every
+    // Keep the provision-period indicator visible in the greeting card on every
     // dashboard render while the user has an active challenge interest. This is
     // independent of whether the Begin Test action is currently available.
     if ($advertisement === 0 && $interestStatus === 'interested') {
         $state['greeting_sub'] = '';
-        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
+        $state['greeting_sub_html'] = $buildProvisionChevron($periodLabel ?: 'Daily');
     }
 
     if ($advertisement === 0 && $interestStatus === 'ongoing') {
         $state['greeting_sub'] = '';
-        $state['greeting_sub_html'] = $buildChallengeChevron($periodLabel ?: 'Daily', 'challenge', $challengeProgressText);
+        $state['greeting_sub_html'] = $buildProvisionChevron($periodLabel ?: 'Daily');
     }
 
     // Published programmes must keep both indicators visible: the publication
@@ -1962,7 +1955,7 @@ function determineSignalsDashboardState($pdo, $userId, &$programme, &$interest, 
         $state['greeting_sub'] = 'Programme is advertised';
         $state['greeting_sub_html'] =
             '<span class="sd-advertised-indicator" style="display:block;font-weight:700;margin-bottom:4px;">Advertised</span>'
-            . $buildChallengeChevron($periodLabel ?: 'Daily', 'provision', $challengeProgressText);
+            . $buildProvisionChevron($periodLabel ?: 'Daily');
     }
 
     if ($state['greeting_sub_html'] === '') {

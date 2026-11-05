@@ -21,24 +21,28 @@ try {
 require_once __DIR__ . '/notification_service.php';
 
 if (!isset($_SESSION['user_email'])) { header("Location: index.php?role=developer"); exit; }
-$email = strtolower($_SESSION['user_email']);
-
-$stmt = $pdo->prepare("SELECT * FROM harvhub WHERE LOWER(email) = ? LIMIT 1");
-$stmt->execute([$email]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-if (!$user) { header("Location: index.php?role=developer"); exit; }
-$userId = (int)$user['id'];
-$activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
-$mainAccountId = (int)($user['main_account_id'] ?? 0);
-$_SESSION['active_sub_account_id'] = $activeSubAccountId;
+$email = strtolower(trim((string)$_SESSION['user_email']));
 
 $activeProgrammeId = (int)($_SESSION['selected_programme_id'] ?? 0);
 if ($activeProgrammeId <= 0) { header("Location: traderapp.php?tab=vps"); exit; }
 
-$stmt = $pdo->prepare("SELECT * FROM programme WHERE id = ? AND userid = ? LIMIT 1");
-$stmt->execute([$activeProgrammeId, $userId]);
+// Resolve the selected programme first, then verify its actual HarvHub owner.
+// This avoids selecting an unrelated same-email account row with LIMIT 1.
+$stmt = $pdo->prepare("SELECT * FROM programme WHERE id = ? LIMIT 1");
+$stmt->execute([$activeProgrammeId]);
 $programme = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$programme) { header("Location: traderapp.php?tab=vps"); exit; }
+
+$userId = (int)($programme['userid'] ?? 0);
+if ($userId <= 0) { header("Location: traderapp.php?tab=vps"); exit; }
+$stmt = $pdo->prepare("SELECT * FROM harvhub WHERE id = ? AND LOWER(email) = ? LIMIT 1");
+$stmt->execute([$userId, $email]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+if (!$user) { header("Location: index.php?role=developer"); exit; }
+
+$activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
+$mainAccountId = (int)($user['main_account_id'] ?? 0);
+$_SESSION['active_sub_account_id'] = $activeSubAccountId;
 
 $fullName = $user['fullname'] ?? 'User';
 $darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
@@ -184,7 +188,9 @@ if (!function_exists('linkSubAccountVpsToProgramme')) {
                 (int)($vpsRow['subscription_duration'] ?? 0),
                 // programme_vps_ip_address — comes from vps.vps_ip_address
                 (string)($vpsRow['vps_ip_address'] ?? ''),
-                (string)($vpsRow['visibility'] ?? 'public'),
+                // Programme VPS visibility always starts private. The owner can
+                // explicitly change it to public from the Programme VPS settings.
+                0,
             ]);
             return true;
         } catch (Throwable $e) {
@@ -241,10 +247,10 @@ try {
         FROM programme_vps v
         INNER JOIN programme p ON p.id = v.programme_id
         INNER JOIN harvhub   h ON h.id = v.user_id
-        WHERE v.visibility = 'public'
+        WHERE (v.visibility = 1 OR v.programme_id = ?)
         ORDER BY p.program_name ASC
     ");
-    $stmt->execute();
+    $stmt->execute([$activeProgrammeId]);
     $programmeHosts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) { $programmeHosts = []; }
 
@@ -256,11 +262,18 @@ foreach ($programmeHosts as $h) {
 // ==================== FLAGS (STRICTLY PROGRAMME-SCOPED) ====================
 $userOwnsProgrammeVps  = false;
 $isAlreadyFollowerProg = false;
+$myProgrammeVpsId = 0;
+$myProgrammeVpsVisibility = '';
 
 try {
-    $s = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
+    $s = $pdo->prepare("SELECT id, visibility FROM programme_vps WHERE programme_id = ? LIMIT 1");
     $s->execute([$activeProgrammeId]);
-    if ($s->fetch(PDO::FETCH_ASSOC)) $userOwnsProgrammeVps = true;
+    $ownedProgrammeVpsRow = $s->fetch(PDO::FETCH_ASSOC) ?: null;
+    if ($ownedProgrammeVpsRow) {
+        $userOwnsProgrammeVps = true;
+        $myProgrammeVpsId = (int)($ownedProgrammeVpsRow['id'] ?? 0);
+        $myProgrammeVpsVisibility = (int)($ownedProgrammeVpsRow['visibility'] ?? 0);
+    }
 } catch (PDOException $e) {}
 
 try {
@@ -281,6 +294,40 @@ if (!$userOwnsProgrammeVps) {
     if (!$anyProgrammeOwnsVps) {
         $linkableSubVps = findUserSubAccountVps($pdo, $userId, $mainAccountId);
     }
+}
+
+// ==================== UPDATE OWN PROGRAMME VPS VISIBILITY (AJAX) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_programme_vps_visibility'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $visibilityRaw = trim((string)($_POST['visibility'] ?? ''));
+    // Accept the numeric values used by the new selector. Text values remain
+    // accepted for compatibility with an older open page during deployment.
+    if ($visibilityRaw === 'public') $visibilityRaw = '1';
+    if ($visibilityRaw === 'private') $visibilityRaw = '0';
+    if (!in_array($visibilityRaw, ['0', '1'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Choose either Public or Private visibility.']);
+        exit;
+    }
+    $visibility = (int)$visibilityRaw;
+    $visibilityLabel = $visibility === 1 ? 'Public' : 'Private';
+    if (!$userOwnsProgrammeVps || $myProgrammeVpsId <= 0) {
+        echo json_encode(['success' => false, 'message' => 'No VPS owned by this programme was found.']);
+        exit;
+    }
+    try {
+        $update = $pdo->prepare("UPDATE `programme_vps` pv INNER JOIN `programme` p ON p.`id` = pv.`programme_id` SET pv.`visibility` = ? WHERE pv.`id` = ? AND pv.`programme_id` = ? AND p.`userid` = ?");
+        $update->execute([$visibility, $myProgrammeVpsId, $activeProgrammeId, $userId]);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Programme VPS visibility updated to ' . $visibilityLabel . '.',
+            'visibility' => $visibility,
+            'visibility_label' => $visibilityLabel
+        ]);
+    } catch (Throwable $e) {
+        error_log('[programme_vps] visibility update failed: ' . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Unable to update programme VPS visibility. Please try again.']);
+    }
+    exit;
 }
 
 // ==================== LINK SUB-ACCOUNT VPS TO PROGRAMME (AJAX) ====================
@@ -345,7 +392,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
     cleanupStaleAcceptedRequests($pdo, $ownerProgId, $activeProgrammeId);
 
     try {
-        $s = $pdo->prepare("SELECT user_id FROM programme_vps WHERE programme_id = ? AND visibility = 'public' LIMIT 1");
+        $s = $pdo->prepare("SELECT user_id FROM programme_vps WHERE programme_id = ? AND visibility = 1 LIMIT 1");
         $s->execute([$ownerProgId]);
         $ownerId = (int)($s->fetchColumn() ?: 0);
     } catch (PDOException $e) { $ownerId = 0; }
@@ -419,10 +466,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
             FROM programme_vps v
             INNER JOIN programme p ON p.id = v.programme_id
             INNER JOIN harvhub   h ON h.id = v.user_id
-            WHERE v.programme_id = ? AND v.visibility = 'public'
+            WHERE v.programme_id = ?
+              AND (v.visibility = 1 OR v.programme_id = ?)
             LIMIT 1
         ");
-        $s->execute([$ownerProgId]);
+        $s->execute([$ownerProgId, $activeProgrammeId]);
         $hostData = $s->fetch(PDO::FETCH_ASSOC);
     } catch (PDOException $e) { $hostData = null; }
     if (!$hostData) {
@@ -813,8 +861,80 @@ showSpinner();
 <?php include 'style.php'; ?>
 <?php include 'vps_style.php'; ?>
 <style>
-    .vps-topbar { position: relative; display: flex; align-items: center; justify-content: center; }
-    .vps-topbar-back { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
+    .vps-topbar { position: relative; display: flex; align-items: center; justify-content: center; min-height: 44px; }
+    .vps-topbar-back { position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 12; }
+    /* Host action controls stay on the far right for every host row. */
+    .vps-host-actions {
+        display:flex !important;
+        align-items:center !important;
+        justify-content:flex-end !important;
+        gap:10px;
+        width:100%;
+    }
+    .vps-host-actions.vps-owner-actions {
+        /* Keep the owner status at the far left and the visibility control at the far right. */
+        justify-content:space-between !important;
+        gap:10px;
+        flex-wrap:nowrap;
+    }
+    .vps-host-actions.vps-owner-actions .vps-owner-status {
+        margin-right:auto;
+        flex:0 0 auto;
+    }
+    .vps-host-actions.vps-owner-actions .vps-visibility-select {
+        margin-left:auto !important;
+        flex:0 0 auto;
+    }
+    .vps-owner-status {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        min-height:40px;
+        color:var(--text, #1f2937);
+        font-size:13px;
+        font-weight:700;
+        white-space:nowrap;
+    }
+    .vps-visibility-select {
+        display:inline-block !important;
+        width:auto !important;
+        min-width:118px;
+        max-width:100%;
+        min-height:40px;
+        height:40px;
+        margin:0 !important;
+        padding:8px 30px 8px 11px;
+        border:1px solid #d8dde5 !important;
+        border-radius:9px;
+        background-color:#ffffff !important;
+        color:#1f2937 !important;
+        font:inherit;
+        font-size:13px;
+        line-height:1.2;
+        cursor:pointer;
+        color-scheme:light;
+    }
+    .vps-visibility-select option {
+        background-color:#ffffff;
+        color:#1f2937;
+    }
+    body.dark-mode .vps-owner-status {
+        color:var(--text, #f3f4f6);
+    }
+    body.dark-mode .vps-visibility-select {
+        background-color:#1f2937 !important;
+        color:#f9fafb !important;
+        border-color:#475569 !important;
+        color-scheme:dark;
+    }
+    body.dark-mode .vps-visibility-select option {
+        background-color:#1f2937;
+        color:#f9fafb;
+    }
+    @media (max-width:420px) {
+        .vps-host-actions.vps-owner-actions { gap:7px; }
+        .vps-visibility-select { min-width:108px; }
+    }
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?> vps-page-body">
@@ -822,7 +942,7 @@ showSpinner();
     <div class="vps-page-wrapper">
         <div class="vps-sticky-top" id="vpsStickyTop">
             <div class="vps-topbar">
-                <a href="#" class="vps-topbar-back" onclick="event.preventDefault(); harvhubGoToTab('signals'); return false;" aria-label="Back"><i class="fa-solid fa-arrow-left"></i></a>
+                <a href="#" class="vps-topbar-back" onclick="event.preventDefault(); harvhubGoBackFromVps(); return false;" aria-label="Back"><i class="fa-solid fa-arrow-left"></i></a>
                 <h1 class="vps-topbar-title">Programme VPS</h1>
             </div>
             <div class="vps-search-wrap">
@@ -861,7 +981,7 @@ showSpinner();
                         <p class="vps-link-note">
                             You have an existing VPS in <strong><?= htmlspecialchars($subName) ?></strong>, do you want to link it to this programme?
                         </p>
-                        <button class="vps-btn-link" onclick="linkSubAccountVps()">
+                        <button class="vps-btn-link" onclick="linkSubAccountVps(this)">
                             <i class="fa-solid fa-link"></i> Link
                         </button>
                     </div>
@@ -891,9 +1011,18 @@ showSpinner();
                                     <span class="vps-host-stat"><span class="vps-host-stat-label">Maximum host</span><span class="vps-host-stat-value"><?= $maxHosts ?></span></span>
                                     <span class="vps-host-stat"><span class="vps-host-stat-label">Current hosts</span><span class="vps-host-stat-value"><?= $currentHosts ?></span></span>
                                 </div>
-                                <div class="vps-host-actions">
+                                <div class="vps-host-actions<?= $isSelf ? ' vps-owner-actions' : '' ?>">
                                     <?php if ($isSelf): ?>
-                                        <button class="vps-btn-request disabled" disabled>Your VPS</button>
+                                        <span class="vps-owner-status">Your VPS</span>
+                                        <select
+                                            class="vps-visibility-select"
+                                            aria-label="VPS visibility"
+                                            data-saved-value="<?= (int)($h['visibility'] ?? 0) ?>"
+                                            onchange="updateProgrammeVpsVisibility(this, <?= $ownerProgId ?>)"
+                                        >
+                                            <option value="1" <?= (int)($h['visibility'] ?? 0) === 1 ? 'selected' : '' ?>>Public</option>
+                                            <option value="0" <?= (int)($h['visibility'] ?? 0) === 0 ? 'selected' : '' ?>>Private</option>
+                                        </select>
                                     <?php elseif ($isLocked): ?>
                                         <button class="vps-btn-request disabled" disabled>Request Space</button>
                                     <?php elseif ($isFull): ?>
@@ -937,6 +1066,43 @@ showSpinner();
         window.location.href = 'traderapp.php?tab=' + encodeURIComponent(tab);
     }
     window.harvhubGoToTab = harvhubGoToTab;
+
+    // The shell records whether Programme VPS was opened from Signals,
+    // Programme Menu, or another workspace tab. Ask the shell to restore that
+    // exact source rather than always forcing navigation to Signals.
+    function harvhubGoBackFromVps() {
+        var allowedReturnTabs = ['signals', 'menu', 'training', 'analytics'];
+        var returnTab = '';
+
+        // The shell URL is authoritative: traderapp.php writes vps_from whenever
+        // it switches into this iframe, so this survives stale child-frame state.
+        try {
+            if (window.parent && window.parent !== window) {
+                var parentUrl = new URL(window.parent.location.href);
+                returnTab = parentUrl.searchParams.get('vps_from') || '';
+            }
+        } catch (e) {}
+
+        // Same-origin session storage is a second fallback; the child page's own
+        // query string is used only when opened outside the shell.
+        if (allowedReturnTabs.indexOf(returnTab) === -1) {
+            try {
+                var childParams = new URLSearchParams(window.location.search);
+                returnTab = childParams.get('vps_from') || sessionStorage.getItem('harvhub_programme_vps_return_tab') || '';
+            } catch (e) {}
+        }
+        if (allowedReturnTabs.indexOf(returnTab) === -1) returnTab = 'signals';
+
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'programmeVpsBack', returnTab: returnTab }, '*');
+                return;
+            }
+        } catch (e) {}
+
+        window.location.href = 'traderapp.php?tab=' + encodeURIComponent(returnTab);
+    }
+    window.harvhubGoBackFromVps = harvhubGoBackFromVps;
 
     (function () {
         document.body.classList.add('page-vps');
@@ -1049,6 +1215,60 @@ showSpinner();
     }
     window.showVpsAlert = showVpsAlert;
 
+    // Visibility is saved immediately when the programme owner changes the inline selector.
+    function updateProgrammeVpsVisibility(select, ownerProgrammeId) {
+        if (!select || select.dataset.saving === '1') return;
+
+        var visibility = String(select.value);
+        var previousValue = String(select.dataset.savedValue || select.value);
+        if (visibility !== '0' && visibility !== '1') {
+            select.value = previousValue;
+            showVpsAlert('Choose either Public or Private.', 'Choose Visibility');
+            return;
+        }
+        if (visibility === previousValue) return;
+
+        select.dataset.saving = '1';
+        select.disabled = true;
+
+        var body = new URLSearchParams({
+            set_programme_vps_visibility: '1',
+            visibility: visibility
+        });
+
+        fetch('programme_vps.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'same-origin',
+            body: body.toString()
+        })
+        .then(function(response) {
+            if (!response.ok) throw new Error('Request failed');
+            return response.json();
+        })
+        .then(function(data) {
+            if (data && data.success) {
+                select.dataset.savedValue = String(data.visibility);
+                showVpsAlert(data.message || 'Programme VPS visibility updated.', 'Success', true);
+            } else {
+                select.value = previousValue;
+                showVpsAlert((data && data.message) || 'Unable to update programme VPS visibility.', 'Error');
+            }
+        })
+        .catch(function() {
+            select.value = previousValue;
+            showVpsAlert('Network error while updating programme VPS visibility.', 'Error');
+        })
+        .finally(function() {
+            select.disabled = false;
+            select.dataset.saving = '0';
+        });
+    }
+    window.updateProgrammeVpsVisibility = updateProgrammeVpsVisibility;
+
     function closeVpsAlertModal(){ document.getElementById('vpsAlertModal').classList.remove('active'); unlockBodyScroll(); }
     window.closeVpsAlertModal = closeVpsAlertModal;
 
@@ -1113,8 +1333,9 @@ showSpinner();
     }
     window.confirmModalAction = confirmModalAction;
 
-    function linkSubAccountVps() {
-        var btn = event.target;
+    function linkSubAccountVps(clickedButton) {
+        var btn = clickedButton || document.querySelector('#linkableVpsCard .vps-btn-link');
+        if (!btn) { showVpsAlert('The Link VPS control could not be found.', 'Error'); return; }
         btn.disabled = true;
         btn.textContent = 'Linking...';
 

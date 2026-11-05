@@ -3,7 +3,6 @@
 // Fully decoupled from programme_vps. Talks only to:
 //   vps, vps_hosts_requestors, vps_hosts_followers, harvhub
 session_start();
-
 try {
     require_once __DIR__ . '/mysqlconnection.php';
     $pdo = getAvailablePdoConnection();
@@ -17,19 +16,14 @@ try {
     http_response_code(500);
     exit('Database connection failed. Please try again later.');
 }
-
 require_once __DIR__ . '/notification_service.php';
-
 if (!isset($_SESSION['user_email'])) {
     header("Location: index.php");
     exit;
 }
-
 $email = strtolower($_SESSION['user_email']);
-
 // ==================== RESOLVE ACTIVE SUB ACCOUNT ====================
 $activeSubAccountId = (int)($_SESSION['active_sub_account_id'] ?? 0);
-
 if ($activeSubAccountId > 0) {
     $stmt = $pdo->prepare("SELECT * FROM harvhub WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
     $stmt->execute([$activeSubAccountId, $email]);
@@ -37,7 +31,6 @@ if ($activeSubAccountId > 0) {
 } else {
     $user = null;
 }
-
 if (!$user) {
     $stmt = $pdo->prepare("SELECT * FROM harvhub WHERE LOWER(email) = ? AND is_main_account = 0 ORDER BY id ASC LIMIT 1");
     $stmt->execute([$email]);
@@ -48,18 +41,14 @@ if (!$user) {
     $stmt->execute([$email]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 }
-
 if (!$user) { header("Location: index.php"); exit; }
-
 $userId             = (int)$user['id'];
 $activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
 $mainAccountId      = (int)($user['main_account_id'] ?? 0);
 $_SESSION['active_sub_account_id'] = $activeSubAccountId;
-
 $fullName = $user['fullname'] ?? 'User';
 $darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
-
 // ==================== HELPERS ====================
 if (!function_exists('resolveHostDisplayName')) {
     function resolveHostDisplayName(array $hostRow) {
@@ -76,7 +65,6 @@ if (!function_exists('resolveHostDisplayName')) {
         return 'N/A';
     }
 }
-
 if (!function_exists('resolveSubAccountName')) {
     function resolveSubAccountName(array $row): string {
         $subName = trim((string)($row['sub_account_name'] ?? ''));
@@ -92,7 +80,6 @@ if (!function_exists('resolveSubAccountName')) {
         return 'Account';
     }
 }
-
 if (!function_exists('countActiveFollowers')) {
     function countActiveFollowers($pdo, $ownerId, $ownerSubId) {
         try {
@@ -111,7 +98,6 @@ if (!function_exists('countActiveFollowers')) {
         }
     }
 }
-
 if (!function_exists('findOtherFollowerLink')) {
     function findOtherFollowerLink($pdo, $requestorId, $requestorSubId, $excludeOwnerId = 0, $excludeOwnerSub = 0) {
         try {
@@ -125,7 +111,6 @@ if (!function_exists('findOtherFollowerLink')) {
                   AND f.host_status = 'active'
             ";
             $params = [$requestorId, $requestorSubId];
-
             if ($excludeOwnerId > 0) {
                 $sql .= " AND f.owner_id <> ?";
                 $params[] = $excludeOwnerId;
@@ -134,9 +119,7 @@ if (!function_exists('findOtherFollowerLink')) {
                 $sql .= " AND f.sub_account_id <> ?";
                 $params[] = $excludeOwnerSub;
             }
-
             $sql .= " LIMIT 1";
-
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -146,7 +129,6 @@ if (!function_exists('findOtherFollowerLink')) {
         }
     }
 }
-
 if (!function_exists('resolveOwnerMainAccountId')) {
     function resolveOwnerMainAccountId($pdo, $ownerId) {
         try {
@@ -159,7 +141,6 @@ if (!function_exists('resolveOwnerMainAccountId')) {
         }
     }
 }
-
 if (!function_exists('resolveUserEmailById')) {
     function resolveUserEmailById($pdo, $userId) {
         try {
@@ -172,7 +153,6 @@ if (!function_exists('resolveUserEmailById')) {
         }
     }
 }
-
 if (!function_exists('resolveHarvhubRowById')) {
     function resolveHarvhubRowById($pdo, $userId) {
         try {
@@ -184,7 +164,6 @@ if (!function_exists('resolveHarvhubRowById')) {
         }
     }
 }
-
 if (!function_exists('subAccountOwnsAnyVps')) {
     function subAccountOwnsAnyVps($pdo, $userId) {
         try {
@@ -200,7 +179,6 @@ if (!function_exists('subAccountOwnsAnyVps')) {
         } catch (Throwable $e) { return false; }
     }
 }
-
 if (!function_exists('findUserProgrammeVps')) {
     function findUserProgrammeVps($pdo, $userId) {
         try {
@@ -218,7 +196,6 @@ if (!function_exists('findUserProgrammeVps')) {
         } catch (Throwable $e) { return null; }
     }
 }
-
 // ==================== MODIFIED LINK HELPER ====================
 // Copies the IP address (and other credentials) from the source
 // programme_vps row into the newly created vps row. The IP is stored
@@ -229,7 +206,6 @@ if (!function_exists('linkProgrammeVpsToSubAccount')) {
             $chk = $pdo->prepare("SELECT id FROM vps WHERE user_id = ? AND sub_account_id = ? LIMIT 1");
             $chk->execute([$userId, $subAccountId]);
             if ($chk->fetch(PDO::FETCH_ASSOC)) return true;
-
             $ins = $pdo->prepare("
                 INSERT INTO vps
                   (user_id, sub_account_id,
@@ -260,7 +236,7 @@ if (!function_exists('linkProgrammeVpsToSubAccount')) {
                 !empty($progVps['computer_username'])      ? $progVps['computer_username']      : null,
                 !empty($progVps['computer_password'])      ? $progVps['computer_password']      : null,
                 !empty($progVps['rdp_password'])           ? $progVps['rdp_password']           : null,
-                (string)($progVps['visibility'] ?? 'public'),
+                in_array(strtolower(trim((string)($progVps['visibility'] ?? '0'))), ['1', 'public', 'true', 'yes'], true) ? 1 : 0,
             ]);
             return true;
         } catch (Throwable $e) {
@@ -269,7 +245,6 @@ if (!function_exists('linkProgrammeVpsToSubAccount')) {
         }
     }
 }
-
 // ==================== FETCH VPS HOSTS (PUBLIC ONLY) ====================
 $hosts = [];
 try {
@@ -282,15 +257,15 @@ try {
         INNER JOIN harvhub h
             ON h.id = v.user_id
            AND h.sub_account_id = v.sub_account_id
-        WHERE v.visibility = 'public'
+        WHERE v.visibility = 1
+           OR (v.user_id = ? AND v.sub_account_id = ?)
         ORDER BY h.username ASC
     ");
-    $stmt->execute();
+    $stmt->execute([$userId, $activeSubAccountId]);
     $hosts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $hosts = [];
 }
-
 // ==================== FETCH HOST FOLLOWER COUNTS ====================
 $hostFollowerCounts = [];
 if (!empty($hosts)) {
@@ -301,25 +276,28 @@ if (!empty($hosts)) {
         $hostFollowerCounts[$key] = countActiveFollowers($pdo, $ownerId, $ownerSubId);
     }
 }
-
 // ==================== VPS FLAGS FOR THE ACTIVE SUB ACCOUNT ====================
 $userOwnsVps       = false;
 $isAlreadyFollower = false;
 $userHasVps        = false;
-
+$myVpsId           = 0;
+$myVpsVisibility   = 0;
 try {
     $stmt = $pdo->prepare("
-        SELECT id FROM vps
+        SELECT id, visibility
+        FROM vps
         WHERE user_id = ?
           AND sub_account_id = ?
         LIMIT 1
     ");
     $stmt->execute([$userId, $activeSubAccountId]);
-    if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+    $ownedVpsRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if ($ownedVpsRow) {
         $userOwnsVps = true;
+        $myVpsId = (int)($ownedVpsRow['id'] ?? 0);
+        $myVpsVisibility = (int)($ownedVpsRow['visibility'] ?? 0) === 1 ? 1 : 0;
     }
 } catch (PDOException $e) {}
-
 try {
     $stmt = $pdo->prepare("
         SELECT id FROM vps_hosts_followers
@@ -333,45 +311,79 @@ try {
         $isAlreadyFollower = true;
     }
 } catch (PDOException $e) {}
-
 $userHasVps = ($userOwnsVps || $isAlreadyFollower);
-
+// ==================== UPDATE OWN VPS VISIBILITY (AJAX) ====================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_vps_visibility'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $visibilityRaw = strtolower(trim((string)($_POST['visibility'] ?? '')));
+    if ($visibilityRaw === 'public') $visibilityRaw = '1';
+    if ($visibilityRaw === 'private') $visibilityRaw = '0';
+    if (!in_array($visibilityRaw, ['0', '1'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Choose either Public or Private visibility.']);
+        exit;
+    }
+    if (!$userOwnsVps || $myVpsId <= 0) {
+        echo json_encode(['success' => false, 'message' => 'Only the VPS owner can change visibility.']);
+        exit;
+    }
+    $visibility = (int)$visibilityRaw;
+    $visibilityLabel = $visibility === 1 ? 'Public' : 'Private';
+    try {
+        $upd = $pdo->prepare("
+            UPDATE vps
+            SET visibility = ?
+            WHERE id = ?
+              AND user_id = ?
+              AND sub_account_id = ?
+            LIMIT 1
+        ");
+        $upd->execute([$visibility, $myVpsId, $userId, $activeSubAccountId]);
+        if ($upd->rowCount() < 1 && $myVpsVisibility !== $visibility) {
+            throw new RuntimeException('VPS visibility was not updated.');
+        }
+        $myVpsVisibility = $visibility;
+        echo json_encode([
+            'success' => true,
+            'visibility' => $visibility,
+            'visibility_label' => $visibilityLabel,
+            'message' => $visibility === 1
+                ? 'Your VPS is now public and visible to other users.'
+                : 'Your VPS is now private and hidden from public listings.'
+        ]);
+    } catch (Throwable $e) {
+        error_log('[investor_vps] visibility update failed: ' . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Unable to update VPS visibility. Please try again.']);
+    }
+    exit;
+}
 // ==================== LINKABLE PROGRAMME VPS DETECTION ====================
 $linkableProgVps = null;
 $anySubAccountOwnsVps = false;
-
 if (!$userOwnsVps) {
     $anySubAccountOwnsVps = subAccountOwnsAnyVps($pdo, $userId);
-
     if (!$anySubAccountOwnsVps) {
         $linkableProgVps = findUserProgrammeVps($pdo, $userId);
     }
 }
-
 // ==================== GET SUB ACCOUNT NAME FOR DISPLAY ====================
 $activeSubAccountName = resolveSubAccountName($user);
-
 // ==================== LINK PROGRAMME VPS TO SUB-ACCOUNT (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['link_programme_vps'])) {
     header('Content-Type: application/json');
-
     if ($userOwnsVps) {
         echo json_encode(['success' => false, 'message' => 'This account already owns a VPS.']);
         exit;
     }
-
     $anySubAccountOwnsVps = subAccountOwnsAnyVps($pdo, $userId);
     if ($anySubAccountOwnsVps) {
         echo json_encode(['success' => false, 'message' => 'Another sub-account already owns a VPS.']);
         exit;
     }
-
     $progVps = findUserProgrammeVps($pdo, $userId);
     if (!$progVps) {
         echo json_encode(['success' => false, 'message' => 'No programme VPS found to link.']);
         exit;
     }
-
     $ok = linkProgrammeVpsToSubAccount($pdo, $progVps, $userId, $activeSubAccountId);
     if ($ok) {
         echo json_encode(['success' => true, 'message' => 'VPS linked to this sub-account successfully!']);
@@ -380,24 +392,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['link_programme_vps'])
     }
     exit;
 }
-
 // ==================== HANDLE REQUEST SPACE (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space'])) {
     header('Content-Type: application/json');
-
     $ownerId      = (int)($_POST['owner_id'] ?? 0);
     $ownerSubId   = (int)($_POST['owner_sub_account_id'] ?? 0);
-
     if ($ownerId <= 0 || $ownerSubId <= 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid host.']);
         exit;
     }
-
     if ($ownerId === $userId && $ownerSubId === $activeSubAccountId) {
         echo json_encode(['success' => false, 'message' => 'You cannot request your own VPS.']);
         exit;
     }
-
     if ($isAlreadyFollower) {
         echo json_encode([
             'success' => false,
@@ -405,14 +412,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
         ]);
         exit;
     }
-
-    $stmt = $pdo->prepare("SELECT id FROM vps WHERE user_id = ? AND sub_account_id = ? AND visibility = 'public' LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id FROM vps WHERE user_id = ? AND sub_account_id = ? AND visibility = 1 LIMIT 1");
     $stmt->execute([$ownerId, $ownerSubId]);
     if (!$stmt->fetch(PDO::FETCH_ASSOC)) {
         echo json_encode(['success' => false, 'message' => 'This host is not available.']);
         exit;
     }
-
     $stmt = $pdo->prepare("
         SELECT id FROM vps_hosts_requestors
         WHERE owner_id = ?
@@ -427,22 +432,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
         echo json_encode(['success' => false, 'message' => 'This account already has an active request with this host.']);
         exit;
     }
-
     $requestorRow        = resolveHarvhubRowById($pdo, $userId);
     $requestorSubName    = $requestorRow ? resolveSubAccountName($requestorRow) : 'An investor';
     $requestorUsername   = trim((string)($user['username'] ?? ''));
     if ($requestorUsername === '') {
         $requestorUsername = trim((string)($user['fullname'] ?? 'An investor'));
     }
-
     $isSelfReferral = ((int)$ownerId === $userId);
-
     if ($isSelfReferral) {
         $notificationMessage = 'Your sub account ' . $requestorSubName . ' requested space on your VPS.';
     } else {
         $notificationMessage = $requestorUsername . ' requested space on your VPS.';
     }
-
     try {
         $stmt = $pdo->prepare("
             INSERT INTO vps_hosts_requestors
@@ -450,10 +451,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
             VALUES (?, ?, ?, ?, 'pending')
         ");
         $stmt->execute([$ownerId, $ownerSubId, $userId, $activeSubAccountId]);
-
         $ownerEmail      = resolveUserEmailById($pdo, $ownerId);
         $ownerMainAccId  = resolveOwnerMainAccountId($pdo, $ownerId);
-
         if ($ownerEmail !== '') {
             recordContractNotification($pdo, [
                 'user_email'       => $ownerEmail,
@@ -468,26 +467,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_vps_space']))
                 'force'            => true
             ]);
         }
-
         echo json_encode(['success' => true, 'message' => 'Request submitted successfully!']);
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => 'Failed to submit request. Please try again.']);
     }
     exit;
 }
-
 // ==================== HANDLE GET HOST DETAILS (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) {
     header('Content-Type: application/json');
-
     $ownerId    = (int)($_POST['owner_id'] ?? 0);
     $ownerSubId = (int)($_POST['owner_sub_account_id'] ?? 0);
-
     if ($ownerId <= 0 || $ownerSubId <= 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid host.']);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("
             SELECT v.user_id, v.sub_account_id AS host_sub_account_id,
@@ -500,25 +494,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
                AND h.sub_account_id = v.sub_account_id
             WHERE v.user_id = ?
               AND v.sub_account_id = ?
-              AND v.visibility = 'public'
+              AND (
+                    v.visibility = 1
+                    OR (v.user_id = ? AND v.sub_account_id = ?)
+                  )
             LIMIT 1
         ");
-        $stmt->execute([$ownerId, $ownerSubId]);
+        $stmt->execute([$ownerId, $ownerSubId, $userId, $activeSubAccountId]);
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => 'Host not found.']);
         exit;
     }
-
     $hostData = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$hostData) {
         echo json_encode(['success' => false, 'message' => 'Host not found.']);
         exit;
     }
-
     $hostName = resolveHostDisplayName($hostData);
     $resolvedOwnerSubId = (int)($hostData['host_sub_account_id'] ?? $ownerSubId);
     $followerCount = countActiveFollowers($pdo, $ownerId, $resolvedOwnerSubId);
-
     $alreadyRequested = false;
     try {
         $stmt = $pdo->prepare("
@@ -533,12 +527,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
         $stmt->execute([$ownerId, $ownerSubId, $userId, $activeSubAccountId]);
         if ($stmt->fetch(PDO::FETCH_ASSOC)) $alreadyRequested = true;
     } catch (PDOException $e) {}
-
     $maxHosts = 5;
     $isSelf = ($ownerId === $userId && $ownerSubId === $activeSubAccountId);
-
     $requestLocked = $isSelf || $isAlreadyFollower || ($followerCount >= $maxHosts) || $alreadyRequested;
-
     echo json_encode([
         'success' => true,
         'host' => [
@@ -559,11 +550,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
     ]);
     exit;
 }
-
 // ==================== GET MY FOLLOWER OWNER (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_follower_owner'])) {
     header('Content-Type: application/json');
-
     try {
         $stmt = $pdo->prepare("
             SELECT f.id AS follower_row_id, f.follower_id, f.host_status, f.created_at,
@@ -589,24 +578,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_follower_owner
     } catch (PDOException $e) {
         $row = null;
     }
-
     if (!$row) {
         echo json_encode(['success' => true, 'is_follower' => false]);
         exit;
     }
-
     $ownerId   = (int)$row['owner_id_resolved'];
     $ownerName = resolveHostDisplayName($row);
-
     $ownerSubId = 0;
     try {
         $sq = $pdo->prepare("SELECT sub_account_id FROM vps_hosts_followers WHERE id = ? LIMIT 1");
         $sq->execute([$row['follower_row_id']]);
         $ownerSubId = (int)($sq->fetchColumn() ?: 0);
     } catch (Throwable $e) {}
-
     $totalFollowers = countActiveFollowers($pdo, $ownerId, $ownerSubId);
-
     echo json_encode([
         'success' => true,
         'is_follower' => true,
@@ -627,11 +611,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_follower_owner
     ]);
     exit;
 }
-
 // ==================== SENT REQUESTS (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_sent_requests'])) {
     header('Content-Type: application/json');
-
     try {
         $stmt = $pdo->prepare("
             SELECT r.id, r.owner_id, r.sub_account_id AS owner_sub_account_id,
@@ -655,7 +637,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_sent_requests']))
     } catch (PDOException $e) {
         $rows = [];
     }
-
     $seen = [];
     $unique = [];
     foreach ($rows as $r) {
@@ -668,20 +649,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_sent_requests']))
             $unique[] = $r;
         }
     }
-
     echo json_encode(['success' => true, 'requests' => $unique]);
     exit;
 }
-
 // ==================== INCOMING REQUESTS (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_incoming_requests'])) {
     header('Content-Type: application/json');
-
     if (!$userOwnsVps) {
         echo json_encode(['success' => false, 'message' => 'This account does not own a VPS.', 'count' => 0]);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("
             SELECT r.id, r.requestor_id, r.requestor_sub_account_id,
@@ -701,7 +678,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_incoming_requests
     } catch (PDOException $e) {
         $rows = [];
     }
-
     foreach ($rows as &$r) {
         if ((int)$r['requestor_id'] === $userId) {
             $r['requestor_display_name'] = 'Your sub account ' . resolveSubAccountName($r);
@@ -710,7 +686,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_incoming_requests
         }
     }
     unset($r);
-
     echo json_encode([
         'success' => true,
         'requests' => $rows,
@@ -718,40 +693,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_incoming_requests
     ]);
     exit;
 }
-
 // ==================== UPDATE REQUEST STATUS (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status'])) {
     header('Content-Type: application/json');
-
     $requestId = (int)($_POST['request_id'] ?? 0);
     $newStatus = trim($_POST['new_status'] ?? '');
-
     $allowed = ['accept', 'reject'];
     if ($requestId <= 0 || !in_array($newStatus, $allowed)) {
         echo json_encode(['success' => false, 'message' => 'Invalid request.']);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("SELECT * FROM vps_hosts_requestors WHERE id = ? LIMIT 1");
         $stmt->execute([$requestId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
         if (!$row) {
             echo json_encode(['success' => false, 'message' => 'Request not found.']);
             exit;
         }
-
         $rowOwnerSub = (int)$row['sub_account_id'];
         $rowReqSub   = (int)$row['requestor_sub_account_id'];
-
         $isOwner = ((int)$row['owner_id'] === $userId && $rowOwnerSub === $activeSubAccountId);
-
         if (!$isOwner) {
             echo json_encode(['success' => false, 'message' => 'Not authorized.']);
             exit;
         }
-
         if ($row['request_status'] !== 'pending') {
             echo json_encode([
                 'success' => false,
@@ -760,19 +726,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
             ]);
             exit;
         }
-
         $requestorId  = (int)$row['requestor_id'];
         $ownerId      = (int)$row['owner_id'];
         $ownerSubId   = $rowOwnerSub;
-
         if ($newStatus === 'accept') {
             $otherRow = findOtherFollowerLink($pdo, $requestorId, $rowReqSub, $ownerId, $ownerSubId);
-
             if ($otherRow) {
                 $otherOwnerName = resolveHostDisplayName($otherRow);
                 $del = $pdo->prepare("DELETE FROM vps_hosts_requestors WHERE id = ?");
                 $del->execute([$requestId]);
-
                 echo json_encode([
                     'success' => false,
                     'message' => 'This user is already with another VPS owner (' . ($otherOwnerName ?: 'another host') . '). Their pending request has been cleared.',
@@ -782,19 +744,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                 exit;
             }
         }
-
         $upd = $pdo->prepare("
             UPDATE vps_hosts_requestors
             SET request_status = ?
             WHERE id = ? AND request_status = 'pending'
         ");
         $upd->execute([$newStatus, $requestId]);
-
         if ($upd->rowCount() === 0) {
             $chk = $pdo->prepare("SELECT request_status FROM vps_hosts_requestors WHERE id = ? LIMIT 1");
             $chk->execute([$requestId]);
             $cur = $chk->fetch(PDO::FETCH_ASSOC);
-
             echo json_encode([
                 'success' => false,
                 'message' => 'Request is already ' . ($cur['request_status'] ?? 'processed') . '.',
@@ -802,7 +761,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
             ]);
             exit;
         }
-
         $ownerName = 'the host';
         try {
             $q = $pdo->prepare("SELECT fullname, first_name, last_name, username, sub_account_name FROM harvhub WHERE id = ? AND sub_account_id = ? LIMIT 1");
@@ -810,7 +768,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
             $hostRow = $q->fetch(PDO::FETCH_ASSOC);
             if ($hostRow) $ownerName = resolveHostDisplayName($hostRow);
         } catch (Throwable $e) {}
-
         if ($newStatus === 'accept') {
             $check = $pdo->prepare("
                 SELECT id FROM vps_hosts_followers
@@ -822,7 +779,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
             ");
             $check->execute([$ownerId, $ownerSubId, $requestorId, $rowReqSub]);
             $exists = $check->fetch(PDO::FETCH_ASSOC);
-
             if (!$exists) {
                 $ins = $pdo->prepare("
                     INSERT INTO vps_hosts_followers
@@ -831,7 +787,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                 ");
                 $ins->execute([$ownerId, $ownerSubId, $requestorId, $rowReqSub]);
             }
-
             $delOthers = $pdo->prepare("
                 DELETE FROM vps_hosts_requestors
                 WHERE requestor_id = ?
@@ -840,14 +795,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                   AND NOT (owner_id = ? AND sub_account_id = ?)
             ");
             $delOthers->execute([$requestorId, $rowReqSub, $requestId, $ownerId, $ownerSubId]);
-
             $delRow = $pdo->prepare("DELETE FROM vps_hosts_requestors WHERE id = ?");
             $delRow->execute([$requestId]);
         }
-
         $requestorEmail     = resolveUserEmailById($pdo, $requestorId);
         $requestorMainAccId = resolveOwnerMainAccountId($pdo, $requestorId);
-
         if ($requestorEmail !== '') {
             if ($newStatus === 'accept') {
                 recordContractNotification($pdo, [
@@ -877,7 +829,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
                 ]);
             }
         }
-
         echo json_encode([
             'success' => true,
             'message' => 'Request ' . $newStatus . 'ed successfully.',
@@ -888,57 +839,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_request_status
     }
     exit;
 }
-
 // ==================== DELETE REQUEST (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_request'])) {
     header('Content-Type: application/json');
-
     $requestId = (int)($_POST['request_id'] ?? 0);
-
     if ($requestId <= 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid request.']);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("SELECT * FROM vps_hosts_requestors WHERE id = ? LIMIT 1");
         $stmt->execute([$requestId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
         if (!$row) {
             echo json_encode(['success' => false, 'message' => 'Request not found.']);
             exit;
         }
-
         if ((int)$row['requestor_id'] !== $userId) {
             echo json_encode(['success' => false, 'message' => 'You can only delete your own sent requests.']);
             exit;
         }
-
         if ((int)$row['requestor_sub_account_id'] !== $activeSubAccountId) {
             echo json_encode(['success' => false, 'message' => 'This request does not belong to the current account.']);
             exit;
         }
-
         $del = $pdo->prepare("DELETE FROM vps_hosts_requestors WHERE id = ?");
         $del->execute([$requestId]);
-
         echo json_encode(['success' => true, 'message' => 'Request deleted.']);
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => 'Failed to delete request.']);
     }
     exit;
 }
-
 // ==================== GET MY FOLLOWERS (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_followers'])) {
     header('Content-Type: application/json');
-
     if (!$userOwnsVps) {
         echo json_encode(['success' => false, 'message' => 'This account does not own a VPS.']);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("
             SELECT f.id, f.follower_id, f.follower_sub_account_id,
@@ -957,7 +896,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_followers'])) 
     } catch (PDOException $e) {
         $rows = [];
     }
-
     foreach ($rows as &$r) {
         if ((int)$r['follower_id'] === $userId) {
             $subName = resolveSubAccountName($r);
@@ -967,45 +905,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_followers'])) 
         }
     }
     unset($r);
-
     echo json_encode(['success' => true, 'followers' => $rows]);
     exit;
 }
-
 // ==================== REMOVE FOLLOWER (AJAX) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
     header('Content-Type: application/json');
-
     $followerRowId = (int)($_POST['follower_row_id'] ?? 0);
-
     if ($followerRowId <= 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid follower.']);
         exit;
     }
-
     try {
         $stmt = $pdo->prepare("SELECT * FROM vps_hosts_followers WHERE id = ? LIMIT 1");
         $stmt->execute([$followerRowId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
         if (!$row) {
             echo json_encode(['success' => false, 'message' => 'Follower not found.']);
             exit;
         }
-
         $isMine = ((int)$row['owner_id'] === $userId && (int)$row['sub_account_id'] === $activeSubAccountId);
-
         if (!$isMine) {
             echo json_encode(['success' => false, 'message' => 'You can only remove followers from your own VPS.']);
             exit;
         }
-
         $removedFollowerId  = (int)$row['follower_id'];
         $removedFollowerSub = (int)$row['follower_sub_account_id'];
-
         $del = $pdo->prepare("DELETE FROM vps_hosts_followers WHERE id = ?");
         $del->execute([$followerRowId]);
-
         $ownerName = 'The host';
         try {
             $q = $pdo->prepare("SELECT fullname, first_name, last_name, username, sub_account_name FROM harvhub WHERE id = ? AND sub_account_id = ? LIMIT 1");
@@ -1013,10 +940,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
             $ownerRow = $q->fetch(PDO::FETCH_ASSOC);
             if ($ownerRow) $ownerName = resolveHostDisplayName($ownerRow);
         } catch (Throwable $e) {}
-
         $followerEmail     = resolveUserEmailById($pdo, $removedFollowerId);
         $followerMainAccId = resolveOwnerMainAccountId($pdo, $removedFollowerId);
-
         if ($followerEmail !== '' && $removedFollowerSub > 0) {
             recordContractNotification($pdo, [
                 'user_email'       => $followerEmail,
@@ -1031,14 +956,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
                 'force'            => true
             ]);
         }
-
         echo json_encode(['success' => true, 'message' => 'Follower removed successfully.']);
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => 'Failed to remove follower.']);
     }
     exit;
 }
-
 function showSpinner() {
     echo '<style>
         .spinner-overlay {
@@ -1086,7 +1009,6 @@ function showSpinner() {
         });
     </script>';
 }
-
 showSpinner();
 ?>
 <!DOCTYPE html>
@@ -1100,24 +1022,88 @@ showSpinner();
 <link rel="stylesheet" href="https://unicons.iconscout.com/release/v4.0.8/css/line.css">
 <?php include 'style.php'; ?>
 <?php include 'vps_style.php'; ?>
-
+<style>
+    .vps-host-actions.vps-owner-actions {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+        gap: 12px;
+    }
+    .vps-owner-actions .vps-owner-status {
+        margin-right: auto;
+        font-weight: 700;
+        color: var(--text, #1a2332);
+    }
+    .vps-visibility-select {
+        margin-left: auto;
+        min-width: 112px;
+        padding: 8px 30px 8px 11px;
+        border: 1px solid var(--border, rgba(127,127,127,.35));
+        border-radius: 9px;
+        background: var(--card-bg, #fff);
+        color: var(--text, #1a2332);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color-scheme: light;
+        cursor: pointer;
+    }
+    .vps-visibility-select option {
+        background: #fff;
+        color: #1a2332;
+    }
+    body.dark-mode .vps-visibility-select {
+        background: #111a17;
+        color: #e6edf3;
+        border-color: rgba(255,255,255,.18);
+        color-scheme: dark;
+    }
+    body.dark-mode .vps-visibility-select option {
+        background: #111a17;
+        color: #e6edf3;
+    }
+    .vps-visibility-select:disabled { opacity: .65; cursor: wait; }
+    .vps-topbar-back {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 40px !important;
+        height: 40px !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        color: var(--text, #1a2332) !important;
+        text-decoration: none !important;
+        line-height: 1 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        z-index: 20 !important;
+    }
+    .vps-topbar-back .vps-back-icon {
+        display: block !important;
+        width: 22px !important;
+        height: 22px !important;
+        min-width: 22px !important;
+        min-height: 22px !important;
+        overflow: visible !important;
+    }
+    body.dark-mode .vps-topbar-back { color: #e6edf3 !important; }
+</style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?> vps-page-body">
-
     <div class="vps-page-wrapper">
-
         <div class="vps-sticky-top" id="vpsStickyTop">
-
             <div class="vps-topbar">
                 <a href="#"
                    class="vps-topbar-back"
-                   onclick="event.preventDefault(); harvhubGoToTab('mydashboard'); return false;"
-                   aria-label="Back to Dashboard">
-                    <i class="fa-solid fa-arrow-left"></i>
+                   onclick="event.preventDefault(); harvhubGoBackFromVps(); return false;"
+                   aria-label="Back" title="Back">
+                    <svg class="vps-back-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M19 12H5M12 19l-7-7 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>
                 </a>
                 <h1 class="vps-topbar-title">VPS Hub</h1>
             </div>
-
             <div class="vps-search-wrap">
                 <input type="text"
                        id="vpsSearchInput"
@@ -1127,7 +1113,6 @@ showSpinner();
                        oninput="onVpsSearch(this.value)"
                        onfocus="onVpsSearch(this.value)">
             </div>
-
             <div class="vps-tabs" id="vpsTabs">
                 <button class="vps-tab active" data-tab="purchase" onclick="switchVpsTab('purchase')">
                     Purchase VPS
@@ -1135,14 +1120,12 @@ showSpinner();
                 <button class="vps-tab" data-tab="users" onclick="switchVpsTab('users')">
                     VPS Owners
                 </button>
-
                 <?php if ($userOwnsVps): ?>
                 <button class="vps-tab" data-tab="incoming" onclick="switchVpsTab('incoming')">
                     Incoming Requests
                     <span class="vps-tab-badge" id="incomingTabBadge" style="display:none;">0</span>
                 </button>
                 <?php endif; ?>
-
                 <?php if ($isAlreadyFollower && !$userOwnsVps): ?>
                     <button class="vps-tab" data-tab="myspace" onclick="switchVpsTab('myspace')">
                         My Space
@@ -1152,7 +1135,6 @@ showSpinner();
                         Sent Requests
                     </button>
                 <?php endif; ?>
-
                 <?php if ($userOwnsVps): ?>
                 <button class="vps-tab" data-tab="followers" onclick="switchVpsTab('followers')">
                     My Followers
@@ -1160,16 +1142,13 @@ showSpinner();
                 <?php endif; ?>
             </div>
         </div>
-
         <div class="vps-scroll-area" id="vpsScrollArea">
-
             <div class="vps-tab-content active" id="vpsTabPurchase">
                 <div class="vps-empty-state">
                     <span class="vps-empty-icon">—</span>
                     <p>Not available at the moment</p>
                 </div>
             </div>
-
             <div class="vps-tab-content" id="vpsTabUsers">
                 <?php if ($isAlreadyFollower): ?>
                     <div class="vps-follower-lock" style="margin-bottom:16px;padding:12px 16px;background:rgba(243,156,18,0.1);border-radius:8px;font-size:13px;line-height:1.5;color:var(--text);">
@@ -1177,7 +1156,6 @@ showSpinner();
                         You cannot send requests to other hosts while this account is an active follower.
                     </div>
                 <?php endif; ?>
-
                 <?php if ($linkableProgVps): ?>
                     <?php
                         $progName = trim((string)($linkableProgVps['program_name'] ?? ''));
@@ -1192,7 +1170,6 @@ showSpinner();
                         </button>
                     </div>
                 <?php endif; ?>
-
                 <?php if (empty($hosts) && !$linkableProgVps): ?>
                     <div class="vps-empty-state">
                         <span class="vps-empty-icon">—</span>
@@ -1211,7 +1188,6 @@ showSpinner();
                             $isSelf = ($ownerId === $userId && $ownerSubId === $activeSubAccountId);
                             $isFull = ($currentHosts >= $maxHosts);
                             $isLocked = $isAlreadyFollower;
-
                             $searchText = strtolower(
                                 ($host['username'] ?? '') . ' ' .
                                 ($host['sub_account_name'] ?? '') . ' ' .
@@ -1240,9 +1216,18 @@ showSpinner();
                                         <span class="vps-host-stat-value"><?= $currentHosts ?></span>
                                     </span>
                                 </div>
-                                <div class="vps-host-actions">
+                                <div class="vps-host-actions<?= $isSelf ? ' vps-owner-actions' : '' ?>">
                                     <?php if ($isSelf): ?>
-                                        <button class="vps-btn-request disabled" disabled>Your VPS</button>
+                                        <span class="vps-owner-status">Your VPS</span>
+                                        <select
+                                            class="vps-visibility-select"
+                                            aria-label="VPS visibility"
+                                            data-current-visibility="<?= (int)($host['visibility'] ?? 0) === 1 ? '1' : '0' ?>"
+                                            onchange="updateOwnVpsVisibility(this)"
+                                        >
+                                            <option value="1" <?= (int)($host['visibility'] ?? 0) === 1 ? 'selected' : '' ?>>Public</option>
+                                            <option value="0" <?= (int)($host['visibility'] ?? 0) === 0 ? 'selected' : '' ?>>Private</option>
+                                        </select>
                                     <?php elseif ($isLocked): ?>
                                         <button class="vps-btn-request disabled" disabled title="This account is already a follower of a VPS">Request Space</button>
                                     <?php elseif ($isFull): ?>
@@ -1260,7 +1245,6 @@ showSpinner();
                     </div>
                 <?php endif; ?>
             </div>
-
             <?php if ($isAlreadyFollower && !$userOwnsVps): ?>
                 <div class="vps-tab-content" id="vpsTabMySpace">
                     <div id="mySpaceContainer" class="vps-requests-list">
@@ -1274,25 +1258,20 @@ showSpinner();
                     </div>
                 </div>
             <?php endif; ?>
-
             <?php if ($userOwnsVps): ?>
             <div class="vps-tab-content" id="vpsTabIncoming">
                 <div id="incomingRequestsContainer" class="vps-requests-list">
                     <div class="vps-requests-loading">Loading incoming requests...</div>
                 </div>
             </div>
-
             <div class="vps-tab-content" id="vpsTabFollowers">
                 <div id="followersContainer" class="vps-requests-list">
                     <div class="vps-requests-loading">Loading followers...</div>
                 </div>
             </div>
             <?php endif; ?>
-
         </div>
-
     </div>
-
     <div id="vpsHostModal" class="vps-modal">
         <div class="vps-modal-content">
             <h2 class="vps-modal-title">Host Profile</h2>
@@ -1304,7 +1283,6 @@ showSpinner();
             </div>
         </div>
     </div>
-
     <div id="vpsConfirmModal" class="vps-modal">
         <div class="vps-modal-content">
             <h2 class="vps-modal-title" id="vpsConfirmModalTitle">Confirm Removal</h2>
@@ -1323,7 +1301,6 @@ showSpinner();
             </div>
         </div>
     </div>
-
     <div id="vpsAlertModal" class="vps-modal">
         <div class="vps-modal-content">
             <h2 class="vps-modal-title" id="vpsAlertModalTitle">Notice</h2>
@@ -1337,7 +1314,6 @@ showSpinner();
             </div>
         </div>
     </div>
-
 <script>
     function harvhubGoToTab(tab) {
         try {
@@ -1349,17 +1325,84 @@ showSpinner();
         window.location.href = 'investorapp.php?tab=' + encodeURIComponent(tab);
     }
     window.harvhubGoToTab = harvhubGoToTab;
-
+    function harvhubGoBackFromVps() {
+        var allowedTabs = ['mydashboard', 'trades', 'activity', 'analytics', 'menu', 'revenue_history', 'profit_split', 'programmes', 'disconnect_broker', 'connect_investor_broker'];
+        var returnTab = '';
+        try {
+            if (window.parent && window.parent !== window) {
+                var parentUrl = new URL(window.parent.location.href);
+                returnTab = parentUrl.searchParams.get('vps_from') || '';
+            }
+        } catch (e) {}
+        if (allowedTabs.indexOf(returnTab) === -1) {
+            try {
+                var childParams = new URLSearchParams(window.location.search);
+                returnTab = childParams.get('vps_from') || sessionStorage.getItem('harvhub_investor_vps_return_tab') || '';
+            } catch (e) {}
+        }
+        if (allowedTabs.indexOf(returnTab) === -1) returnTab = 'mydashboard';
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'investorVpsBack', returnTab: returnTab }, '*');
+                return;
+            }
+        } catch (e) {}
+        window.location.href = 'investorapp.php?tab=' + encodeURIComponent(returnTab);
+    }
+    window.harvhubGoBackFromVps = harvhubGoBackFromVps;
+    function updateOwnVpsVisibility(select) {
+        if (!select || select.dataset.saving === '1') return;
+        var next = String(select.value);
+        var previous = String(select.dataset.currentVisibility || select.value);
+        if (next !== '0' && next !== '1') {
+            select.value = previous;
+            if (typeof showVpsAlert === 'function') showVpsAlert('Choose either Public or Private.', 'Choose Visibility');
+            return;
+        }
+        if (next === previous) return;
+        select.dataset.saving = '1';
+        select.disabled = true;
+        fetch('vps.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'same-origin',
+            body: 'set_vps_visibility=1&visibility=' + encodeURIComponent(next)
+        })
+        .then(function (response) {
+            if (!response.ok) throw new Error('Request failed');
+            return response.json();
+        })
+        .then(function (data) {
+            if (data && data.success) {
+                select.dataset.currentVisibility = String(data.visibility);
+                select.value = String(data.visibility);
+                if (typeof showVpsAlert === 'function') showVpsAlert(data.message || 'VPS visibility updated.', 'Success');
+            } else {
+                select.value = previous;
+                if (typeof showVpsAlert === 'function') showVpsAlert((data && data.message) || 'Unable to update VPS visibility.', 'Error');
+            }
+        })
+        .catch(function () {
+            select.value = previous;
+            if (typeof showVpsAlert === 'function') showVpsAlert('Network error while updating VPS visibility.', 'Error');
+        })
+        .finally(function () {
+            select.disabled = false;
+            select.dataset.saving = '0';
+        });
+    }
+    window.updateOwnVpsVisibility = updateOwnVpsVisibility;
     (function () {
         document.body.classList.add('page-vps');
-
         window.addEventListener('message', function (e) {
             if (!e.data || typeof e.data !== 'object') return;
             if (e.data.type === 'theme') {
                 document.body.classList.toggle('dark-mode', !!e.data.dark);
             }
         });
-
         var WATCHED = [
             'page-connect_investor_broker',
             'profile-page-open',
@@ -1384,7 +1427,6 @@ showSpinner();
         broadcast();
         try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
     })();
-
     var currentHostOwnerId  = null;
     var currentHostSubId    = 0;
     var userHasVps          = <?= $userHasVps ? 'true' : 'false' ?>;
@@ -1392,11 +1434,9 @@ showSpinner();
     var isAlreadyFollower   = <?= $isAlreadyFollower ? 'true' : 'false' ?>;
     var modeIsMySpace       = <?= ($isAlreadyFollower && !$userOwnsVps) ? 'true' : 'false' ?>;
     var hasLinkableProgVps  = <?= $linkableProgVps ? 'true' : 'false' ?>;
-
     var pendingConfirmAction = null;
     var pendingConfirmId = null;
     var pendingConfirmName = '';
-
     function updateIncomingBadge(count) {
         var badge = document.getElementById('incomingTabBadge');
         if (!badge) return;
@@ -1409,27 +1449,22 @@ showSpinner();
         }
     }
     window.updateIncomingBadge = updateIncomingBadge;
-
     function onVpsSearch(query) {
         var q = (query || '').trim().toLowerCase();
         var listEl = document.getElementById('vpsHostsList');
         if (!listEl) return;
-
         var items = listEl.querySelectorAll('.vps-host-item');
         var anyVisible = false;
-
         items.forEach(function (el) {
             var searchText = el.getAttribute('data-search-text') || '';
             var matches = (q === '') || (searchText.indexOf(q) !== -1);
             if (matches) { el.style.display = ''; anyVisible = true; }
             else { el.style.display = 'none'; }
         });
-
         var emptyEl = document.getElementById('vpsSearchEmpty');
         if (emptyEl) emptyEl.style.display = (anyVisible || q === '') ? 'none' : '';
         listEl.style.display = anyVisible ? '' : 'none';
     }
-
     function switchVpsTab(tab) {
         document.querySelectorAll('.vps-tab').forEach(function(el) {
             el.classList.toggle('active', el.dataset.tab === tab);
@@ -1437,10 +1472,8 @@ showSpinner();
         document.querySelectorAll('.vps-tab-content').forEach(function(el) {
             el.classList.remove('active');
         });
-
         var scrollArea = document.getElementById('vpsScrollArea');
         if (scrollArea) scrollArea.scrollTop = 0;
-
         if (tab === 'purchase') {
             document.getElementById('vpsTabPurchase').classList.add('active');
         } else if (tab === 'users') {
@@ -1461,17 +1494,14 @@ showSpinner();
             var fol = document.getElementById('vpsTabFollowers');
             if (fol) { fol.classList.add('active'); loadMyFollowers(); }
         }
-
         showStickyTop();
     }
     window.switchVpsTab = switchVpsTab;
-
     var stickyTop  = document.getElementById('vpsStickyTop');
     var scrollArea = document.getElementById('vpsScrollArea');
     var lastScrollTop   = 0;
     var isStickyHidden  = false;
     var raf             = null;
-
     function hideStickyTop() {
         if (isStickyHidden || !stickyTop) return;
         stickyTop.classList.add('is-hidden');
@@ -1482,38 +1512,30 @@ showSpinner();
         isStickyHidden = false;
     }
     window.showStickyTop = showStickyTop;
-
     function handleScroll() {
         if (!scrollArea) return;
         var cur = scrollArea.scrollTop || 0;
         var maxScroll = (scrollArea.scrollHeight - scrollArea.clientHeight);
         var atBottom = (cur >= maxScroll - 5);
-
         if (cur > lastScrollTop + 1) {
             if (!atBottom) hideStickyTop();
         } else if (cur < lastScrollTop - 1) {
             showStickyTop();
         }
-
         if (cur <= 0) showStickyTop();
         if (atBottom) showStickyTop();
-
         lastScrollTop = cur <= 0 ? 0 : cur;
     }
-
     function onScrollThrottled() {
         if (raf) cancelAnimationFrame(raf);
         raf = requestAnimationFrame(handleScroll);
     }
-
     if (scrollArea) {
         scrollArea.addEventListener('scroll', onScrollThrottled, { passive: true });
     }
-
     function showVpsAlert(message, title, reloadAfter) {
         document.getElementById('vpsAlertModalTitle').textContent = title || 'Notice';
         document.getElementById('vpsAlertMessage').textContent = message == null ? '' : String(message);
-
         var okBtn = document.getElementById('vpsAlertOkBtn');
         if (okBtn) {
             okBtn.onclick = function () {
@@ -1524,37 +1546,30 @@ showSpinner();
                 }
             };
         }
-
         document.getElementById('vpsAlertModal').classList.add('active');
         lockBodyScroll();
     }
     window.showVpsAlert = showVpsAlert;
-
     function closeVpsAlertModal() {
         document.getElementById('vpsAlertModal').classList.remove('active');
         unlockBodyScroll();
     }
     window.closeVpsAlertModal = closeVpsAlertModal;
-
     function openVpsConfirm(opts) {
         pendingConfirmAction = opts.type || null;
         pendingConfirmId     = opts.id || null;
         pendingConfirmName   = opts.name || '';
-
         document.getElementById('vpsConfirmModalTitle').textContent = opts.title || 'Confirm';
         document.getElementById('vpsConfirmTargetLabel').textContent = opts.label || 'Target';
         document.getElementById('vpsConfirmFollowerName').textContent = opts.name || '—';
         document.getElementById('vpsConfirmMessage').textContent = opts.message || '';
         document.getElementById('vpsConfirmRemoveBtn').textContent = opts.confirmText || 'Yes, Confirm';
-
         var targetRow = document.getElementById('vpsConfirmTargetRow');
         targetRow.style.display = opts.name ? '' : 'none';
-
         document.getElementById('vpsConfirmModal').classList.add('active');
         lockBodyScroll();
     }
     window.openVpsConfirm = openVpsConfirm;
-
     function closeVpsConfirmModal() {
         document.getElementById('vpsConfirmModal').classList.remove('active');
         unlockBodyScroll();
@@ -1563,18 +1578,15 @@ showSpinner();
         pendingConfirmName = '';
     }
     window.closeVpsConfirmModal = closeVpsConfirmModal;
-
     function confirmModalAction() {
         if (!pendingConfirmAction || !pendingConfirmId) {
             closeVpsConfirmModal();
             return;
         }
-
         var btn = document.getElementById('vpsConfirmRemoveBtn');
         var originalText = btn.textContent;
         btn.disabled = true;
         btn.textContent = 'Processing...';
-
         if (pendingConfirmAction === 'remove_follower') {
             var rowId = pendingConfirmId;
             fetch('vps.php', {
@@ -1589,7 +1601,6 @@ showSpinner();
             .then(function(data) {
                 btn.disabled = false;
                 btn.textContent = originalText;
-
                 if (data.success) {
                     closeVpsConfirmModal();
                     showVpsAlert(data.message || 'Follower removed successfully.', 'Success');
@@ -1617,7 +1628,6 @@ showSpinner();
             .then(function(data) {
                 btn.disabled = false;
                 btn.textContent = originalText;
-
                 if (data.success) {
                     closeVpsConfirmModal();
                     showVpsAlert(data.message || 'Request deleted.', 'Success');
@@ -1638,12 +1648,10 @@ showSpinner();
         }
     }
     window.confirmModalAction = confirmModalAction;
-
     function linkProgrammeVps() {
         var btn = event.target;
         btn.disabled = true;
         btn.textContent = 'Linking...';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1669,13 +1677,10 @@ showSpinner();
         });
     }
     window.linkProgrammeVps = linkProgrammeVps;
-
     function loadSentRequests() {
         var container = document.getElementById('sentRequestsContainer');
         if (!container) return;
-
         container.innerHTML = '<div class="vps-requests-loading">Loading sent requests...</div>';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1697,13 +1702,10 @@ showSpinner();
         });
     }
     window.loadSentRequests = loadSentRequests;
-
     function loadMySpace() {
         var container = document.getElementById('mySpaceContainer');
         if (!container) return;
-
         container.innerHTML = '<div class="vps-requests-loading">Loading your space...</div>';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1725,14 +1727,11 @@ showSpinner();
         });
     }
     window.loadMySpace = loadMySpace;
-
     function renderMySpace(container, owner, self) {
         var totalFollowers = parseInt(owner.total_followers, 10) || 0;
         var status = (self.host_status || 'active').toLowerCase();
         var myName = self.display_name || 'You';
-
         var html = '';
-
         html += '<div class="vps-owner-card">';
         html += '  <div class="vps-owner-badge">VPS Owner</div>';
         html += '  <div class="vps-owner-name">' + escapeHtml(owner.fullname || 'Anonymous') + '</div>';
@@ -1744,7 +1743,6 @@ showSpinner();
         html += '    <div class="vps-owner-stat"><span class="vps-owner-stat-label">Total Followers</span><span class="vps-owner-stat-value">' + totalFollowers + '</span></div>';
         html += '  </div>';
         html += '</div>';
-
         html += '<div class="vps-followers-section">';
         html += '  <div class="vps-followers-title">You</div>';
         html += '  <div class="vps-hosts-list">';
@@ -1754,16 +1752,12 @@ showSpinner();
         html += '    </div>';
         html += '  </div>';
         html += '</div>';
-
         container.innerHTML = html;
     }
-
     function loadIncomingRequests() {
         var container = document.getElementById('incomingRequestsContainer');
         if (!container) return;
-
         container.innerHTML = '<div class="vps-requests-loading">Loading incoming requests...</div>';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1779,9 +1773,7 @@ showSpinner();
                 updateIncomingBadge(0);
                 return;
             }
-
             updateIncomingBadge(data.count || (data.requests ? data.requests.length : 0));
-
             if (!data.requests || !data.requests.length) {
                 container.innerHTML = '<div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>No pending requests at the moment</p></div>';
                 return;
@@ -1793,13 +1785,10 @@ showSpinner();
         });
     }
     window.loadIncomingRequests = loadIncomingRequests;
-
     function loadMyFollowers() {
         var container = document.getElementById('followersContainer');
         if (!container) return;
-
         container.innerHTML = '<div class="vps-requests-loading">Loading followers...</div>';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1814,12 +1803,10 @@ showSpinner();
                 container.innerHTML = '<div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>This account has no followers yet</p></div>';
                 return;
             }
-
             var html = '<div class="vps-hosts-list">';
             data.followers.forEach(function(f) {
                 var name = f.follower_display_name || 'Unknown';
                 var status = (f.host_status || 'active').toLowerCase();
-
                 html += '<div class="vps-request-item">';
                 html += '  <div class="vps-request-row"><div class="vps-request-label">Follower</div><div class="vps-request-value">' + escapeHtml(name) + '</div></div>';
                 html += '  <div class="vps-request-row"><div class="vps-request-label">Status</div><div class="vps-request-value"><span class="vps-status-badge vps-status-' + status + '">' + escapeHtml(status) + '</span></div></div>';
@@ -1836,29 +1823,22 @@ showSpinner();
         });
     }
     window.loadMyFollowers = loadMyFollowers;
-
     function renderRequestList(container, requests, mode) {
         var html = '<div class="vps-hosts-list">';
-
         requests.forEach(function(req) {
             var name = (mode === 'sent')
                 ? (req.owner_display_name || 'Anonymous')
                 : (req.requestor_display_name || 'Anonymous');
-
             var label = (mode === 'sent') ? 'Host' : 'Requestor';
             var location = (mode === 'sent' && req.owner_location) ? req.owner_location : '';
             var status = (req.request_status || 'pending').toLowerCase();
-
             html += '<div class="vps-request-item">';
             html += '  <div class="vps-request-row"><div class="vps-request-label">' + label + '</div><div class="vps-request-value">' + escapeHtml(name) + '</div></div>';
-
             if (location) {
                 html += '  <div class="vps-request-row"><div class="vps-request-label">Proxy</div><div class="vps-request-value">' + escapeHtml(location) + '</div></div>';
             }
-
             html += '  <div class="vps-request-row"><div class="vps-request-label">Status</div><div class="vps-request-value"><span class="vps-status-badge vps-status-' + status + '">' + escapeHtml(status) + '</span></div></div>';
             html += '  <div class="vps-request-row"><div class="vps-request-label">Action</div><div class="vps-request-value">';
-
             if (mode === 'incoming') {
                 if (status === 'pending') {
                     html += '<select class="vps-request-select" data-request-id="' + req.id + '" onchange="updateRequestStatus(this)">';
@@ -1872,20 +1852,16 @@ showSpinner();
             } else {
                 html += '<button class="vps-btn-delete" data-request-id="' + req.id + '" data-request-name="' + escapeAttr(name) + '" onclick="deleteRequestClicked(this)">Delete Request</button>';
             }
-
             html += '  </div></div>';
             html += '</div>';
         });
-
         html += '</div>';
         container.innerHTML = html;
     }
-
     function removeFollowerClicked(btn) {
         var rowId = btn.getAttribute('data-follower-id');
         var name  = btn.getAttribute('data-follower-name') || '';
         if (!rowId) return;
-
         openVpsConfirm({
             type: 'remove_follower',
             id: rowId,
@@ -1897,12 +1873,10 @@ showSpinner();
         });
     }
     window.removeFollowerClicked = removeFollowerClicked;
-
     function deleteRequestClicked(btn) {
         var reqId = btn.getAttribute('data-request-id');
         var name  = btn.getAttribute('data-request-name') || '';
         if (!reqId) return;
-
         openVpsConfirm({
             type: 'delete_request',
             id: reqId,
@@ -1914,18 +1888,14 @@ showSpinner();
         });
     }
     window.deleteRequestClicked = deleteRequestClicked;
-
     var _updatingRequestIds = {};
-
     function updateRequestStatus(selectEl) {
         var requestId = selectEl.getAttribute('data-request-id');
         var newStatus = selectEl.value;
-
         if (!requestId || !newStatus) return;
         if (_updatingRequestIds[requestId]) return;
         _updatingRequestIds[requestId] = true;
         selectEl.disabled = true;
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -1937,7 +1907,6 @@ showSpinner();
         .then(function(r) { return r.json(); })
         .then(function(data) {
             _updatingRequestIds[requestId] = false;
-
             if (data.success) {
                 loadIncomingRequests();
                 showVpsAlert(
@@ -1963,7 +1932,6 @@ showSpinner();
         });
     }
     window.updateRequestStatus = updateRequestStatus;
-
     function lockBodyScroll() {
         if (document.body.dataset.vpsModalScrollLocked === '1') return;
         var scrollY = window.scrollY || window.pageYOffset || 0;
@@ -1975,7 +1943,6 @@ showSpinner();
         document.body.style.width = '100%';
         document.body.style.top = '-' + scrollY + 'px';
     }
-
     function unlockBodyScroll() {
         if (document.body.dataset.vpsModalScrollLocked !== '1') return;
         var scrollY = parseInt(document.body.dataset.vpsModalScrollY || '0', 10) || 0;
@@ -1987,21 +1954,16 @@ showSpinner();
         document.body.style.top = '';
         window.scrollTo(0, scrollY);
     }
-
     function showHostModal(ownerId, ownerSubId) {
         currentHostOwnerId = ownerId;
         currentHostSubId   = ownerSubId || 0;
-
         var modal = document.getElementById('vpsHostModal');
         var body = document.getElementById('vpsHostModalBody');
         var actions = document.getElementById('vpsHostModalActions');
-
         body.innerHTML = '<div class="vps-modal-loading">Loading...</div>';
         actions.innerHTML = '<button class="vps-modal-close" onclick="closeVpsHostModal()">Close</button>';
-
         modal.classList.add('active');
         lockBodyScroll();
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -2019,9 +1981,7 @@ showSpinner();
                     '<div class="vps-modal-row"><span class="vps-modal-label">Proxy</span><span class="vps-modal-value">' + escapeHtml(h.server_location || 'N/A') + '</span></div>' +
                     '<div class="vps-modal-row"><span class="vps-modal-label">Subscription Duration</span><span class="vps-modal-value">' + escapeHtml(String(h.subscription_duration || 0)) + ' days</span></div>' +
                     '<div class="vps-modal-row"><span class="vps-modal-label">Current Hosts</span><span class="vps-modal-value">' + h.current_hosts + ' / ' + h.max_hosts + '</span></div>';
-
                 var actionsHtml = '';
-
                 if (h.request_locked) {
                     var reason = 'Request Space';
                     if (h.is_self)                      reason = 'Your VPS';
@@ -2032,7 +1992,6 @@ showSpinner();
                 } else {
                     actionsHtml += '<button class="vps-btn-confirm" onclick="requestVpsSpace(' + h.owner_id + ', ' + (h.owner_sub_account_id || 0) + ')">Request Space</button>';
                 }
-
                 actionsHtml += '<button class="vps-modal-close" onclick="closeVpsHostModal()">Close</button>';
                 actions.innerHTML = actionsHtml;
             } else {
@@ -2044,7 +2003,6 @@ showSpinner();
         });
     }
     window.showHostModal = showHostModal;
-
     function closeVpsHostModal() {
         document.getElementById('vpsHostModal').classList.remove('active');
         unlockBodyScroll();
@@ -2052,19 +2010,15 @@ showSpinner();
         currentHostSubId = 0;
     }
     window.closeVpsHostModal = closeVpsHostModal;
-
     function requestVpsSpace(ownerId, ownerSubId) {
         if (!ownerId) return;
-
         if (isAlreadyFollower) {
             showVpsAlert('This account is already a follower of another VPS. You cannot request space from other hosts.', 'Error');
             return;
         }
-
         var btn = event.target;
         btn.disabled = true;
         btn.textContent = 'Submitting...';
-
         fetch('vps.php', {
             method: 'POST',
             headers: {
@@ -2093,37 +2047,31 @@ showSpinner();
         });
     }
     window.requestVpsSpace = requestVpsSpace;
-
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text == null ? '' : String(text);
         return div.innerHTML;
     }
-
     function escapeAttr(text) {
         return escapeHtml(text).replace(/"/g, '&quot;');
     }
-
     function refreshVisibleRequestLists() {
         var sentTab = document.querySelector('.vps-tab[data-tab="sent"]');
         var sentContent = document.getElementById('vpsTabSent');
         if (sentTab && sentTab.classList.contains('active') && sentContent && sentContent.classList.contains('active')) {
             loadSentRequests();
         }
-
         var msTab = document.querySelector('.vps-tab[data-tab="myspace"]');
         var msContent = document.getElementById('vpsTabMySpace');
         if (msTab && msTab.classList.contains('active') && msContent && msContent.classList.contains('active')) {
             loadMySpace();
         }
-
         if (userOwnsVps) {
             var incomingTab = document.querySelector('.vps-tab[data-tab="incoming"]');
             var incomingContent = document.getElementById('vpsTabIncoming');
             if (incomingTab && incomingTab.classList.contains('active') && incomingContent && incomingContent.classList.contains('active')) {
                 loadIncomingRequests();
             }
-
             var folTab = document.querySelector('.vps-tab[data-tab="followers"]');
             var folContent = document.getElementById('vpsTabFollowers');
             if (folTab && folTab.classList.contains('active') && folContent && folContent.classList.contains('active')) {
@@ -2132,7 +2080,6 @@ showSpinner();
         }
     }
     window.refreshVisibleRequestLists = refreshVisibleRequestLists;
-
     function refreshIncomingBadge() {
         if (!userOwnsVps) return;
         fetch('vps.php', {
@@ -2152,19 +2099,16 @@ showSpinner();
         .catch(function() {});
     }
     window.refreshIncomingBadge = refreshIncomingBadge;
-
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden) {
             refreshVisibleRequestLists();
             refreshIncomingBadge();
         }
     });
-
     window.addEventListener('focus', function() {
         refreshVisibleRequestLists();
         refreshIncomingBadge();
     });
-
     var _vpsRefreshTimer = null;
     function startVpsAutoRefresh() {
         if (_vpsRefreshTimer) clearInterval(_vpsRefreshTimer);
@@ -2176,51 +2120,41 @@ showSpinner();
         }, 8000);
     }
     startVpsAutoRefresh();
-
     window.addEventListener('beforeunload', function() {
         if (_vpsRefreshTimer) {
             clearInterval(_vpsRefreshTimer);
             _vpsRefreshTimer = null;
         }
     });
-
     window.onVpsSearch = onVpsSearch;
-
     if (userOwnsVps) refreshIncomingBadge();
-
     (function () {
         function syncVpsTabsVisibility() {
             var tabsContainer = document.getElementById('vpsTabs') || document.querySelector('.vps-tabs');
             if (!tabsContainer) return;
-
             var visibleCount = 0;
             tabsContainer.querySelectorAll('.vps-tab').forEach(function (tab) {
                 if (tab.offsetParent !== null || (tab.getClientRects && tab.getClientRects().length > 0)) {
                     visibleCount++;
                 }
             });
-
             if (visibleCount < 2) {
                 tabsContainer.classList.add('vps-tabs-hidden');
             } else {
                 tabsContainer.classList.remove('vps-tabs-hidden');
             }
         }
-
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', syncVpsTabsVisibility);
         } else {
             syncVpsTabsVisibility();
         }
-
         window.addEventListener('focus', syncVpsTabsVisibility);
         document.addEventListener('visibilitychange', function () {
             if (!document.hidden) syncVpsTabsVisibility();
         });
-
         window.syncVpsTabsVisibility = syncVpsTabsVisibility;
     })();
 </script>
-
 </body>
 </html>

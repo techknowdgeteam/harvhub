@@ -430,43 +430,55 @@ function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, i
     $windowStart = $startAt->setTime(0, 0, 0);
     $restrictedDayLabels = array_map('ucfirst', array_keys($restrictedDaySet));
     $count = $period === 'daily' ? $durationDays : spc_periodCount($period, $durationDays);
+
+    // A challenge needs actual collection days. If every weekday is blocked,
+    // no finite extension can ever satisfy the requested eligible-day count.
+    if (count($restrictedDaySet) >= 7) return [];
+
     $periods = [];
-
-    // Keep every calendar checkpoint in the sequence. Restricted days remain
-    // visible as skipped cards, but do not count toward required checkpoints.
+    $cursor = $windowStart;
     for ($i = 0; $i < $count; $i++) {
-        if ($period === 'daily') {
-            $offsetStart = $i;
-            $offsetEndExclusive = $i + 1;
-        } else {
-            $offsetStart = (int)floor(($i * $durationDays) / $count);
-            $offsetEndExclusive = (int)floor((($i + 1) * $durationDays) / $count);
-            if ($offsetEndExclusive <= $offsetStart) $offsetEndExclusive = $offsetStart + 1;
-        }
+        // Distribute the configured eligible-day requirement across checkpoints.
+        // For example, 60 weekly days / 8 checkpoints becomes 7 or 8 eligible
+        // days per checkpoint; restricted dates extend the calendar end.
+        $offsetStart = (int)floor(($i * $durationDays) / $count);
+        $offsetEndExclusive = (int)floor((($i + 1) * $durationDays) / $count);
+        $targetEligibleDays = max(1, $offsetEndExclusive - $offsetStart);
 
-        $periodStart = $windowStart->modify('+' . $offsetStart . ' days');
-        $periodEnd = $windowStart->modify('+' . $offsetEndExclusive . ' days');
+        $periodStart = $cursor;
         $activeDates = [];
         $excludedDetails = [];
-        $calendarRestrictedDays = [];
-
-        for ($dayOffset = $offsetStart; $dayOffset < $offsetEndExclusive; $dayOffset++) {
-            $dateObject = $windowStart->modify('+' . $dayOffset . ' days');
+        $calendarDays = 0;
+        $guard = 0;
+        while (count($activeDates) < $targetEligibleDays && $guard < 5000) {
+            $dateObject = $periodStart->modify('+' . $calendarDays . ' days');
             $date = $dateObject->format('Y-m-d');
             $weekday = strtolower($dateObject->format('l'));
             $isRestrictedDate = isset($restrictedDateSet[$date]);
             $isRestrictedDay = isset($restrictedDaySet[$weekday]);
 
             if ($isRestrictedDate || $isRestrictedDay) {
-                if ($isRestrictedDate) $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
-                if ($isRestrictedDay) $calendarRestrictedDays[$weekday] = ucfirst($weekday);
+                // A date that is restricted in both ways is still one excluded
+                // calendar day, not two. Explicit dates are listed individually;
+                // recurring weekdays are shown in the separate weekday field.
+                if ($isRestrictedDate) {
+                    $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
+                }
             } else {
                 $activeDates[] = $date;
             }
+
+            $calendarDays++;
+            $guard++;
         }
 
-        $calendarDays = max(0, $offsetEndExclusive - $offsetStart);
-        $eligibleDays = count($activeDates);
+        if (count($activeDates) !== $targetEligibleDays) {
+            // Protect against pathological restriction data rather than creating
+            // a challenge with fewer eligible days than the configured requirement.
+            return [];
+        }
+
+        $periodEnd = $periodStart->modify('+' . $calendarDays . ' days');
         $periods[] = [
             'index' => $i,
             'label' => spc_periodLabel($period, $i),
@@ -475,16 +487,14 @@ function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, i
             'start_at' => $periodStart->format('Y-m-d H:i:s'),
             'end_at' => $periodEnd->format('Y-m-d H:i:s'),
             'calendar_days' => $calendarDays,
-            'eligible_days' => $eligibleDays,
+            'eligible_days' => count($activeDates),
             'active_dates' => $activeDates,
             'excluded_dates' => $excludedDetails,
-            // Show the programme's configured restricted weekdays on each card;
-            // the excluded date list above is scoped to this exact checkpoint.
             'excluded_days' => $restrictedDayLabels,
             'progress' => 0,
             'status' => 'locked',
             'locked' => true,
-            'skipped' => $eligibleDays === 0,
+            'skipped' => false,
             'trades' => 0,
             'wins' => 0,
             'consecutive_losses' => 0,
@@ -493,6 +503,10 @@ function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, i
             'loss_gate_passed' => false,
             'requirements_met' => false
         ];
+
+        // The next checkpoint begins immediately after this checkpoint's final
+        // eligible day, including any restricted dates used to extend it.
+        $cursor = $periodEnd;
     }
 
     return $periods;
@@ -500,90 +514,143 @@ function spc_buildChallengePeriods(DateTimeImmutable $startAt, string $period, i
 
 function spc_previewLookbackStart(DateTimeImmutable $now, string $period): DateTimeImmutable {
     $period = strtolower(trim($period));
-    if ($period === 'monthly') return $now->modify('-2 months');
-    if ($period === 'weekly') return $now->modify('-14 days');
-    return $now->modify('-7 days');
+    $today = $now->setTime(0, 0, 0);
+    if ($period === 'monthly') {
+        // Clamp the day-of-month so dates near month-end do not overflow into
+        // an unintended later month (for example, November 30 minus 2 months).
+        $targetMonth = $today->modify('first day of this month')->modify('-2 months');
+        $day = min((int)$today->format('j'), (int)$targetMonth->format('t'));
+        return $targetMonth->setDate((int)$targetMonth->format('Y'), (int)$targetMonth->format('n'), $day);
+    }
+    if ($period === 'weekly') return $today->modify('-13 days');
+    return $today->modify('-6 days');
 }
 
-function spc_buildPreviewPeriod(string $period, DateTimeImmutable $lookbackStart, DateTimeImmutable $now, array $restricted): array {
+/**
+ * Builds separate historical preview slices from real live-trade dates.
+ * The lookback is a hard limit, not one combined checkpoint. If a live trade
+ * exists inside the lookback, the first eligible live-trade date becomes the
+ * visible start; otherwise the complete lookback window remains visible.
+ * Weekly and monthly previews follow calendar-week/calendar-month boundaries,
+ * so a two-month lookback can correctly display Month 1, Month 2 and Month 3.
+ */
+function spc_buildPreviewPeriods(string $period, DateTimeImmutable $lookbackStart, DateTimeImmutable $now, array $restricted, array $events = []): array {
+    $period = in_array(strtolower(trim($period)), ['daily','weekly','monthly'], true) ? strtolower(trim($period)) : 'daily';
     $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
     $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
-    $calendarStart = $lookbackStart->setTime(0, 0, 0);
-    $calendarEnd = $now->setTime(0, 0, 0);
-    $activeDates = [];
-    $excludedDetails = [];
-    $cursor = $calendarStart;
-    while ($cursor <= $calendarEnd) {
-        $date = $cursor->format('Y-m-d');
-        $weekday = strtolower($cursor->format('l'));
-        $isRestrictedDate = isset($restrictedDateSet[$date]);
-        $isRestrictedDay = isset($restrictedDaySet[$weekday]);
-        if ($isRestrictedDate || $isRestrictedDay) {
-            // Restricted Dates lists only dates explicitly configured in the
-            // account-management calendar. Recurring weekday exclusions appear
-            // separately in Restricted Days.
-            if ($isRestrictedDate) $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
-        } else {
-            $activeDates[] = $date;
-        }
-        $cursor = $cursor->modify('+1 day');
+    $lookbackStart = $lookbackStart->setTime(0, 0, 0);
+    $today = $now->setTime(0, 0, 0);
+    $windowEndExclusive = $today->modify('+1 day');
+
+    // Anchor the preview at the first non-restricted live trade in the allowed
+    // lookback. Do not let older trades pull the preview beyond its hard limit.
+    $firstLiveTradeDate = null;
+    foreach ($events as $event) {
+        $date = substr(trim((string)($event['trade_date'] ?? '')), 0, 10);
+        if ($date === '' || $date < $lookbackStart->format('Y-m-d') || $date > $today->format('Y-m-d')) continue;
+        $dateObject = DateTimeImmutable::createFromFormat('!Y-m-d', $date, $now->getTimezone());
+        if (!$dateObject) continue;
+        $weekday = strtolower($dateObject->format('l'));
+        if (isset($restrictedDateSet[$date]) || isset($restrictedDaySet[$weekday])) continue;
+        if ($firstLiveTradeDate === null || $date < $firstLiveTradeDate) $firstLiveTradeDate = $date;
     }
+
+    $cursor = $firstLiveTradeDate
+        ? DateTimeImmutable::createFromFormat('!Y-m-d', $firstLiveTradeDate, $now->getTimezone())
+        : $lookbackStart;
+    if (!$cursor) $cursor = $lookbackStart;
+
     $restrictedDayLabels = array_map('ucfirst', array_keys($restrictedDaySet));
-    $label = $period === 'weekly' ? '2 Weeks Preview' : ($period === 'monthly' ? '2 Months Preview' : '7 Days Preview');
-    return [
-        'index' => 0,
-        'label' => $label,
-        'start_date' => $lookbackStart->format('Y-m-d'),
-        'end_date' => $now->format('Y-m-d'),
-        'start_at' => $lookbackStart->format('Y-m-d H:i:s'),
-        'end_at' => $now->modify('+1 second')->format('Y-m-d H:i:s'),
-        'calendar_days' => (int)$calendarStart->diff($calendarEnd)->days + 1,
-        'eligible_days' => count($activeDates),
-        'active_dates' => $activeDates,
-        'excluded_dates' => $excludedDetails,
-        'excluded_days' => $restrictedDayLabels,
-        'progress' => 0,
-        'status' => 'preview',
-        'locked' => false,
-        'skipped' => count($activeDates) === 0,
-        'preview' => true,
-        'trades' => 0,
-        'wins' => 0,
-        'consecutive_losses' => 0,
-        'trades_passed' => false,
-        'wins_passed' => false,
-        'loss_gate_passed' => false,
-        'requirements_met' => false
-    ];
+    $periods = [];
+    while ($cursor < $windowEndExclusive) {
+        $periodStart = $cursor->setTime(0, 0, 0);
+        if ($period === 'monthly') {
+            $bucketEnd = $periodStart->modify('first day of next month')->setTime(0, 0, 0);
+        } elseif ($period === 'weekly') {
+            $daysUntilNextMonday = 8 - (int)$periodStart->format('N');
+            $bucketEnd = $periodStart->modify('+' . $daysUntilNextMonday . ' days')->setTime(0, 0, 0);
+        } else {
+            $bucketEnd = $periodStart->modify('+1 day');
+        }
+        $periodEnd = $bucketEnd < $windowEndExclusive ? $bucketEnd : $windowEndExclusive;
+
+        $activeDates = [];
+        $excludedDetails = [];
+        $calendarDays = (int)$periodStart->diff($periodEnd)->days;
+        for ($dayOffset = 0; $dayOffset < $calendarDays; $dayOffset++) {
+            $dateObject = $periodStart->modify('+' . $dayOffset . ' days');
+            $date = $dateObject->format('Y-m-d');
+            $weekday = strtolower($dateObject->format('l'));
+            $isRestrictedDate = isset($restrictedDateSet[$date]);
+            $isRestrictedDay = isset($restrictedDaySet[$weekday]);
+            if ($isRestrictedDate || $isRestrictedDay) {
+                if ($isRestrictedDate) $excludedDetails[] = spc_restrictionDetail($date, true, $isRestrictedDay, $weekday);
+            } else {
+                $activeDates[] = $date;
+            }
+        }
+
+        $isLastSlice = ($periodEnd >= $windowEndExclusive);
+        $periodEndAt = $isLastSlice ? $now->modify('+1 second') : $periodEnd;
+        $periodIndex = count($periods);
+        $periods[] = [
+            'index' => $periodIndex,
+            'label' => spc_periodLabel($period, $periodIndex),
+            'start_date' => $periodStart->format('Y-m-d'),
+            'end_date' => $periodEnd->modify('-1 day')->format('Y-m-d'),
+            'start_at' => $periodStart->format('Y-m-d H:i:s'),
+            'end_at' => $periodEndAt->format('Y-m-d H:i:s'),
+            'calendar_days' => $calendarDays,
+            'eligible_days' => count($activeDates),
+            'active_dates' => $activeDates,
+            'excluded_dates' => $excludedDetails,
+            'excluded_days' => $restrictedDayLabels,
+            'progress' => 0,
+            'status' => count($activeDates) === 0 ? 'restricted' : 'preview',
+            'locked' => false,
+            'skipped' => count($activeDates) === 0,
+            'preview' => true,
+            'trades' => 0,
+            'wins' => 0,
+            'consecutive_losses' => 0,
+            'trades_passed' => false,
+            'wins_passed' => false,
+            'loss_gate_passed' => false,
+            'requirements_met' => false
+        ];
+
+        $cursor = $periodEnd;
+    }
+
+    return $periods;
 }
+
+
 
 function spc_countEligibleDays(DateTimeImmutable $startAt, int $durationDays, array $restricted): int {
-    $restrictedDateSet = array_fill_keys(array_map('strval', $restricted['dates'] ?? []), true);
-    $restrictedDaySet = array_fill_keys(array_map('strval', $restricted['days'] ?? []), true);
-    $eligible = 0;
-    $start = $startAt->setTime(0, 0, 0);
-    for ($i = 0; $i < max(1, $durationDays); $i++) {
-        $date = $start->modify('+' . $i . ' days');
-        $iso = $date->format('Y-m-d');
-        $weekday = strtolower($date->format('l'));
-        if (isset($restrictedDateSet[$iso]) || isset($restrictedDaySet[$weekday])) continue;
-        $eligible++;
-    }
-    return $eligible;
+    // durationDays is the number of eligible collection days required. The
+    // challenge period builder extends the calendar window around restrictions;
+    // restricted weekdays/dates must not reduce this requirement.
+    return max(0, $durationDays);
 }
 
-
-function spc_durationDescription(string $period, int $durationDays, int $eligibleDays): string {
+function spc_durationDescription(string $period, int $durationDays, int $eligibleDays, ?int $calendarDays = null): string {
     $period = strtolower(trim($period));
+    $requiredDays = max(0, $eligibleDays);
+    $calendarDays = max($requiredDays, (int)($calendarDays ?? $durationDays));
+    $excludedDays = max(0, $calendarDays - $requiredDays);
+    $windowText = $calendarDays . ' calendar days (' . $requiredDays . ' required eligible days + ' . $excludedDays . ' restricted days)';
+    $restrictionExplanation = 'Restricted weekdays and specific restricted dates are excluded only from trade collection; they are not subtracted from the required eligible-day total. Every unique calendar date excluded by either rule extends the overall end date by one calendar day. If one date matches both a restricted weekday and an explicit restricted date, it is counted only once. For example, 60 required eligible days plus 10 unique restricted dates means a 70-calendar-day window: 10 excluded dates and all 60 eligible days still required.';
+
     if ($period === 'weekly') {
         $count = spc_periodCount('weekly', $durationDays);
-        return $count . ' Weeks Duration Provision. Each week must meet the provision challenge, excluding the restricted days and dates in each week. There are ' . $eligibleDays . ' eligible days within ' . $durationDays . ' calendar days.';
+        return $count . ' weekly checkpoints require ' . $requiredDays . ' eligible trading days. ' . $restrictionExplanation . ' Planned duration: ' . $windowText . '.';
     }
     if ($period === 'monthly') {
         $count = spc_periodCount('monthly', $durationDays);
-        return $count . ' Months Duration Provision. Each month must meet the provision challenge, excluding the restricted days and dates in each month. There are ' . $eligibleDays . ' eligible days within ' . $durationDays . ' calendar days.';
+        return $count . ' monthly checkpoints require ' . $requiredDays . ' eligible trading days. ' . $restrictionExplanation . ' Planned duration: ' . $windowText . '.';
     }
-    return $eligibleDays . ' Days Duration Provision. Each day must meet the provision challenge. (' . $durationDays . ' calendar days before restricted dates and days are excluded.)';
+    return $requiredDays . ' daily checkpoints require ' . $requiredDays . ' eligible trading days. ' . $restrictionExplanation . ' Planned duration: ' . $windowText . '.';
 }
 
 function spc_getLiveProvisionEvents(PDO $pdo, int $userId, int $programmeId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, DateTimeZone $timezone): array {
@@ -724,13 +791,16 @@ function spc_startProvisionTest(PDO $pdo, int $userId, int $programmeId, array $
     $timezoneName = trim((string)($programme['timezone'] ?? ''));
     $timezone = spc_timezone($timezoneName);
     $now = new DateTimeImmutable('now', $timezone);
-    $endAt = $now->setTime(0, 0, 0)->modify('+' . $duration . ' days');
     $restricted = spc_getRestrictedCalendar($pdo, $userId, $programmeId, $email);
     $periods = spc_buildChallengePeriods($now, $period, $duration, $restricted, $now);
-    $totalRequired = 0;
-    foreach ($periods as $p) if ((int)$p['eligible_days'] > 0) $totalRequired++;
+    $totalRequired = count($periods);
     if ($totalRequired <= 0) {
-        return ['success'=>false, 'message'=>'Every day in this challenge window is restricted. Adjust the restricted dates/days before beginning the test.'];
+        return ['success'=>false, 'message'=>'The restricted weekdays/dates leave no eligible collection days. Adjust the restricted calendar before beginning the test.'];
+    }
+    $lastPeriod = $periods[$totalRequired - 1];
+    $endAt = spc_parseDateTime($lastPeriod['end_at'] ?? '', $timezone);
+    if (!$endAt) {
+        return ['success'=>false, 'message'=>'The extended challenge end date could not be calculated. Please review the restricted calendar.'];
     }
     $initial = [];
     foreach ($periods as $p) {
@@ -829,6 +899,18 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
 
     if ($hasChallengeRun) {
         $periods = spc_buildChallengePeriods($startAt, $period, $duration, $restricted, $now);
+        if (!empty($periods)) {
+            $computedEndAt = spc_parseDateTime($periods[count($periods) - 1]['end_at'] ?? '', $timezone);
+            if ($computedEndAt) {
+                $endAt = $computedEndAt;
+                try {
+                    $endUpdate = $pdo->prepare("UPDATE `signals_provider_interest` SET `challenge_end_at` = ?, `updated_at` = CURRENT_TIMESTAMP WHERE `id` = ? AND `user_id` = ? AND `programme_id` = ?");
+                    $endUpdate->execute([$endAt->format('Y-m-d H:i:s'), (int)$interest['id'], $userId, $programmeId]);
+                } catch (Throwable $endUpdateError) {
+                    error_log('[signals challenge] extended end-date persistence failed: ' . $endUpdateError->getMessage());
+                }
+            }
+        }
         foreach ($periods as $idx => $p) {
             $pStart = spc_parseDateTime($p['start_at'], $timezone);
             $pEnd = spc_parseDateTime($p['end_at'], $timezone);
@@ -848,14 +930,32 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
             $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $comparisonStart, $endAt, $timezone);
         }
     } elseif ($previewMode) {
-        // Before Begin Test, keep dummy readings live using the requested rolling
-        // limits: daily=7 days, weekly=14 days, monthly=2 months. Preview is read-only.
+        // The lookback is a hard data limit, not one combined checkpoint.
+        // Read only actual live trades inside it, then create one navigable
+        // card for each calendar day/week/month slice within the data window.
         $lookbackStart = spc_previewLookbackStart($now, $period);
         $lookbackEnd = $now->modify('+1 second');
-        $previewPeriod = spc_buildPreviewPeriod($period, $lookbackStart, $now, $restricted);
-        $periods = [$previewPeriod];
-        $currentIndex = 0;
         $tracking = spc_getLiveProvisionEvents($pdo, $userId, $programmeId, $lookbackStart, $lookbackEnd, $timezone);
+        $hasPreviewLiveTrades = !empty($tracking['events']);
+        if ($hasPreviewLiveTrades) {
+            $periods = spc_buildPreviewPeriods($period, $lookbackStart, $now, $restricted, $tracking['events']);
+        } else {
+            // With no live-trade history and no explicit test start date, do not
+            // fabricate prior checkpoints from the lookback window. Show only
+            // the current calendar day/week/month as the default preview.
+            $currentBucketStart = $now->setTime(0, 0, 0);
+            if ($period === 'weekly') {
+                $currentBucketStart = $currentBucketStart->modify('-' . ((int)$currentBucketStart->format('N') - 1) . ' days');
+            } elseif ($period === 'monthly') {
+                $currentBucketStart = $currentBucketStart->modify('first day of this month');
+            }
+            $periods = spc_buildPreviewPeriods($period, $currentBucketStart, $now, $restricted, []);
+        }
+        $currentIndex = max(0, count($periods) - 1);
+        if (!empty($periods)) {
+            $actualPreviewStart = spc_parseDateTime($periods[0]['start_at'], $timezone);
+            if ($actualPreviewStart) $lookbackStart = $actualPreviewStart;
+        }
     } else {
         // A failed/breached row retains its last challenge calendar, but its
         // checkpoint readings stay reset until the user explicitly restarts it.
@@ -1095,7 +1195,16 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     $allRequirementsMet = $periodStats ? !empty($periodStats['requirements_met']) : false;
     $durationAnchor = $hasChallengeRun ? $startAt : $now->setTime(0, 0, 0);
     $eligibleDurationDays = spc_countEligibleDays($durationAnchor, $duration, $restricted);
-    $durationDescription = spc_durationDescription($period, $duration, $eligibleDurationDays);
+    $durationPlanPeriods = ($hasChallengeRun || !$previewMode)
+        ? $periods
+        : spc_buildChallengePeriods($durationAnchor, $period, $duration, $restricted, $now);
+    $calendarDurationDays = $duration;
+    if (!empty($durationPlanPeriods)) {
+        $planStart = spc_parseDateTime($durationPlanPeriods[0]['start_at'] ?? '', $timezone);
+        $planEnd = spc_parseDateTime($durationPlanPeriods[count($durationPlanPeriods) - 1]['end_at'] ?? '', $timezone);
+        if ($planStart && $planEnd) $calendarDurationDays = max($duration, (int)$planStart->diff($planEnd)->days);
+    }
+    $durationDescription = spc_durationDescription($period, $duration, $eligibleDurationDays, $calendarDurationDays);
     $begun = $hasChallengeRun || $beginTest === 1;
 
     return [
@@ -1914,8 +2023,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     .spr-list { display: flex; flex-direction: column; gap: 12px; }
 
+    /* Interested Provision: flush content directly beneath the main tabs. */
+    .spr-scroll-area.spr-interested-mode {
+        padding: 2px 0 90px;
+        max-width: none;
+        margin: 0;
+        width: 100%;
+    }
+    .spr-interested-mode .spr-list { gap: 0; }
+    .spr-interested-mode .spr-item {
+        width: 100%;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 16px var(--spr-page-pad);
+    }
+
     .spr-item {
-        background: var(--spr-card); border: 1px solid var(--spr-border);
+        background: var(--spr-bg); border: 1px solid var(--spr-border);
         border-radius: var(--spr-radius); padding: 16px 20px;
         display: flex; align-items: center; justify-content: space-between;
         gap: 16px; box-shadow: var(--spr-shadow);
@@ -2182,7 +2308,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <div class="spr-modal-card spr-confirm-card" style="text-align:center;">
         <div class="spr-confirm-icon" style="background:rgba(52,152,219,.12);color:#3498db;"><i class="fa-solid fa-play"></i></div>
         <div class="spr-confirm-title">Begin Test</div>
-        <div class="spr-confirm-text" id="sprBeginTestText">Once you agree to begin the test, live trades will be generated from your trained programme for the next <?= (int)($dayDuration ?: 30) ?> days. Your strategy will be evaluated against the challenge requirements, and once they are met, your programme will be advertised.</div>
+        <div class="spr-confirm-text" id="sprBeginTestText">The test requires <?= (int)($dayDuration ?: 30) ?> eligible collection days. Restricted weekdays and dates are excluded from trade collection and extend the overall calendar window by their unique number of restricted dates.</div>
         <div class="spr-actions">
             <button class="spr-btn primary" id="sprConfirmBeginTestBtn">Confirm Test</button>
             <button class="spr-btn ghost" onclick="sprCloseModal('sprBeginTestModal')">Cancel</button>
@@ -2227,6 +2353,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     var cancelFilterBtn = document.getElementById('sprCancelFilterBtn');
     var filterFloat = document.getElementById('sprFilterFloat');
     var subTabs = document.getElementById('sprSubTabs');
+    var scrollArea = document.getElementById('sprScrollArea');
     var requestListEl = document.getElementById('sprRequestList');
 
     function notifyParentModal(open) {
@@ -2402,8 +2529,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var lossFailed = lossesLimit > 0 && liveLosses >= lossesLimit;
 
         function progressBlock(label, current, target, percent, passed, isLoss) {
-            var right = locked
-                ? '<i class="fa-solid fa-lock spr-progress-lock" aria-label="Locked until this checkpoint begins"></i>'
+            // Keep checkpoint readings private until this selected slice has
+            // at least one genuine live trade. Historical/dummy zeroes must
+            // not be presented as a real count.
+            var hasLiveTradeData = !!(tracking && moment && liveTrades > 0);
+            var countLocked = locked || !hasLiveTradeData;
+            var right = countLocked
+                ? '<i class="fa-solid fa-lock spr-progress-lock" aria-label="' + (locked ? 'Locked until this checkpoint begins' : 'Locked until live trade data is available') + '" title="' + (locked ? 'Locked until this checkpoint begins' : 'Locked until live trade data is available') + '"></i>'
                 : '<span class="spr-progress-count">' + current + ' / ' + target + '</span>';
             var mark = locked
                 ? '<i class="fa-solid fa-lock spr-progress-lock" aria-hidden="true"></i>'
@@ -2483,8 +2615,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (canBeginTest) {
             html += '<button class="spr-begin-test-btn" onclick="sprBeginTest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-play"></i> Begin Test</button>';
         }
-        if (status === 'failed') {
-            html += '<button class="spr-restart-btn" onclick="sprRestartInterest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-rotate-right"></i> Restart Challenge</button>';
+        if (status === 'failed' || status === 'breached') {
+            html += '<div class="spr-failure-message">' + escapeHtml(interest.challenge_failure_reason || 'This signals provision challenge has failed.') + '</div>';
+            html += '<button class="spr-restart-btn" onclick="sprRestartInterest(' + interest.id + ', ' + JSON.stringify(periodLabel) + ')"><i class="fa-solid fa-rotate-right"></i> Interested</button>';
         }
         if (['interested','pending','active','ongoing','failed','breached'].indexOf(status) !== -1) {
             html += '<button class="spr-cancel-btn" type="button" onclick="sprCancelInterest(' + interest.id + ')">Cancel Provision</button>';
@@ -2502,9 +2635,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (CURRENT_MAIN_TAB === 'challenges') {
             subTabs.hidden = false;
             filterFloat.style.display = '';
+            scrollArea.classList.remove('spr-interested-mode');
         } else {
             subTabs.hidden = true;
             filterFloat.style.display = 'none';
+            scrollArea.classList.add('spr-interested-mode');
         }
     }
 
@@ -2820,8 +2955,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         document.getElementById('sprConfirmBeginTestBtn').textContent = 'Confirm Test';
         var duration = parseInt(CHALLENGE_DURATIONS[String(periodLabel || 'Daily').toLowerCase()], 10) || 30;
         document.getElementById('sprBeginTestText').textContent =
-            'Once you agree to begin the test, live trades will be generated from your trained programme for the next ' + duration +
-            ' calendar days. Restricted dates and weekdays are excluded. Every day, each of the eight weeks, or each of the three months must meet the provision requirement before the challenge can pass.';
+            'The test requires ' + duration + ' eligible collection days. Restricted weekdays and specific restricted dates are not used for trade collection; each unique restricted calendar date extends the overall end date by one day. A date blocked by both a restricted weekday and a restricted date is counted only once. For example, 60 required days plus 10 unique restricted days means a 70-calendar-day window, with 10 dates excluded from collection and all 60 eligible days still required.';
         window.SPR_BEGIN_TEST_INTEREST_ID = parseInt(interestId, 10) || 0;
         sprOpenModal('sprBeginTestModal');
     };
@@ -2831,7 +2965,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         window.SPR_BEGIN_TEST_INTEREST_ID = parseInt(interestId, 10) || 0;
         document.querySelector('#sprBeginTestModal .spr-confirm-title').textContent = 'Restart Challenge';
         document.getElementById('sprBeginTestText').textContent =
-            'Restarting will reset every daily, weekly, or monthly checkpoint to zero and begin a fresh ' + periodLabel.toLowerCase() + ' challenge window. Restricted dates and weekdays will be applied again.';
+            'Restarting will reset every daily, weekly, or monthly checkpoint to zero and begin a fresh ' + periodLabel.toLowerCase() + ' signals provision test. The required eligible collection days stay the same. Restricted weekdays and dates are skipped for trade collection and extend the calendar end date; a calendar date blocked by both rules counts once.';
         document.getElementById('sprConfirmBeginTestBtn').textContent = 'Confirm Restart';
         sprOpenModal('sprBeginTestModal');
     };

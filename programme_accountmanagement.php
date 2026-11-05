@@ -194,6 +194,61 @@
         '__martingale__',
     ];
 
+    // Navigation-card labels and descriptions. Each item opens one isolated
+    // full-width editor view; the overview itself contains navigation only.
+    $SECTION_NAV_META = [
+        'restricted_dates' => [
+            'title' => 'Restricted Dates',
+            'description' => 'Manage calendar dates when trading must be blocked.',
+            'icon' => 'fa-calendar-xmark',
+        ],
+        'restricted_days' => [
+            'title' => 'Restricted Days',
+            'description' => 'Set the weekdays and time windows when trading is restricted.',
+            'icon' => 'fa-calendar-week',
+        ],
+        'programme_revenue_target' => [
+            'title' => 'Daily Revenue Target',
+            'description' => 'Configure daily targets and the weekly, daily and balance ranges.',
+            'icon' => 'fa-bullseye',
+        ],
+        'trades_breakeven' => [
+            'title' => 'Trades Breakeven',
+            'description' => 'Set the floating-profit and breakeven risk-reward thresholds.',
+            'icon' => 'fa-scale-balanced',
+        ],
+        'min_balance_risk_distance' => [
+            'title' => 'Minimum Balance Risk Distance',
+            'description' => 'Configure risk amounts for minimum balance ranges.',
+            'icon' => 'fa-arrow-down-wide-short',
+        ],
+        'max_balance_risk_distance' => [
+            'title' => 'Maximum Balance Risk Distance',
+            'description' => 'Configure risk amounts for maximum balance ranges.',
+            'icon' => 'fa-arrow-up-wide-short',
+        ],
+        'balance_default_risk' => [
+            'title' => 'Account Balance Default Risk',
+            'description' => 'Manage default risk amounts across account balance ranges.',
+            'icon' => 'fa-wallet',
+        ],
+        'balance_maximum_risk' => [
+            'title' => 'Account Balance Maximum Risk',
+            'description' => 'Manage maximum risk amounts across account balance ranges.',
+            'icon' => 'fa-shield-halved',
+        ],
+        'trades' => [
+            'title' => 'Trades',
+            'description' => 'Manage trade handling rules and settings applied to investors.',
+            'icon' => 'fa-sliders',
+        ],
+        'trades_martingale' => [
+            'title' => 'Martingale',
+            'description' => 'Configure martingale settings and per-stage drawdown ranges.',
+            'icon' => 'fa-chart-line',
+        ],
+    ];
+
     // ==================== HELPERS ====================
     function getDeveloperInvestors(PDO $pdo, int $developerId): array {
         $stmt = $pdo->prepare("
@@ -1358,8 +1413,11 @@
                         <?php foreach ($revenueWeeks as $wk): ?>
                             <?php $days = $revenueGrouped[$wk]; ?>
                             <div class="dd-rt-week" data-week="<?= (int)$wk ?>">
-                                <div class="dd-rt-week-head">
-                                    <span class="dd-rt-week-title">Week <?= (int)$wk ?></span>
+                                <div class="dd-rt-week-head" data-rt-toggle-head="week">
+                                    <button type="button" class="dd-rt-toggle dd-rt-week-toggle" data-rt-toggle="week" aria-expanded="true" aria-label="Toggle Week <?= (int)$wk ?>">
+                                        <i class="fa-solid fa-chevron-down dd-rt-toggle-icon" aria-hidden="true"></i>
+                                        <span class="dd-rt-week-title">Week <?= (int)$wk ?></span>
+                                    </button>
                                     <div class="dd-rt-week-actions">
                                         <button type="button" class="dd-btn-mini dd-btn-edit"
                                                 onclick="ddRtOpenAddDay(<?= (int)$wk ?>)">
@@ -1372,14 +1430,18 @@
                                     </div>
                                 </div>
 
+                                <div class="dd-rt-week-content">
                                 <div id="dd-rt-add-day-<?= (int)$wk ?>"></div>
 
                                 <?php foreach ($validDays as $dayName): ?>
                                     <?php if (!isset($days[$dayName])) continue; ?>
                                     <?php $rows = $days[$dayName]; ?>
                                     <div class="dd-rt-day" data-day="<?= htmlspecialchars($dayName) ?>">
-                                        <div class="dd-rt-day-head">
-                                            <span class="dd-rt-day-title"><?= htmlspecialchars($dayName) ?></span>
+                                        <div class="dd-rt-day-head" data-rt-toggle-head="day">
+                                            <button type="button" class="dd-rt-toggle dd-rt-day-toggle" data-rt-toggle="day" aria-expanded="true" aria-label="Toggle <?= htmlspecialchars($dayName) ?>">
+                                                <i class="fa-solid fa-chevron-down dd-rt-toggle-icon" aria-hidden="true"></i>
+                                                <span class="dd-rt-day-title"><?= htmlspecialchars($dayName) ?></span>
+                                            </button>
                                             <div class="dd-rt-day-actions">
                                                 <button type="button" class="dd-btn-mini dd-btn-edit"
                                                         onclick="ddRtOpenAddRow(<?= (int)$wk ?>, '<?= htmlspecialchars($dayName) ?>')">
@@ -1392,6 +1454,7 @@
                                             </div>
                                         </div>
 
+                                        <div class="dd-rt-day-content">
                                         <div id="dd-rt-add-row-<?= (int)$wk ?>-<?= htmlspecialchars($dayName) ?>"></div>
 
                                         <div class="dd-rt-rows">
@@ -1435,8 +1498,10 @@
                                                 </div>
                                             <?php endforeach; ?>
                                         </div>
+                                        </div><!-- /.dd-rt-day-content -->
                                     </div>
                                 <?php endforeach; ?>
+                                </div><!-- /.dd-rt-week-content -->
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -1450,10 +1515,10 @@
     function renderAccountMgmtCard(array $ACCOUNT_MGMT_COLUMNS, array $accountMgmt, string $programmeName): string {
         ob_start();
         ?>
-        <section class="dd-card">
+        <section class="dd-card" id="dd-list-section-trades">
             <div class="dd-card-head">
                 <div>
-                    <h2 class="dd-card-title">Account Management</h2>
+                    <h2 class="dd-card-title">Trades</h2>
                     <p class="dd-card-subtitle">
                         Each investor under you has exactly one row in the account management table.
                         Saving here propagates to all of them for this programme.
@@ -1632,34 +1697,80 @@
         return ob_get_clean();
     }
 
-    // ==================== BUILD ORDERED CARD STACK ====================
-    $cardsHtml = '';
+    // ==================== BUILD ISOLATED SECTION VIEWS + NAVIGATION CARDS ====================
+    function renderAccountManagementSectionView(string $sectionKey, string $sectionHtml): string {
+        ob_start();
+        ?>
+        <div class="dd-section-view" data-section-view="<?= htmlspecialchars($sectionKey, ENT_QUOTES, 'UTF-8') ?>" hidden>
+            <?= $sectionHtml ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    function renderAccountManagementNavigationCard(string $sectionKey, array $meta): string {
+        $key = htmlspecialchars($sectionKey, ENT_QUOTES, 'UTF-8');
+        $title = htmlspecialchars((string)($meta['title'] ?? $sectionKey), ENT_QUOTES, 'UTF-8');
+        $description = htmlspecialchars((string)($meta['description'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $icon = htmlspecialchars((string)($meta['icon'] ?? 'fa-sliders'), ENT_QUOTES, 'UTF-8');
+        return '<button type="button" class="dd-section-nav-card" data-open-section="' . $key . '" data-section-title="' . $title . '">' .
+            '<span class="dd-section-nav-icon"><i class="fa-solid ' . $icon . '"></i></span>' .
+            '<span class="dd-section-nav-title">' . $title . '</span>' .
+            '<span class="dd-section-nav-description">' . $description . '</span>' .
+            '<span class="dd-section-nav-open">Open section <i class="fa-solid fa-arrow-right"></i></span>' .
+            '</button>';
+    }
+
+    $sectionViewsHtml = '';
+    $navigationHtml = '';
+    $tradesSectionAdded = false;
 
     foreach ($CARD_ORDER as $listKey) {
+        // Place the general Trades settings immediately before Martingale.
+        if ($listKey === '__martingale__' && !$tradesSectionAdded) {
+            $tradesHtml = renderAccountMgmtCard($ACCOUNT_MGMT_COLUMNS, $accountMgmt, $programmeName);
+            $sectionViewsHtml .= renderAccountManagementSectionView('trades', $tradesHtml);
+            $navigationHtml .= renderAccountManagementNavigationCard('trades', $SECTION_NAV_META['trades']);
+            $tradesSectionAdded = true;
+        }
+
         if ($listKey === '__revenue_target__') {
-            $cardsHtml .= renderRevenueTargetCard(
+            $sectionHtml = renderRevenueTargetCard(
                 $revenueGrouped,
                 $revenueWeeks,
                 $globalSettings,
                 $autoLossStreakDisplay,
                 $programmeName
             );
+            $sectionViewsHtml .= renderAccountManagementSectionView('programme_revenue_target', $sectionHtml);
+            $navigationHtml .= renderAccountManagementNavigationCard('programme_revenue_target', $SECTION_NAV_META['programme_revenue_target']);
             continue;
         }
+
         if ($listKey === '__martingale__') {
-            $cardsHtml .= renderMartingaleCard(
+            $sectionHtml = renderMartingaleCard(
                 $MARTINGALE_GLOBAL_COLUMNS,
                 $martingaleGlobals,
                 $martingaleRangeRows,
                 $programmeName
             );
+            $sectionViewsHtml .= renderAccountManagementSectionView('trades_martingale', $sectionHtml);
+            $navigationHtml .= renderAccountManagementNavigationCard('trades_martingale', $SECTION_NAV_META['trades_martingale']);
             continue;
         }
+
         if (!isset($LIST_TABLES[$listKey])) continue;
-        $cardsHtml .= renderListCard($listKey, $LIST_TABLES[$listKey], $listRows[$listKey] ?? [], $programmeTimezone);
+        $sectionHtml = renderListCard($listKey, $LIST_TABLES[$listKey], $listRows[$listKey] ?? [], $programmeTimezone);
+        $sectionViewsHtml .= renderAccountManagementSectionView($listKey, $sectionHtml);
+        $navigationHtml .= renderAccountManagementNavigationCard($listKey, $SECTION_NAV_META[$listKey]);
     }
 
-    $cardsHtml .= renderAccountMgmtCard($ACCOUNT_MGMT_COLUMNS, $accountMgmt, $programmeName);
+    // Defensive fallback in case the order is changed and Martingale is removed.
+    if (!$tradesSectionAdded) {
+        $tradesHtml = renderAccountMgmtCard($ACCOUNT_MGMT_COLUMNS, $accountMgmt, $programmeName);
+        $sectionViewsHtml .= renderAccountManagementSectionView('trades', $tradesHtml);
+        $navigationHtml .= renderAccountManagementNavigationCard('trades', $SECTION_NAV_META['trades']);
+    }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1729,6 +1840,97 @@
     @media (max-width: 480px) { .dd-scroll-area { padding: 72px 12px 20px; } }
     .dd-notice { padding: 12px 16px; border-radius: var(--radius-sm, 10px); font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px; }
     .dd-notice-info { background: var(--spr-soft); border: 1px solid var(--spr-border); color: var(--spr-text); }
+    .dd-section-home[hidden], .dd-section-views[hidden], .dd-section-view[hidden] { display: none !important; }
+    .dd-section-nav {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        align-items: stretch;
+        width: 100%;
+    }
+    .dd-section-nav-card {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
+        min-width: 0;
+        aspect-ratio: 1 / 1;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 11px;
+        padding: clamp(14px, 2vw, 22px);
+        border: 1px solid var(--spr-border);
+        border-radius: var(--spr-radius);
+        background: var(--spr-card);
+        color: var(--spr-text);
+        box-shadow: var(--spr-shadow);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        overflow: hidden;
+        transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .dd-section-nav-card:hover, .dd-section-nav-card:focus-visible {
+        border-color: var(--spr-accent);
+        box-shadow: 0 8px 24px rgba(18, 163, 107, .12);
+        outline: none;
+    }
+    .dd-section-nav-card:active { transform: scale(.985); }
+    .dd-section-nav-card:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
+        aspect-ratio: auto;
+        min-height: 170px;
+    }
+    .dd-section-nav-icon {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+        border-radius: 13px;
+        background: var(--spr-soft);
+        color: var(--spr-accent);
+        font-size: 1.15rem;
+    }
+    .dd-section-nav-title {
+        display: block;
+        max-width: 100%;
+        color: var(--spr-text);
+        font-size: clamp(.88rem, 1.5vw, 1.04rem);
+        font-weight: 850;
+        line-height: 1.28;
+        overflow-wrap: anywhere;
+    }
+    .dd-section-nav-description {
+        display: block;
+        color: var(--spr-muted);
+        font-size: .72rem;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+    }
+    .dd-section-nav-open {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: auto;
+        color: var(--spr-accent);
+        font-size: .7rem;
+        font-weight: 850;
+    }
+    .dd-section-view { width: 100%; min-width: 0; }
+    /* The selected section uses the full content width, not an outer card. */
+    .dd-section-view > .dd-card {
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+    body.dark-mode .dd-section-view > .dd-card { background: transparent; border-color: transparent; }
     .dd-card { background: var(--spr-card); border: 1px solid var(--spr-border); border-radius: var(--spr-radius); padding: 20px; margin-bottom: 20px; box-shadow: var(--spr-shadow); }
     body.dark-mode .dd-card { background: var(--spr-card); border-color: var(--spr-border); }
     .dd-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -1860,10 +2062,21 @@
     }
     .dd-rt-week-head {
         display: flex; justify-content: space-between; align-items: center;
-        gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+        gap: 10px; margin-bottom: 10px; flex-wrap: wrap; cursor: pointer;
     }
+    .dd-rt-toggle {
+        display: inline-flex; align-items: center; gap: 9px; min-width: 0;
+        padding: 2px 0; border: 0; background: transparent; color: inherit;
+        font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .dd-rt-toggle:focus-visible { outline: 2px solid var(--spr-accent); outline-offset: 4px; border-radius: 4px; }
+    .dd-rt-toggle-icon { color: var(--spr-accent); font-size: .78rem; transition: transform .18s ease; }
     .dd-rt-week-title { font-size: 1rem; font-weight: 800; color: var(--spr-accent); text-transform: uppercase; letter-spacing: 0.6px; }
-    .dd-rt-week-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .dd-rt-week-actions { display: flex; gap: 8px; flex-wrap: wrap; cursor: default; }
+    .dd-rt-week-content { display: flex; flex-direction: column; gap: 0; }
+    .dd-rt-week.is-collapsed > .dd-rt-week-content { display: none; }
+    .dd-rt-week.is-collapsed .dd-rt-toggle-icon,
+    .dd-rt-day.is-collapsed .dd-rt-toggle-icon { transform: rotate(-90deg); }
     .dd-rt-day {
         background: var(--spr-bg); border: 1px solid var(--spr-border);
         border-radius: var(--radius-sm, 10px); padding: 10px 12px; margin-bottom: 10px;
@@ -1872,10 +2085,12 @@
     .dd-rt-day:last-child { margin-bottom: 0; }
     .dd-rt-day-head {
         display: flex; justify-content: space-between; align-items: center;
-        gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
+        gap: 10px; margin-bottom: 8px; flex-wrap: wrap; cursor: pointer;
     }
     .dd-rt-day-title { font-size: 0.88rem; font-weight: 800; color: var(--spr-text); }
-    .dd-rt-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .dd-rt-day-actions { display: flex; gap: 8px; flex-wrap: wrap; cursor: default; }
+    .dd-rt-day-content { display: block; }
+    .dd-rt-day.is-collapsed > .dd-rt-day-content { display: none; }
     .dd-rt-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
     .dd-rt-row {
         background: var(--spr-card); border: 1px solid var(--spr-border);
@@ -1926,29 +2141,31 @@
 
     <div class="dd-sticky-top">
         <div class="dd-topbar">
-            <button type="button" class="dd-topbar-back" onclick="ddGoBack()" aria-label="Back">
+            <button type="button" class="dd-topbar-back" id="ddTopbarBack" onclick="ddHandleTopbarBack()" aria-label="Back">
                 <i class="fa-solid fa-arrow-left"></i>
             </button>
-            <h1 class="dd-topbar-title">Account Management</h1>
+            <h1 class="dd-topbar-title" id="ddTopbarTitle">Account Management</h1>
         </div>
     </div>
 
-    <div class="dd-scroll-area">
+    <div class="dd-scroll-area" id="ddScrollArea">
 
-        <?php if (!empty($currentBroker)): ?>
+        <div class="dd-section-home" id="ddSectionHome">
+
             <div class="dd-notice dd-notice-info">
-                <strong>Broker:</strong> <?= htmlspecialchars($currentBroker) ?>
+                <span style="display:block;font-size:0.78rem;margin-top:4px;">
+                    All settings apply only to this <?= htmlspecialchars($programmeName) ?> programme.
+                </span>
             </div>
-        <?php endif; ?>
 
-        <div class="dd-notice dd-notice-info">
-            <strong>Programme:</strong> <?= htmlspecialchars($programmeName) ?>
-            <span style="display:block;font-size:0.78rem;margin-top:4px;">
-                All settings on this page apply only to this programme.
-            </span>
+            <div class="dd-section-nav" aria-label="Account management sections">
+                <?= $navigationHtml ?>
+            </div>
         </div>
 
-        <?= $cardsHtml ?>
+        <div class="dd-section-views" id="ddSectionViews" hidden>
+            <?= $sectionViewsHtml ?>
+        </div>
 
     </div>
 
@@ -1999,6 +2216,77 @@
         } catch (e) {}
         window.location.href = 'programme_menu.php';
     };
+
+    function ddSetTopbarBackMode(sectionOpen) {
+        var back = document.getElementById('ddTopbarBack');
+        if (!back) return;
+        var label = sectionOpen ? 'Back to options' : 'Back';
+        back.setAttribute('aria-label', label);
+    }
+
+    // The single sticky-header arrow returns to the section grid while a section
+    // is open; from the grid it retains the original page-level back behavior.
+    window.ddHandleTopbarBack = function () {
+        var home = document.getElementById('ddSectionHome');
+        if (home && home.hidden) {
+            window.ddReturnToSectionList();
+            return;
+        }
+        window.ddGoBack();
+    };
+
+    // Switch between the two-level navigation overview and one isolated section.
+    window.ddOpenAccountSection = function (sectionKey, sectionTitle) {
+        var home = document.getElementById('ddSectionHome');
+        var views = document.getElementById('ddSectionViews');
+        var title = document.getElementById('ddTopbarTitle');
+        if (!home || !views) return;
+
+        var target = null;
+        views.querySelectorAll('[data-section-view]').forEach(function (view) {
+            if (view.getAttribute('data-section-view') === String(sectionKey)) target = view;
+        });
+        if (!target) return;
+
+        home.hidden = true;
+        views.hidden = false;
+        views.querySelectorAll('[data-section-view]').forEach(function (view) {
+            view.hidden = view !== target;
+            view.setAttribute('aria-hidden', view === target ? 'false' : 'true');
+        });
+        if (title) title.textContent = sectionTitle || 'Account Management';
+        ddSetTopbarBackMode(true);
+        var scrollArea = document.getElementById('ddScrollArea');
+        if (scrollArea) scrollArea.scrollTop = 0;
+
+        if (String(sectionKey) === 'programme_revenue_target') {
+            window.ddInitRevenueTargetFolding(target);
+        }
+    };
+
+    window.ddReturnToSectionList = function () {
+        var home = document.getElementById('ddSectionHome');
+        var views = document.getElementById('ddSectionViews');
+        var title = document.getElementById('ddTopbarTitle');
+        if (!home || !views) return;
+
+        views.hidden = true;
+        views.querySelectorAll('[data-section-view]').forEach(function (view) {
+            view.hidden = true;
+            view.setAttribute('aria-hidden', 'true');
+        });
+        home.hidden = false;
+        if (title) title.textContent = 'Account Management';
+        ddSetTopbarBackMode(false);
+        var scrollArea = document.getElementById('ddScrollArea');
+        if (scrollArea) scrollArea.scrollTop = 0;
+    };
+
+    document.addEventListener('click', function (e) {
+        var navCard = e.target.closest('[data-open-section]');
+        if (!navCard) return;
+        window.ddOpenAccountSection(navCard.getAttribute('data-open-section'), navCard.getAttribute('data-section-title'));
+    });
 
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
@@ -2618,6 +2906,84 @@
         .catch(function () { showDdAlert('Network error.', 'Error'); });
     };
 
+    function ddRtSetGroupExpanded(group, expanded) {
+        if (!group) return;
+        group.classList.toggle('is-collapsed', !expanded);
+        var toggle = group.querySelector('[data-rt-toggle]');
+        if (toggle) toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+
+    function ddRtExpandWeek(weekNo) {
+        var week = document.querySelector('.dd-rt-week[data-week="' + String(weekNo) + '"]');
+        if (week) ddRtSetGroupExpanded(week, true);
+        return week;
+    }
+
+    function ddRtExpandDay(weekNo, dayName) {
+        var week = ddRtExpandWeek(weekNo);
+        if (!week) return null;
+        var day = null;
+        week.querySelectorAll('.dd-rt-day').forEach(function (candidate) {
+            if (candidate.getAttribute('data-day') === String(dayName)) day = candidate;
+        });
+        if (day) ddRtSetGroupExpanded(day, true);
+        return day;
+    }
+
+    // Measure the fully expanded content of each group independently. Only
+    // groups that exceed their own height threshold start collapsed. Run after
+    // the Revenue Target view is visible so measurements are not zeroed by its
+    // initially hidden parent section.
+    window.ddInitRevenueTargetFolding = function (view) {
+        if (!view || view.getAttribute('data-fold-initialized') === '1') return;
+        window.requestAnimationFrame(function () {
+            if (view.hidden || view.closest('[hidden]')) return;
+
+            var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 800;
+            var dayLimit = Math.max(240, Math.round(viewportHeight * 0.34));
+            var weekLimit = Math.max(520, Math.round(viewportHeight * 0.72));
+
+            view.querySelectorAll('.dd-rt-week').forEach(function (week) {
+                ddRtSetGroupExpanded(week, true);
+                var weekContent = week.querySelector(':scope > .dd-rt-week-content');
+                if (!weekContent) return;
+
+                var daysToCollapse = [];
+                week.querySelectorAll('.dd-rt-day').forEach(function (day) {
+                    ddRtSetGroupExpanded(day, true);
+                    var dayContent = day.querySelector(':scope > .dd-rt-day-content');
+                    var dayHeight = dayContent
+                        ? Math.max(dayContent.scrollHeight, dayContent.getBoundingClientRect().height)
+                        : 0;
+                    if (dayHeight > dayLimit) daysToCollapse.push(day);
+                });
+
+                // Capture the complete week height before applying day folds.
+                var weekHeight = Math.max(weekContent.scrollHeight, weekContent.getBoundingClientRect().height);
+                daysToCollapse.forEach(function (day) { ddRtSetGroupExpanded(day, false); });
+                if (weekHeight > weekLimit) ddRtSetGroupExpanded(week, false);
+            });
+
+            view.setAttribute('data-fold-initialized', '1');
+        });
+    };
+
+    // Clicking anywhere in a week/day heading (except its action buttons)
+    // toggles that group; the chevron button also supports keyboard activation.
+    document.addEventListener('click', function (e) {
+        var dayHead = e.target.closest('.dd-rt-day-head');
+        if (dayHead && !e.target.closest('.dd-rt-day-actions')) {
+            var day = dayHead.closest('.dd-rt-day');
+            if (day) ddRtSetGroupExpanded(day, day.classList.contains('is-collapsed'));
+            return;
+        }
+        var weekHead = e.target.closest('.dd-rt-week-head');
+        if (weekHead && !e.target.closest('.dd-rt-week-actions')) {
+            var week = weekHead.closest('.dd-rt-week');
+            if (week) ddRtSetGroupExpanded(week, week.classList.contains('is-collapsed'));
+        }
+    });
+
     window.ddRtOpenAddWeek = function () {
         var c = document.getElementById('dd-rt-add-week-form');
         if (!c) return;
@@ -2663,6 +3029,7 @@
     window.ddRtOpenAddDay = function (weekNo) {
         var c = document.getElementById('dd-rt-add-day-' + weekNo);
         if (!c) return;
+        ddRtExpandWeek(weekNo);
         if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
 
         c.innerHTML = '' +
@@ -2697,6 +3064,7 @@
     window.ddRtOpenAddRow = function (weekNo, dayName) {
         var c = document.getElementById('dd-rt-add-row-' + weekNo + '-' + dayName);
         if (!c) return;
+        ddRtExpandDay(weekNo, dayName);
         if (c.innerHTML.trim() !== '') { c.innerHTML = ''; return; }
         c.innerHTML = ddRtBuildRowFormHtml(null, { week_no: weekNo, day_name: dayName });
     };
@@ -2710,6 +3078,11 @@
         var ec = document.getElementById('dd-rt-edit-' + rowId);
         if (!ec) return;
         if (ec.innerHTML.trim() !== '') { ec.innerHTML = ''; return; }
+
+        var containingDay = ec.closest('.dd-rt-day');
+        var containingWeek = ec.closest('.dd-rt-week');
+        if (containingWeek) ddRtSetGroupExpanded(containingWeek, true);
+        if (containingDay) ddRtSetGroupExpanded(containingDay, true);
 
         var rowEl = document.querySelector('.dd-rt-row[data-row-id="' + rowId + '"]');
         var data = {};
@@ -3080,6 +3453,8 @@
         var am = document.getElementById('ddAlertModal');
         if (am && am.classList.contains('active') && e.target === am) closeDdAlert();
     });
+
+    ddSetTopbarBackMode(false);
 
     window.saveAccountManagement = saveAccountManagement;
     window.closeDdAlert          = closeDdAlert;

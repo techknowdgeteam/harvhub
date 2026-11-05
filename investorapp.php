@@ -3,21 +3,16 @@
     session_start();
     // Central table name; database credentials/connections come only from mysqlconnection.php.
     $tableName = 'harvhub';
-
     /* Centralized database connection: mysqlconnection.php owns all credentials. */
 try {
     require_once __DIR__ . '/mysqlconnection.php';
-
     if (!function_exists('getAvailablePdoConnection')) {
         throw new RuntimeException('getAvailablePdoConnection() was not found in mysqlconnection.php.');
     }
-
     $pdo = getAvailablePdoConnection();
-
     if (!$pdo instanceof PDO) {
         throw new RuntimeException('getAvailablePdoConnection() did not return a PDO connection.');
     }
-
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
@@ -25,16 +20,13 @@ try {
     http_response_code(500);
     exit('Database connection failed. Please try again later.');
 }
-
     require_once __DIR__ . '/notification_service.php';
-
     // ---- LOGOUT ----
     if (isset($_GET['logout'])) {
         if (isset($_SESSION['user_email'])) {
             try {
                 $logoutEmail = strtolower($_SESSION['user_email']);
                 $subId  = (int)($_SESSION['active_sub_account_id'] ?? 0);
-
                 if ($subId > 0) {
                     $lastAccount = 'SA' . $subId;
                     $upd = $pdo->prepare("UPDATE $tableName SET last_account = ? WHERE sub_account_id = ? AND LOWER(email) = ?");
@@ -42,7 +34,6 @@ try {
                 }
             } catch (Throwable $e) {}
         }
-
         $_SESSION = array();
         if (ini_get("session.use_cookies")) {
             $params = session_get_cookie_params();
@@ -54,30 +45,23 @@ try {
         header("Location: index.php");
         exit;
     }
-
     if (!isset($_SESSION['user_email'])) {
         header("Location: index.php");
         exit;
     }
-
     $email = strtolower($_SESSION['user_email']);
-
     $activeSubId = (int)($_SESSION['active_sub_account_id'] ?? 0);
-
     if ($activeSubId > 0) {
         $stmt = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
         $stmt->execute([$activeSubId, $email]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     }
-
     if (!$user) {
         $lastQ = $pdo->prepare("SELECT last_account FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
         $lastQ->execute([$email]);
         $lastRow = $lastQ->fetch(PDO::FETCH_ASSOC);
         $lastAccount = trim((string)($lastRow['last_account'] ?? ''));
-
         $resolved = null;
-
         // New format: SA<sub_id>  (matches programme_menu.php and the updated logout handler)
         if (preg_match('/^SA(\d+)$/', $lastAccount, $m)) {
             $subId = (int)$m[1];
@@ -117,22 +101,18 @@ try {
         }
         $user = $resolved;
     }
-
     if (!$user) {
         unset($_SESSION['user_email'], $_SESSION['auth_role']);
         header("Location: index.php");
         exit;
     }
-
     $userId             = (int)$user['id'];
     $activeSubAccountId = (int)($user['sub_account_id'] ?? $userId);
     $mainAccountId      = (int)($user['main_account_id'] ?? 0);
     $activeSubName      = trim((string)($user['sub_account_name'] ?? ''));
     $darkMode           = !empty($user['dark_mode']);
-
     $_SESSION['active_sub_account_id']  = $activeSubAccountId;
     $_SESSION['active_main_account_id'] = $mainAccountId;
-
     if (!function_exists('normalizeAccountName')) {
         function normalizeAccountName($name) {
             $name = preg_replace('/[^A-Za-z0-9 ]+/', '', (string)$name);
@@ -141,7 +121,6 @@ try {
             return substr($name, 0, 20);
         }
     }
-
     if (!function_exists('getGlobalCredentials')) {
         function getGlobalCredentials($pdo, $tableName, $email) {
             $email = strtolower(trim($email));
@@ -149,13 +128,11 @@ try {
             $q->execute([$email]);
             $row = $q->fetch(PDO::FETCH_ASSOC);
             if ($row) return $row;
-
             $q = $pdo->prepare("SELECT * FROM $tableName WHERE LOWER(email) = ? ORDER BY id ASC LIMIT 1");
             $q->execute([$email]);
             return $q->fetch(PDO::FETCH_ASSOC) ?: null;
         }
     }
-
     if (!function_exists('recordLastAccount')) {
         function recordLastAccount($pdo, $tableName, $email, $subId) {
             try {
@@ -164,12 +141,9 @@ try {
             } catch (Throwable $e) {}
         }
     }
-
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
         if (isset($_POST['get_sub_accounts'])) {
             header('Content-Type: application/json; charset=utf-8');
-
             try {
                 $q = $pdo->prepare("
                     SELECT id, sub_account_id, sub_account_name, email, is_main_account
@@ -179,7 +153,6 @@ try {
                 ");
                 $q->execute([$email]);
                 $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-
                 $list = [];
                 foreach ($rows as $r) {
                     $name = (string)($r['sub_account_name'] ?? '');
@@ -191,7 +164,6 @@ try {
                         'is_active'      => ((int)($r['sub_account_id'] ?? $r['id']) === $activeSubAccountId)
                     ];
                 }
-
                 echo json_encode([
                     'success'          => true,
                     'active_sub_name'  => $activeSubName,
@@ -203,13 +175,10 @@ try {
             }
             exit;
         }
-
         if (isset($_POST['create_sub_account_from_shell'])) {
             header('Content-Type: application/json; charset=utf-8');
-
             $rawName = (string)($_POST['account_name'] ?? '');
             $normalized = normalizeAccountName($rawName);
-
             if ($normalized === '') {
                 echo json_encode(['success' => false, 'errors' => ['Account name is required.']]);
                 exit;
@@ -218,13 +187,11 @@ try {
                 echo json_encode(['success' => false, 'errors' => ['Account name cannot exceed 20 characters.']]);
                 exit;
             }
-
             $globalRow = getGlobalCredentials($pdo, $tableName, $email);
             if (!$globalRow) {
                 echo json_encode(['success' => false, 'errors' => ['Could not resolve your account credentials.']]);
                 exit;
             }
-
             if ($mainAccountId <= 0) {
                 try {
                     $pdo->prepare("INSERT INTO main_accounts (owner_email) VALUES (?) ON DUPLICATE KEY UPDATE owner_email = VALUES(owner_email)")
@@ -242,7 +209,6 @@ try {
                     exit;
                 }
             }
-
             try {
                 $chk = $pdo->prepare("
                     SELECT id FROM $tableName
@@ -258,7 +224,6 @@ try {
                 echo json_encode(['success' => false, 'errors' => ['Failed to verify uniqueness.']]);
                 exit;
             }
-
             try {
                 $ins = $pdo->prepare("
                     INSERT INTO $tableName
@@ -290,7 +255,6 @@ try {
                 $newId = (int)$pdo->lastInsertId();
                 if ($newId <= 0) throw new Exception('Insert failed');
                 $pdo->prepare("UPDATE $tableName SET sub_account_id = id WHERE id = ?")->execute([$newId]);
-
                 echo json_encode([
                     'success'        => true,
                     'message'        => 'Sub account created.',
@@ -305,16 +269,13 @@ try {
             }
             exit;
         }
-
         if (isset($_POST['switch_sub_account_from_shell'])) {
             header('Content-Type: application/json; charset=utf-8');
-
             $targetSubId = (int)($_POST['sub_account_id'] ?? 0);
             if ($targetSubId <= 0) {
                 echo json_encode(['success' => false, 'message' => 'Invalid sub account.']);
                 exit;
             }
-
             try {
                 $q = $pdo->prepare("SELECT * FROM $tableName WHERE sub_account_id = ? AND LOWER(email) = ? LIMIT 1");
                 $q->execute([$targetSubId, $email]);
@@ -323,13 +284,10 @@ try {
                     echo json_encode(['success' => false, 'message' => 'Sub account not found.']);
                     exit;
                 }
-
                 $_SESSION['user_email'] = strtolower($target['email']);
                 $_SESSION['active_sub_account_id'] = (int)$target['sub_account_id'];
                 $_SESSION['active_main_account_id'] = (int)$target['main_account_id'];
-
                 recordLastAccount($pdo, $tableName, $target['email'], (int)$target['sub_account_id']);
-
                 echo json_encode([
                     'success'        => true,
                     'message'        => 'Switched.',
@@ -341,7 +299,6 @@ try {
             }
             exit;
         }
-
         if (isset($_POST['mark_notifications_read'])) {
             header('Content-Type: application/json; charset=utf-8');
             $ok = markContractNotificationsRead($pdo, $email, $activeSubAccountId);
@@ -351,7 +308,6 @@ try {
             ]);
             exit;
         }
-
         if (isset($_POST['get_notifications_list'])) {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -361,7 +317,6 @@ try {
             ]);
             exit;
         }
-
         if (isset($_POST['check_new_notifications'])) {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -370,7 +325,6 @@ try {
             ]);
             exit;
         }
-
         if (isset($_POST['get_notification_preferences'])) {
             header('Content-Type: application/json; charset=utf-8');
             $prefs = getNotificationPreferences($pdo, $email, $mainAccountId);
@@ -384,17 +338,14 @@ try {
             ]);
             exit;
         }
-
         if (isset($_POST['save_notification_preferences'])) {
             header('Content-Type: application/json; charset=utf-8');
-
             $browser = isset($_POST['browser_notifications_enabled'])
                 ? (int)$_POST['browser_notifications_enabled'] : null;
             $sound = isset($_POST['notification_sound_enabled'])
                 ? (int)$_POST['notification_sound_enabled'] : null;
             $seen = isset($_POST['permission_prompt_seen'])
                 ? (int)$_POST['permission_prompt_seen'] : null;
-
             $ok = saveNotificationPreferences(
                 $pdo,
                 $email,
@@ -403,11 +354,9 @@ try {
                 $sound,
                 $seen
             );
-
             echo json_encode(['success' => $ok]);
             exit;
         }
-
         if (isset($_POST['toggle_dark_mode_ajax'])) {
             header('Content-Type: application/json');
             $v = isset($_POST['dark_mode_checkbox']) ? (int)$_POST['dark_mode_checkbox'] : 0;
@@ -416,7 +365,6 @@ try {
             echo json_encode(['success' => true, 'dark_mode' => $v]);
             exit;
         }
-
         // -------- LIVE SHELL STATE POLL --------
         // Returns everything the shell needs to stay in sync without a reload:
         //  - current sub-account's unread notification count (bell badge)
@@ -424,12 +372,10 @@ try {
         //  - active sub-account id + name (to keep the sheet in sync)
         if (isset($_POST['poll_shell_state'])) {
             header('Content-Type: application/json; charset=utf-8');
-
             $unreadCurrent = 0;
             try {
                 $unreadCurrent = getNotificationUnreadCount($pdo, $email, $activeSubAccountId);
             } catch (Throwable $e) {}
-
             // Per-sub-account unread notification map
             $notifMap = [];
             $subList = [];
@@ -442,14 +388,12 @@ try {
                 ");
                 $q->execute([$email]);
                 $rows = $q->fetchAll(PDO::FETCH_ASSOC);
-
                 foreach ($rows as $r) {
                     $sid = (int)($r['sub_account_id'] ?? $r['id']);
                     $notifMap[$sid] = 0;
                     try {
                         $notifMap[$sid] = (int)getNotificationUnreadCount($pdo, $email, $sid);
                     } catch (Throwable $e) {}
-
                     $name = (string)($r['sub_account_name'] ?? '');
                     $subList[] = [
                         'id'             => (int)$r['id'],
@@ -461,7 +405,6 @@ try {
                     ];
                 }
             } catch (Throwable $e) {}
-
             echo json_encode([
                 'success'              => true,
                 'unread_count'         => $unreadCurrent,
@@ -473,14 +416,11 @@ try {
             exit;
         }
     }
-
     $initialUnreadCount = getNotificationUnreadCount($pdo, $email, $activeSubAccountId);
     $allNotifications = getContractNotifications($pdo, $email, $activeSubAccountId, 100);
     $notificationPreferences = getNotificationPreferences($pdo, $email, $mainAccountId);
-
     $navTabs = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
     $defaultTab = $_GET['tab'] ?? 'mydashboard';
-
     $tabSrc = [
         'mydashboard'             => 'mydashboard.php',
         'trades'                  => 'revenue_target.php',
@@ -494,20 +434,15 @@ try {
         'programmes'              => 'programmes.php',
         'connect_investor_broker' => 'connect_investor_broker.php',
     ];
-
     if (!array_key_exists($defaultTab, $tabSrc)) $defaultTab = 'mydashboard';
-
     $hiddenTabs = [
         'revenue_history','profit_split','vps','disconnect_broker','programmes','connect_investor_broker'
     ];
-
     $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
-
     $tabsWithBrandHeader = ['mydashboard'];
     $tabsWithNav         = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
     $tabsWithPageHeader  = ['trades', 'activity', 'analytics', 'menu'];
     $tabsWithNoChrome    = ['vps', 'programmes', 'revenue_history'];
-
     $tabTitles = [
         'mydashboard'             => 'Dashboard',
         'trades'                  => 'Daily Revenue',
@@ -521,27 +456,22 @@ try {
         'disconnect_broker'       => 'Disconnect Broker',
         'connect_investor_broker' => 'Connect Broker',
     ];
-
     $showBrandHeader = in_array($defaultTab, $tabsWithBrandHeader, true);
     $showNav         = in_array($defaultTab, $tabsWithNav, true);
     $showPageHeader  = in_array($defaultTab, $tabsWithPageHeader, true);
-
     if (in_array($defaultTab, $tabsWithNoChrome, true)) {
         $showBrandHeader = false;
         $showNav         = false;
         $showPageHeader  = false;
     }
-
     $takeoverTabs = ['programmes', 'revenue_history', 'profit_split', 'vps', 'disconnect_broker', 'connect_investor_broker'];
     $bodyExtraClass = in_array($defaultTab, $takeoverTabs, true) ? 'page-' . $defaultTab : '';
-
     $chromeClasses = [];
     if (!$showBrandHeader && !$showPageHeader) $chromeClasses[] = 'shell-no-header';
     if (!$showBrandHeader)                    $chromeClasses[] = 'shell-no-brand-header';
     if (!$showPageHeader)                     $chromeClasses[] = 'shell-no-page-header';
     if (!$showNav)                            $chromeClasses[] = 'shell-no-nav';
     $chromeClassStr = implode(' ', $chromeClasses);
-
     $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 ?>
 <!DOCTYPE html>
@@ -566,20 +496,17 @@ try {
         --shell-page-header-height: 56px;
         --safe-top: env(safe-area-inset-top, 0px);
         --safe-bottom: env(safe-area-inset-bottom, 0px);
-
         --surface: #ffffff;
         --surface-2: #f7fafc;
         --border: rgba(0,0,0,0.08);
         --shadow: 0 8px 32px rgba(0,0,0,0.12);
     }
-
     @media (max-width: 480px) {
         :root {
             --page-header-height: 52px;
             --shell-page-header-height: 52px;
         }
     }
-
     body.dark-mode {
         --bg: #0c1311;
         --text: #e6edf3;
@@ -587,15 +514,12 @@ try {
         --accent: #2ecc8f;
         --gold: #f5a623;
         --grey-avatar: #3a4650;
-
         --surface: #0c1311;
         --surface-2: #0f1614;
         --border: rgba(255,255,255,0.06);
         --shadow: 0 8px 32px rgba(0,0,0,0.6);
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     html, body {
         height: 100%;
         overflow: hidden;
@@ -606,7 +530,6 @@ try {
         -webkit-tap-highlight-color: transparent;
         overscroll-behavior-x: none;
     }
-
     .shell {
         max-width: 1100px;
         margin: 0 auto;
@@ -618,13 +541,11 @@ try {
         height: 100dvh;
         overflow-x: hidden;
     }
-
     @media (max-width: 1100px) {
         .shell {
             max-width: 100%;
         }
     }
-
     .shell-page-header {
         max-width: 1100px;
         left: 50%;
@@ -632,11 +553,9 @@ try {
         transform: translateX(-50%);
         width: 100%;
     }
-
     .shell-page-header.is-hidden {
         transform: translateX(-50%) translateY(-100%);
     }
-
     @media (max-width: 1100px) {
         .shell-page-header {
             max-width: 100%;
@@ -648,11 +567,9 @@ try {
             transform: translateY(-100%);
         }
     }
-
     .bottom-nav {
         max-width: 500px;
     }
-
     /* Notification panel: cap to viewport width, prevent horizontal bleed */
     @media (min-width: 801px) {
         .notification-panel {
@@ -661,20 +578,16 @@ try {
             max-width: 100vw;
         }
     }
-
     body.shell-no-header       .harvhub-header-top { display: none !important; }
     body.shell-no-brand-header .harvhub-header-top { display: none !important; }
     body.shell-no-page-header  .shell-page-header  { display: none !important; }
     body.shell-no-nav          .bottom-nav         { display: none !important; }
-
     body.profile-page-open .harvhub-header-top { display: none !important; }
     body.profile-page-open .shell-page-header  { display: none !important; }
     body.profile-page-open .bottom-nav         { display: none !important; }
-
     body.modal-overlay-open .harvhub-header-top { display: none !important; }
     body.modal-overlay-open .shell-page-header  { display: none !important; }
     body.modal-overlay-open .bottom-nav         { display: none !important; }
-
     .harvhub-header-top {
         position: relative;
         z-index: 500;
@@ -687,7 +600,6 @@ try {
         flex: 0 0 auto;
     }
     .harvhub-header-top .header-left { display: flex; align-items: center; gap: 8px; }
-
     .harvhub-header-top .header-logo {
         font-size: 1.05rem;
         font-weight: 700;
@@ -697,7 +609,6 @@ try {
         gap: 8px;
         letter-spacing: 0.2px;
     }
-
     .harvhub-header-top .header-dropdown-btn {
         display: inline-flex;
         align-items: center;
@@ -723,7 +634,6 @@ try {
     body.dark-mode .harvhub-header-top .header-dropdown-btn:hover {
         background: rgba(46,204,143,0.18);
     }
-
     .harvhub-header-top .header-right { display: flex; align-items: center; gap: 8px; }
     .harvhub-header-top .notification-bell {
         position: relative;
@@ -768,7 +678,6 @@ try {
         50% { transform: scale(1.35); }
         100% { transform: scale(1); }
     }
-
     .header-sheet-backdrop {
         position: fixed;
         top: var(--safe-top);
@@ -788,7 +697,6 @@ try {
         visibility: visible;
         transition: opacity 0.28s ease, visibility 0s linear 0s;
     }
-
     .header-sheet {
         position: fixed;
         left: 0;
@@ -814,7 +722,6 @@ try {
     .header-sheet.active {
         transform: translateY(0);
     }
-
     .header-sheet-handle {
         width: 42px;
         height: 4px;
@@ -823,7 +730,6 @@ try {
         margin: 4px auto 14px;
         opacity: 0.7;
     }
-
     .header-sheet-title {
         font-size: 0.68rem;
         text-transform: uppercase;
@@ -832,7 +738,6 @@ try {
         font-weight: 700;
         margin: 4px 4px 10px;
     }
-
     .header-sheet-row {
         display: flex;
         align-items: center;
@@ -851,7 +756,6 @@ try {
     }
     .header-sheet-row:hover { background: rgba(46,204,143,0.08); }
     body.dark-mode .header-sheet-row:hover { background: rgba(46,204,143,0.12); }
-
     .header-sheet-avatar {
         width: 42px;
         height: 42px;
@@ -866,17 +770,14 @@ try {
         flex-shrink: 0;
         overflow: hidden;
     }
-
     .header-sheet-avatar.is-investor-hub {
         background: var(--gold);
         color: #fff;
     }
-
     .header-sheet-avatar.is-developer-hub {
         background: var(--gold);
         color: #fff;
     }
-
     .header-sheet-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
     .header-sheet-text .hs-title {
         font-size: 0.98rem;
@@ -894,14 +795,12 @@ try {
         font-size: 1rem;
         flex-shrink: 0;
     }
-
     .header-sheet-row.logout-row .header-sheet-avatar {
         background: rgba(239,68,68,0.12);
         color: #ef4444;
     }
     .header-sheet-row.logout-row .hs-title { color: #ef4444; }
     .header-sheet-row.logout-row:hover { background: rgba(239,68,68,0.08); }
-
     .header-sheet-row.current-account-row {
         background: rgba(46,204,143,0.08);
         cursor: default;
@@ -909,14 +808,12 @@ try {
     .header-sheet-row.current-account-row:hover {
         background: rgba(46,204,143,0.08);
     }
-
     .header-sheet-divider {
         height: 1px;
         background: var(--border);
         margin: 8px 4px;
         opacity: 0.6;
     }
-
     .header-sheet-sub-list {
         display: flex;
         flex-direction: column;
@@ -924,7 +821,6 @@ try {
         margin: 4px 0;
         padding-left: 4px;
     }
-
     @media (min-width: 801px) {
         .header-sheet {
             left: 50%;
@@ -933,12 +829,10 @@ try {
             max-width: 1100px;
             transform: translateX(-50%) translateY(100%);
         }
-
         .header-sheet.active {
             transform: translateX(-50%) translateY(0);
         }
     }
-
     @media (max-width: 1100px) {
         .header-sheet {
             left: 0;
@@ -950,7 +844,6 @@ try {
             transform: translateY(0);
         }
     }
-
     .header-sheet-sub-item {
         display: flex;
         align-items: center;
@@ -975,7 +868,6 @@ try {
         background: rgba(46,204,143,0.14);
         font-weight: 700;
     }
-
     .header-sheet-sub-avatar {
         width: 40px;
         height: 40px;
@@ -995,7 +887,6 @@ try {
         background: var(--accent);
         box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
     }
-
     .header-sheet-sub-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
     .header-sheet-sub-text .sub-name {
         font-size: 0.92rem;
@@ -1004,11 +895,9 @@ try {
         word-break: break-word;
     }
     .header-sheet-sub-item .sub-check { color: var(--accent); font-size: 0.85rem; flex-shrink: 0; }
-
     body.header-sheet-open .harvhub-header-top { visibility: hidden; }
     body.header-sheet-open .shell-page-header  { visibility: hidden; }
     body.header-sheet-open .bottom-nav         { visibility: hidden; }
-
     .shell-page-header {
         position: fixed;
         top: 0;
@@ -1049,13 +938,10 @@ try {
         max-width: 100%;
         line-height: 1.2;
     }
-
     @media (max-width: 480px) {
         .shell-page-header-title { font-size: 1.25rem; }
     }
-
     /* ---------- Notifications: panel, list, items, toast ---------- */
-
     .notification-panel {
         position: fixed;
         top: 0;
@@ -1078,7 +964,6 @@ try {
         contain: layout paint;
     }
     .notification-panel.active { transform: translateX(0); }
-
     .notification-panel .panel-content {
         display: flex;
         flex-direction: column;
@@ -1087,7 +972,6 @@ try {
         min-width: 0;
         overflow-x: hidden;
     }
-
     .notification-panel .notification-header {
         display: flex;
         align-items: center;
@@ -1118,7 +1002,6 @@ try {
     }
     .notification-panel .close-notifications:hover { background: rgba(0,0,0,0.05); }
     body.dark-mode .notification-panel .close-notifications:hover { background: rgba(255,255,255,0.06); }
-
     .notification-panel .notification-list {
         flex: 1 1 auto;
         overflow-y: auto;
@@ -1127,7 +1010,6 @@ try {
         -webkit-overflow-scrolling: touch;
         min-width: 0;
     }
-
     .notification-panel .notification-item {
         padding: 14px 18px;
         display: flex;
@@ -1156,7 +1038,6 @@ try {
         top: 18px;
         right: 18px;
     }
-
     .notification-panel .notification-section {
         font-size: 0.68rem;
         font-weight: 700;
@@ -1203,7 +1084,6 @@ try {
         color: var(--text-muted);
         font-size: 0.88rem;
     }
-
     .notification-toast {
         position: fixed;
         top: calc(var(--safe-top) + 12px);
@@ -1256,7 +1136,6 @@ try {
         overflow-wrap: anywhere;
         word-break: break-word;
     }
-
     .notification-permission-backdrop {
         position: fixed;
         inset: 0;
@@ -1316,7 +1195,6 @@ try {
     }
     .notification-permission-allow { background:var(--accent); color:#fff; }
     .notification-permission-later { background:var(--surface-2); color:var(--text); }
-
     .viewport {
         flex: 1;
         position: relative;
@@ -1325,9 +1203,7 @@ try {
         padding-bottom: calc(var(--nav-height) + var(--safe-bottom));
         background: var(--bg);
     }
-
     body.shell-no-nav .viewport { padding-bottom: 0; }
-
     .app-frame {
         position: absolute;
         inset: 0;
@@ -1341,7 +1217,6 @@ try {
         transition: opacity 0.2s ease;
     }
     .app-frame.active { opacity: 1; pointer-events: auto; z-index: 2; }
-
     .loader {
         position: absolute;
         inset: 0;
@@ -1367,7 +1242,6 @@ try {
         animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-
     .shell-blocking-loader {
         position: fixed;
         inset: 0;
@@ -1390,7 +1264,6 @@ try {
         color: var(--text-muted);
         letter-spacing: 0.3px;
     }
-
     .bottom-nav {
         position: fixed;
         bottom: 20px;
@@ -1443,7 +1316,6 @@ try {
     }
     .bottom-nav-item.active,
     .bottom-nav-item:hover { color: var(--accent, #2e8b57); }
-
     @media (max-width: 480px) {
         .bottom-nav {
             width: calc(100% - 32px);
@@ -1460,7 +1332,6 @@ try {
         .bottom-nav-item .nav-icon { font-size: 1rem; }
         .bottom-nav-item .nav-label { font-size: 0.45rem; }
     }
-
     body.page-connect_investor_broker .bottom-nav,
     body.profile-page-open .bottom-nav,
     body.modal-overlay-open .bottom-nav,
@@ -1471,7 +1342,6 @@ try {
     body.page-programmes .bottom-nav,
     body.page-verify_code .bottom-nav,
     body.page-forgot_password .bottom-nav { display: none !important; }
-
     body.page-connect_investor_broker .harvhub-header-top,
     body.page-connect_investor_broker .shell-page-header,
     body.profile-page-open .harvhub-header-top,
@@ -1492,21 +1362,17 @@ try {
     body.page-verify_code .shell-page-header,
     body.page-forgot_password .harvhub-header-top,
     body.page-forgot_password .shell-page-header { display: none !important; }
-
     body.prog-detail-view-open .bottom-nav { display: none !important; }
     body.prog-detail-view-open .harvhub-header-top { display: none !important; }
     body.prog-detail-view-open .shell-page-header { display: none !important; }
 </style>
 </head>
 <body class="<?= $darkMode ? 'dark-mode' : '' ?><?= $bodyExtraClass ? ' ' . htmlspecialchars($bodyExtraClass) : '' ?><?= $chromeClassStr ? ' ' . htmlspecialchars($chromeClassStr) : '' ?>">
-
 <div class="shell-blocking-loader" id="shellBlockingLoader">
     <div class="spinner"></div>
     <p id="shellBlockingLoaderText">Loading…</p>
 </div>
-
 <div class="shell">
-
     <div class="harvhub-header-top" id="shellHeader">
         <div class="header-left">
             <span class="header-logo"><i class="fa-brands fa-pagelines"></i> HarvHub</span>
@@ -1524,7 +1390,6 @@ try {
             </div>
         </div>
     </div>
-
     <div class="shell-page-header" id="shellPageHeader">
         <div class="shell-page-header-inner">
             <h1 class="shell-page-header-title" id="shellPageHeaderTitle">
@@ -1532,13 +1397,10 @@ try {
             </h1>
         </div>
     </div>
-
     <div class="header-sheet-backdrop" id="headerSheetBackdrop"></div>
     <div class="header-sheet" id="headerSheet" role="dialog" aria-modal="true" aria-label="Account menu">
         <div class="header-sheet-handle"></div>
-
         <div class="header-sheet-title">All Accounts</div>
-
         <a href="javascript:void(0)" class="header-sheet-row" id="headerSheetOverview" style="display: none;">
             <span class="header-sheet-avatar" style="background:rgba(46,204,143,0.15);color:var(--accent);"><i class="fa-solid fa-layer-group"></i></span>
             <span class="header-sheet-text">
@@ -1547,7 +1409,6 @@ try {
             </span>
             <i class="fa-solid fa-chevron-right header-sheet-chev"></i>
         </a>
-
         <button type="button" class="header-sheet-row" id="headerSheetDeveloperHub">
             <span class="header-sheet-avatar is-developer-hub"><i class="fa-solid fa-chart-line"></i></span>
             <span class="header-sheet-text">
@@ -1556,16 +1417,12 @@ try {
             </span>
             <i class="fa-solid fa-chevron-right header-sheet-chev"></i>
         </button>
-
         <div class="header-sheet-divider"></div>
-
         <div class="header-sheet-title">Accounts</div>
         <div class="header-sheet-sub-list" id="sheetSubAccountsList">
             <div style="padding:10px 14px;font-size:0.82rem;color:var(--text-muted);">Loading…</div>
         </div>
-
         <div class="header-sheet-divider"></div>
-
         <button type="button" class="header-sheet-row" id="headerSheetCreateAccount">
             <span class="header-sheet-avatar" style="background:rgba(46,204,143,0.15);color:var(--accent);"><i class="fa-solid fa-plus"></i></span>
             <span class="header-sheet-text">
@@ -1574,7 +1431,6 @@ try {
             </span>
             <i class="fa-solid fa-chevron-right header-sheet-chev"></i>
         </button>
-
         <button type="button" class="header-sheet-row logout-row" id="headerSheetLogout">
             <span class="header-sheet-avatar"><i class="fa-solid fa-right-from-bracket"></i></span>
             <span class="header-sheet-text">
@@ -1584,7 +1440,6 @@ try {
             <i class="fa-solid fa-chevron-right header-sheet-chev"></i>
         </button>
     </div>
-
     <div class="header-sheet-backdrop" id="createAccountBackdrop"></div>
     <div class="header-sheet" id="createAccountSheet" role="dialog" aria-modal="true" aria-label="Create new account">
         <div class="header-sheet-handle"></div>
@@ -1604,7 +1459,6 @@ try {
             <button type="button" id="createAccountCancel" style="width:100%;padding:14px;border:none;border-radius:10px;background:rgba(127,127,127,0.15);color:var(--text);font-weight:600;font-size:0.95rem;cursor:pointer;">Cancel</button>
         </div>
     </div>
-
     <div class="header-sheet-backdrop" id="confirmSignoutBackdrop"></div>
     <div class="header-sheet" id="confirmSignoutSheet" role="dialog" aria-modal="true" aria-label="Confirm sign out">
         <div class="header-sheet-handle"></div>
@@ -1617,7 +1471,6 @@ try {
             <button type="button" id="confirmSignoutNo" style="width:100%;padding:14px;border:none;border-radius:10px;background:rgba(127,127,127,0.15);color:var(--text);font-weight:600;font-size:0.95rem;cursor:pointer;">Cancel</button>
         </div>
     </div>
-
     <div class="notification-panel" id="headerNotificationPanel">
         <div class="panel-content">
             <div class="notification-header">
@@ -1642,13 +1495,11 @@ try {
             </div>
         </div>
     </div>
-
     <div class="notification-toast" id="notificationToast" role="button" tabindex="0" aria-label="Open new notification">
         <div class="toast-section" id="notificationToastSection">Notification</div>
         <div class="toast-title" id="notificationToastTitle">New notification</div>
         <div class="toast-message" id="notificationToastMessage"></div>
     </div>
-
     <div class="notification-permission-backdrop" id="notificationPermissionBackdrop">
         <div class="notification-permission-modal" role="dialog" aria-modal="true" aria-labelledby="notificationPermissionTitle">
             <div class="notification-permission-icon"><i class="fa-regular fa-bell"></i></div>
@@ -1664,12 +1515,10 @@ try {
             </div>
         </div>
     </div>
-
     <div class="viewport">
         <div class="loader" id="loader">
             <div class="spinner"></div>
         </div>
-
         <?php foreach ($tabSrc as $tab => $file): ?>
             <iframe
                 id="frame-<?= $tab ?>"
@@ -1681,7 +1530,6 @@ try {
                 loading="eager"></iframe>
         <?php endforeach; ?>
     </div>
-
     <nav class="bottom-nav" id="bottomNav">
         <button type="button" class="bottom-nav-item <?= $activeNavTab === 'mydashboard' ? 'active' : '' ?>" data-tab="mydashboard">
             <span class="nav-icon"><i class="fa-solid fa-house"></i></span>
@@ -1705,46 +1553,37 @@ try {
         </button>
     </nav>
 </div>
-
 <script>
 (function () {
     var TABS_WITH_BRAND_HEADER = ['mydashboard'];
     var TABS_WITH_NAV          = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
     var TABS_WITH_PAGE_HEADER  = ['trades', 'activity', 'analytics', 'menu'];
     var TABS_NO_CHROME         = ['vps', 'programmes', 'revenue_history'];
-
     var TAB_TITLES = {
         'mydashboard':'Dashboard','trades':'Daily Revenue','activity':'Activity',
         'analytics':'Analytics','menu':'Menu','revenue_history':'Revenue History',
         'profit_split':'Profit Split','vps':'VPS Hub','programmes':'Programmes',
         'disconnect_broker':'Disconnect Broker','connect_investor_broker':'Connect Broker'
     };
-
     window.__harvhubModalOpen = false;
-
     function setModalOpen(isOpen) {
         window.__harvhubModalOpen = !!isOpen;
         document.body.classList.toggle('modal-overlay-open', !!isOpen);
     }
-
     function applyChromeForTab(tab) {
         var showBrandHeader = TABS_WITH_BRAND_HEADER.indexOf(tab) !== -1;
         var showNav         = TABS_WITH_NAV.indexOf(tab) !== -1;
         var showPageHeader  = TABS_WITH_PAGE_HEADER.indexOf(tab) !== -1;
-
         if (TABS_NO_CHROME.indexOf(tab) !== -1) {
             showBrandHeader = false; showNav = false; showPageHeader = false;
         }
-
         document.body.classList.toggle('shell-no-header',       !showBrandHeader && !showPageHeader);
         document.body.classList.toggle('shell-no-brand-header', !showBrandHeader);
         document.body.classList.toggle('shell-no-page-header',  !showPageHeader);
         document.body.classList.toggle('shell-no-nav',          !showNav);
-
         var titleEl = document.getElementById('shellPageHeaderTitle');
         if (titleEl) titleEl.textContent = TAB_TITLES[tab] || 'HarvHub';
     }
-
     var frames = {
         mydashboard:             document.getElementById('frame-mydashboard'),
         trades:                  document.getElementById('frame-trades'),
@@ -1760,7 +1599,27 @@ try {
     };
     var names = Object.keys(frames);
     var navTabNames = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
-
+    var investorReturnTabs = names.slice();
+    var brokerSourceTab = 'mydashboard';
+    var vpsSourceTab = 'mydashboard';
+    function getActiveFrameTab() {
+        for (var i = 0; i < names.length; i++) {
+            var tab = names[i];
+            if (frames[tab] && frames[tab].classList.contains('active')) return tab;
+        }
+        return 'mydashboard';
+    }
+    function getTabNameByFrameWindow(frameWindow) {
+        for (var i = 0; i < names.length; i++) {
+            var tab = names[i];
+            if (frames[tab] && frames[tab].contentWindow === frameWindow) return tab;
+        }
+        return '';
+    }
+    function isInvestorReturnTab(tab, destinationTab) {
+        var candidate = String(tab || '');
+        return investorReturnTabs.indexOf(candidate) !== -1 && candidate !== String(destinationTab || '');
+    }
     var FILE_TO_TAB = {
         'mydashboard.php':'mydashboard','revenue_target.php':'trades','activity.php':'activity',
         'useranalytics.php':'analytics','analytics.php':'analytics','menu.php':'menu',
@@ -1768,12 +1627,10 @@ try {
         'disconnect_broker.php':'disconnect_broker','programmes.php':'programmes',
         'connect_investor_broker.php':'connect_investor_broker'
     };
-
     var loader = document.getElementById('loader');
     var navItems = document.querySelectorAll('.bottom-nav-item');
     var loaded = 0;
     var lastNavTab = '<?= $activeNavTab ?>';
-
     function pushTheme(f) {
         if (!f) return;
         try {
@@ -1784,16 +1641,15 @@ try {
         } catch (e) {}
     }
     function pushAll() { names.forEach(function (n) { pushTheme(frames[n]); }); }
-
     function injectNavShim(f) {
         if (!f) return;
         try {
             var w = f.contentWindow;
             var d = w && w.document;
             if (!w || !d) return;
+            var shimSourceTab = getTabNameByFrameWindow(w);
             if (w.__harvhubShimInstalled) return;
             w.__harvhubShimInstalled = true;
-
             d.addEventListener('click', function (ev) {
                 var a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
                 if (!a) return;
@@ -1801,17 +1657,15 @@ try {
                 if (!href || href.charAt(0) === '#') return;
                 if (/^(mailto:|tel:|javascript:)/i.test(href)) return;
                 if (/^https?:/i.test(href) && href.indexOf(window.location.origin) !== 0) return;
-
                 var clean = href.split('?')[0].split('#')[0];
                 var base = clean.substring(clean.lastIndexOf('/') + 1);
-
                 if (base === 'investorapp.php') {
                     ev.preventDefault();
                     var m = href.match(/[?&]tab=([^&#]+)/);
-                    requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard');
+                    requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard', shimSourceTab);
                     return;
                 }
-                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base]); return; }
+                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base], shimSourceTab); return; }
                 if (base === 'index.php') { ev.preventDefault(); requestLogout(); return; }
                 if (/\.php(\?|#|$)/i.test(clean) && base !== '') {
                     ev.preventDefault();
@@ -1820,7 +1674,6 @@ try {
                     else w.location.href = href;
                 }
             }, true);
-
             try {
                 var origAssign  = w.location.assign.bind(w.location);
                 var origReplace = w.location.replace.bind(w.location);
@@ -1830,17 +1683,16 @@ try {
                     var base = clean.substring(clean.lastIndexOf('/') + 1);
                     if (base === 'investorapp.php') {
                         var m = s.match(/[?&]tab=([^&#]+)/);
-                        requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard');
+                        requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard', shimSourceTab);
                         return true;
                     }
-                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base]); return true; }
+                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base], shimSourceTab); return true; }
                     if (base === 'index.php') { requestLogout(); return true; }
                     return false;
                 }
                 w.location.assign  = function (url) { if (handleNav(url)) return; return origAssign(url); };
                 w.location.replace = function (url) { if (handleNav(url)) return; return origReplace(url); };
             } catch (e) {}
-
             try {
                 f.contentWindow.postMessage({
                     type: 'theme',
@@ -1849,10 +1701,8 @@ try {
             } catch (e) {}
         } catch (e) {}
     }
-
-    function requestSwitch(tab) { if (!frames[tab]) return; switchTab(tab); }
+    function requestSwitch(tab, sourceTab) { if (!frames[tab]) return; switchTab(tab, sourceTab); }
     function requestLogout() { window.location.href = 'investorapp.php?logout=1'; }
-
     function onLoad(e) {
         pushTheme(e.target);
         injectNavShim(e.target);
@@ -1864,13 +1714,26 @@ try {
     }
     names.forEach(function (k) { frames[k].addEventListener('load', onLoad); });
     names.forEach(function (k) { injectNavShim(frames[k]); });
-
     setTimeout(function () {
         if (loader && !loader.classList.contains('hidden')) loader.classList.add('hidden');
     }, 12000);
-
-    function switchTab(tab) {
+    function switchTab(tab, requestedSourceTab) {
         if (!frames[tab]) return;
+        var previousTab = getActiveFrameTab();
+        if (tab === 'connect_investor_broker' && previousTab !== tab) {
+            var explicitBrokerSource = String(requestedSourceTab || '');
+            brokerSourceTab = isInvestorReturnTab(explicitBrokerSource, 'connect_investor_broker')
+                ? explicitBrokerSource
+                : (isInvestorReturnTab(previousTab, 'connect_investor_broker') ? previousTab : (isInvestorReturnTab(lastNavTab, 'connect_investor_broker') ? lastNavTab : 'mydashboard'));
+            try { sessionStorage.setItem('harvhub_investor_broker_return_tab', brokerSourceTab); } catch (e) {}
+        }
+        if (tab === 'vps' && previousTab !== tab) {
+            var explicitVpsSource = String(requestedSourceTab || '');
+            vpsSourceTab = isInvestorReturnTab(explicitVpsSource, 'vps')
+                ? explicitVpsSource
+                : (isInvestorReturnTab(previousTab, 'vps') ? previousTab : (isInvestorReturnTab(lastNavTab, 'vps') ? lastNavTab : 'mydashboard'));
+            try { sessionStorage.setItem('harvhub_investor_vps_return_tab', vpsSourceTab); } catch (e) {}
+        }
         names.forEach(function (k) { frames[k].classList.toggle('active', k === tab); });
         if (navTabNames.indexOf(tab) !== -1) lastNavTab = tab;
         navItems.forEach(function (b) { b.classList.toggle('active', b.dataset.tab === lastNavTab); });
@@ -1878,6 +1741,8 @@ try {
         try {
             var url = new URL(window.location);
             url.searchParams.set('tab', tab);
+            if (tab === 'connect_investor_broker') url.searchParams.set('broker_from', brokerSourceTab);
+            if (tab === 'vps') url.searchParams.set('vps_from', vpsSourceTab);
             history.replaceState(null, '', url);
         } catch (e) {}
         pushTheme(frames[tab]);
@@ -1885,14 +1750,46 @@ try {
         lastScrollTop = 0; isNavHidden = false; isHeaderHidden = false;
         if (!window.__harvhubModalOpen) { showNav(); showHeader(); }
     }
-
     navItems.forEach(function (b) {
         b.addEventListener('click', function () { switchTab(b.dataset.tab); });
     });
-
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
-        if (e.data.type === 'switchTab' && frames[e.data.tab]) switchTab(e.data.tab);
+        if (e.data.type === 'switchTab' && frames[e.data.tab]) {
+            var sendingTab = getTabNameByFrameWindow(e.source);
+            var explicitSenderTab = isInvestorReturnTab(e.data.sourceTab) ? String(e.data.sourceTab) : sendingTab;
+            switchTab(e.data.tab, explicitSenderTab);
+        }
+        if (e.data.type === 'investorBrokerBack' && frames.connect_investor_broker && e.source === frames.connect_investor_broker.contentWindow) {
+            var requestedBrokerReturnTab = String(e.data.returnTab || '');
+            if (isInvestorReturnTab(requestedBrokerReturnTab, 'connect_investor_broker')) {
+                brokerSourceTab = requestedBrokerReturnTab;
+            } else {
+                try {
+                    var brokerShellUrl = new URL(window.location.href);
+                    var brokerUrlSource = brokerShellUrl.searchParams.get('broker_from') || '';
+                    var brokerStoredSource = sessionStorage.getItem('harvhub_investor_broker_return_tab') || '';
+                    if (isInvestorReturnTab(brokerUrlSource, 'connect_investor_broker')) brokerSourceTab = brokerUrlSource;
+                    else if (isInvestorReturnTab(brokerStoredSource, 'connect_investor_broker')) brokerSourceTab = brokerStoredSource;
+                } catch (err) {}
+            }
+            switchTab(isInvestorReturnTab(brokerSourceTab, 'connect_investor_broker') ? brokerSourceTab : 'mydashboard');
+        }
+        if (e.data.type === 'investorVpsBack' && frames.vps && e.source === frames.vps.contentWindow) {
+            var requestedVpsReturnTab = String(e.data.returnTab || '');
+            if (isInvestorReturnTab(requestedVpsReturnTab, 'vps')) {
+                vpsSourceTab = requestedVpsReturnTab;
+            } else {
+                try {
+                    var vpsShellUrl = new URL(window.location.href);
+                    var vpsUrlSource = vpsShellUrl.searchParams.get('vps_from') || '';
+                    var vpsStoredSource = sessionStorage.getItem('harvhub_investor_vps_return_tab') || '';
+                    if (isInvestorReturnTab(vpsUrlSource, 'vps')) vpsSourceTab = vpsUrlSource;
+                    else if (isInvestorReturnTab(vpsStoredSource, 'vps')) vpsSourceTab = vpsStoredSource;
+                } catch (err) {}
+            }
+            switchTab(isInvestorReturnTab(vpsSourceTab, 'vps') ? vpsSourceTab : 'mydashboard');
+        }
         if (e.data.type === 'bodyClass') {
             if (Array.isArray(e.data.remove)) e.data.remove.forEach(function (c) { document.body.classList.remove(c); });
             if (Array.isArray(e.data.add))    e.data.add.forEach(function (c) { document.body.classList.add(c); });
@@ -1923,7 +1820,6 @@ try {
         if (e.data.type === 'logout') window.location.href = 'investorapp.php?logout=1';
         if (e.data.type === 'openHeaderSheet') openHeaderSheet();
         if (e.data.type === 'showSpinner') showBlockingLoader('Loading…');
-
         // Child iframes can ask the shell to refresh its live badges
         // (e.g. after accepting a request in mydashboard.php).
         if (e.data.type === 'harvhubRefreshShell') {
@@ -1931,7 +1827,6 @@ try {
                 window.harvhubRefreshShellState();
             }
         }
-
         // ------------------------------------------------------------------
         // MODAL-OVERLAY BRIDGE — SOLE authority over `modal-overlay-open`
         // ------------------------------------------------------------------
@@ -1942,19 +1837,15 @@ try {
             setModalOpen(false);
         }
     });
-
     new MutationObserver(function (muts) {
         for (var i = 0; i < muts.length; i++) {
             if (muts[i].attributeName === 'class') { pushAll(); break; }
         }
     }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-
     window.addEventListener('load', function () { setTimeout(pushAll, 400); });
     window.__investorSwitch = switchTab;
-
     var blockingLoader = document.getElementById('shellBlockingLoader');
     var blockingLoaderText = document.getElementById('shellBlockingLoaderText');
-
     function showBlockingLoader(text) {
         if (blockingLoaderText) blockingLoaderText.textContent = text || 'Loading…';
         if (blockingLoader) blockingLoader.classList.add('active');
@@ -1964,13 +1855,11 @@ try {
     }
     window.showBlockingLoader = showBlockingLoader;
     window.hideBlockingLoader = hideBlockingLoader;
-
     // ---------- Header sheet ----------
     var headerSheet         = document.getElementById('headerSheet');
     var headerSheetBackdrop = document.getElementById('headerSheetBackdrop');
     var headerDropdownBtn   = document.getElementById('headerDropdownBtn');
     var sheetOpen           = false;
-
     function openHeaderSheet() {
         if (sheetOpen) return;
         sheetOpen = true;
@@ -1983,7 +1872,6 @@ try {
         }
         loadSubAccountsIntoSheet();
     }
-
     function closeHeaderSheet(immediate) {
         if (!sheetOpen) return;
         function finishClose() {
@@ -2003,9 +1891,7 @@ try {
             setTimeout(finishClose, 340);
         }
     }
-
     function toggleHeaderSheet() { if (sheetOpen) closeHeaderSheet(); else openHeaderSheet(); }
-
     if (headerDropdownBtn) {
         headerDropdownBtn.addEventListener('click', function (e) {
             e.stopPropagation();
@@ -2013,26 +1899,21 @@ try {
         });
     }
     if (headerSheetBackdrop) headerSheetBackdrop.addEventListener('click', function () { closeHeaderSheet(); });
-
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && sheetOpen) closeHeaderSheet(); });
-
     // ---------- Sub account list ----------
     var sheetSubAccountsList = document.getElementById('sheetSubAccountsList');
-
     function renderSubAccountsList(accounts) {
         if (!sheetSubAccountsList) return;
         if (!accounts || accounts.length === 0) {
             sheetSubAccountsList.innerHTML = '<div style="padding:10px 14px;font-size:0.82rem;color:var(--text-muted);">No sub accounts</div>';
             return;
         }
-
         // Active first, then by id ascending — matches traderapp ordering.
         accounts.sort(function (a, b) {
             if (a.is_active && !b.is_active) return -1;
             if (!a.is_active && b.is_active) return 1;
             return (a.sub_account_id || 0) - (b.sub_account_id || 0);
         });
-
         var html = '';
         accounts.forEach(function (acc) {
             var label = acc.name !== '' ? acc.name : 'Unnamed';
@@ -2050,14 +1931,12 @@ try {
             html += '</button>';
         });
         sheetSubAccountsList.innerHTML = html;
-
         sheetSubAccountsList.querySelectorAll('.header-sheet-sub-item').forEach(function (el) {
             el.addEventListener('click', function () {
                 var subId = parseInt(el.getAttribute('data-sub-id'), 10);
                 var subName = el.getAttribute('data-sub-name') || '';
                 var isActive = el.classList.contains('is-active');
                 if (isActive) { closeHeaderSheet(); return; }
-
                 closeHeaderSheet();
                 setTimeout(function () {
                     showBlockingLoader('Switching to ' + subName + '…');
@@ -2066,11 +1945,9 @@ try {
             });
         });
     }
-
     function loadSubAccountsIntoSheet() {
         if (!sheetSubAccountsList) return;
         sheetSubAccountsList.innerHTML = '<div style="padding:10px 14px;font-size:0.82rem;color:var(--text-muted);">Loading…</div>';
-
         fetch('investorapp.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
@@ -2089,7 +1966,6 @@ try {
             sheetSubAccountsList.innerHTML = '<div style="padding:10px 14px;font-size:0.82rem;color:#ef4444;">Network error</div>';
         });
     }
-
     function switchSubAccount(subId) {
         fetch('investorapp.php', {
             method: 'POST',
@@ -2108,7 +1984,6 @@ try {
         })
         .catch(function () { hideBlockingLoader(); alert('Network error.'); });
     }
-
     // ---------- Developer's Hub ----------
     var developerHubBtn = document.getElementById('headerSheetDeveloperHub');
     if (developerHubBtn) {
@@ -2123,7 +1998,6 @@ try {
             }, 360);
         });
     }
-
     // ---------- Overview ----------
     var overviewBtn = document.getElementById('headerSheetOverview');
     if (overviewBtn) {
@@ -2134,7 +2008,6 @@ try {
             }, 360);
         });
     }
-
     // ---------- Create account ----------
     var createSheet      = document.getElementById('createAccountSheet');
     var createBackdrop   = document.getElementById('createAccountBackdrop');
@@ -2144,7 +2017,6 @@ try {
     var createCancel     = document.getElementById('createAccountCancel');
     var createBtnTrigger = document.getElementById('headerSheetCreateAccount');
     var createOpen       = false;
-
     function openCreateSheet() {
         if (createOpen) return;
         createOpen = true;
@@ -2162,7 +2034,6 @@ try {
         document.body.classList.remove('header-sheet-open');
         setTimeout(function () { createOpen = false; if (typeof cb === 'function') cb(); }, 340);
     }
-
     if (createBtnTrigger) {
         createBtnTrigger.addEventListener('click', function () {
             closeHeaderSheet();
@@ -2171,7 +2042,6 @@ try {
     }
     if (createBackdrop) createBackdrop.addEventListener('click', function () { closeCreateSheet(); });
     if (createCancel)   createCancel.addEventListener('click',   function () { closeCreateSheet(); });
-
     if (createSubmit) {
         createSubmit.addEventListener('click', function () {
             var raw = (createInput && createInput.value) ? createInput.value : '';
@@ -2181,18 +2051,14 @@ try {
                 .trim()
                 .toLowerCase()
                 .substring(0, 20);
-
             if (createError) { createError.style.display = 'none'; createError.textContent = ''; }
-
             if (normalized === '') {
                 createError.textContent = 'Please enter an account name.';
                 createError.style.display = 'block';
                 return;
             }
-
             createSubmit.disabled = true;
             createSubmit.textContent = 'Creating…';
-
             fetch('investorapp.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
@@ -2221,7 +2087,6 @@ try {
             });
         });
     }
-
     // ---------- Sign out ----------
     var confirmSheet    = document.getElementById('confirmSignoutSheet');
     var confirmBackdrop = document.getElementById('confirmSignoutBackdrop');
@@ -2229,7 +2094,6 @@ try {
     var confirmNo       = document.getElementById('confirmSignoutNo');
     var logoutTrigger   = document.getElementById('headerSheetLogout');
     var confirmOpen     = false;
-
     function openConfirmSheet() {
         if (confirmOpen) return;
         confirmOpen = true;
@@ -2244,7 +2108,6 @@ try {
         document.body.classList.remove('header-sheet-open');
         setTimeout(function () { confirmOpen = false; if (typeof cb === 'function') cb(); }, 340);
     }
-
     if (logoutTrigger) {
         logoutTrigger.addEventListener('click', function () {
             closeHeaderSheet();
@@ -2253,7 +2116,6 @@ try {
     }
     if (confirmBackdrop) confirmBackdrop.addEventListener('click', function () { closeConfirmSheet(); });
     if (confirmNo) confirmNo.addEventListener('click', function () { closeConfirmSheet(); });
-
     if (confirmYes) {
         confirmYes.addEventListener('click', function () {
             try {
@@ -2270,10 +2132,8 @@ try {
             }, 250);
         });
     }
-
     window.openHeaderSheet = openHeaderSheet;
     window.closeHeaderSheet = closeHeaderSheet;
-
     // ---------- Global notification system ----------
     (function () {
         var panel = document.getElementById('headerNotificationPanel');
@@ -2288,13 +2148,11 @@ try {
         var permissionBackdrop = document.getElementById('notificationPermissionBackdrop');
         var permissionAllow = document.getElementById('notificationPermissionAllow');
         var permissionLater = document.getElementById('notificationPermissionLater');
-
         var open = false;
         var lastUnreadCount = <?= (int)$initialUnreadCount ?>;
         var firstPoll = true;
         var toastTimer = null;
         var latestNotification = null;
-
         function post(body) {
             return fetch('investorapp.php', {
                 method: 'POST',
@@ -2306,13 +2164,11 @@ try {
                 credentials: 'same-origin'
             }).then(function (r) { return r.json(); });
         }
-
         function escapeHtml(text) {
             var div = document.createElement('div');
             div.textContent = text == null ? '' : String(text);
             return div.innerHTML;
         }
-
         function formatDate(dateString) {
             var date = new Date(String(dateString).replace(' ', 'T'));
             if (isNaN(date.getTime())) return '';
@@ -2321,30 +2177,24 @@ try {
             var m = Math.floor(diffMs / 60000);
             var h = Math.floor(diffMs / 3600000);
             var d = Math.floor(diffMs / 86400000);
-
             if (m < 1) return 'Just now';
             if (m < 60) return m + ' min ago';
             if (h < 24) return h + ' hour' + (h > 1 ? 's' : '') + ' ago';
             if (d < 7) return d + ' day' + (d > 1 ? 's' : '') + ' ago';
-
             return date.toLocaleDateString('en-US', {
                 month: 'short',
                 day: 'numeric'
             });
         }
-
         function renderList(items) {
             if (!items || !items.length) {
                 list.innerHTML = '<div class="empty-notifications">No notifications</div>';
                 return;
             }
-
             var html = '';
-
             items.forEach(function (n) {
                 var unread = n.update === 'new' ? 'unread' : '';
                 var typeCls = escapeHtml(n.type || 'info');
-
                 html += '<div class="notification-item ' + unread + ' ' + typeCls + '"'
                     + ' data-id="' + escapeHtml(n.id) + '"'
                     + ' data-update="' + escapeHtml(n.update) + '"'
@@ -2355,14 +2205,11 @@ try {
                     + '<div class="notification-time">' + escapeHtml(formatDate(n.time)) + '</div>'
                     + '</div>';
             });
-
             list.innerHTML = html;
-
             list.querySelectorAll('.notification-item').forEach(function (item) {
                 item.addEventListener('click', function () {
                     var tab = item.getAttribute('data-action-tab') || '';
                     closePanel(false);
-
                     if (tab) {
                         setTimeout(function () {
                             switchTab(tab);
@@ -2371,13 +2218,10 @@ try {
                 });
             });
         }
-
         function updateBadge(count) {
             count = parseInt(count, 10) || 0;
-
             if (!badge) return;
             var prev = parseInt(badge.textContent, 10) || 0;
-
             if (count > 0) {
                 badge.textContent = count > 99 ? '99+' : String(count);
                 badge.style.display = 'flex';
@@ -2391,23 +2235,19 @@ try {
                 badge.style.display = 'none';
             }
         }
-
         function refresh() {
             return post('get_notifications_list=1')
                 .then(function (data) {
                     if (!data || !data.success) return;
-
                     renderList(data.notifications || []);
                     updateBadge(data.unread_count || 0);
                     lastUnreadCount = parseInt(data.unread_count, 10) || 0;
-
                     if (data.notifications && data.notifications.length) {
                         latestNotification = data.notifications[0];
                     }
                 })
                 .catch(function () {});
         }
-
         function markRead() {
             return post('mark_notifications_read=1')
                 .then(function (data) {
@@ -2421,83 +2261,65 @@ try {
                 })
                 .catch(function () {});
         }
-
         function openPanel() {
             if (!panel) return;
             panel.classList.add('active');
             open = true;
             refresh();
         }
-
         function closePanel(markAsReadNow) {
             if (!panel) return;
             panel.classList.remove('active');
             open = false;
             if (markAsReadNow !== false) markRead();
         }
-
         function playNotificationSound() {
             post('get_notification_preferences=1')
                 .then(function (data) {
                     if (!data || !data.success) return;
-
                     var enabled = !!parseInt(
                         data.preferences.notification_sound_enabled,
                         10
                     );
-
                     if (!enabled || !window.AudioContext && !window.webkitAudioContext) return;
-
                     var AudioCtx = window.AudioContext || window.webkitAudioContext;
                     var ctx = new AudioCtx();
                     var osc = ctx.createOscillator();
                     var gain = ctx.createGain();
-
                     osc.type = 'sine';
                     osc.frequency.setValueAtTime(880, ctx.currentTime);
                     osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.12);
-
                     gain.gain.setValueAtTime(0.0001, ctx.currentTime);
                     gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.015);
                     gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
-
                     osc.connect(gain);
                     gain.connect(ctx.destination);
                     osc.start();
                     osc.stop(ctx.currentTime + 0.19);
-
                     setTimeout(function () {
                         try { ctx.close(); } catch (e) {}
                     }, 300);
                 })
                 .catch(function () {});
         }
-
         function showToast(notification) {
             if (!toast || !notification) return;
-
             latestNotification = notification;
             toastSection.textContent = notification.section || 'Notification';
             toastTitle.textContent = notification.title || 'New notification';
             toastMessage.textContent = notification.message || '';
-
             toast.classList.add('active');
-
             if (toastTimer) clearTimeout(toastTimer);
             toastTimer = setTimeout(function () {
                 toast.classList.remove('active');
             }, 6500);
-
             post('get_notification_preferences=1')
                 .then(function (data) {
                     if (!data || !data.success) return;
-
                     var prefs = data.preferences || {};
                     var soundEnabled = !!parseInt(prefs.notification_sound_enabled, 10);
                     var browserEnabled = !!parseInt(prefs.browser_notifications_enabled, 10);
-
                     if (soundEnabled) playNotificationSound();
-
                     if (
                         browserEnabled &&
                         'Notification' in window &&
@@ -2512,7 +2334,6 @@ try {
                                     silent: !soundEnabled
                                 }
                             );
-
                             browserNotification.onclick = function () {
                                 window.focus();
                                 openPanel();
@@ -2523,35 +2344,28 @@ try {
                 })
                 .catch(function () {});
         }
-
         function checkPermissionPrompt() {
             post('get_notification_preferences=1')
                 .then(function (data) {
                     if (!data || !data.success) return;
-
                     var prefs = data.preferences || {};
                     var seen = parseInt(prefs.permission_prompt_seen, 10) === 1;
-
                     if (!seen && permissionBackdrop) {
                         permissionBackdrop.classList.add('active');
                     }
                 })
                 .catch(function () {});
         }
-
         function savePrefs(browserEnabled, soundEnabled, promptSeen) {
             var body =
                 'save_notification_preferences=1'
                 + '&browser_notifications_enabled=' + (browserEnabled ? '1' : '0')
                 + '&notification_sound_enabled=' + (soundEnabled ? '1' : '0')
                 + '&permission_prompt_seen=' + (promptSeen ? '1' : '0');
-
             return post(body).catch(function () {});
         }
-
         function allowNotifications() {
             var browserEnabled = false;
-
             if ('Notification' in window) {
                 return Notification.requestPermission()
                     .then(function (permission) {
@@ -2568,47 +2382,37 @@ try {
                         });
                     });
             }
-
             return savePrefs(false, true, true).then(function () {
                 if (permissionBackdrop) permissionBackdrop.classList.remove('active');
             });
         }
-
         function declineNotifications() {
             savePrefs(false, false, true);
             if (permissionBackdrop) permissionBackdrop.classList.remove('active');
         }
-
         function poll() {
             post('get_notifications_list=1')
                 .then(function (data) {
                     if (!data || !data.success) return;
-
                     var count = parseInt(data.unread_count, 10) || 0;
-
                     if (!firstPoll && count > lastUnreadCount) {
                         var newItem = (data.notifications || []).find(function (n) {
                             return n.update === 'new';
                         });
-
                         if (newItem) showToast(newItem);
                     }
-
                     firstPoll = false;
                     lastUnreadCount = count;
                     updateBadge(count);
-
                     if (open) renderList(data.notifications || []);
                 })
                 .catch(function () {});
         }
-
         if (bell) {
             bell.addEventListener('click', function () {
                 if (open) closePanel(true);
                 else openPanel();
             });
-
             bell.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
@@ -2617,20 +2421,17 @@ try {
                 }
             });
         }
-
         if (closeBtn) {
             closeBtn.addEventListener('click', function () {
                 closePanel(true);
             });
         }
-
         document.addEventListener('click', function (ev) {
             if (!open || !panel) return;
             if (panel.contains(ev.target)) return;
             if (bell && bell.contains(ev.target)) return;
             closePanel(true);
         });
-
         if (toast) {
             toast.addEventListener('click', function () {
                 toast.classList.remove('active');
@@ -2644,23 +2445,18 @@ try {
                 }
             });
         }
-
         if (permissionAllow) {
             permissionAllow.addEventListener('click', allowNotifications);
         }
-
         if (permissionLater) {
             permissionLater.addEventListener('click', declineNotifications);
         }
-
         refresh();
         checkPermissionPrompt();
         setInterval(poll, 3000);
-
         window.harvhubOpenNotifications = openPanel;
         window.harvhubRefreshNotifications = refresh;
     })();
-
     // ---------- Live shell state (badges, sub-account list) ----------
     // Lightweight poller that keeps the header bell and the switcher list
     // in sync without a full page reload. Runs on all shell pages.
@@ -2671,7 +2467,6 @@ try {
         var BASE_INTERVAL = 4000;   // 4s
         var MAX_INTERVAL  = 20000;  // 20s on error backoff
         var lastState = null;
-
         function post(body) {
             return fetch('investorapp.php', {
                 method: 'POST',
@@ -2683,10 +2478,8 @@ try {
                 credentials: 'same-origin'
             }).then(function (r) { return r.json(); });
         }
-
         function applyState(data) {
             if (!data || !data.success) return;
-
             // Update header bell badge count
             var badge = document.getElementById('headerNotificationBadge');
             if (badge) {
@@ -2705,7 +2498,6 @@ try {
                     badge.style.display = 'none';
                 }
             }
-
             // If the switcher sheet is open, refresh the list with new counts
             if (sheetOpen && sheetSubAccountsList && Array.isArray(data.sub_accounts)) {
                 // Patch in place — only rebuild if the set/order changed.
@@ -2713,7 +2505,6 @@ try {
                     sheetSubAccountsList.querySelectorAll('.header-sheet-sub-item'),
                     function (el) { return parseInt(el.getAttribute('data-sub-id'), 10) || 0; }
                 );
-
                 // Active first
                 var nextIds = data.sub_accounts
                     .slice()
@@ -2723,11 +2514,9 @@ try {
                         return (a.sub_account_id || 0) - (b.sub_account_id || 0);
                     })
                     .map(function (a) { return a.sub_account_id || 0; });
-
                 var same =
                     currentIds.length === nextIds.length &&
                     currentIds.every(function (v, i) { return v === nextIds[i]; });
-
                 if (!same) {
                     renderSubAccountsList(data.sub_accounts);
                 } else {
@@ -2749,10 +2538,8 @@ try {
                     });
                 }
             }
-
             lastState = data;
         }
-
         function fetchState() {
             if (!running) return;
             post('poll_shell_state=1')
@@ -2770,7 +2557,6 @@ try {
                     schedule();
                 });
         }
-
         function schedule() {
             if (!running) return;
             if (interval) clearTimeout(interval);
@@ -2780,19 +2566,16 @@ try {
             else if (failCount >= 3) delay = MAX_INTERVAL;
             interval = setTimeout(fetchState, delay);
         }
-
         function start() {
             running = true;
             failCount = 0;
             if (interval) clearTimeout(interval);
             fetchState();
         }
-
         function stop() {
             running = false;
             if (interval) { clearTimeout(interval); interval = null; }
         }
-
         document.addEventListener('visibilitychange', function () {
             if (document.hidden) stop();
             else start();
@@ -2801,15 +2584,12 @@ try {
             if (running) fetchState();
         });
         window.addEventListener('beforeunload', function () { stop(); });
-
         // Public hook so child iframes can request an immediate refresh
         window.harvhubRefreshShellState = function () {
             fetchState();
         };
-
         start();
     })();
-
     // ---------- Scroll-aware header + nav ----------
     var bottomNav   = document.querySelector('.bottom-nav');
     var pageHeader  = document.getElementById('shellPageHeader');
@@ -2817,7 +2597,6 @@ try {
     var isNavHidden    = false;
     var isHeaderHidden = false;
     var raf = null;
-
     function navAllowed() {
         if (window.__harvhubModalOpen) return false;
         if (document.body.classList.contains('modal-overlay-open')) return false;
@@ -2834,9 +2613,7 @@ try {
         if (document.body.classList.contains('header-sheet-open')) return false;
         return true;
     }
-
     function getActiveFrame() { return document.querySelector('.app-frame.active'); }
-
     function getST() {
         var f = getActiveFrame(); if (!f) return 0;
         try {
@@ -2861,7 +2638,6 @@ try {
         try { var w = f.contentWindow; return w ? (w.innerHeight || 0) : 0; } catch (e) {}
         return 0;
     }
-
     function showNav() {
         if (!bottomNav || !navAllowed()) return;
         bottomNav.style.transform = 'translateX(-50%) translateY(0)';
@@ -2886,7 +2662,6 @@ try {
         pageHeader.classList.add('is-hidden');
         isHeaderHidden = true;
     }
-
     function handle() {
         if (window.__harvhubModalOpen) return;
         var cur = getST();
@@ -2903,7 +2678,6 @@ try {
         lastScrollTop = cur <= 0 ? 0 : cur;
     }
     function throttle() { if (raf) cancelAnimationFrame(raf); raf = requestAnimationFrame(handle); }
-
     function attachScrollListeners() {
         document.querySelectorAll('.app-frame').forEach(function (f) {
             function a() {
@@ -2919,13 +2693,11 @@ try {
             a();
         });
     }
-
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () { attachScrollListeners(); if (!window.__harvhubModalOpen) { showNav(); showHeader(); } });
     } else {
         attachScrollListeners(); if (!window.__harvhubModalOpen) { showNav(); showHeader(); }
     }
-
     var _origSwitch = window.__investorSwitch;
     if (typeof _origSwitch === 'function') {
         window.__investorSwitch = function (t) {
@@ -2937,7 +2709,6 @@ try {
             }
         };
     }
-
     // ---------- Takeover watcher (profile page only — NOT modal) ----------
     (function () {
         var lastTakeoverState = false;
@@ -2958,7 +2729,6 @@ try {
         }
         setInterval(function () {
             var shellHasProfile = document.body.classList.contains('profile-page-open');
-
             var frameHasProfile = false;
             try {
                 var active = document.querySelector('.app-frame.active');
@@ -2967,30 +2737,23 @@ try {
                     frameHasProfile = inner.classList.contains('profile-page-open');
                 }
             } catch (e) {}
-
             var profileOpen = shellHasProfile || frameHasProfile;
-
             if (profileOpen && !shellHasProfile) document.body.classList.add('profile-page-open');
             else if (!profileOpen && shellHasProfile) document.body.classList.remove('profile-page-open');
-
             if (profileOpen === lastTakeoverState) return;
             lastTakeoverState = profileOpen;
             if (profileOpen) enterTakeoverMode(); else exitTakeoverMode();
         }, 100);
     })();
-
     applyChromeForTab('<?= htmlspecialchars($defaultTab, ENT_QUOTES) ?>');
     if (!window.__harvhubModalOpen) { showNav(); showHeader(); }
-
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.textContent = text == null ? '' : String(text);
         return div.innerHTML;
     }
     function escapeAttr(text) { return escapeHtml(text).replace(/"/g, '&quot;'); }
-
 })();
-
 // ---------- Body class watcher ----------
 (function () {
     var WATCHED = [

@@ -555,6 +555,7 @@ body::-webkit-scrollbar{display:none}
 .pa-control-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
 /* USER-LOCKED: Keep this 60px top margin exactly as set; do not change it in future edits. */
 .pa-root-row{grid-template-columns:minmax(0,1fr);}
+.pa-confirmation-row{grid-template-columns:minmax(0,1fr);margin:0 0 10px}
 .pa-scoped-control-row{margin:0 0 13px}
 .pa-confirmation-control{min-width:0}
 .pa-control{min-width:0}
@@ -630,7 +631,7 @@ body.pa-modal-open{position:fixed;left:0;right:0;width:100%;touch-action:none}
 .pa-hidden{display:none!important}.pa-no-data{min-height:calc(100vh - 20px);display:flex;align-items:center;justify-content:center;text-align:center;font-size:1rem;font-weight:800;color:var(--pa-muted)}
 .pa-foot{font-size:.65rem;color:var(--pa-muted);margin:12px 2px 0}
 @media(max-width:900px){.pa-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:650px){.pa-page{padding:0 12px 88px;margin-top:10px}.pa-control-row{grid-template-columns:1fr 1fr}.pa-root-row{grid-template-columns:1fr;}.pa-control-root{grid-column:1/-1}.pa-confirmation-control{grid-column:1/-1}.pa-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pa-card{padding:11px}.pa-metric{min-height:110px}.pa-value{font-size:1.27rem}.pa-trade-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pa-section-title{font-size:.84rem}.pa-modal-card{padding:12px}.pa-modal-actions{gap:6px}.pa-modal-actions button{flex:1 1 0;padding:8px 7px;font-size:.7rem}}
+@media(max-width:650px){.pa-page{padding:0 12px 88px;margin-top:10px}.pa-control-row{grid-template-columns:1fr 1fr}.pa-root-row{grid-template-columns:1fr;}.pa-control-row.pa-confirmation-row{grid-template-columns:1fr;}.pa-control-root{grid-column:1/-1}.pa-confirmation-control{grid-column:1/-1}.pa-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pa-card{padding:11px}.pa-metric{min-height:110px}.pa-value{font-size:1.27rem}.pa-trade-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pa-section-title{font-size:.84rem}.pa-modal-card{padding:12px}.pa-modal-actions{gap:6px}.pa-modal-actions button{flex:1 1 0;padding:8px 7px;font-size:.7rem}}
 </style>
 </head>
 <body class="<?= $darkMode ? 'dark-mode' : '' ?>">
@@ -646,14 +647,16 @@ body.pa-modal-open{position:fixed;left:0;right:0;width:100%;touch-action:none}
             <button type="button" class="pa-source-tab active" data-trade-source="live" role="tab" aria-selected="true">Live</button>
             <button type="button" class="pa-source-tab" data-trade-source="history" role="tab" aria-selected="false">History</button>
         </div>
-        <div class="pa-control-row pa-root-row">
+        <div class="pa-control-row pa-root-row" id="paRootRow">
             <div class="pa-control pa-control-root"><label for="paRoot">Strategy</label><select id="paRoot"><option value="all">All Strategies</option></select></div>
+        </div>
+        <div class="pa-control-row pa-confirmation-row pa-hidden" id="paConfirmationRow">
+            <div class="pa-control pa-confirmation-control"><label for="paConfirmation">Confirmation</label><select id="paConfirmation"><option value="all">All confirmations</option></select></div>
         </div>
         <div class="pa-tabs pa-hidden" id="paTabs"></div>
         <div class="pa-control-row pa-scoped-control-row" id="paScopedControls">
             <div class="pa-control"><label>Symbols</label><button type="button" class="pa-symbol-button" id="paSymbolButton">Choose symbols</button></div>
             <div class="pa-control"><label for="paTimeframe">Timeframes</label><select id="paTimeframe"><option value="all">All timeframes</option></select></div>
-            <div class="pa-control pa-hidden pa-confirmation-control" id="paConfirmationControl"><label for="paConfirmation">Confirmation</label><select id="paConfirmation"><option value="all">All confirmations</option></select></div>
         </div>
         <div id="paDashboardContent"></div>
     </div>
@@ -1051,7 +1054,13 @@ function updateTabs(){
     tabs.innerHTML=html;
     var hasConfirmations=rid==='all'?Object.keys(rootMap).some(function(id){return Object.keys(rootMap[id].confirmations).length>0;}):!!root&&mode.anyConfirmation;
     var showConfirmationFilter=activeTab==='confirmation'&&hasConfirmations;
-    $('paConfirmationControl').classList.toggle('pa-hidden',!showConfirmationFilter);
+    $('paConfirmationRow').classList.toggle('pa-hidden',!showConfirmationFilter);
+
+    // The strategy selector belongs exclusively to the All Strategies view.
+    // Confirmation is a separate tab, so hide the entire strategy control row
+    // while that tab is active. The selected root remains intact internally and
+    // continues to scope the confirmation options when a specific strategy is selected.
+    $('paRootRow').classList.toggle('pa-hidden',activeTab==='confirmation'||viewState.page!=='dashboard');
     $('paScopedControls').classList.toggle('pa-hidden',viewState.page!=='dashboard');
 }
 function rootsConfiguredForTrades(){

@@ -1683,6 +1683,32 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     };
 
     var activeShellTab = <?= json_encode($defaultTab) ?>;
+    var VPS_RETURN_ALLOWED = ['signals', 'menu', 'training', 'analytics'];
+    var vpsReturnTab = 'signals';
+    var BROKER_RETURN_ALLOWED = [
+        'signals', 'menu', 'training', 'analytics', 'vps',
+        'disconnect_trader_broker', 'signals_provision_request',
+        'account_management', 'programme_investors'
+    ];
+    var brokerReturnTab = 'signals';
+    try {
+        var shellUrl = new URL(window.location.href);
+        var queryReturnTab = shellUrl.searchParams.get('vps_from') || '';
+        var storedReturnTab = sessionStorage.getItem('harvhub_programme_vps_return_tab') || '';
+        if (VPS_RETURN_ALLOWED.indexOf(queryReturnTab) !== -1) {
+            vpsReturnTab = queryReturnTab;
+        } else if (activeShellTab === 'vps' && VPS_RETURN_ALLOWED.indexOf(storedReturnTab) !== -1) {
+            vpsReturnTab = storedReturnTab;
+        }
+
+        var brokerQueryReturnTab = shellUrl.searchParams.get('broker_from') || '';
+        var storedBrokerReturnTab = sessionStorage.getItem('harvhub_programme_broker_return_tab') || '';
+        if (BROKER_RETURN_ALLOWED.indexOf(brokerQueryReturnTab) !== -1) {
+            brokerReturnTab = brokerQueryReturnTab;
+        } else if (activeShellTab === 'connect_trader_broker' && BROKER_RETURN_ALLOWED.indexOf(storedBrokerReturnTab) !== -1) {
+            brokerReturnTab = storedBrokerReturnTab;
+        }
+    } catch (e) {}
     var analyticsNestedView = false;
     var trainingFrameReady = false;
     var pendingAnalyticsLocate = null;
@@ -1764,6 +1790,15 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     var names = Object.keys(frames);
     var navTabNames = ['signals', 'training', 'analytics', 'menu'];
 
+    function getTabNameByFrameWindow(sourceWindow) {
+        if (!sourceWindow) return '';
+        for (var i = 0; i < names.length; i++) {
+            var tabName = names[i];
+            if (frames[tabName] && frames[tabName].contentWindow === sourceWindow) return tabName;
+        }
+        return '';
+    }
+
     var FILE_TO_TAB = {
         'signals_dashboard.php':'signals',
         'programme_training.php':'training',
@@ -1816,10 +1851,10 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 if (base === 'traderapp.php') {
                     ev.preventDefault();
                     var m = href.match(/[?&]tab=([^&#]+)/);
-                    requestSwitch(m ? decodeURIComponent(m[1]) : 'signals');
+                    requestSwitch(m ? decodeURIComponent(m[1]) : 'signals', getTabNameByFrameWindow(w));
                     return;
                 }
-                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base]); return; }
+                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base], getTabNameByFrameWindow(w)); return; }
                 if (base === 'index.php') { ev.preventDefault(); requestLogout(); return; }
                 if (/\.php(\?|#|$)/i.test(clean) && base !== '') {
                     ev.preventDefault();
@@ -1838,10 +1873,10 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                     var base = clean.substring(clean.lastIndexOf('/') + 1);
                     if (base === 'traderapp.php') {
                         var m = s.match(/[?&]tab=([^&#]+)/);
-                        requestSwitch(m ? decodeURIComponent(m[1]) : 'signals');
+                        requestSwitch(m ? decodeURIComponent(m[1]) : 'signals', getTabNameByFrameWindow(w));
                         return true;
                     }
-                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base]); return true; }
+                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base], getTabNameByFrameWindow(w)); return true; }
                     if (base === 'index.php') { requestLogout(); return true; }
                     return false;
                 }
@@ -1858,7 +1893,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         } catch (e) {}
     }
 
-    function requestSwitch(tab) { if (!frames[tab]) return; switchTab(tab); }
+    function requestSwitch(tab, sourceTab) { if (!frames[tab]) return; switchTab(tab, sourceTab || ''); }
     function requestLogout() { window.location.href = 'traderapp.php?logout=1'; }
 
     function syncTrainingFrameActivity() {
@@ -1890,8 +1925,44 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         if (loader && !loader.classList.contains('hidden')) loader.classList.add('hidden');
     }, 12000);
 
-    function switchTab(tab) {
+    function switchTab(tab, requestedSourceTab) {
         if (!frames[tab]) return;
+
+        var previousTab = activeShellTab;
+        if (tab === 'vps' && previousTab !== 'vps') {
+            // Capture the actual tab which initiated the VPS navigation.
+            // This covers both Signals Dashboard banners and Programme Menu links.
+            var explicitSource = String(requestedSourceTab || '');
+            if (VPS_RETURN_ALLOWED.indexOf(explicitSource) !== -1) {
+                vpsReturnTab = explicitSource;
+            } else if (VPS_RETURN_ALLOWED.indexOf(previousTab) !== -1) {
+                vpsReturnTab = previousTab;
+            } else if (VPS_RETURN_ALLOWED.indexOf(lastNavTab) !== -1) {
+                vpsReturnTab = lastNavTab;
+            } else {
+                vpsReturnTab = 'signals';
+            }
+            try { sessionStorage.setItem('harvhub_programme_vps_return_tab', vpsReturnTab); } catch (e) {}
+        } else if (previousTab === 'vps' && tab !== 'vps') {
+            try { sessionStorage.removeItem('harvhub_programme_vps_return_tab'); } catch (e) {}
+        }
+
+        if (tab === 'connect_trader_broker' && previousTab !== 'connect_trader_broker') {
+            var explicitBrokerSource = String(requestedSourceTab || '');
+            if (BROKER_RETURN_ALLOWED.indexOf(explicitBrokerSource) !== -1) {
+                brokerReturnTab = explicitBrokerSource;
+            } else if (BROKER_RETURN_ALLOWED.indexOf(previousTab) !== -1) {
+                brokerReturnTab = previousTab;
+            } else if (BROKER_RETURN_ALLOWED.indexOf(lastNavTab) !== -1) {
+                brokerReturnTab = lastNavTab;
+            } else {
+                brokerReturnTab = 'signals';
+            }
+            try { sessionStorage.setItem('harvhub_programme_broker_return_tab', brokerReturnTab); } catch (e) {}
+        } else if (previousTab === 'connect_trader_broker' && tab !== 'connect_trader_broker') {
+            try { sessionStorage.removeItem('harvhub_programme_broker_return_tab'); } catch (e) {}
+        }
+
         activeShellTab = tab;
         // Programme Training runs inside a persistent iframe. Explicitly suspend
         // its background work whenever another workspace tab becomes active.
@@ -1904,6 +1975,16 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         try {
             var url = new URL(window.location);
             url.searchParams.set('tab', tab);
+            if (tab === 'vps') {
+                url.searchParams.set('vps_from', vpsReturnTab);
+            } else {
+                url.searchParams.delete('vps_from');
+            }
+            if (tab === 'connect_trader_broker') {
+                url.searchParams.set('broker_from', brokerReturnTab);
+            } else {
+                url.searchParams.delete('broker_from');
+            }
             history.replaceState(null, '', url);
         } catch (e) {}
         pushTheme(frames[tab]);
@@ -1929,7 +2010,45 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
 
     window.addEventListener('message', function (e) {
         if (!e.data || typeof e.data !== 'object') return;
-        if (e.data.type === 'switchTab' && frames[e.data.tab]) switchTab(e.data.tab);
+        if (e.data.type === 'switchTab' && frames[e.data.tab]) {
+            var sendingTab = getTabNameByFrameWindow(e.source);
+            var explicitSenderTab = VPS_RETURN_ALLOWED.indexOf(String(e.data.sourceTab || '')) !== -1
+                ? String(e.data.sourceTab)
+                : sendingTab;
+            switchTab(e.data.tab, explicitSenderTab);
+        }
+        if (e.data.type === 'programmeVpsBack' && frames.vps && e.source === frames.vps.contentWindow) {
+            var requestedReturnTab = String(e.data.returnTab || '');
+            if (VPS_RETURN_ALLOWED.indexOf(requestedReturnTab) !== -1) {
+                vpsReturnTab = requestedReturnTab;
+            } else {
+                try {
+                    var currentShellUrl = new URL(window.location.href);
+                    var urlReturnTab = currentShellUrl.searchParams.get('vps_from') || '';
+                    var storedReturnTab = sessionStorage.getItem('harvhub_programme_vps_return_tab') || '';
+                    if (VPS_RETURN_ALLOWED.indexOf(urlReturnTab) !== -1) vpsReturnTab = urlReturnTab;
+                    else if (VPS_RETURN_ALLOWED.indexOf(storedReturnTab) !== -1) vpsReturnTab = storedReturnTab;
+                } catch (err) {}
+            }
+            var vpsDestination = VPS_RETURN_ALLOWED.indexOf(vpsReturnTab) !== -1 ? vpsReturnTab : 'signals';
+            switchTab(vpsDestination);
+        }
+        if (e.data.type === 'programmeBrokerBack' && frames.connect_trader_broker && e.source === frames.connect_trader_broker.contentWindow) {
+            var requestedBrokerReturnTab = String(e.data.returnTab || '');
+            if (BROKER_RETURN_ALLOWED.indexOf(requestedBrokerReturnTab) !== -1) {
+                brokerReturnTab = requestedBrokerReturnTab;
+            } else {
+                try {
+                    var currentBrokerShellUrl = new URL(window.location.href);
+                    var brokerUrlReturnTab = currentBrokerShellUrl.searchParams.get('broker_from') || '';
+                    var brokerStoredReturnTab = sessionStorage.getItem('harvhub_programme_broker_return_tab') || '';
+                    if (BROKER_RETURN_ALLOWED.indexOf(brokerUrlReturnTab) !== -1) brokerReturnTab = brokerUrlReturnTab;
+                    else if (BROKER_RETURN_ALLOWED.indexOf(brokerStoredReturnTab) !== -1) brokerReturnTab = brokerStoredReturnTab;
+                } catch (err) {}
+            }
+            var brokerDestination = BROKER_RETURN_ALLOWED.indexOf(brokerReturnTab) !== -1 ? brokerReturnTab : 'signals';
+            switchTab(brokerDestination);
+        }
         // Analytics internal pages temporarily take over the viewport. Only the
         // analytics iframe may toggle this shell state.
         if (e.data.type === 'programmeAnalyticsView' && frames.analytics && e.source === frames.analytics.contentWindow) {
