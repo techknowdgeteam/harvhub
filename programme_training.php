@@ -1192,48 +1192,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_latest'
     }
     exit;
 }
-// Resolve the exact Signals Provision requirement for this programme owner.
-// A provision changes to `ongoing` as soon as its test starts. Older code only
-// queried interested/pending/active rows, so the RR became NULL during the test
-// and the trade builder silently defaulted to 1:1. Always inspect the newest
-// provision row for this user + programme, then ignore it if it was cancelled.
+// Signals Provision is authoritative whenever it contains a non-empty,
+// positive numeric risk-reward value. Its interest/test status is deliberately
+// NOT consulted: ongoing, passed, failed, breached, cancelled, or any other
+// status must not change the configured ratio used by Programme Training.
 $providerRiskReward = null;
 $providerRiskRewardType = '';
-$providerProvisionStatus = '';
 try {
     if ($programmeId > 0) {
         $rrStmt = $pdo->prepare("
-            SELECT `risk_reward`, `risk_reward_type`, `interest_status`
+            SELECT `risk_reward`, `risk_reward_type`
             FROM `signals_provider_interest`
             WHERE `programme_id` = ?
               AND `user_id` = ?
               AND COALESCE(`accountmanagement_id`, 0) = 0
+              AND `risk_reward` IS NOT NULL
+              AND TRIM(CAST(`risk_reward` AS CHAR)) <> ''
             ORDER BY `id` DESC
             LIMIT 1
         ");
         $rrStmt->execute([$programmeId, $userId]);
         $providerRow = $rrStmt->fetch(PDO::FETCH_ASSOC) ?: null;
         if ($providerRow) {
-            $providerProvisionStatus = strtolower(trim((string)($providerRow['interest_status'] ?? '')));
-            $validProvisionStatuses = ['interested', 'pending', 'active', 'ongoing', 'passed', 'failed', 'breached'];
-            if (in_array($providerProvisionStatus, $validProvisionStatuses, true)) {
-                $rrValue = $providerRow['risk_reward'] ?? null;
-                if ($rrValue !== null && $rrValue !== '' && is_numeric($rrValue) && (float)$rrValue > 0) {
-                    $providerRiskReward = (float)$rrValue;
-                }
+            $rrValue = $providerRow['risk_reward'] ?? null;
+            if ($rrValue !== null && trim((string)$rrValue) !== '' && is_numeric($rrValue) && (float)$rrValue > 0) {
+                $providerRiskReward = (float)$rrValue;
+            }
 
-                $rrTypeValue = strtolower(trim((string)($providerRow['risk_reward_type'] ?? '')));
-                $validRiskRewardTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
-                if (in_array($rrTypeValue, $validRiskRewardTypes, true)) {
-                    $providerRiskRewardType = $rrTypeValue;
-                }
+            $rrTypeValue = strtolower(trim((string)($providerRow['risk_reward_type'] ?? '')));
+            $validRiskRewardTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
+            if (in_array($rrTypeValue, $validRiskRewardTypes, true)) {
+                $providerRiskRewardType = $rrTypeValue;
             }
         }
     }
 } catch (Throwable $e) {
     $providerRiskReward = null;
     $providerRiskRewardType = '';
-    $providerProvisionStatus = '';
     error_log('[programme_training] Signals Provision RR lookup failed: ' . $e->getMessage());
 }
 ?>
@@ -2401,8 +2396,15 @@ try {
     /* Dynamic diagnostics console */
     .pt-dynamic-console-modal{position:fixed;inset:0;z-index:100500;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
     .pt-dynamic-console-modal.active{display:flex}
-    .pt-dynamic-console-box{width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
-    .pt-dynamic-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;flex-shrink:0}
+    .pt-dynamic-console-box{position:relative;width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
+    .pt-roots-data-loading{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;box-sizing:border-box;text-align:center;background:var(--pt-card);color:var(--pt-text)}
+    .pt-roots-data-loading[hidden]{display:none!important}
+    .pt-roots-data-spinner{width:42px;height:42px;border:4px solid rgba(128,128,128,.22);border-top-color:var(--pt-accent);border-radius:50%;animation:ptRootsDataSpin .8s linear infinite}
+    .pt-roots-data-loading strong{font-size:15px;font-weight:800}
+    .pt-roots-data-loading span.pt-roots-data-message{max-width:440px;color:var(--pt-muted);font-size:12px;line-height:1.55}
+    .pt-roots-data-loading .pt-roots-data-error{color:#dc3545;font-size:22px}
+    @keyframes ptRootsDataSpin{to{transform:rotate(360deg)}}
+    .pt-dynamic-console-head{position:relative;z-index:7;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;flex-shrink:0}
     .pt-dynamic-console-title{font-size:1rem;font-weight:800}
     .pt-dynamic-console-subtitle{font-size:.78rem;color:var(--pt-muted);margin-top:2px}
     .pt-dynamic-console-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -2749,8 +2751,14 @@ try {
             <div><div class="pt-dynamic-console-title" id="ptRootsDataTitle"><i class="fa-solid fa-list-check"></i> Roots Data — Trade Families</div><div class="pt-dynamic-console-subtitle">Matched root families and their entry/exit trigger records</div></div>
             <div class="pt-dynamic-console-actions"><button type="button" class="pt-dynamic-console-action" onclick="ptRefreshRootsData()"><i class="fa-solid fa-rotate"></i> Refresh</button><button type="button" class="pt-dynamic-console-action" onclick="ptCloseRootsData()"><i class="fa-solid fa-xmark"></i> Close</button></div>
         </div>
-        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Only native data for roots configured on the currently viewed timeframe is shown here. Higher-timeframe projection data is not included.</div>
+        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Preparing the current timeframe's saved root matches and trade records. Chart updates pause while this data panel is open.</div>
         <div id="ptRootsDataBody" style="flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:16px 18px"></div>
+        <div class="pt-roots-data-loading" id="ptRootsDataLoading" role="status" aria-live="polite" hidden>
+            <span class="pt-roots-data-spinner" id="ptRootsDataSpinner" aria-hidden="true"></span>
+            <i class="fa-solid fa-triangle-exclamation pt-roots-data-error" id="ptRootsDataErrorIcon" aria-hidden="true" hidden></i>
+            <strong id="ptRootsDataLoadingTitle">Preparing Roots Data…</strong>
+            <span class="pt-roots-data-message" id="ptRootsDataLoadingMessage">Loading saved configuration, candle history and matching trade records.</span>
+        </div>
     </div>
 </div>
 
@@ -2778,19 +2786,24 @@ try {
     var PT_DRAW_FRAME = null;
     var PT_PROJECTION_REFRESH_PENDING = false;
     var PT_PROJECTION_PRESERVE_PENDING = true;
+    // A successful configuration save invalidates cached higher-timeframe
+    // sources; the next page-work resume must rebuild them from saved settings.
+    var PT_FORCE_PROJECTION_REFRESH_ON_RESUME = false;
     var PT_PROJECTION_REFRESH_BUSY = false;
     var PT_OLDER_LOAD_PENDING = false;
     var PT_PENDING_LIVE_CANDLES = null;
     var PT_INTERACTION_HELD = false;
+    // Named holds prevent background chart/candle work from restarting while
+    // either modal (or a nested modal flow) still owns the screen.
+    var PT_MODAL_BACKGROUND_HOLDS = Object.create(null);
     var PT_INTERACTION_SETTLE_MS = 360;
 
     var PT_PROGRAMME_ID      = <?= (int)$programmeId ?>;
     var PT_PROGRAMME_NAME    = <?= json_encode($programmeName) ?>;
-    // Values are read from the latest non-cancelled Signals Provision for this
-    // exact programme owner. Do not infer the requested ratio from a chart row.
+    // Values are read from the latest non-empty Signals Provision RR for this
+    // exact programme owner. Provision status never controls whether it applies.
     var PT_PROVIDER_RISK_REWARD = <?= $providerRiskReward === null ? 'null' : json_encode($providerRiskReward) ?>;
     var PT_PROVIDER_RISK_REWARD_TYPE = <?= json_encode($providerRiskRewardType) ?>;
-    var PT_PROVIDER_PROVISION_STATUS = <?= json_encode($providerProvisionStatus) ?>;
     var PT_HAS_BROKER        = <?= $hasBroker ? 'true' : 'false' ?>;
     var PT_USER_ID           = <?= (int)$userId ?>;
     var PT_DARK_MODE          = <?= $darkMode ? 'true' : 'false' ?>;
@@ -2945,8 +2958,32 @@ try {
         } catch (e) {}
     }
 
+    function ptHasModalBackgroundHold() {
+        return Object.keys(PT_MODAL_BACKGROUND_HOLDS).length > 0;
+    }
+
     function ptPageCanWork() {
-        return PT_WORK_ENABLED && !document.hidden;
+        return PT_WORK_ENABLED && !document.hidden && !ptHasModalBackgroundHold();
+    }
+
+    function ptAcquireModalBackgroundHold(reason) {
+        reason = String(reason || '').trim();
+        if (!reason || PT_MODAL_BACKGROUND_HOLDS[reason]) return;
+        var wasHeld = ptHasModalBackgroundHold();
+        PT_MODAL_BACKGROUND_HOLDS[reason] = true;
+        // Suspend only once even when nested modal interactions request a hold.
+        if (!wasHeld) ptSuspendPageWork();
+    }
+
+    function ptReleaseModalBackgroundHold(reason) {
+        reason = String(reason || '').trim();
+        if (!reason || !PT_MODAL_BACKGROUND_HOLDS[reason]) return;
+        delete PT_MODAL_BACKGROUND_HOLDS[reason];
+        // Retain the pause while any other modal remains open. Resume the work
+        // scheduler only after the final hold has been released.
+        if (!ptHasModalBackgroundHold() && PT_WORK_ENABLED && !document.hidden) {
+            ptResumePageWork();
+        }
     }
 
     // Only chart/live-data requests use this wrapper. User-initiated saves and
@@ -3098,6 +3135,22 @@ try {
         PT_DRAW_SCHEDULED = false;
         if (typeof ptStopLocateArrowAnimation === 'function') ptStopLocateArrowAnimation();
         PT_LOCATE_ARROW = null;
+        // Clear deferred touch/crosshair work as well. These callbacks only
+        // affect the chart canvas, so they must not fire behind an active modal.
+        if (typeof PT_TOUCH_STATE !== 'undefined' && PT_TOUCH_STATE) {
+            if (PT_TOUCH_STATE.crosshairTimer) {
+                clearTimeout(PT_TOUCH_STATE.crosshairTimer);
+                PT_TOUCH_STATE.crosshairTimer = null;
+            }
+            PT_TOUCH_STATE.pointers = {};
+            PT_TOUCH_STATE.crosshairActive = false;
+            PT_TOUCH_STATE.crosshairDragActive = false;
+            PT_TOUCH_STATE._lastPan = null;
+        }
+        if (typeof PT_DRAG_STATE !== 'undefined' && PT_DRAG_STATE) {
+            PT_DRAG_STATE.mode = null;
+            PT_DRAG_STATE.moved = false;
+        }
     }
 
     function ptResumePageWork() {
@@ -3119,7 +3172,9 @@ try {
         }
 
         if (PT_HAS_BROKER && PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
-            ptRefreshHigherTimeframeProjection(true);
+            var preserveProjectionCache = !PT_FORCE_PROJECTION_REFRESH_ON_RESUME;
+            PT_FORCE_PROJECTION_REFRESH_ON_RESUME = false;
+            ptRefreshHigherTimeframeProjection(preserveProjectionCache);
         }
         if (PT_CANDLES.length) ptScheduleDraw();
     }
@@ -3702,10 +3757,12 @@ try {
         return ptPrice((fallbackCandles || PT_CANDLES)[index], level);
     }
     function ptRefreshHigherTimeframeProjection(preserveCompletedCache) {
-        if (!ptPageCanWork() || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) return;
+        if (!ptPageCanWork() || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) {
+            return Promise.resolve(false);
+        }
         if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
             ptQueueProjectionRefresh(!!preserveCompletedCache);
-            return;
+            return Promise.resolve(false);
         }
         var token = ++PT_PROJECTION_REQUEST_TOKEN;
         PT_PROJECTION_REFRESH_BUSY = true;
@@ -3714,16 +3771,16 @@ try {
         var configPromise = (typeof ptLoadSavedConfiguration === 'function')
             ? ptLoadSavedConfiguration(false).catch(function(){ return null; })
             : Promise.resolve(null);
-        configPromise.then(function(){
-            if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return;
+        return configPromise.then(function(){
+            if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return false;
             if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
                 PT_PROJECTION_REFRESH_BUSY = false;
                 ptQueueProjectionRefresh(!!preserveCompletedCache);
-                return;
+                return false;
             }
             var config = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
             var tfs = ptProjectionRootsForCurrentView(config);
-            if (!tfs.length) { PT_PROJECTION_REFRESH_BUSY = false; ptProjectionStatus('', ''); return; }
+            if (!tfs.length) { PT_PROJECTION_REFRESH_BUSY = false; ptProjectionStatus('', ''); return true; }
             var rootNames = [];
             (config.roots || []).forEach(function(root){
                 if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
@@ -3740,12 +3797,14 @@ try {
                     PT_PROJECTION_REFRESH_BUSY = false;
                     ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — ready', 'done');
                     ptScheduleDraw();
+                    return true;
                 }).catch(function(err){
-                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
+                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return false;
                     PT_PROJECTION_REFRESH_BUSY = false;
-                    if (err && err.name === 'AbortError') return;
+                    if (err && err.name === 'AbortError') return false;
                     ptProjectionStatus('Projection loading failed: ' + (err.message || 'unknown error'), 'error');
                     console.warn('Higher-timeframe projection load failed', err);
+                    return false;
                 });
         });
     }
@@ -6258,9 +6317,176 @@ try {
         });
         return records;
     }
-    window.ptOpenRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.add('active');ptRefreshRootsData();};
+    var PT_ROOTS_DATA_OPEN_TOKEN = 0;
+    var PT_ROOTS_DATA_PRELOAD_PROMISE = null;
+
+    function ptSetRootsDataLoading(show, title, message, isError) {
+        var overlay = document.getElementById('ptRootsDataLoading');
+        var titleEl = document.getElementById('ptRootsDataLoadingTitle');
+        var messageEl = document.getElementById('ptRootsDataLoadingMessage');
+        var spinner = document.getElementById('ptRootsDataSpinner');
+        var errorIcon = document.getElementById('ptRootsDataErrorIcon');
+        var refreshButton = document.querySelector('#ptRootsDataModal .pt-dynamic-console-actions button:first-child');
+        if (!overlay) return;
+        overlay.hidden = !show;
+        if (titleEl && title) titleEl.textContent = title;
+        if (messageEl && message) messageEl.textContent = message;
+        if (spinner) spinner.hidden = !!isError;
+        if (errorIcon) errorIcon.hidden = !isError;
+        // The Close control stays available in the header; Refresh is disabled
+        // until the data has been preloaded so the modal cannot be half-used.
+        if (refreshButton) refreshButton.disabled = !!show;
+    }
+
+    function ptBuildRootsDataSnapshot() {
+        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length || typeof ptDrawChart !== 'function') return;
+        // Root matching is independent of the user's current pan/zoom window.
+        // Temporarily fit all loaded candles so the matcher is guaranteed to run
+        // even when the chart had been panned into blank space, then restore view.
+        var savedView = {
+            candleWidth: PT_VIEW.candleWidth,
+            candleSpacing: PT_VIEW.candleSpacing,
+            offsetX: PT_VIEW.offsetX,
+            offsetY: PT_VIEW.offsetY,
+            priceScale: PT_VIEW.priceScale
+        };
+        try {
+            ptFitViewportToCandles();
+            ptDrawChart();
+        } finally {
+            Object.keys(savedView).forEach(function (key) { PT_VIEW[key] = savedView[key]; });
+        }
+    }
+
+    function ptWaitForRootsDataCandles(token, timeoutMs) {
+        return new Promise(function(resolve, reject) {
+            var startedAt = Date.now();
+            var timeout = Math.max(5000, Number(timeoutMs) || 45000);
+            function check() {
+                var modal = document.getElementById('ptRootsDataModal');
+                if (token !== PT_ROOTS_DATA_OPEN_TOKEN || !modal || !modal.classList.contains('active')) {
+                    reject(new Error('Roots Data loading was cancelled.'));
+                    return;
+                }
+                if (!PT_HAS_BROKER || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
+                    resolve({complete:true, noChart:true});
+                    return;
+                }
+                if (!PT_CHART_STARTED && ptPageCanWork()) {
+                    ptLoadChart();
+                }
+                if (PT_INITIAL_LOADED) {
+                    if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
+                        window.setTimeout(check, 120);
+                        return;
+                    }
+                    var targetReached = PT_REQUESTED_AMOUNT === null || PT_CANDLES.length >= PT_REQUESTED_AMOUNT;
+                    var stoppedByLimit = PT_CONSECUTIVE_ERRORS >= PT_MAX_CONSECUTIVE_ERRORS;
+                    var historyFinished = !PT_HAS_MORE_OLDER || targetReached || stoppedByLimit;
+                    var schedulerIdle = !PT_IS_LOADING_OLDER && PT_AUTO_LOAD_TIMER === null;
+                    if (schedulerIdle && historyFinished) {
+                        resolve({complete:!stoppedByLimit, partial:!!stoppedByLimit, noChart:!PT_CANDLES.length});
+                        return;
+                    }
+                    // Re-enter the existing history loader if a previous interaction
+                    // left it idle between pages. It still respects the chart work gate.
+                    if (schedulerIdle && PT_HAS_MORE_OLDER && PT_CANDLES.length && ptPageCanWork()) {
+                        ptAutoLoadUpToTarget(PT_LOAD_TOKEN);
+                    }
+                }
+                if (Date.now() - startedAt >= timeout) {
+                    if (PT_INITIAL_LOADED) {
+                        resolve({complete:false, partial:true, timedOut:true, noChart:!PT_CANDLES.length});
+                    } else {
+                        reject(new Error('Candle data did not finish loading. Close Roots Data and check the chart connection, then try again.'));
+                    }
+                    return;
+                }
+                window.setTimeout(check, 120);
+            }
+            check();
+        });
+    }
+
+    window.ptOpenRootsData = function () {
+        var modal = document.getElementById('ptRootsDataModal');
+        if (!modal) return;
+        if (modal.classList.contains('active') && PT_ROOTS_DATA_PRELOAD_PROMISE) return PT_ROOTS_DATA_PRELOAD_PROMISE;
+
+        PT_ROOTS_DATA_OPEN_TOKEN++;
+        var token = PT_ROOTS_DATA_OPEN_TOKEN;
+        modal.classList.add('active');
+        modal.setAttribute('aria-busy', 'true');
+        ptSetRootsDataLoading(true, 'Preparing Roots Data…', 'Loading saved root configuration and the candle data required to calculate this timeframe.', false);
+
+        // Do not pause until the data required by this modal has been prepared.
+        // The loading overlay prevents interaction during this one-time preload.
+        PT_ROOTS_DATA_PRELOAD_PROMISE = Promise.resolve()
+            .then(function () {
+                if (typeof ptLoadSavedConfiguration === 'function') {
+                    return ptLoadSavedConfiguration(false);
+                }
+                return null;
+            })
+            .then(function () {
+                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) throw new Error('Roots Data loading was cancelled.');
+                ptSetRootsDataLoading(true, 'Loading candle history…', 'Waiting for the current chart timeframe to finish its configured candle load.', false);
+                return ptWaitForRootsDataCandles(token, 45000);
+            })
+            .then(function (loadState) {
+                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) throw new Error('Roots Data loading was cancelled.');
+                if (loadState && !loadState.noChart && PT_CANDLES.length) {
+                    ptSetRootsDataLoading(true, 'Preparing root matches…', 'Loading any higher-timeframe source candles needed by configured roots and confirmations.', false);
+                    return ptRefreshHigherTimeframeProjection(true).then(function (projectionReady) {
+                        if (!projectionReady) loadState.projectionIncomplete = true;
+                        return loadState;
+                    });
+                }
+                return loadState;
+            })
+            .then(function (loadState) {
+                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) return;
+                // One deterministic final chart pass builds the native and projected
+                // root/confirmation trade arrays before the modal becomes interactive.
+                ptBuildRootsDataSnapshot();
+                window.ptRefreshRootsData();
+
+                // Hold every chart/candle/configuration background process while the
+                // user inspects the fully-prepared data. Closing the modal releases it.
+                ptAcquireModalBackgroundHold('roots-data-modal');
+                modal.setAttribute('aria-busy', 'false');
+                ptSetRootsDataLoading(false);
+                var status = document.getElementById('ptRootsDataStatus');
+                if (status) {
+                    status.textContent = (loadState && (loadState.partial || loadState.timedOut || loadState.projectionIncomplete))
+                        ? 'Roots Data is ready using the available candle/projection data. Chart updates are paused while this panel is open.'
+                        : 'Roots Data is ready. Chart updates and background candle loading are paused while this panel is open.';
+                }
+            })
+            .catch(function (error) {
+                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) return;
+                modal.setAttribute('aria-busy', 'false');
+                ptSetRootsDataLoading(true, 'Could not prepare Roots Data', (error && error.message) || 'The required data could not be loaded. Close this panel and try again.', true);
+                console.warn('[programme_training] Roots Data preload failed:', error);
+            })
+            .finally(function () {
+                if (token === PT_ROOTS_DATA_OPEN_TOKEN) PT_ROOTS_DATA_PRELOAD_PROMISE = null;
+            });
+        return PT_ROOTS_DATA_PRELOAD_PROMISE;
+    };
+
     window.ptSetRootsDataMode=function(){PT_ROOTS_DATA_MODE='main';PT_ROOT_TRADE_DATA=PT_MAIN_TRADE_DATA;ptRefreshRootsData();};
-    window.ptCloseRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.remove('active');};
+
+    window.ptCloseRootsData = function () {
+        var modal = document.getElementById('ptRootsDataModal');
+        PT_ROOTS_DATA_OPEN_TOKEN++;
+        if (modal) {
+            modal.classList.remove('active');
+            modal.setAttribute('aria-busy', 'false');
+        }
+        ptSetRootsDataLoading(false);
+        ptReleaseModalBackgroundHold('roots-data-modal');
+    };
     // Resolve a configured candle timestamp to the currently loaded chart index.
     function ptIndexForTradeTime(value) {
         if (value == null || value === '' || !Array.isArray(PT_CANDLES)) return -1;
@@ -9528,7 +9754,13 @@ try {
             .then(function (data) {
                 if (btn) btn.disabled = false;
                 if (data && data.success) {
-                    ptRefreshHigherTimeframeProjection();
+                    // The database now owns this new configuration. Invalidate the
+                    // previously resolved load promise and higher-timeframe caches;
+                    // rebuilding is deferred until the modal closes and page work
+                    // resumes, so chart traffic cannot compete with modal interaction.
+                    PT_CFG_LOAD_PROMISE = null;
+                    PT_CFG_LOADED = false;
+                    PT_FORCE_PROJECTION_REFRESH_ON_RESUME = true;
                     setFootStatus(
                         'Saved: ' + data.meta.root_count + ' root(s), ' +
                         data.meta.tree_count + ' tree(s), ' +
@@ -9984,6 +10216,9 @@ try {
         window.ptOpenConfigModal = function () {
             var m = el('ptConfigModal');
             if (!m) return;
+            // Stop candle history, live-tail polling, live configuration polling,
+            // projection fetches and chart redraws before showing editable controls.
+            ptAcquireModalBackgroundHold('configuration-modal');
             // Fold every expanded root and render that state BEFORE the modal becomes visible.
             PT_CFG.roots.forEach(function (root) { root.expanded = false; });
             render();
@@ -10063,6 +10298,8 @@ try {
             window.ptCloseUnlockRootsModal();
             try { parent.postMessage({type:'trainingControlsOpen', open:false}, '*'); } catch(e) {}
             setFootStatus('');
+            // Resume chart/candle work after the modal has fully closed.
+            ptReleaseModalBackgroundHold('configuration-modal');
         };
         window.ptCfgAddRoot = function () {
             if (PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED) return;
