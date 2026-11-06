@@ -1192,15 +1192,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_latest'
     }
     exit;
 }
+// Resolve the exact Signals Provision requirement for this programme owner.
+// A provision changes to `ongoing` as soon as its test starts. Older code only
+// queried interested/pending/active rows, so the RR became NULL during the test
+// and the trade builder silently defaulted to 1:1. Always inspect the newest
+// provision row for this user + programme, then ignore it if it was cancelled.
 $providerRiskReward = null;
+$providerRiskRewardType = '';
+$providerProvisionStatus = '';
 try {
     if ($programmeId > 0) {
-        $rrStmt = $pdo->prepare("SELECT risk_reward FROM signals_provider_interest WHERE programme_id = ? AND interest_status IN ('interested','pending','active') ORDER BY id DESC LIMIT 1");
-        $rrStmt->execute([$programmeId]);
-        $rrValue = $rrStmt->fetchColumn();
-        if ($rrValue !== false && is_numeric($rrValue)) $providerRiskReward = (float)$rrValue;
+        $rrStmt = $pdo->prepare("
+            SELECT `risk_reward`, `risk_reward_type`, `interest_status`
+            FROM `signals_provider_interest`
+            WHERE `programme_id` = ?
+              AND `user_id` = ?
+              AND COALESCE(`accountmanagement_id`, 0) = 0
+            ORDER BY `id` DESC
+            LIMIT 1
+        ");
+        $rrStmt->execute([$programmeId, $userId]);
+        $providerRow = $rrStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($providerRow) {
+            $providerProvisionStatus = strtolower(trim((string)($providerRow['interest_status'] ?? '')));
+            $validProvisionStatuses = ['interested', 'pending', 'active', 'ongoing', 'passed', 'failed', 'breached'];
+            if (in_array($providerProvisionStatus, $validProvisionStatuses, true)) {
+                $rrValue = $providerRow['risk_reward'] ?? null;
+                if ($rrValue !== null && $rrValue !== '' && is_numeric($rrValue) && (float)$rrValue > 0) {
+                    $providerRiskReward = (float)$rrValue;
+                }
+
+                $rrTypeValue = strtolower(trim((string)($providerRow['risk_reward_type'] ?? '')));
+                $validRiskRewardTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
+                if (in_array($rrTypeValue, $validRiskRewardTypes, true)) {
+                    $providerRiskRewardType = $rrTypeValue;
+                }
+            }
+        }
     }
-} catch (Throwable $e) { $providerRiskReward = null; }
+} catch (Throwable $e) {
+    $providerRiskReward = null;
+    $providerRiskRewardType = '';
+    $providerProvisionStatus = '';
+    error_log('[programme_training] Signals Provision RR lookup failed: ' . $e->getMessage());
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -2751,7 +2786,11 @@ try {
 
     var PT_PROGRAMME_ID      = <?= (int)$programmeId ?>;
     var PT_PROGRAMME_NAME    = <?= json_encode($programmeName) ?>;
+    // Values are read from the latest non-cancelled Signals Provision for this
+    // exact programme owner. Do not infer the requested ratio from a chart row.
     var PT_PROVIDER_RISK_REWARD = <?= $providerRiskReward === null ? 'null' : json_encode($providerRiskReward) ?>;
+    var PT_PROVIDER_RISK_REWARD_TYPE = <?= json_encode($providerRiskRewardType) ?>;
+    var PT_PROVIDER_PROVISION_STATUS = <?= json_encode($providerProvisionStatus) ?>;
     var PT_HAS_BROKER        = <?= $hasBroker ? 'true' : 'false' ?>;
     var PT_USER_ID           = <?= (int)$userId ?>;
     var PT_DARK_MODE          = <?= $darkMode ? 'true' : 'false' ?>;
@@ -6112,21 +6151,90 @@ try {
                 if (triggerIndex != null && Number(triggerIndex) <= Number(entryAtIndex)) triggerIndex = null;
                 var actualEntryIndex = triggerIndex;
                 var entryC = triggerIndex != null ? candles[triggerIndex] : null;
-                var rr=root.takeProfitType==='risk_reward'?Number(window.PT_PROVIDER_RISK_REWARD || root.riskReward || 0):null;
-                var riskDistanceForTarget=Math.abs(entryPrice-slPrice);
-                var configuredTpPrice = root.takeProfitType==='risk_reward'
-                    ? (isLong ? entryPrice+riskDistanceForTarget*(rr>0?rr:1) : entryPrice-riskDistanceForTarget*(rr>0?rr:1))
-                    : (tpC?ptPrice(tpC,tpResolvedLevel):null);
+                // Signals Provision is the authoritative source of the trade RR.
+                // Fixed RR means exact ratio; Minimum RR means at least that ratio;
+                // Custom & Default keeps the configured custom price-level ratio and
+                // uses the provision RR as its default when no valid custom target exists.
+                var providerRrValue = Number(window.PT_PROVIDER_RISK_REWARD);
+                var localRrValue = Number(root.riskReward);
+                var hasProviderRr = Number.isFinite(providerRrValue) && providerRrValue > 0;
+                var hasLocalRr = Number.isFinite(localRrValue) && localRrValue > 0;
+                var rr = hasProviderRr ? providerRrValue : (hasLocalRr ? localRrValue : 1);
+                var rrPolicy = String(window.PT_PROVIDER_RISK_REWARD_TYPE || 'fixed_risk_reward').toLowerCase().trim();
+                if (['fixed_risk_reward','minimum_risk_reward','custom_and_default_risk_reward'].indexOf(rrPolicy) < 0) {
+                    rrPolicy = 'fixed_risk_reward';
+                }
+                var riskDistanceForTarget = Math.abs(entryPrice - slPrice);
+                if (!(riskDistanceForTarget > 0) || !Number.isFinite(riskDistanceForTarget)) return;
+
+                var provisionTarget = isLong
+                    ? entryPrice + (riskDistanceForTarget * rr)
+                    : entryPrice - (riskDistanceForTarget * rr);
+                var configuredTpPrice = root.takeProfitType === 'risk_reward'
+                    ? provisionTarget
+                    : (tpC ? ptPrice(tpC, tpResolvedLevel) : null);
                 var tpPrice = configuredTpPrice;
                 var minimumRiskRewardApplied = false;
-                // HARD RULE: price-level take profit can never be less than 1:1.
-                // If the configured price is too close, on the wrong side, or gives < 1R,
-                // clamp it to exactly one risk distance from entry in the profitable direction.
-                if(root.takeProfitType!=='risk_reward' && riskDistanceForTarget>0 && tpPrice!==null && Number.isFinite(Number(tpPrice))){
-                    var minimumTarget=isLong ? entryPrice+riskDistanceForTarget : entryPrice-riskDistanceForTarget;
-                    var actualReward=isLong ? Number(tpPrice)-entryPrice : entryPrice-Number(tpPrice);
-                    if(!(actualReward>=riskDistanceForTarget)) { tpPrice=minimumTarget; minimumRiskRewardApplied=true; }
+                var effectiveTpType = root.takeProfitType === 'risk_reward' ? 'risk reward' : 'price level';
+
+                if (root.takeProfitType === 'risk_reward') {
+                    // Risk/reward mode must use the ratio saved in Signals Provision.
+                    // Do not silently substitute 1:1 when an active provision exists.
+                    if (hasProviderRr || hasLocalRr) {
+                        tpPrice = provisionTarget;
+                    } else {
+                        console.warn('[programme_training] No valid Signals Provision or saved RR was found; using the legacy 1:1 default.');
+                        tpPrice = isLong
+                            ? entryPrice + riskDistanceForTarget
+                            : entryPrice - riskDistanceForTarget;
+                    }
+                    configuredTpPrice = tpPrice;
+                    effectiveTpType = 'risk reward';
+                } else {
+                    var actualReward = (tpPrice !== null && Number.isFinite(Number(tpPrice)))
+                        ? (isLong ? Number(tpPrice) - entryPrice : entryPrice - Number(tpPrice))
+                        : null;
+                    var actualRiskReward = (actualReward !== null && riskDistanceForTarget > 0)
+                        ? actualReward / riskDistanceForTarget
+                        : null;
+
+                    if (hasProviderRr && rrPolicy === 'fixed_risk_reward') {
+                        // Fixed means exact 1:R, even if an old saved setup still has
+                        // a price-level TP selected. This keeps the provision contract
+                        // authoritative and makes the effective target unambiguous.
+                        tpPrice = provisionTarget;
+                        effectiveTpType = 'risk reward';
+                    } else if (hasProviderRr && rrPolicy === 'minimum_risk_reward') {
+                        // A custom price-level target may exceed the requested minimum,
+                        // but it can never fall below the provision's minimum ratio.
+                        if (actualRiskReward === null || actualRiskReward < rr) {
+                            tpPrice = provisionTarget;
+                            minimumRiskRewardApplied = true;
+                            effectiveTpType = 'risk reward';
+                        }
+                    } else if (hasProviderRr && rrPolicy === 'custom_and_default_risk_reward') {
+                        // Preserve a valid custom price-level ratio. The saved provision
+                        // RR is the default target only when the custom target is invalid
+                        // or lies on the wrong side of the entry.
+                        if (!(actualReward !== null && actualReward > 0)) {
+                            tpPrice = provisionTarget;
+                            effectiveTpType = 'risk reward';
+                        }
+                    } else {
+                        // Backward-compatible behaviour when no Signals Provision RR
+                        // exists: keep the prior 1:1 minimum for manually configured
+                        // price-level targets.
+                        if (actualReward === null || !(actualReward >= riskDistanceForTarget)) {
+                            tpPrice = isLong
+                                ? entryPrice + riskDistanceForTarget
+                                : entryPrice - riskDistanceForTarget;
+                            minimumRiskRewardApplied = true;
+                            effectiveTpType = 'risk reward';
+                        }
+                    }
                 }
+
+                if (tpPrice === null || !Number.isFinite(Number(tpPrice))) return;
                 var tradeState=ptEvaluateTradeOutcome(candles,triggerIndex,slPrice,tpPrice,order);
                 var slTrigger=tradeState.slTriggerIndex;
                 var tpTrigger=tradeState.tpTriggerIndex;
@@ -6140,7 +6248,7 @@ try {
                 var resolvedChartTimeframe = String(PT_CURRENT_TIMEFRAME).toLowerCase();
                 var tradeRecord = {rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:resolvedFamilyNumber,confirmationRootId:resolvedConfirmationRootId||null,familySignature:resolvedFamilySignature,timeframe:resolvedChartTimeframe,sourceTimeframe:resolvedChartTimeframe,dataMode:'main',orderType:order,
                     entryIndex:actualEntryIndex,entryAtIndex:entryAtIndex,entryName:targetLabel(root,root.entryFrom),entryPriceLevel:entryResolvedLevel,entryPrice:entryPrice,entryTime:entryC?stamp(entryC):null,entryAtTime:stamp(entryAtC),
-                    slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:root.takeProfitType==='risk_reward'?'risk reward':'price level',
+                    slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:effectiveTpType,
                     riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,isShort:isShort,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
                     triggerIndex:triggerIndex,entryTriggerTime:triggerIndex!=null?stamp(candles[triggerIndex]):null,slTriggerIndex:slTrigger,tpTriggerIndex:tpTrigger,outcome:outcome,
                     slTriggerTime:slTrigger!=null?stamp(candles[slTrigger]):null,tpTriggerTime:tpTrigger!=null?stamp(candles[tpTrigger]):null};
@@ -6732,7 +6840,7 @@ try {
                 var stateClass=t.outcome==='stoploss hit'?'loss':(t.outcome==='take profit reached'?'profit':(t.outcome==='in trade'?'active':'pending'));
                 var rrDisplay=(t.riskReward!==null && Number.isFinite(Number(t.riskReward)))?'1 : '+Number(t.riskReward).toLocaleString(undefined,{maximumFractionDigits:3}):'1 : unavailable';
                 html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span>'+(t.confirmationRootName?'<span class="pt-rd-order">'+ptEscapeHtml(t.confirmationRootName)+'</span>':'')+'</div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
-                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime||'Awaiting entry trigger')+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Risk/reward target':'Configured price level · minimum 1:1 enforced')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
+                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime||'Awaiting entry trigger')+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Signals Provision risk/reward target':'Configured price level · Signals Provision policy applied')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
                 html+='<div class="pt-rd-details"><div><span>Entry at (anchor candle)</span><b>'+ptEscapeHtml(t.entryName)+' · '+ptEscapeHtml(t.entryAtTime||'—')+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
                 if(t.tpType==='risk reward') html+='<div><span>Take profit type</span><b>Risk/reward target</b></div>';
                 else html+='<div><span>Take profit at</span><b>'+ptEscapeHtml(t.tpName||'—')+' · '+ptEscapeHtml(t.tpTime||'—')+'</b></div>';
@@ -9019,6 +9127,7 @@ try {
                 takeProfitFrom: '',
                 takeProfitType: 'risk_reward',
                 takeProfitPriceLevel: 'high',
+                riskReward: null,
                 trees: [],
                 drawings: []
             };
@@ -9059,6 +9168,7 @@ try {
                 takeProfitFrom: '',
                 takeProfitType: 'risk_reward',
                 takeProfitPriceLevel: 'high',
+                riskReward: null,
                 applyToChart: true,
                 tradeFor: 'root',
                 confirmationRoots: [],
@@ -9098,6 +9208,7 @@ try {
                     take_profit_at: (root.tradeFor || 'root') === 'root' ? (root.takeProfitFrom || '') : '',
                     take_profit_type: (root.tradeFor || 'root') === 'root' ? (root.takeProfitType || 'risk_reward') : 'risk_reward',
                     take_profit_price_level: (root.tradeFor || 'root') === 'root' && root.takeProfitType !== 'risk_reward' ? (root.takeProfitPriceLevel || '') : null,
+                    risk_reward: (root.tradeFor || 'root') === 'root' && root.riskReward != null && Number.isFinite(Number(root.riskReward)) ? Number(root.riskReward) : null,
                     trees: [],
                     drawings: [],
                     confirmation_roots: []

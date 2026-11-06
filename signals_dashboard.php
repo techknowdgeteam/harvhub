@@ -3589,7 +3589,7 @@ if ($programme && !empty($email)) {
                 <div>
                     <div class="sd-card-title">Signals</div>
                     <div class="sd-card-desc" id="sdTradesCardDesc">
-                        Signals generated from this programme for <?= count($activeInvestorIdSet) ?> active investor<?= count($activeInvestorIdSet) === 1 ? '' : 's' ?>
+                        Trade Signals generated from this programme for <?= count($activeInvestorIdSet) ?> active investor<?= count($activeInvestorIdSet) === 1 ? '' : 's' ?>
                     </div>
                 </div>
             </div>
@@ -4400,7 +4400,7 @@ if ($programme && !empty($email)) {
             var ac = parseInt(data.active_investor_count, 10) || 0;
             updateText(
                 tradesDescEl,
-                'Trades generated from this programme for ' + ac + ' active investor' + (ac === 1 ? '' : 's'),
+                'Trade Signals generated from this programme for ' + ac + ' active investor' + (ac === 1 ? '' : 's'),
                 true
             );
         }

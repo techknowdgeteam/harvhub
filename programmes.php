@@ -209,6 +209,598 @@ if (!function_exists('resolveUserSubAccountIdById')) {
 }
 
 // =====================================================================
+// INVESTOR READ-ONLY DATA HELPERS
+// These functions only SELECT saved programme data. They deliberately do
+// not invoke the signals challenge evaluator or analytics write/sync code.
+// =====================================================================
+if (!function_exists('progInvestorTableColumns')) {
+    function progInvestorTableColumns(PDO $pdo, string $table): array {
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) return [];
+        try {
+            $q = $pdo->query('SHOW COLUMNS FROM `' . $table . '`');
+            return $q ? $q->fetchAll(PDO::FETCH_COLUMN) : [];
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+}
+
+if (!function_exists('progInvestorTableExists')) {
+    function progInvestorTableExists(PDO $pdo, string $table): bool {
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) return false;
+        try {
+            $q = $pdo->query('SHOW TABLES LIKE ' . $pdo->quote($table));
+            return (bool)($q ? $q->fetchColumn() : false);
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+}
+
+if (!function_exists('progInvestorJsonList')) {
+    function progInvestorJsonList($raw): array {
+        if (is_array($raw)) $decoded = $raw;
+        else {
+            $decoded = json_decode((string)$raw, true);
+            if (!is_array($decoded)) $decoded = [];
+        }
+        $out = [];
+        foreach ($decoded as $value) {
+            if (is_array($value)) {
+                if (isset($value['date']) && is_scalar($value['date'])) {
+                    $value = (string)$value['date'];
+                } else {
+                    continue;
+                }
+            }
+            if (!is_scalar($value)) continue;
+            $value = trim((string)$value);
+            if ($value !== '') $out[$value] = $value;
+        }
+        return array_values($out);
+    }
+}
+
+if (!function_exists('progInvestorParseList')) {
+    function progInvestorParseList($raw): array {
+        if ($raw === null || $raw === '') return [];
+        if (is_array($raw)) {
+            $items = [];
+            array_walk_recursive($raw, static function($value) use (&$items) { $items[] = $value; });
+        } else {
+            $value = trim((string)$raw);
+            if ($value === '') return [];
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                $items = [];
+                array_walk_recursive($decoded, static function($item) use (&$items) { $items[] = $item; });
+            } else {
+                $items = preg_split('/\s*,\s*/', trim($value, " \t\n\r\0\x0B[]{}\"'"));
+            }
+        }
+        $out = [];
+        foreach ($items as $item) {
+            $item = trim((string)$item);
+            if ($item === '') continue;
+            foreach (preg_split('/\s*,\s*/', $item) as $part) {
+                $part = trim($part, " \t\n\r\0\x0B[]{}\"'");
+                if ($part !== '') $out[$part] = $part;
+            }
+        }
+        return array_values($out);
+    }
+}
+
+if (!function_exists('progInvestorFetchConfigRows')) {
+    function progInvestorFetchConfigRows(PDO $pdo, string $table, int $programmeId, int $developerId): array {
+        $columns = progInvestorTableColumns($pdo, $table);
+        if (!$columns) return [];
+        $map = [];
+        foreach ($columns as $column) $map[strtolower((string)$column)] = (string)$column;
+        $programmeColumn = null;
+        foreach (['programme_id', 'programmeid', 'program_id'] as $candidate) {
+            if (isset($map[$candidate])) { $programmeColumn = $map[$candidate]; break; }
+        }
+        $userColumn = null;
+        foreach (['user_id', 'userid', 'developerid'] as $candidate) {
+            if (isset($map[$candidate])) { $userColumn = $map[$candidate]; break; }
+        }
+        if (!$programmeColumn || !$userColumn) return [];
+        try {
+            $q = $pdo->prepare('SELECT * FROM `' . $table . '` WHERE `' . $programmeColumn . '` = ? AND `' . $userColumn . '` = ?');
+            $q->execute([$programmeId, $developerId]);
+            return $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) {
+            error_log('Investor programme configuration read failed for ' . $table . ': ' . $e->getMessage());
+            return [];
+        }
+    }
+}
+
+if (!function_exists('progInvestorTfMs')) {
+    function progInvestorTfMs($timeframe): int {
+        $tf = strtolower(trim((string)$timeframe));
+        if (!preg_match('/^(\d+)\s*([mhdw])$/', $tf, $m)) return PHP_INT_MAX;
+        return (int)$m[1] * ['m'=>60000, 'h'=>3600000, 'd'=>86400000, 'w'=>604800000][$m[2]];
+    }
+}
+
+if (!function_exists('progInvestorLoadRoots')) {
+    function progInvestorLoadRoots(PDO $pdo, int $programmeId, int $developerId): array {
+        $roots = [];
+        $ensureRoot = static function(int $rootId, string $rootName = '') use (&$roots): void {
+            if ($rootId <= 0) return;
+            if (!isset($roots[$rootId])) {
+                $roots[$rootId] = [
+                    'root_id'=>$rootId,
+                    'root_name'=>$rootName !== '' ? $rootName : 'Strategy ' . $rootId,
+                    'timeframes'=>[], 'trade_enabled'=>false, 'trade_for'=>'root', 'confirmations'=>[]
+                ];
+            } elseif ($rootName !== '') {
+                $roots[$rootId]['root_name'] = $rootName;
+            }
+        };
+
+        $mainRows = progInvestorFetchConfigRows($pdo, 'programme_training_configuration', $programmeId, $developerId);
+        foreach ($mainRows as $row) {
+            $rootId = (int)($row['root_id'] ?? 0);
+            if ($rootId <= 0) continue;
+            $ensureRoot($rootId, trim((string)($row['root_name'] ?? '')));
+            foreach (progInvestorParseList($row['timeframe'] ?? '') as $tf) $roots[$rootId]['timeframes'][] = strtolower($tf);
+            $tradeFor = strtolower(trim((string)($row['trade_for'] ?? 'root')));
+            if ($tradeFor !== '') $roots[$rootId]['trade_for'] = $tradeFor;
+            if ($tradeFor === 'root' && (int)($row['use_for_trade'] ?? 0) === 1) $roots[$rootId]['trade_enabled'] = true;
+            $legacyConfirmationId = (int)($row['confirmation_root_id'] ?? 0);
+            if ($legacyConfirmationId > 0 && !isset($roots[$rootId]['confirmations'][$legacyConfirmationId])) {
+                $roots[$rootId]['confirmations'][$legacyConfirmationId] = [
+                    'confirmation_root_id'=>$legacyConfirmationId,
+                    'confirmation_root_name'=>'Confirmation ' . $legacyConfirmationId,
+                    'timeframes'=>[], 'trade_enabled'=>false
+                ];
+            }
+        }
+
+        $confirmationRows = progInvestorFetchConfigRows($pdo, 'programme_training_confirmation_configuration', $programmeId, $developerId);
+        foreach ($confirmationRows as $row) {
+            $parentId = (int)($row['parent_root_id'] ?? $row['parentrootid'] ?? $row['parent_id'] ?? 0);
+            $confirmationId = (int)($row['root_id'] ?? $row['confirmation_root_id'] ?? 0);
+            if ($parentId <= 0 || $confirmationId <= 0) continue;
+            $ensureRoot($parentId);
+            $confirmationName = trim((string)($row['root_name'] ?? $row['confirmation_root_name'] ?? ''));
+            if (!isset($roots[$parentId]['confirmations'][$confirmationId])) {
+                $roots[$parentId]['confirmations'][$confirmationId] = [
+                    'confirmation_root_id'=>$confirmationId,
+                    'confirmation_root_name'=>$confirmationName !== '' ? $confirmationName : 'Confirmation ' . $confirmationId,
+                    'timeframes'=>[], 'trade_enabled'=>false
+                ];
+            } elseif ($confirmationName !== '') {
+                $roots[$parentId]['confirmations'][$confirmationId]['confirmation_root_name'] = $confirmationName;
+            }
+            foreach (progInvestorParseList($row['timeframe'] ?? $row['timeframes'] ?? '') as $tf) $roots[$parentId]['confirmations'][$confirmationId]['timeframes'][] = strtolower($tf);
+            if ((int)($row['use_for_trade'] ?? $row['trade_enabled'] ?? $row['is_trade_enabled'] ?? 0) === 1) {
+                $roots[$parentId]['confirmations'][$confirmationId]['trade_enabled'] = true;
+            }
+        }
+
+        foreach ($roots as &$root) {
+            $root['timeframes'] = array_values(array_unique(array_filter(array_map(static function($v) { return strtolower(trim((string)$v)); }, $root['timeframes']))));
+            usort($root['timeframes'], static function($a, $b) {
+                $aa = progInvestorTfMs($a); $bb = progInvestorTfMs($b);
+                return $aa === $bb ? strcmp($a, $b) : ($aa <=> $bb);
+            });
+            foreach ($root['confirmations'] as &$confirmation) {
+                $confirmation['timeframes'] = array_values(array_unique(array_filter(array_map(static function($v) { return strtolower(trim((string)$v)); }, $confirmation['timeframes']))));
+                usort($confirmation['timeframes'], static function($a, $b) {
+                    $aa = progInvestorTfMs($a); $bb = progInvestorTfMs($b);
+                    return $aa === $bb ? strcmp($a, $b) : ($aa <=> $bb);
+                });
+            }
+            unset($confirmation);
+            ksort($root['confirmations'], SORT_NUMERIC);
+            $root['confirmations'] = array_values($root['confirmations']);
+        }
+        unset($root);
+        ksort($roots, SORT_NUMERIC);
+        return array_values($roots);
+    }
+}
+
+if (!function_exists('progInvestorTimezone')) {
+    function progInvestorTimezone(string $name): DateTimeZone {
+        try { return new DateTimeZone(trim($name) !== '' ? trim($name) : 'UTC'); }
+        catch (Throwable $e) { return new DateTimeZone('UTC'); }
+    }
+}
+
+if (!function_exists('progInvestorFetchProvision')) {
+    function progInvestorFetchProvision(
+        PDO $pdo,
+        int $developerId,
+        int $programmeId,
+        string $programmeTimezone = '',
+        bool $isAdvertised = false
+    ): array {
+        $empty = [
+            'available' => false,
+            'begin_test' => 0,
+            'period' => 'daily',
+            'trades_count' => null,
+            'expected_win' => null,
+            'consecutive_loss' => null,
+            'status' => '',
+            'failed_period_index' => null,
+            'windows' => [],
+            'current_index' => 0
+        ];
+
+        if ($developerId <= 0 || $programmeId <= 0 || !progInvestorTableExists($pdo, 'signals_provider_interest')) {
+            return $empty;
+        }
+
+        try {
+            // Display the latest saved request only. This is a SELECT-only path;
+            // it never evaluates, advances, resets or changes the provision.
+            $q = $pdo->prepare(
+                'SELECT * FROM `signals_provider_interest`
+                 WHERE `user_id` = ? AND `programme_id` = ?
+                 ORDER BY `id` DESC LIMIT 1'
+            );
+            $q->execute([$developerId, $programmeId]);
+            $row = $q->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            error_log('Investor provision read failed: ' . $e->getMessage());
+            return $empty;
+        }
+
+        if (!$row) return $empty;
+
+        $period = strtolower(trim((string)($row['trades_provision'] ?? 'daily')));
+        if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) $period = 'daily';
+
+        $timezoneName = trim((string)($row['challenge_timezone'] ?? ''));
+        if ($timezoneName === '') $timezoneName = trim($programmeTimezone);
+        $timezone = progInvestorTimezone($timezoneName);
+        $now = new DateTimeImmutable('now', $timezone);
+        $todayDate = $now->format('Y-m-d');
+
+        $startedAt = null;
+        $startedRaw = trim((string)($row['signal_testing_started_at'] ?? ''));
+        if ($startedRaw !== '') {
+            try { $startedAt = new DateTimeImmutable($startedRaw, $timezone); }
+            catch (Throwable $e) { $startedAt = null; }
+        }
+
+        $challengeEnd = null;
+        $endRaw = trim((string)($row['challenge_end_at'] ?? ''));
+        if ($endRaw !== '') {
+            try { $challengeEnd = new DateTimeImmutable($endRaw, $timezone); }
+            catch (Throwable $e) { $challengeEnd = null; }
+        }
+
+        $progressColumn = $period === 'weekly'
+            ? 'weekly_progress_json'
+            : ($period === 'monthly' ? 'monthly_progress_json' : 'daily_progress_json');
+
+        $periodRows = json_decode((string)($row[$progressColumn] ?? '[]'), true);
+        if (!is_array($periodRows)) $periodRows = [];
+        $periodRows = array_values(array_filter($periodRows, 'is_array'));
+        usort($periodRows, static function ($a, $b) {
+            $ai = (int)($a['index'] ?? 0);
+            $bi = (int)($b['index'] ?? 0);
+            return $ai === $bi
+                ? strcmp((string)($a['start_date'] ?? ''), (string)($b['start_date'] ?? ''))
+                : ($ai <=> $bi);
+        });
+
+        $windows = [];
+        if ($startedAt !== null && $startedAt <= $now) {
+            $testStartDate = $startedAt->format('Y-m-d');
+            $testEndDate = $challengeEnd ? $challengeEnd->format('Y-m-d') : '';
+
+            foreach ($periodRows as $periodRow) {
+                $rawStart = trim((string)($periodRow['start_date'] ?? ''));
+                $rawEnd = trim((string)($periodRow['end_date'] ?? $rawStart));
+                if ($rawStart === '') continue;
+
+                try {
+                    $periodStart = new DateTimeImmutable($rawStart, $timezone);
+                    $periodEnd = new DateTimeImmutable($rawEnd !== '' ? $rawEnd : $rawStart, $timezone);
+                } catch (Throwable $e) {
+                    continue;
+                }
+
+                $periodStartDate = $periodStart->format('Y-m-d');
+                $periodEndDate = $periodEnd->format('Y-m-d');
+
+                // Every saved checkpoint in the scheduled test window is retained
+                // for a programme that has not yet been advertised. This includes
+                // locked future Day / Week / Month windows, even when not completed.
+                if ($periodEndDate < $testStartDate) continue;
+                if ($testEndDate !== '' && $periodStartDate > $testEndDate) continue;
+
+                $visibleStart = max($periodStartDate, $testStartDate);
+                $visibleEnd = $periodEndDate;
+                if ($testEndDate !== '' && $visibleEnd > $testEndDate) {
+                    $visibleEnd = $testEndDate;
+                }
+
+                // Once advertised, the test window is presented only through
+                // today's date. Future checkpoints are hidden and the latest
+                // current/past checkpoint becomes the default front window.
+                if ($isAdvertised) {
+                    if ($periodStartDate > $todayDate) continue;
+                    $visibleEnd = min($visibleEnd, $todayDate);
+                }
+
+                if ($visibleEnd < $visibleStart) continue;
+
+                $checkpointIndex = (int)($periodRow['index'] ?? count($windows));
+                $checkpointStatus = strtolower(trim((string)($periodRow['status'] ?? '')));
+
+                $windows[] = [
+                    'index' => $checkpointIndex,
+                    'label' => trim((string)($periodRow['label'] ?? '')) !== ''
+                        ? (string)$periodRow['label']
+                        : ucfirst($period) . ' ' . ($checkpointIndex + 1),
+                    'start_date' => $visibleStart,
+                    'end_date' => $visibleEnd,
+                    'status' => $checkpointStatus,
+                    'locked' => !empty($periodRow['locked']) || $checkpointStatus === 'locked',
+                    'trades' => (int)($periodRow['trades'] ?? 0),
+                    'wins' => (int)($periodRow['wins'] ?? 0),
+                    'consecutive_losses' => (int)($periodRow['consecutive_losses'] ?? 0),
+                    'trades_passed' => !empty($periodRow['trades_passed']),
+                    'wins_passed' => !empty($periodRow['wins_passed']),
+                    'loss_gate_passed' => !empty($periodRow['loss_gate_passed'])
+                ];
+            }
+        }
+
+        usort($windows, static function ($a, $b) {
+            $ai = (int)($a['index'] ?? 0);
+            $bi = (int)($b['index'] ?? 0);
+            return $ai <=> $bi;
+        });
+
+        $currentIndex = 0;
+        if ($windows) {
+            if ($isAdvertised) {
+                // The latest window whose start is not after today is the cover.
+                $currentIndex = count($windows) - 1;
+            } else {
+                $savedCurrentIndex = (int)($row['challenge_current_period_index'] ?? -1);
+                $foundCurrent = false;
+                foreach ($windows as $position => $window) {
+                    if ((int)$window['index'] === $savedCurrentIndex) {
+                        $currentIndex = $position;
+                        $foundCurrent = true;
+                        break;
+                    }
+                }
+                if (!$foundCurrent) {
+                    foreach ($windows as $position => $window) {
+                        if ((string)$window['start_date'] <= $todayDate) $currentIndex = $position;
+                    }
+                }
+            }
+        }
+
+        return [
+            'available' => true,
+            'begin_test' => (int)($row['begin_test'] ?? 0),
+            'period' => $period,
+            'trades_count' => $row['trades_count'] ?? null,
+            'expected_win' => $row['expected_win_count'] ?? null,
+            'consecutive_loss' => $row['consecutive_expected_loss'] ?? null,
+            'status' => strtolower(trim((string)($row['interest_status'] ?? ''))),
+            'failed_period_index' => array_key_exists('challenge_failed_period_index', $row)
+                && $row['challenge_failed_period_index'] !== null
+                    ? (int)$row['challenge_failed_period_index']
+                    : null,
+            'windows' => $windows,
+            'current_index' => $currentIndex
+        ];
+    }
+}
+
+if (!function_exists('progInvestorCanViewProgramme')) {
+    function progInvestorCanViewProgramme(PDO $pdo, array $programme, int $viewerId, int $activeSubAccountId, int $linkedProgrammeId): bool {
+        $pid = (int)($programme['id'] ?? 0);
+        $isPublic = (int)($programme['advertisement'] ?? 0) === 1
+            && (int)($programme['server_advertisement_approval'] ?? 0) === 1
+            && (int)($programme['visibility'] ?? 0) === 1;
+        if ($isPublic || ($linkedProgrammeId > 0 && $linkedProgrammeId === $pid)) return true;
+        try {
+            $q = $pdo->prepare('SELECT `id` FROM `programme_investors` WHERE `investorid` = ? AND (`sub_account_id` = ? OR `sub_account_id` IS NULL) AND `programme_id` = ? LIMIT 1');
+            $q->execute([$viewerId, $activeSubAccountId, $pid]);
+            return (bool)$q->fetchColumn();
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+}
+
+if (!function_exists('progInvestorFetchAnalytics')) {
+    function progInvestorFetchAnalytics(PDO $pdo, int $programmeId, int $developerId, $selectedSymbolsRaw = ''): array {
+        $result = ['rows'=>[], 'roots'=>[], 'symbols'=>[], 'error'=>''];
+        $mainRows = progInvestorFetchConfigRows($pdo, 'programme_training_configuration', $programmeId, $developerId);
+        $hasConfiguredRoots = false;
+        foreach ($mainRows as $row) {
+            if ((int)($row['root_id'] ?? 0) > 0) { $hasConfiguredRoots = true; break; }
+        }
+        $roots = $hasConfiguredRoots ? progInvestorLoadRoots($pdo, $programmeId, $developerId) : [];
+        if (!progInvestorTableExists($pdo, 'programme_analytics')) {
+            $result['error'] = 'The programme analytics table is not installed.';
+            return $result;
+        }
+        $columns = progInvestorTableColumns($pdo, 'programme_analytics');
+        $columnMap = array_fill_keys(array_map('strtolower', $columns), true);
+        if (!isset($columnMap['programme_id']) || !isset($columnMap['userid'])) {
+            $result['error'] = 'The programme analytics table is missing its programme or developer reference columns.';
+            return $result;
+        }
+        try {
+            $q = $pdo->prepare('SELECT * FROM `programme_analytics` WHERE `programme_id` = ? AND `userid` = ? ORDER BY `id` ASC');
+            $q->execute([$programmeId, $developerId]);
+            $rows = $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) {
+            error_log('Investor programme analytics read failed: ' . $e->getMessage());
+            $result['error'] = 'Programme analytics could not be loaded.';
+            return $result;
+        }
+
+        // Older analytics installations may not contain live_trades. Keep those
+        // legacy rows visible in the Live source without altering the database.
+        foreach ($rows as &$row) {
+            if (!array_key_exists('live_trades', $row)) $row['live_trades'] = 1;
+        }
+        unset($row);
+
+        // Build an internal-only strategy/confirmation lookup. It is deliberately
+        // never returned to the investor's browser.
+        if (!$roots && $rows) {
+            $fallbackRoots = [];
+            foreach ($rows as $row) {
+                $rid = (int)($row['root_id'] ?? 0);
+                if ($rid <= 0) continue;
+                if (!isset($fallbackRoots[$rid])) {
+                    $fallbackRoots[$rid] = [
+                        'root_id'=>$rid,
+                        'root_name'=>trim((string)($row['root_name'] ?? '')) ?: 'Strategy ' . $rid,
+                        'timeframes'=>[], 'trade_enabled'=>false, 'trade_for'=>'root', 'confirmations'=>[]
+                    ];
+                }
+                $tf = strtolower(trim((string)($row['timeframe'] ?? '')));
+                if ($tf !== '') $fallbackRoots[$rid]['timeframes'][] = $tf;
+                if ((int)($row['trade_configured'] ?? 0) === 1) $fallbackRoots[$rid]['trade_enabled'] = true;
+                $cid = (int)($row['confirmation_root_id'] ?? 0);
+                if ($cid > 0) {
+                    if (!isset($fallbackRoots[$rid]['confirmations'][$cid])) {
+                        $fallbackRoots[$rid]['confirmations'][$cid] = [
+                            'confirmation_root_id'=>$cid,
+                            'confirmation_root_name'=>trim((string)($row['confirmation_root_name'] ?? '')) ?: 'Confirmation ' . $cid,
+                            'timeframes'=>[], 'trade_enabled'=>false
+                        ];
+                    }
+                    $ctf = strtolower(trim((string)($row['source_timeframe'] ?? $row['timeframe'] ?? '')));
+                    if ($ctf !== '') $fallbackRoots[$rid]['confirmations'][$cid]['timeframes'][] = $ctf;
+                    if ((int)($row['trade_configured'] ?? 0) === 1) $fallbackRoots[$rid]['confirmations'][$cid]['trade_enabled'] = true;
+                }
+            }
+            foreach ($fallbackRoots as &$root) {
+                $root['timeframes'] = array_values(array_unique($root['timeframes']));
+                ksort($root['confirmations'], SORT_NUMERIC);
+                foreach ($root['confirmations'] as &$confirmation) $confirmation['timeframes'] = array_values(array_unique($confirmation['timeframes']));
+                unset($confirmation);
+                $root['confirmations'] = array_values($root['confirmations']);
+            }
+            unset($root);
+            ksort($fallbackRoots, SORT_NUMERIC);
+            $roots = array_values($fallbackRoots);
+        }
+
+        $symbols = progInvestorParseList($selectedSymbolsRaw);
+        if (!$symbols) {
+            $symbolSet = [];
+            foreach ($rows as $row) {
+                $symbol = trim((string)($row['symbol'] ?? ''));
+                if ($symbol !== '') $symbolSet[$symbol] = $symbol;
+            }
+            $symbols = array_values($symbolSet);
+        }
+        $symbols = array_values(array_unique(array_filter(array_map('strval', $symbols))));
+        sort($symbols, SORT_NATURAL | SORT_FLAG_CASE);
+        $symbolLookup = array_fill_keys($symbols, true);
+
+        $rootLookup = [];
+        foreach ($roots as $root) {
+            $rid = (int)($root['root_id'] ?? 0);
+            if ($rid > 0) $rootLookup[$rid] = $root;
+        }
+        $rowMatchesTimeframes = static function(array $row, array $timeframes): bool {
+            if (!$timeframes) return false;
+            $candidates = [
+                strtolower(trim((string)($row['timeframe'] ?? ''))),
+                strtolower(trim((string)($row['source_timeframe'] ?? '')))
+            ];
+            foreach ($candidates as $candidate) {
+                if ($candidate !== '' && in_array($candidate, $timeframes, true)) return true;
+            }
+            return false;
+        };
+
+        // Only the programme's selected symbols are included. All configured
+        // strategies and confirmations are combined here, and all configured
+        // timeframes are retained. Internal IDs/configuration are then stripped.
+        $publicRows = [];
+        foreach ($rows as $row) {
+            $symbol = trim((string)($row['symbol'] ?? ''));
+            if ($symbol === '' || !isset($symbolLookup[$symbol])) continue;
+            if ((int)($row['matched_family'] ?? 0) === 0) continue;
+
+            $rootId = (int)($row['root_id'] ?? 0);
+            $root = $rootLookup[$rootId] ?? null;
+            if (!$root) continue;
+            $rootTimeframes = array_values(array_unique(array_map('strtolower', $root['timeframes'] ?? [])));
+            $confirmationId = (int)($row['confirmation_root_id'] ?? 0);
+
+            if ($confirmationId > 0) {
+                $confirmation = null;
+                foreach (($root['confirmations'] ?? []) as $candidate) {
+                    if ((int)($candidate['confirmation_root_id'] ?? 0) === $confirmationId) {
+                        $confirmation = $candidate;
+                        break;
+                    }
+                }
+                $confirmationTimeframes = $confirmation
+                    ? array_values(array_unique(array_map('strtolower', $confirmation['timeframes'] ?? [])))
+                    : [];
+                if (!$confirmation || !$confirmationTimeframes) continue;
+                if ($rootTimeframes && !$rowMatchesTimeframes($row, $rootTimeframes)) continue;
+                if (!$rowMatchesTimeframes($row, $confirmationTimeframes)) continue;
+            } elseif ($rootTimeframes && !$rowMatchesTimeframes($row, $rootTimeframes)) {
+                continue;
+            }
+
+            $outcome = strtolower(trim((string)($row['outcome'] ?? '')));
+            $normalizedOutcome = preg_replace('/[\\s_-]+/', ' ', $outcome);
+            $dateFields = ['entry_trigger_time', 'entry_anchor_time', 'event_time'];
+            if (in_array($normalizedOutcome, ['stoploss hit', 'closed in loss', 'closed loss', 'loss', 'losing'], true)) {
+                $dateFields = ['stoploss_trigger_time', 'close_time', 'closed_at', 'event_time', 'entry_trigger_time', 'entry_anchor_time'];
+            } elseif (in_array($normalizedOutcome, ['take profit reached', 'closed in profit', 'closed profit', 'profit', 'profitable'], true)) {
+                $dateFields = ['take_profit_trigger_time', 'close_time', 'closed_at', 'event_time', 'entry_trigger_time', 'entry_anchor_time'];
+            } elseif (in_array($normalizedOutcome, ['closed flat', 'breakeven', 'break even', 'closed at breakeven'], true)) {
+                $dateFields = ['breakeven_trigger_time', 'close_time', 'closed_at', 'event_time', 'entry_trigger_time', 'entry_anchor_time'];
+            }
+            $tradeDate = '';
+            foreach ($dateFields as $dateField) {
+                $dateValue = trim((string)($row[$dateField] ?? ''));
+                if ($dateValue !== '') { $tradeDate = substr($dateValue, 0, 10); break; }
+            }
+            if (!preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $tradeDate)) $tradeDate = '';
+
+            // This is the complete investor-facing row. No strategy IDs,
+            // confirmation IDs, family numbers/signatures, prices, directions,
+            // orders, chart identifiers or exact trigger timestamps are exposed.
+            $publicRows[] = [
+                'symbol' => $symbol,
+                'outcome' => (string)($row['outcome'] ?? ''),
+                'risk_reward' => $row['risk_reward'] ?? null,
+                'trade_configured' => (int)($row['trade_configured'] ?? 0),
+                'live_trades' => (int)($row['live_trades'] ?? 1),
+                'trade_date' => $tradeDate
+            ];
+        }
+
+        $result['rows'] = $publicRows;
+        $result['symbols'] = $symbols;
+        // Do not send roots or confirmation configuration to the client.
+        $result['roots'] = [];
+        return $result;
+    }
+}
+
+// =====================================================================
 // AJAX ROUTER
 // =====================================================================
 if (
@@ -217,6 +809,35 @@ if (
     && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest'
 ) {
     header('Content-Type: application/json');
+
+    // -------- READ-ONLY PROGRAMME ANALYTICS FOR INVESTORS --------
+    if (isset($_POST['get_programme_analytics'])) {
+        $pid = (int)($_POST['programme_id'] ?? 0);
+        if ($pid <= 0) {
+            echo json_encode(['success'=>false, 'message'=>'Invalid programme.']);
+            exit;
+        }
+        try {
+            $q = $pdo->prepare('SELECT `id`,`userid`,`program_name`,`visibility`,`advertisement`,`server_advertisement_approval`,`selected_symbols` FROM `programme` WHERE `id` = ? LIMIT 1');
+            $q->execute([$pid]);
+            $programme = $q->fetch(PDO::FETCH_ASSOC);
+            if (!$programme || !progInvestorCanViewProgramme($pdo, $programme, $userId, $activeSubAccountId, $linkedProgrammeId)) {
+                echo json_encode(['success'=>false, 'message'=>'Programme analytics are not available for this programme.']);
+                exit;
+            }
+            $data = progInvestorFetchAnalytics($pdo, $pid, (int)$programme['userid'], $programme['selected_symbols'] ?? '');
+            echo json_encode([
+                'success'=>true,
+                'programme_name'=>(string)($programme['program_name'] ?? 'Programme'),
+                'rows'=>$data['rows'],
+                'error'=>$data['error']
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        } catch (Throwable $e) {
+            error_log('Investor programme analytics endpoint failed: ' . $e->getMessage());
+            echo json_encode(['success'=>false, 'message'=>'Failed to load programme analytics.']);
+        }
+        exit;
+    }
 
     // -------- GET PROGRAMME DETAILS --------
     if (isset($_POST['get_programme_details'])) {
@@ -229,7 +850,7 @@ if (
         try {
             $stmt = $pdo->prepare("
                 SELECT p.id, p.userid, p.sub_account_id AS developer_sub_account_id,
-                       p.program_name, p.visibility, p.advertisement, p.broker, p.timezone,
+                       p.program_name, p.visibility, p.advertisement, p.server_advertisement_approval, p.broker, p.timezone,
                        h.fullname, h.first_name, h.last_name, h.username,
                        h.email AS developer_email
                 FROM programme p
@@ -245,14 +866,17 @@ if (
             $stmt->execute([$pid]);
             $programme = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$programme) {
-                echo json_encode(['success' => false, 'message' => 'Programme not found or not public.']);
+            if (!$programme || !progInvestorCanViewProgramme($pdo, $programme, $userId, $activeSubAccountId, $linkedProgrammeId)) {
+                echo json_encode(['success' => false, 'message' => 'Programme not found or not available to this investor.']);
                 exit;
             }
 
             $developerName  = resolveDeveloperDisplayName($programme);
             $programmeBroker = resolveProgrammeBroker($programme, $pdo);
             $programmeTimezone = trim((string)($programme['timezone'] ?? ''));
+            $isAdvertised = (int)($programme['advertisement'] ?? 0) === 1
+                && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
+            $provision = progInvestorFetchProvision($pdo, (int)$programme['userid'], $pid, $programmeTimezone, $isAdvertised);
 
             $stmt = $pdo->prepare("
                 SELECT contract_duration, developer_percentage, investor_percentage,
@@ -290,36 +914,7 @@ if (
             $developerPercent = $req && (int)$req['developer_percentage'] > 0 ? (int)$req['developer_percentage'] : $srvServerShare;
             $investorPercent  = $req && (int)$req['investor_percentage'] > 0 ? (int)$req['investor_percentage'] : $srvUserShare;
 
-            $analytics = [
-                'winrate'                    => null,
-                'lossrate'                   => null,
-                'risk_reward'                => null,
-                'period'                     => 'Daily',
-                'highest_drawdown'           => null,
-                'consecutive_sequential_loss'=> null,
-                'highest_trades_per_day'     => null,
-            ];
-            try {
-                $aStmt = $pdo->prepare("
-                    SELECT winrate, lossrate, risk_reward, period,
-                           highest_drawdown, consecutive_sequential_loss, highest_trades_per_day
-                    FROM programme_analytics
-                    WHERE programme_id = ?
-                    ORDER BY id ASC
-                    LIMIT 1
-                ");
-                $aStmt->execute([$pid]);
-                $aRow = $aStmt->fetch(PDO::FETCH_ASSOC);
-                if ($aRow) {
-                    $analytics['winrate']                     = $aRow['winrate'];
-                    $analytics['lossrate']                    = $aRow['lossrate'];
-                    $analytics['risk_reward']                 = $aRow['risk_reward'];
-                    $analytics['period']                      = resolvePeriodLabel($aRow['period'] ?? 'daily');
-                    $analytics['highest_drawdown']            = $aRow['highest_drawdown'];
-                    $analytics['consecutive_sequential_loss'] = $aRow['consecutive_sequential_loss'];
-                    $analytics['highest_trades_per_day']      = $aRow['highest_trades_per_day'];
-                }
-            } catch (PDOException $e) {}
+
 
             $alreadyInvested = false;
             try {
@@ -386,7 +981,7 @@ if (
                     'investor_percentage'       => $investorPercent,
                     'minimum_investment_amount' => $minInvestment,
                     'maximum_investment_amount' => $maxInvestment,
-                    'analytics'                 => $analytics,
+                    'provision'                 => $provision,
                 ],
                 'already_invested'   => $alreadyInvested,
                 'has_any_investment' => $hasAnyInvestment,
@@ -900,11 +1495,11 @@ try {
 
         $periodLabel = 'Daily';
         try {
-            $pStmt = $pdo->prepare("SELECT period FROM programme_analytics WHERE programme_id = ? ORDER BY id ASC LIMIT 1");
-            $pStmt->execute([$p['id']]);
+            $pStmt = $pdo->prepare("SELECT trades_provision FROM signals_provider_interest WHERE user_id = ? AND programme_id = ? ORDER BY id DESC LIMIT 1");
+            $pStmt->execute([(int)$p['userid'], (int)$p['id']]);
             $pRow = $pStmt->fetch(PDO::FETCH_ASSOC);
-            if ($pRow && !empty($pRow['period'])) $periodLabel = resolvePeriodLabel($pRow['period']);
-        } catch (PDOException $e) {}
+            if ($pRow && !empty($pRow['trades_provision'])) $periodLabel = resolvePeriodLabel($pRow['trades_provision']);
+        } catch (Throwable $e) {}
 
         $programmeLink = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://')
             . ($_SERVER['HTTP_HOST'] ?? '')
@@ -939,12 +1534,6 @@ try {
 // ==================== FETCH USER'S INVESTED PROGRAMME ====================
 $investedProgramme = null;
 $investedProgrammeData = null;
-$investedAnalytics = [
-    'winrate' => null, 'lossrate' => null, 'risk_reward' => null,
-    'period' => 'Daily',
-    'highest_drawdown' => null,
-    'consecutive_sequential_loss' => null, 'highest_trades_per_day' => null,
-];
 $investedReq = null;
 $investedTimezone = '';
 $cancelEligible = false;
@@ -955,7 +1544,7 @@ $hasPaymentRequirement   = false;
 if ($userHasProgramme) {
     try {
         $stmt = $pdo->prepare("
-            SELECT p.id, p.userid, p.program_name, p.visibility, p.advertisement, p.broker, p.timezone,
+            SELECT p.id, p.userid, p.program_name, p.visibility, p.advertisement, p.server_advertisement_approval, p.broker, p.timezone,
                    h.fullname, h.first_name, h.last_name, h.username,
                    h.email AS developer_email
             FROM programme p
@@ -985,27 +1574,7 @@ if ($userHasProgramme) {
             $investedReq = $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {}
 
-        try {
-            $stmt = $pdo->prepare("
-                SELECT winrate, lossrate, risk_reward, period,
-                       highest_drawdown, consecutive_sequential_loss, highest_trades_per_day
-                FROM programme_analytics
-                WHERE programme_id = ?
-                ORDER BY id ASC
-                LIMIT 1
-            ");
-            $stmt->execute([$activeProgrammeId]);
-            $aRow = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($aRow) {
-                $investedAnalytics['winrate']                     = $aRow['winrate'];
-                $investedAnalytics['lossrate']                    = $aRow['lossrate'];
-                $investedAnalytics['risk_reward']                 = $aRow['risk_reward'];
-                $investedAnalytics['period']                      = resolvePeriodLabel($aRow['period'] ?? 'daily');
-                $investedAnalytics['highest_drawdown']            = $aRow['highest_drawdown'];
-                $investedAnalytics['consecutive_sequential_loss'] = $aRow['consecutive_sequential_loss'];
-                $investedAnalytics['highest_trades_per_day']      = $aRow['highest_trades_per_day'];
-            }
-        } catch (PDOException $e) {}
+
 
         $srvRow = $pdo->query("SELECT contract_duration, min_broker_balance, server_share_percent, user_share_percent FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         $srvContractDuration = (int)($srvRow['contract_duration'] ?? 30);
@@ -1029,7 +1598,14 @@ if ($userHasProgramme) {
             'investor_percentage'       => $investedReq && (int)$investedReq['investor_percentage'] > 0 ? (int)$investedReq['investor_percentage'] : $srvUserShare,
             'minimum_investment_amount' => $investedReq && (float)$investedReq['minimum_investment_amount'] > 0 ? (float)$investedReq['minimum_investment_amount'] : $srvMinBrokerBalance,
             'maximum_investment_amount' => $investedReq ? (float)$investedReq['maximum_investment_amount'] : 0,
-            'analytics'                 => $investedAnalytics,
+            'provision'                 => progInvestorFetchProvision(
+                $pdo,
+                (int)$investedProgramme['userid'],
+                (int)$investedProgramme['id'],
+                $investedTimezone,
+                (int)($investedProgramme['advertisement'] ?? 0) === 1
+                    && (int)($investedProgramme['server_advertisement_approval'] ?? 0) === 1
+            ),
         ];
     }
 
@@ -1285,7 +1861,7 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
         document.body.style.overflow = '';
         delete document.body.dataset.progModalLocked;
         delete document.body.dataset.progModalY;
-        ['progDetailModal','progAlertModal','progConfirmModal','progCancelModal'].forEach(function (id) {
+        ['progDetailModal','progAlertModal','progConfirmModal','progCancelModal','progAnalyticsModal'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.classList.remove('active');
         });
@@ -1457,35 +2033,13 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
                         </div>
                     </div>
 
-                    <div class="prog-detail-section-title prog-item-stat-value">Analytics</div>
-                    <div class="prog-detail-grid prog-detail-grid-2col">
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Winrate</span>
-                            <span class="prog-detail-value"><?= $ip['analytics']['winrate'] !== null && $ip['analytics']['winrate'] !== '' ? htmlspecialchars(rtrim(rtrim(number_format((float)$ip['analytics']['winrate'], 2, '.', ''), '0'), '.')) . '%' : '—' ?></span>
-                        </div>
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Lossrate</span>
-                            <span class="prog-detail-value"><?= $ip['analytics']['lossrate'] !== null && $ip['analytics']['lossrate'] !== '' ? htmlspecialchars(rtrim(rtrim(number_format((float)$ip['analytics']['lossrate'], 2, '.', ''), '0'), '.')) . '%' : '—' ?></span>
-                        </div>
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Risk Reward</span>
-                            <span class="prog-detail-value"><?= $ip['analytics']['risk_reward'] !== null && $ip['analytics']['risk_reward'] !== '' ? htmlspecialchars('1:' . rtrim(rtrim(number_format((float)$ip['analytics']['risk_reward'], 2, '.', ''), '0'), '.')) : '—' ?></span>
-                        </div>
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Trades Provision</span>
-                            <span class="prog-detail-value"><?= htmlspecialchars($ip['analytics']['period']) ?></span>
-                        </div>
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Timezone</span>
-                            <span class="prog-detail-value"><?= !empty($ip['timezone_pretty']) ? htmlspecialchars($ip['timezone_pretty']) : '—' ?></span>
-                        </div>
-                        <div class="prog-detail-row">
-                            <span class="prog-detail-label">Consecutive Sequential Loss</span>
-                            <span class="prog-detail-value"><?= $ip['analytics']['consecutive_sequential_loss'] !== null && $ip['analytics']['consecutive_sequential_loss'] !== '' ? htmlspecialchars((string)$ip['analytics']['consecutive_sequential_loss']) : '—' ?></span>
-                        </div>
-                    </div>
+                    <div class="prog-investor-provision-mount"
+                         data-programme-id="<?= (int)$ip['id'] ?>"
+                         data-programme-name="<?= htmlspecialchars($ip['program_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>"
+                         data-provision="<?= htmlspecialchars(json_encode($ip['provision'] ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>"></div>
 
-                    <div class="prog-detail-section-title prog-item-stat-value">Requirements</div>
+                    <div class="prog-detail-section-title prog-item-stat-value">Investment Requirements</div>
+
                     <div class="prog-detail-grid">
                         <div class="prog-detail-row">
                             <span class="prog-detail-label">Contract Duration</span>
@@ -1548,6 +2102,30 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
         </div>
         <div class="prog-view-actions" id="progDetailActions">
             <button type="button" class="prog-modal-close" onclick="closeProgDetailModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="progAnalyticsModal" class="prog-modal prog-analytics-modal" aria-hidden="true">
+    <div class="prog-modal-content prog-modal-wide prog-analytics-modal-content">
+        <div class="prog-view-header prog-analytics-header">
+            <button type="button" class="prog-view-back" onclick="handleProgrammeAnalyticsHeaderBack()" aria-label="Back to programme">
+                <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <h2 class="prog-view-title" id="progAnalyticsTitle">Programme Analytics</h2>
+        </div>
+        <div class="prog-modal-body prog-analytics-body" id="progAnalyticsBody">
+            <div id="paAnalyticsLoadMessage" class="pa-panel pa-empty">Select a programme to view its recorded analytics.</div>
+            <div class="pa-page">
+                <div id="paDashboard">
+                    <div class="pa-source-tabs" id="paSourceTabs" role="tablist" aria-label="Trade source">
+                        <button type="button" class="pa-source-tab active" data-trade-source="live" role="tab" aria-selected="true">Live</button>
+                        <button type="button" class="pa-source-tab" data-trade-source="history" role="tab" aria-selected="false">History</button>
+                    </div>
+                    <div id="paDashboardContent"></div>
+                </div>
+                <div id="paIsolated" class="pa-hidden"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -1829,6 +2407,265 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
         });
     }
 
+    // ==================================================================
+    // Investor provision display.
+    // Uses only saved signals_provider_interest checkpoint data. No
+    // provision evaluator, status transition, reset or write is performed.
+    // ==================================================================
+    var PROG_PROVISION_WINDOWS = {};
+    var PROG_PROVISION_CACHE = {};
+    var PROG_ANALYTICS_RETURN_TO_DETAIL = false;
+
+    function progProvisionNumber(value, fallback) {
+        if (value === null || value === undefined || value === '') return fallback;
+        var number = Number(value);
+        return Number.isFinite(number) ? number : fallback;
+    }
+
+    function progProvisionDate(value) {
+        var raw = String(value || '').slice(0, 10);
+        var parts = raw.split('-');
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        if (parts.length !== 3) return raw || '—';
+        var monthIndex = parseInt(parts[1], 10) - 1;
+        if (monthIndex < 0 || monthIndex > 11) return raw;
+        return String(parts[2]).padStart(2, '0') + ' ' + months[monthIndex] + ' ' + parts[0];
+    }
+
+    function progProvisionRange(start, end, period) {
+        var first = progProvisionDate(start);
+        var last = progProvisionDate(end || start);
+        return String(period || '').toLowerCase() === 'daily' || first === last
+            ? first
+            : first + ' – ' + last;
+    }
+
+    function progProvisionProgressBlock(label, current, target, passed, isLoss, locked, lossFailed) {
+        current = Math.max(0, progProvisionNumber(current, 0));
+        target = Math.max(0, progProvisionNumber(target, 0));
+        var percent = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+        var right = locked
+            ? '<i class="fa-solid fa-lock spr-progress-lock" aria-label="Locked checkpoint" title="Locked checkpoint"></i>'
+            : '<span class="spr-progress-count">' + current + ' / ' + target + '</span>';
+        var mark = locked
+            ? '<i class="fa-solid fa-lock spr-progress-lock" aria-hidden="true"></i>'
+            : (passed
+                ? '<span class="spr-progress-mark" title="Requirement met" aria-label="Requirement met"><i class="fa-solid fa-check"></i></span>'
+                : (isLoss && lossFailed
+                    ? '<span class="spr-progress-mark is-failed" title="Loss limit reached" aria-label="Loss limit reached"><i class="fa-solid fa-xmark"></i></span>'
+                    : '<span class="spr-progress-mark" style="visibility:hidden" aria-hidden="true"></span>'));
+        var trackClass = isLoss ? 'spr-progress-track spr-progress-loss-track' : 'spr-progress-track';
+        var fillClass = isLoss ? 'spr-progress-loss-fill' : ('spr-progress-fill' + (passed ? ' is-complete' : ''));
+        return '<div class="spr-progress-item">'
+            + '<div class="spr-progress-heading"><span class="spr-progress-label">' + escapeHtml(label) + '</span>' + right + '</div>'
+            + '<div class="' + trackClass + '"><div class="' + fillClass + '" style="width:' + (locked ? 0 : percent).toFixed(2) + '%"></div></div>'
+            + mark
+            + '</div>';
+    }
+
+    function progProvisionWindowProgressHtml(windowRow, provision) {
+        var tradesTarget = Math.max(0, progProvisionNumber(provision.trades_count, 0));
+        var winsTarget = Math.max(0, progProvisionNumber(provision.expected_win, 0));
+        var lossesLimit = Math.max(0, progProvisionNumber(provision.consecutive_loss, 0));
+        var currentTrades = Math.max(0, progProvisionNumber(windowRow.trades, 0));
+        var currentWins = Math.max(0, progProvisionNumber(windowRow.wins, 0));
+        var currentLosses = Math.max(0, progProvisionNumber(windowRow.consecutive_losses, 0));
+        var locked = !!windowRow.locked || String(windowRow.status || '').toLowerCase() === 'locked';
+        var lossFailed = lossesLimit > 0 && currentLosses >= lossesLimit;
+
+        return '<div class="spr-progress-list">'
+            + progProvisionProgressBlock('Minimum Trades Count', currentTrades, tradesTarget, !!windowRow.trades_passed, false, locked, false)
+            + progProvisionProgressBlock('Minimum Expected Win Count', currentWins, winsTarget, !!windowRow.wins_passed, false, locked, false)
+            + progProvisionProgressBlock('Maximum Expected Consecutive Loss', currentLosses, lossesLimit, !!windowRow.loss_gate_passed, true, locked, lossFailed)
+            + '</div>';
+    }
+
+    function renderInvestorProvision(provision, programmeId, scopeKey, programmeName) {
+        provision = provision && typeof provision === 'object' ? provision : {};
+        var scope = String(scopeKey || ('programme-' + programmeId));
+        var available = !!provision.available;
+        var period = String(provision.period || 'daily').toLowerCase();
+        if (['daily', 'weekly', 'monthly'].indexOf(period) === -1) period = 'daily';
+        var periodLabel = period.charAt(0).toUpperCase() + period.slice(1);
+        var windows = Array.isArray(provision.windows) ? provision.windows : [];
+
+        PROG_PROVISION_CACHE[scope] = {
+            provision: provision,
+            programmeId: Number(programmeId) || 0,
+            programmeName: String(programmeName || 'Programme')
+        };
+
+        var windowIndex = Object.prototype.hasOwnProperty.call(PROG_PROVISION_WINDOWS, scope)
+            ? Number(PROG_PROVISION_WINDOWS[scope])
+            : Number(provision.current_index);
+        if (!Number.isFinite(windowIndex)) windowIndex = Math.max(0, windows.length - 1);
+        if (windows.length) windowIndex = Math.max(0, Math.min(windows.length - 1, windowIndex));
+        else windowIndex = 0;
+        PROG_PROVISION_WINDOWS[scope] = windowIndex;
+
+        var selectedWindow = windows[windowIndex] || null;
+        var scopeAttr = escapeAttr(scope);
+        var nav = '';
+        if (selectedWindow) {
+            var selectedLabel = String(selectedWindow.label || (periodLabel + ' ' + (windowIndex + 1)));
+            var selectedRange = progProvisionRange(selectedWindow.start_date, selectedWindow.end_date, period);
+            nav = '<div class="spr-period-nav">'
+                + '<button type="button" class="spr-period-nav-btn" data-provision-window-step="-1" data-provision-scope="' + scopeAttr + '" aria-label="Previous ' + escapeAttr(period) + ' window" ' + (windowIndex <= 0 ? 'disabled' : '') + '><i class="fa-solid fa-chevron-left"></i></button>'
+                + '<div class="spr-period-nav-title">' + escapeHtml(selectedLabel) + '<span class="spr-period-nav-range">' + escapeHtml(selectedRange) + '</span></div>'
+                + '<button type="button" class="spr-period-nav-btn" data-provision-window-step="1" data-provision-scope="' + scopeAttr + '" aria-label="Next ' + escapeAttr(period) + ' window" ' + (windowIndex >= windows.length - 1 ? 'disabled' : '') + '><i class="fa-solid fa-chevron-right"></i></button>'
+                + '</div>';
+        }
+
+        var progressHtml = selectedWindow
+            ? progProvisionWindowProgressHtml(selectedWindow, provision)
+            : '<div class="spr-provision-no-checkpoint">' + (available ? 'No provision progress is recorded.' : 'No provision data is available.') + '</div>';
+
+        var card = '<div class="spr-item prog-investor-provision-card">'
+            + '<div class="spr-item-main">'
+            + '<div class="spr-item-header"><div class="spr-item-title">' + escapeHtml(periodLabel) + ' Provision</div></div>'
+            + nav
+            + progressHtml
+            + '</div></div>';
+
+        var analyticsButton = '<button type="button" class="prog-see-analytics" data-see-analytics="1" data-programme-id="' + (Number(programmeId) || 0) + '" data-programme-name="' + escapeAttr(programmeName || 'Programme') + '"><i class="fa-solid fa-chart-line"></i> See analytics</button>';
+        return '<div class="prog-investor-provision" data-provision-scope="' + scopeAttr + '">' + card + analyticsButton + '</div>';
+    }
+
+    window.progMoveProvisionWindow = function (scopeKey, direction) {
+        var scope = String(scopeKey || '');
+        var cached = PROG_PROVISION_CACHE[scope];
+        if (!cached || !cached.provision || !Array.isArray(cached.provision.windows)) return;
+
+        var windows = cached.provision.windows;
+        if (!windows.length) return;
+        var current = Object.prototype.hasOwnProperty.call(PROG_PROVISION_WINDOWS, scope)
+            ? Number(PROG_PROVISION_WINDOWS[scope])
+            : Number(cached.provision.current_index || 0);
+        if (!Number.isFinite(current)) current = 0;
+        var next = Math.max(0, Math.min(windows.length - 1, current + (Number(direction) || 0)));
+        if (next === current) return;
+        PROG_PROVISION_WINDOWS[scope] = next;
+
+        // Delegated clicks survive this replacement, so both arrows keep working
+        // after every window navigation and on both the invested and detail views.
+        var existing = null;
+        document.querySelectorAll('.prog-investor-provision').forEach(function (node) {
+            if (node.getAttribute('data-provision-scope') === scope) existing = node;
+        });
+        if (existing) {
+            existing.outerHTML = renderInvestorProvision(
+                cached.provision,
+                cached.programmeId,
+                scope,
+                cached.programmeName
+            );
+        }
+    };
+
+    function initializeProvisionPanels() {
+        document.querySelectorAll('.prog-investor-provision-mount').forEach(function (mount) {
+            if (mount.dataset.rendered === '1') return;
+            var provision = {};
+            try { provision = JSON.parse(mount.getAttribute('data-provision') || '{}'); }
+            catch (e) { provision = {}; }
+            var pid = Number(mount.getAttribute('data-programme-id') || 0);
+            var programmeName = mount.getAttribute('data-programme-name') || 'Programme';
+            var scope = 'invested-' + pid;
+            mount.dataset.renderedScope = scope;
+            mount.innerHTML = renderInvestorProvision(provision, pid, scope, programmeName);
+            mount.dataset.rendered = '1';
+        });
+    }
+
+    // ==================================================================
+    // Investor analytics modal: the same Programme Analytics dashboard
+    // templates, supplied with programme-scoped read-only AJAX data.
+    // ==================================================================
+    function openProgrammeAnalytics(programmeId, programmeName) {
+        var modal = document.getElementById('progAnalyticsModal');
+        var title = document.getElementById('progAnalyticsTitle');
+        var message = document.getElementById('paAnalyticsLoadMessage');
+        var detailModal = document.getElementById('progDetailModal');
+        PROG_ANALYTICS_RETURN_TO_DETAIL = !!(detailModal && detailModal.classList.contains('active'));
+        if (PROG_ANALYTICS_RETURN_TO_DETAIL) detailModal.classList.remove('active');
+        title.textContent = (programmeName || 'Programme') + ' · Analytics';
+        message.className = 'pa-panel pa-empty';
+        message.textContent = 'Loading programme analytics...';
+        message.style.display = '';
+        document.getElementById('paDashboard').classList.add('pa-hidden');
+        document.getElementById('paIsolated').classList.add('pa-hidden');
+        modal.classList.add('active');
+        modal.setAttribute('aria-hidden', 'false');
+        lockBodyScroll();
+        setShellHeaderHidden(true);
+        fetch('programmes.php', {
+            method: 'POST',
+            headers: {'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
+            credentials: 'same-origin',
+            body: 'get_programme_analytics=1&programme_id=' + encodeURIComponent(programmeId)
+        })
+        .then(function(response) { return response.text(); })
+        .then(function(text) {
+            var data;
+            try { data = JSON.parse(text); }
+            catch (e) { throw new Error('Server returned an unexpected analytics response.'); }
+            if (!data.success) throw new Error(data.message || 'Unable to load programme analytics.');
+            title.textContent = (data.programme_name || programmeName || 'Programme') + ' · Analytics';
+            if (data.error) {
+                message.className = 'pa-panel pa-empty';
+                message.textContent = data.error;
+                message.style.display = '';
+                return;
+            }
+            if (typeof window.setProgrammeAnalyticsData !== 'function') throw new Error('The analytics display could not be initialized.');
+            message.style.display = 'none';
+            document.getElementById('paDashboard').classList.remove('pa-hidden');
+            window.setProgrammeAnalyticsData(data);
+        })
+        .catch(function(error) {
+            message.className = 'pa-panel pa-empty';
+            message.textContent = error && error.message ? error.message : 'Unable to load programme analytics.';
+            message.style.display = '';
+        });
+    }
+    window.openProgrammeAnalytics = openProgrammeAnalytics;
+
+    function closeProgrammeAnalyticsModal() {
+        var modal = document.getElementById('progAnalyticsModal');
+        if (!modal) return;
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+        var detailModal = document.getElementById('progDetailModal');
+        if (PROG_ANALYTICS_RETURN_TO_DETAIL && detailModal) {
+            detailModal.classList.add('active');
+            PROG_ANALYTICS_RETURN_TO_DETAIL = false;
+            setShellHeaderHidden(true);
+        } else {
+            unlockBodyScroll();
+            setShellHeaderHidden(false);
+        }
+    }
+    window.closeProgrammeAnalyticsModal = closeProgrammeAnalyticsModal;
+
+    document.addEventListener('click', function(e) {
+        var windowButton = e.target.closest('[data-provision-window-step]');
+        if (windowButton && !windowButton.disabled) {
+            window.progMoveProvisionWindow(
+                windowButton.getAttribute('data-provision-scope') || '',
+                windowButton.getAttribute('data-provision-window-step') || 0
+            );
+            return;
+        }
+
+        var analyticsButton = e.target.closest('[data-see-analytics]');
+        if (analyticsButton) {
+            openProgrammeAnalytics(
+                analyticsButton.getAttribute('data-programme-id'),
+                analyticsButton.getAttribute('data-programme-name') || 'Programme'
+            );
+        }
+    });
+
     function viewProgramme(pid, programmeName) {
         var modal   = document.getElementById('progDetailModal');
         var body    = document.getElementById('progDetailBody');
@@ -1887,19 +2724,11 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
 
             html += '</div>';
 
-            html += '<div class="prog-detail-section-title prog-item-stat-value">Analytics</div>';
-            html += '<div class="prog-detail-grid prog-detail-grid-2col">';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Winrate</span><span class="prog-detail-value">' + formatVal(p.analytics ? p.analytics.winrate : null, '%') + '</span></div>';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Risk Reward</span><span class="prog-detail-value">' + formatRiskReward(p.analytics ? p.analytics.risk_reward : null) + '</span></div>';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Trades Provision</span><span class="prog-detail-value">' + escapeHtml(p.analytics && p.analytics.period ? p.analytics.period : 'Daily') + '</span></div>';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Timezone</span><span class="prog-detail-value">' + (p.timezone_pretty ? escapeHtml(p.timezone_pretty) : '—') + '</span></div>';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Consecutive Sequential Loss</span><span class="prog-detail-value">' + formatVal(p.analytics ? p.analytics.consecutive_sequential_loss : null, '') + '</span></div>';
-            html += '</div>';
+            html += renderInvestorProvision(p.provision || null, p.id, 'detail-' + p.id, p.program_name);
 
-            html += '<div class="prog-detail-section-title prog-item-stat-value">Requirements</div>';
+            html += '<div class="prog-detail-section-title prog-item-stat-value">Investment Requirements</div>';
             html += '<div class="prog-detail-grid">';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Contract Duration</span><span class="prog-detail-value">' + escapeHtml(String(p.contract_duration)) + ' days</span></div>';
-            html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Trades Provision</span><span class="prog-detail-value">' + escapeHtml(p.analytics && p.analytics.period ? p.analytics.period : 'Daily') + '</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Programme Share</span><span class="prog-detail-value">' + escapeHtml(String(p.developer_percentage)) + '%</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Investor Share</span><span class="prog-detail-value">' + escapeHtml(String(p.investor_percentage)) + '%</span></div>';
             html +=   '<div class="prog-detail-row"><span class="prog-detail-label">Minimum Investment</span><span class="prog-detail-value">$' + escapeHtml(Number(p.minimum_investment_amount).toFixed(2)) + '</span></div>';
@@ -1964,8 +2793,11 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
 
     function closeProgDetailModal() {
         document.getElementById('progDetailModal').classList.remove('active');
-        unlockBodyScroll();
-        setShellHeaderHidden(false);
+        var analyticsModal = document.getElementById('progAnalyticsModal');
+        if (!analyticsModal || !analyticsModal.classList.contains('active')) {
+            unlockBodyScroll();
+            setShellHeaderHidden(false);
+        }
     }
 
     function doSendRequest(pid, name) {
@@ -2092,6 +2924,8 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
 
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
+            var analyticsModal = document.getElementById('progAnalyticsModal');
+            if (analyticsModal && analyticsModal.classList.contains('active')) { closeProgrammeAnalyticsModal(); return; }
             var dm = document.getElementById('progDetailModal');
             if (dm && dm.classList.contains('active')) { closeProgDetailModal(); return; }
             var cm = document.getElementById('progConfirmModal');
@@ -2111,7 +2945,7 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
     var _programmeRefreshBusy = false;
 
     function programmeModalIsOpen() {
-        return ['progDetailModal', 'progAlertModal', 'progConfirmModal', 'progCancelModal'].some(function (id) {
+        return ['progDetailModal', 'progAlertModal', 'progConfirmModal', 'progCancelModal', 'progAnalyticsModal'].some(function (id) {
             var el = document.getElementById(id);
             return !!(el && el.classList.contains('active'));
         });
@@ -2152,6 +2986,7 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
             // Update only the panel contents; keep tabs and page state intact.
             if (currentInvested && latestInvested && !programmeModalIsOpen()) {
                 currentInvested.innerHTML = latestInvested.innerHTML;
+                initializeProvisionPanels();
             }
 
             // If the active tab is Sent Requests, its records are refreshed below
@@ -2187,6 +3022,7 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
             _programmeRefreshTimer = null;
         }
     });
+    initializeProvisionPanels();
     startProgrammeAutoRefresh();
 
     window.onProgSearch           = onProgSearch;
@@ -2247,6 +3083,355 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
         broadcast();
         try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
     })();
+</script>
+<script>
+(function(){
+'use strict';
+
+var PA_ROWS = [];
+var activeTradeSource = 'live';
+var pageStack = [];
+var viewState = {page:'dashboard'};
+var currentTradeRows = [];
+var lastStats = null;
+var $ = function(id){ return document.getElementById(id); };
+
+function esc(value){
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+}
+function num(value){ var n = Number(value); return Number.isFinite(n) ? n : 0; }
+function fmt(value, max){ return num(value).toLocaleString(undefined, {maximumFractionDigits:max == null ? 2 : max}); }
+function dateKey(value){ return value ? String(value).slice(0,10) : ''; }
+function normalizedOutcome(value){
+    var v = String(value == null ? '' : value).trim().toLowerCase().replace(/[\s_-]+/g,' ');
+    var aliases = {
+        'breakeven':'closed flat','break even':'closed flat','closed at breakeven':'closed flat',
+        'closed breakeven':'closed flat','closed profit':'closed in profit','profit':'closed in profit',
+        'profitable':'closed in profit','closed loss':'closed in loss','loss':'closed in loss','losing':'closed in loss'
+    };
+    return aliases[v] || v;
+}
+function outcomeLabel(value){
+    var v = normalizedOutcome(value);
+    var labels = {
+        'stoploss hit':'Stoploss hit',
+        'take profit reached':'Profit reached',
+        'closed flat':'Closed flat',
+        'closed in profit':'Profit reached',
+        'closed in loss':'Stoploss hit',
+        'matched family':'Signal recorded',
+        "identify but don't trade":'Signal recorded'
+    };
+    return labels[v] || (value ? String(value) : 'Signal recorded');
+}
+function isLoss(row){ var v = normalizedOutcome(row && row.outcome); return v === 'stoploss hit' || v === 'closed in loss'; }
+function isProfit(row){ var v = normalizedOutcome(row && row.outcome); return v === 'take profit reached' || v === 'closed in profit'; }
+function isFlat(row){ return normalizedOutcome(row && row.outcome) === 'closed flat'; }
+function isClosed(row){ return isLoss(row) || isProfit(row) || isFlat(row) || ['closed','position closed','manual close','manually closed'].indexOf(normalizedOutcome(row && row.outcome)) !== -1; }
+function tradeDateFor(row){ return dateKey(row && row.trade_date); }
+function isNonTradeStatus(row){
+    var status = normalizedOutcome(row && row.outcome);
+    return status === 'pending entry' || status === 'in trade';
+}
+function tradeRows(rows){
+    return (rows || []).filter(function(row){
+        // Only completed trade outcomes belong in the investor trade totals/lists.
+        // Pending entries and trades still in progress are deliberately excluded.
+        return num(row.trade_configured) === 1 && !isNonTradeStatus(row);
+    });
+}
+
+function calculate(rows){
+    rows = Array.isArray(rows) ? rows : [];
+    var trades = tradeRows(rows);
+    var closed = trades.filter(isClosed);
+    var sl = trades.filter(isLoss).length;
+    var tp = trades.filter(isProfit).length;
+    var flat = trades.filter(isFlat).length;
+    var winsR = trades.reduce(function(total, row){ return total + (isProfit(row) ? Math.abs(num(row.risk_reward)) : 0); }, 0);
+    var maxLoss = 0, maxWin = 0, lossRun = 0, winRun = 0;
+    var equity = 100, highest = 100, maxDrawdown = 0;
+    var ordered = closed.slice().sort(function(a,b){ return tradeDateFor(a).localeCompare(tradeDateFor(b)); });
+    ordered.forEach(function(row){
+        if (isLoss(row)) { lossRun++; winRun = 0; maxLoss = Math.max(maxLoss, lossRun); }
+        else if (isProfit(row)) { winRun++; lossRun = 0; maxWin = Math.max(maxWin, winRun); }
+        else { lossRun = 0; winRun = 0; }
+        equity += isLoss(row) ? -1 : (isProfit(row) ? Math.abs(num(row.risk_reward)) : 0);
+        highest = Math.max(highest, equity);
+        var drawdown = highest > 0 ? ((highest - equity) / highest) * 100 : 0;
+        maxDrawdown = Math.max(maxDrawdown, drawdown);
+    });
+    return {
+        signals: rows.length,
+        total: trades.length,
+        sl: sl,
+        tp: tp,
+        flat: flat,
+        winsR: winsR,
+        netR: winsR - sl,
+        closed: closed.length,
+        winRate: closed.length ? (tp / closed.length) * 100 : 0,
+        maxLoss: maxLoss,
+        maxWin: maxWin,
+        currentBalance: equity,
+        highestBalance: highest,
+        highestRevenue: Math.max(0, highest - 100),
+        maxDrawdown: maxDrawdown
+    };
+}
+
+function metricCard(label, value, icon, detail, cls, action, buttonLabel){
+    var actionHtml = action
+        ? '<button type="button" class="pa-action" data-page-action="' + esc(action) + '">' + esc(buttonLabel || 'See trades') + '</button>'
+        : '';
+    return '<article class="pa-card pa-metric">'
+        + '<div class="pa-metric-top"><span class="pa-label">' + esc(label) + '</span><span class="pa-icon"><i class="fa-solid ' + esc(icon) + '"></i></span></div>'
+        + '<div class="pa-value ' + (cls || '') + '">' + esc(value) + '</div>'
+        + '<div class="pa-detail">' + (detail || '') + '</div>'
+        + actionHtml
+        + '</article>';
+}
+function renderDashboard(){
+    var x = calculate(currentTradeRows);
+    lastStats = x;
+    if (!PA_ROWS.length) {
+        $('paDashboardContent').innerHTML = '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No recorded signals</strong>No analytics records are available for this programme yet.</div>';
+        return;
+    }
+    var html = '';
+    html += metricCard('Total Signals', fmt(x.signals,0), 'fa-signal', 'Combined strategy and confirmation signals');
+    html += metricCard('Total Trades', fmt(x.total,0), 'fa-arrow-right-arrow-left', 'All selected programme symbols and timeframes', '', 'trades-provision', 'Trades Provision');
+    html += metricCard('Stoploss hit', fmt(x.sl,0), 'fa-shield-halved', 'Trades closed at stoploss', 'negative');
+    html += metricCard('Lost Risks', '-' + fmt(x.sl,0) + 'RR', 'fa-arrow-trend-down', 'One risk unit for each stoploss', 'negative');
+    html += metricCard('Profit reached', fmt(x.tp,0), 'fa-trophy', 'Trades closed in profit', 'positive');
+    html += metricCard('Risk rewards', '+' + fmt(x.winsR,2) + 'RR', 'fa-coins', 'Combined realised profit', 'positive');
+    html += metricCard('Consecutive Loss', fmt(x.maxLoss,0), 'fa-arrow-down', 'Longest recorded losing sequence');
+    html += metricCard('Consecutive Win', fmt(x.maxWin,0), 'fa-arrow-up', 'Longest recorded winning sequence');
+    html += metricCard('Highest Drawdown', fmt(x.maxDrawdown,2) + '%', 'fa-chart-line', 'Maximum recorded drawdown', 'negative');
+    html += metricCard('Highest Revenue Peak', '+' + fmt(x.highestRevenue,2) + '%', 'fa-arrow-trend-up', 'Highest balance above the starting baseline', 'positive');
+    html += metricCard('Win rate', fmt(x.winRate,1) + '%', 'fa-bullseye', fmt(x.tp,0) + ' wins / ' + fmt(x.closed,0) + ' closed');
+    html += metricCard('Current virtual balance', fmt(x.currentBalance,2) + '%', 'fa-scale-balanced', 'Starting baseline adjusted by recorded losses and rewards', x.currentBalance >= 100 ? 'positive' : 'negative');
+    $('paDashboardContent').innerHTML = '<div class="pa-grid">' + html + '</div>';
+}
+
+function resultRiskText(row){
+    if (isProfit(row)) return '+' + fmt(Math.abs(num(row.risk_reward)),2) + 'RR';
+    if (isLoss(row)) return '-1RR';
+    if (isFlat(row)) return '0RR';
+    return '—';
+}
+function renderSignalCard(row){
+    var outcome = outcomeLabel(row.outcome);
+    var resultClass = isProfit(row) ? 'positive' : (isLoss(row) ? 'negative' : '');
+    var statusClass = isProfit(row) ? 'take-profit-reached' : (isLoss(row) ? 'stoploss-hit' : '');
+    return '<article class="pa-card pa-signal-card">'
+        + '<div class="pa-signal-symbol">' + esc(row.symbol || '—') + '</div>'
+        + '<div class="pa-signal-result"><span class="pa-status ' + statusClass + '">' + esc(outcome) + '</span>'
+        + '<strong class="pa-signal-rr ' + resultClass + '">' + esc(resultRiskText(row)) + '</strong></div>'
+        + '</article>';
+}
+function renderSignalCards(rows){
+    if (!rows.length) return '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No recorded trades</strong>No trade results were recorded in this period.</div>';
+    return rows.slice().sort(function(a,b){
+        return tradeDateFor(a).localeCompare(tradeDateFor(b)) || String(a.symbol || '').localeCompare(String(b.symbol || ''));
+    }).map(renderSignalCard).join('');
+}
+function getDateRows(rows){ return tradeRows(rows).filter(function(row){ return !!tradeDateFor(row); }); }
+function groupBy(rows, keyFn){
+    var map = {};
+    rows.forEach(function(row){ var key = keyFn(row); if (key) (map[key] || (map[key] = [])).push(row); });
+    return map;
+}
+function monthWeekNumber(date){
+    var day = Number(String(date || '').slice(8,10));
+    if (!Number.isFinite(day) || day < 1 || day > 31) return 0;
+    return Math.min(4, Math.floor((day - 1) / 7) + 1);
+}
+function monthWeekKey(month, weekNumber){ return String(month) + '|' + String(weekNumber); }
+function parseMonthWeekKey(key){
+    var parts = String(key || '').split('|');
+    return {month:parts[0] || '', weekNumber:Number(parts[1] || 0)};
+}
+function monthName(key){
+    var date = new Date(key + '-01T12:00:00');
+    return date.toLocaleDateString(undefined, {month:'long',year:'numeric'});
+}
+function monthRows(rows, month){ return rows.filter(function(row){ return tradeDateFor(row).slice(0,7) === month; }); }
+function weekRows(rows, weekKey){
+    var parsed = parseMonthWeekKey(weekKey);
+    if (!parsed.month || parsed.weekNumber < 1 || parsed.weekNumber > 4) return [];
+    return rows.filter(function(row){
+        var date = tradeDateFor(row);
+        return date.slice(0,7) === parsed.month && monthWeekNumber(date) === parsed.weekNumber;
+    });
+}
+function isolatedHeader(title){
+    return '<div class="pa-isolated-head"><h2>' + esc(title) + '</h2></div>';
+}
+function renderTradesProvision(){
+    var trades = getDateRows(currentTradeRows);
+    var months = groupBy(trades, function(row){ return tradeDateFor(row).slice(0,7); });
+    var keys = Object.keys(months).sort().reverse();
+    var html = isolatedHeader('Trades Provision');
+    if (!keys.length) {
+        $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trade dates yet</strong>Recorded trade dates will appear here.</div>';
+        return;
+    }
+    html += '<div class="pa-period-list">' + keys.map(function(month){
+        return '<button type="button" class="pa-period" data-month="' + esc(month) + '">'
+            + '<strong>' + esc(monthName(month)) + '</strong>'
+            + '<span>' + months[month].length + (months[month].length === 1 ? ' trade' : ' trades') + ' · Open month <i class="fa-solid fa-chevron-right"></i></span>'
+            + '</button>';
+    }).join('') + '</div>';
+    $('paIsolated').innerHTML = html;
+}
+function renderWeeks(month){
+    var trades = getDateRows(currentTradeRows);
+    var monthTrades = monthRows(trades, month);
+    var weeks = groupBy(monthTrades, function(row){ return String(monthWeekNumber(tradeDateFor(row))); });
+    var keys = Object.keys(weeks).sort(function(a,b){ return Number(b) - Number(a); });
+    var html = isolatedHeader(monthName(month));
+    if (!keys.length) {
+        $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trading weeks</strong>No trades were recorded for this month.</div>';
+        return;
+    }
+    html += '<div class="pa-period-list">' + keys.map(function(weekNumber){
+        var key = monthWeekKey(month, weekNumber);
+        return '<button type="button" class="pa-period" data-week="' + esc(key) + '">'
+            + '<strong>Week ' + esc(weekNumber) + '</strong>'
+            + '<span>' + weeks[weekNumber].length + (weeks[weekNumber].length === 1 ? ' trade' : ' trades') + ' · Open week <i class="fa-solid fa-chevron-right"></i></span>'
+            + '</button>';
+    }).join('') + '</div>';
+    $('paIsolated').innerHTML = html;
+}
+function renderDays(weekKey){
+    var parsed = parseMonthWeekKey(weekKey);
+    var trades = getDateRows(currentTradeRows);
+    var currentWeekRows = weekRows(trades, weekKey);
+    var days = groupBy(currentWeekRows, function(row){ return tradeDateFor(row); });
+    var keys = Object.keys(days).sort().reverse();
+    var html = isolatedHeader('Week ' + parsed.weekNumber);
+    if (!keys.length) {
+        $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trading days</strong>No trades were recorded for this week.</div>';
+        return;
+    }
+    html += '<div class="pa-period-list">' + keys.map(function(day){
+        var label = new Date(day + 'T12:00:00').toLocaleDateString(undefined, {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+        return '<button type="button" class="pa-period" data-day="' + esc(day) + '">'
+            + '<strong>' + esc(label) + '</strong>'
+            + '<span>' + days[day].length + (days[day].length === 1 ? ' trade' : ' trades') + ' · Open day <i class="fa-solid fa-chevron-right"></i></span>'
+            + '</button>';
+    }).join('') + '</div>';
+    $('paIsolated').innerHTML = html;
+}
+function renderTradeDay(day){
+    var trades = getDateRows(currentTradeRows).filter(function(row){ return tradeDateFor(row) === day; });
+    var label = new Date(day + 'T12:00:00').toLocaleDateString(undefined, {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    $('paIsolated').innerHTML = isolatedHeader(label) + '<div class="pa-signal-list">' + renderSignalCards(trades) + '</div>';
+}
+function syncParentChrome(){
+    var nested = viewState.page !== 'dashboard';
+    var back = document.querySelector('.prog-analytics-header .prog-view-back');
+    if (back) back.setAttribute('aria-label', nested ? 'Back to previous analytics view' : 'Back to programme');
+    try { window.parent.postMessage({type:'programmeAnalyticsView', nested:nested}, '*'); } catch(e) {}
+}
+function renderCurrentView(){
+    var isolated = viewState.page !== 'dashboard';
+    $('paDashboard').classList.toggle('pa-hidden', isolated);
+    $('paIsolated').classList.toggle('pa-hidden', !isolated);
+    syncParentChrome();
+    if (!isolated) { renderDashboard(); return; }
+    if (viewState.page === 'trades-provision') renderTradesProvision();
+    else if (viewState.page === 'trades-weeks') renderWeeks(viewState.month);
+    else if (viewState.page === 'trades-days') renderDays(viewState.week);
+    else if (viewState.page === 'trades-day') renderTradeDay(viewState.day);
+}
+function goPage(page, extra){
+    pageStack.push(viewState);
+    viewState = Object.assign({page:page}, extra || {});
+    renderCurrentView();
+    var scroller = $('progAnalyticsBody');
+    if (scroller) scroller.scrollTop = 0;
+}
+function backPage(){
+    viewState = pageStack.length ? pageStack.pop() : {page:'dashboard'};
+    renderCurrentView();
+    var scroller = $('progAnalyticsBody');
+    if (scroller) scroller.scrollTop = 0;
+}
+function handleProgrammeAnalyticsHeaderBack(){
+    if (viewState.page !== 'dashboard') { backPage(); return; }
+    if (typeof window.closeProgrammeAnalyticsModal === 'function') window.closeProgrammeAnalyticsModal();
+}
+window.handleProgrammeAnalyticsHeaderBack = handleProgrammeAnalyticsHeaderBack;
+function refresh(){
+    currentTradeRows = PA_ROWS.filter(function(row){
+        return num(row.live_trades) === (activeTradeSource === 'live' ? 1 : 0);
+    });
+    renderCurrentView();
+}
+
+$('paSourceTabs').addEventListener('click', function(event){
+    var tab = event.target.closest('[data-trade-source]');
+    if (!tab) return;
+    activeTradeSource = tab.dataset.tradeSource === 'history' ? 'history' : 'live';
+    $('paSourceTabs').querySelectorAll('[data-trade-source]').forEach(function(button){
+        var active = button === tab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    pageStack = [];
+    viewState = {page:'dashboard'};
+    refresh();
+});
+
+document.addEventListener('click', function(event){
+    var action = event.target.closest('[data-page-action]');
+    if (action) {
+        if (action.dataset.pageAction === 'trades-provision') goPage('trades-provision');
+        return;
+    }
+    var month = event.target.closest('[data-month]');
+    if (month) { goPage('trades-weeks', {month:month.dataset.month}); return; }
+    var week = event.target.closest('[data-week]');
+    if (week) { goPage('trades-days', {week:week.dataset.week}); return; }
+    var day = event.target.closest('[data-day]');
+    if (day) { goPage('trades-day', {day:day.dataset.day}); return; }
+});
+
+window.setProgrammeAnalyticsData = function(payload){
+    payload = payload && typeof payload === 'object' ? payload : {};
+    PA_ROWS = Array.isArray(payload.rows) ? payload.rows : [];
+    activeTradeSource = 'live';
+    pageStack = [];
+    viewState = {page:'dashboard'};
+    $('paSourceTabs').querySelectorAll('[data-trade-source]').forEach(function(button){
+        var active = button.dataset.tradeSource === 'live';
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    refresh();
+};
+window.resetProgrammeAnalyticsData = function(){
+    PA_ROWS = [];
+    currentTradeRows = [];
+    pageStack = [];
+    viewState = {page:'dashboard'};
+    lastStats = null;
+    if ($('paDashboardContent')) $('paDashboardContent').innerHTML = '';
+    if ($('paIsolated')) $('paIsolated').innerHTML = '';
+};
+window.addEventListener('message', function(event){
+    if (!event.data || typeof event.data !== 'object') return;
+    if (event.data.type === 'theme') {
+        document.body.classList.toggle('dark-mode', !!event.data.dark);
+        document.documentElement.classList.toggle('force-light', !event.data.dark);
+    }
+});
+try { window.parent.postMessage({type:'requestTheme'}, '*'); } catch(e) {}
+})();
 </script>
 </body>
 </html>

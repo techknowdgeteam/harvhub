@@ -15,8 +15,11 @@ if (!isset($_SESSION['user_email'])) {
 $email = strtolower($_SESSION['user_email']);
 
 require_once __DIR__ . '/mysqlconnection.php';
+
 $pdo = getAvailablePdoConnection();
+
 $tableName = 'harvhub';
+
 $serverAccountTable = 'server_account';
 
 // =====================================================================
@@ -70,6 +73,8 @@ if (!$activeRow) {
 }
 
 $activeSubAccountId = (int)($activeRow['sub_account_id'] ?? $activeRow['id']);
+$darkMode = !empty($activeRow['dark_mode']);
+$darkModeClass = $darkMode ? 'dark-mode' : '';
 
 $activeUserId       = (int)$activeRow['id'];
 
@@ -623,11 +628,12 @@ $symbols              = $payload['symbols'];
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http\://www\.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
 
 <title>🌾Harvhub</title>
 
 <?php include 'style.php'; ?>
+<?php include __DIR__ . '/useranalytics_style.php'; ?>
 
 <style>
 
@@ -643,7 +649,7 @@ $symbols              = $payload['symbols'];
 
         margin: 0;
 
-        transition: *background* 0.3s, color 0.3s;
+        transition: background 0.3s, color 0.3s;
 
     }
 
@@ -661,7 +667,7 @@ $symbols              = $payload['symbols'];
 
 </head>
 
-<body>
+<body class="<?= htmlspecialchars($darkModeClass, ENT_QUOTES, 'UTF-8') ?>">
 
 <div class="custom-body page-container">
 
@@ -1019,7 +1025,7 @@ $symbols              = $payload['symbols'];
 
         try {
 
-            var base = document.baseURI || window\.location.href;
+            var base = document.baseURI || window.location.href;
 
             return new URL('useranalytics.php', base).toString();
 
@@ -1415,7 +1421,7 @@ $symbols              = $payload['symbols'];
 
     });
 
-    window\.addEventListener('focus', function() {
+    window.addEventListener('focus', function() {
 
         if (pollRunning) fetchAnalytics();
 
@@ -1423,20 +1429,19 @@ $symbols              = $payload['symbols'];
 
     startLiveUpdates();
 
-    window\.addEventListener('beforeunload', function() { stopLiveUpdates(); });
+    window.addEventListener('beforeunload', function() { stopLiveUpdates(); });
 
     (function () {
 
-        window\.addEventListener('message', function (e) {
+        function applyAnalyticsTheme(isDark) {
+            var dark = !!isDark;
+            document.body.classList.toggle('dark-mode', dark);
+            document.documentElement.classList.toggle('dark-mode', dark);
+        }
 
+        window.addEventListener('message', function (e) {
             if (!e.data || typeof e.data !== 'object') return;
-
-            if (e.data.type === 'theme') {
-
-                document.body.classList.toggle('dark-mode', !!e.data.dark);
-
-            }
-
+            if (e.data.type === 'theme') applyAnalyticsTheme(e.data.dark);
         });
 
         var WATCHED = [
@@ -1465,7 +1470,7 @@ $symbols              = $payload['symbols'];
 
             try {
 
-                window\.parent.postMessage({
+                window.parent.postMessage({
 
                     type: 'bodyClass',
 
@@ -1483,7 +1488,7 @@ $symbols              = $payload['symbols'];
 
         broadcast();
 
-        try { window\.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
+        try { window.parent.postMessage({ type: 'requestTheme' }, '*'); } catch (e) {}
 
     })();
 
