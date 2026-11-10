@@ -155,6 +155,53 @@ if (!function_exists('prettyTimezone')) {
     }
 }
 
+/**
+ * Read the shared investor-programme defaults from the current relational
+ * Server App configuration. These values previously lived in the combined
+ * server configuration record; they now belong to server_requirements.
+ *
+ * Challenge durations and trades_setup_per_group are stored separately in
+ * server_operational_settings, but this investor page does not consume them.
+ */
+if (!function_exists('progInvestorLoadServerRequirements')) {
+    function progInvestorLoadServerRequirements(PDO $pdo): array {
+        $defaults = [
+            'minimum_deposit'        => 0.00,
+            'min_broker_balance'    => 30.00,
+            'contract_duration'     => 30,
+            'server_share_percent'  => 30.000,
+            'user_share_percent'    => 70.000,
+            'min_profit_for_split'  => 30.00,
+            'expiry_threshold_days' => 5,
+        ];
+
+        try {
+            $stmt = $pdo->query("
+                SELECT minimum_deposit,
+                       min_broker_balance,
+                       contract_duration,
+                       server_share_percent,
+                       user_share_percent,
+                       min_profit_for_split,
+                       expiry_threshold_days
+                FROM server_requirements
+                WHERE id = 1
+                LIMIT 1
+            ");
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($row)) {
+                return array_merge($defaults, $row);
+            }
+
+            error_log('programmes.php: server_requirements singleton row id=1 was not found; using schema defaults.');
+        } catch (Throwable $e) {
+            error_log('programmes.php: unable to read server_requirements: ' . $e->getMessage());
+        }
+
+        return $defaults;
+    }
+}
+
 if (!function_exists('resolveHostDisplayNameCompat')) {
     function resolveHostDisplayNameCompat(array $r) {
         $username = trim((string)($r['username'] ?? ''));
@@ -620,9 +667,236 @@ if (!function_exists('progInvestorCanViewProgramme')) {
     }
 }
 
+if (!function_exists('progInvestorBuildAnalyticsStatistics')) {
+    /**
+     * Calculate the public investor dashboard from the same saved analytics rows
+     * used by Programme Analytics. All strategy IDs, setup numbers, setup-group
+     * IDs, signatures and exact event timestamps stay on the server.
+     */
+    function progInvestorBuildAnalyticsStatistics(array $pairs): array {
+        $normalize = static function($value): string {
+            $value = strtolower(trim((string)$value));
+            $value = preg_replace('/[\s_-]+/', ' ', $value);
+            $aliases = [
+                'breakeven' => 'closed flat',
+                'break even' => 'closed flat',
+                'closed at breakeven' => 'closed flat',
+                'closed breakeven' => 'closed flat',
+                'closed profit' => 'closed in profit',
+                'profit' => 'closed in profit',
+                'profitable' => 'closed in profit',
+                'closed loss' => 'closed in loss',
+                'loss' => 'closed in loss',
+                'losing' => 'closed in loss'
+            ];
+            return $aliases[$value] ?? $value;
+        };
+        $isLoss = static function(array $row) use ($normalize): bool {
+            return in_array($normalize($row['outcome'] ?? ''), ['stoploss hit', 'closed in loss'], true);
+        };
+        $isProfit = static function(array $row) use ($normalize): bool {
+            return in_array($normalize($row['outcome'] ?? ''), ['take profit reached', 'closed in profit'], true);
+        };
+        $isFlat = static function(array $row) use ($normalize): bool {
+            return $normalize($row['outcome'] ?? '') === 'closed flat';
+        };
+        $isClosed = static function(array $row) use ($isLoss, $isProfit, $isFlat, $normalize): bool {
+            return $isLoss($row) || $isProfit($row) || $isFlat($row)
+                || in_array($normalize($row['outcome'] ?? ''), ['closed', 'position closed', 'manual close', 'manually closed'], true);
+        };
+        $eventOrder = static function(array $pair): string {
+            $row = $pair['internal'] ?? [];
+            $raw = trim((string)($row['event_time'] ?? ''));
+            if ($raw === '') {
+                foreach ([
+                    'stoploss_trigger_time', 'take_profit_trigger_time', 'breakeven_trigger_time',
+                    'close_time', 'closed_at', 'entry_trigger_time', 'entry_anchor_time', 'created_at'
+                ] as $field) {
+                    $candidate = trim((string)($row[$field] ?? ''));
+                    if ($candidate !== '') { $raw = $candidate; break; }
+                }
+            }
+            return $raw === '' ? '0000-00-00 00:00:00' : str_replace('T', ' ', substr($raw, 0, 19));
+        };
+        $sortPairs = static function(array &$items) use ($eventOrder): void {
+            usort($items, static function(array $a, array $b) use ($eventOrder): int {
+                $cmp = strcmp($eventOrder($a), $eventOrder($b));
+                if ($cmp !== 0) return $cmp;
+                return ((int)($a['internal']['id'] ?? 0)) <=> ((int)($b['internal']['id'] ?? 0));
+            });
+        };
+        $publicSequence = static function(array $items): array {
+            return array_values(array_map(static function(array $pair): array {
+                return $pair['public'];
+            }, $items));
+        };
+
+        $statistics = [];
+        foreach (['live' => 1, 'history' => 0] as $source => $liveFlag) {
+            $sourcePairs = array_values(array_filter($pairs, static function(array $pair) use ($liveFlag): bool {
+                return (int)($pair['public']['live_trades'] ?? 1) === $liveFlag;
+            }));
+            $tradePairs = array_values(array_filter($sourcePairs, static function(array $pair): bool {
+                return (int)($pair['public']['trade_configured'] ?? 0) === 1;
+            }));
+            $closedPairs = array_values(array_filter($tradePairs, static function(array $pair) use ($isClosed): bool {
+                return $isClosed($pair['internal'] ?? []);
+            }));
+
+            $lossCount = count(array_filter($tradePairs, static function(array $pair) use ($isLoss): bool {
+                return $isLoss($pair['internal'] ?? []);
+            }));
+            $profitCount = count(array_filter($tradePairs, static function(array $pair) use ($isProfit): bool {
+                return $isProfit($pair['internal'] ?? []);
+            }));
+            $flatCount = count(array_filter($tradePairs, static function(array $pair) use ($isFlat): bool {
+                return $isFlat($pair['internal'] ?? []);
+            }));
+            $pendingCount = count(array_filter($tradePairs, static function(array $pair) use ($normalize): bool {
+                return $normalize($pair['internal']['outcome'] ?? '') === 'pending entry';
+            }));
+            $activePairs = array_values(array_filter($tradePairs, static function(array $pair) use ($normalize): bool {
+                return $normalize($pair['internal']['outcome'] ?? '') === 'in trade';
+            }));
+            $longActive = count(array_filter($activePairs, static function(array $pair): bool {
+                return strtolower(trim((string)($pair['internal']['direction'] ?? ''))) === 'long';
+            }));
+            $shortActive = count(array_filter($activePairs, static function(array $pair): bool {
+                return strtolower(trim((string)($pair['internal']['direction'] ?? ''))) === 'short';
+            }));
+
+            $winsR = 0.0;
+            foreach ($tradePairs as $pair) {
+                if ($isProfit($pair['internal'] ?? [])) {
+                    $winsR += is_numeric($pair['internal']['risk_reward'] ?? null)
+                        ? (float)$pair['internal']['risk_reward'] : 0.0;
+                }
+            }
+
+            // The latest Programme Analytics streaks are measured independently
+            // within each symbol/timeframe/root/confirmation stream. The private
+            // stream key is never included in the returned payload.
+            $streams = [];
+            foreach ($closedPairs as $pair) {
+                $row = $pair['internal'] ?? [];
+                $streamParts = [
+                    strtolower(trim((string)($row['symbol'] ?? ''))),
+                    strtolower(trim((string)($row['timeframe'] ?? ''))),
+                    strtolower(trim((string)($row['source_timeframe'] ?? ''))),
+                    (string)(int)($row['root_id'] ?? 0),
+                    (string)(int)($row['confirmation_root_id'] ?? 0)
+                ];
+                $streamKey = json_encode($streamParts, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                if ($streamKey === false) $streamKey = implode('|', $streamParts);
+                $streams[$streamKey][] = $pair;
+            }
+
+            $maxLoss = 0;
+            $maxWin = 0;
+            $maxLossStreaks = [];
+            $maxWinStreaks = [];
+            foreach ($streams as $stream) {
+                $sortPairs($stream);
+                $lossRun = [];
+                $winRun = [];
+                foreach ($stream as $pair) {
+                    $row = $pair['internal'] ?? [];
+                    if ($isLoss($row)) {
+                        $lossRun[] = $pair;
+                        $winRun = [];
+                        $length = count($lossRun);
+                        if ($length > $maxLoss) {
+                            $maxLoss = $length;
+                            $maxLossStreaks = [$publicSequence($lossRun)];
+                        } elseif ($length === $maxLoss && $maxLoss > 0) {
+                            $maxLossStreaks[] = $publicSequence($lossRun);
+                        }
+                    } elseif ($isProfit($row)) {
+                        $winRun[] = $pair;
+                        $lossRun = [];
+                        $length = count($winRun);
+                        if ($length > $maxWin) {
+                            $maxWin = $length;
+                            $maxWinStreaks = [$publicSequence($winRun)];
+                        } elseif ($length === $maxWin && $maxWin > 0) {
+                            $maxWinStreaks[] = $publicSequence($winRun);
+                        }
+                    } else {
+                        $lossRun = [];
+                        $winRun = [];
+                    }
+                }
+            }
+
+            // Keep the same overall baseline, revenue peak and drawdown sequence
+            // model as Programme Analytics. Only the resulting Growth is exposed;
+            // the private virtual-balance value itself is not sent to the browser.
+            $equity = 100.0;
+            $highest = 100.0;
+            $maxDrawdown = 0.0;
+            $activeSequence = [];
+            $drawdownSequence = [];
+            $peakSequence = [];
+            $accountExhausted = false;
+            $sortPairs($closedPairs);
+            foreach ($closedPairs as $pair) {
+                $row = $pair['internal'] ?? [];
+                $value = $isLoss($row)
+                    ? -1.0
+                    : ($isProfit($row) ? max(0.0, is_numeric($row['risk_reward'] ?? null) ? (float)$row['risk_reward'] : 0.0) : 0.0);
+                $equity += $value;
+                $activeSequence[] = $pair;
+                $drawdown = max(0.0, 100.0 - $equity);
+                if ($drawdown > $maxDrawdown) {
+                    $maxDrawdown = $drawdown;
+                    $drawdownSequence = $activeSequence;
+                }
+                if ($equity > $highest) {
+                    $highest = $equity;
+                    $peakSequence = $activeSequence;
+                }
+                if ($equity <= 0.0) $accountExhausted = true;
+                if ($equity >= 100.0) $activeSequence = [];
+            }
+
+            $mainSetupPairs = array_values(array_filter($sourcePairs, static function(array $pair): bool {
+                return !empty($pair['main_setup']);
+            }));
+            $statistics[$source] = [
+                'signals' => count($sourcePairs),
+                'mainSetupCount' => count($mainSetupPairs),
+                'mainSetups' => $publicSequence($mainSetupPairs),
+                'total' => count($tradePairs),
+                'sl' => $lossCount,
+                'tp' => $profitCount,
+                'flat' => $flatCount,
+                'winsR' => $winsR,
+                'netR' => $winsR - $lossCount,
+                'closed' => count($closedPairs),
+                'winRate' => count($closedPairs) > 0 ? ($profitCount / count($closedPairs)) * 100.0 : 0.0,
+                'maxLoss' => $maxLoss,
+                'maxWin' => $maxWin,
+                'maxLossStreaks' => $maxLossStreaks,
+                'maxWinStreaks' => $maxWinStreaks,
+                'highestRevenue' => max(0.0, $highest - 100.0),
+                'maxDrawdown' => $maxDrawdown,
+                'growth' => $equity - 100.0,
+                'pending' => $pendingCount,
+                'activeCount' => count($activePairs),
+                'longActive' => $longActive,
+                'shortActive' => $shortActive,
+                'drawdownSequence' => $publicSequence($drawdownSequence),
+                'peakSequence' => $publicSequence($peakSequence),
+                'accountExhausted' => $accountExhausted
+            ];
+        }
+        return $statistics;
+    }
+}
+
 if (!function_exists('progInvestorFetchAnalytics')) {
     function progInvestorFetchAnalytics(PDO $pdo, int $programmeId, int $developerId, $selectedSymbolsRaw = ''): array {
-        $result = ['rows'=>[], 'roots'=>[], 'symbols'=>[], 'error'=>''];
+        $result = ['rows'=>[], 'roots'=>[], 'symbols'=>[], 'statistics'=>['live'=>[], 'history'=>[]], 'error'=>''];
         $mainRows = progInvestorFetchConfigRows($pdo, 'programme_training_configuration', $programmeId, $developerId);
         $hasConfiguredRoots = false;
         foreach ($mainRows as $row) {
@@ -729,10 +1003,10 @@ if (!function_exists('progInvestorFetchAnalytics')) {
             return false;
         };
 
-        // Only the programme's selected symbols are included. All configured
-        // strategies and confirmations are combined here, and all configured
-        // timeframes are retained. Internal IDs/configuration are then stripped.
+        // Only selected symbols and configured strategy/timeframe rows are used.
+        // Raw strategy identity is retained only in this server-side calculation.
         $publicRows = [];
+        $analyticsPairs = [];
         foreach ($rows as $row) {
             $symbol = trim((string)($row['symbol'] ?? ''));
             if ($symbol === '' || !isset($symbolLookup[$symbol])) continue;
@@ -763,7 +1037,7 @@ if (!function_exists('progInvestorFetchAnalytics')) {
             }
 
             $outcome = strtolower(trim((string)($row['outcome'] ?? '')));
-            $normalizedOutcome = preg_replace('/[\\s_-]+/', ' ', $outcome);
+            $normalizedOutcome = preg_replace('/[\s_-]+/', ' ', $outcome);
             $dateFields = ['entry_trigger_time', 'entry_anchor_time', 'event_time'];
             if (in_array($normalizedOutcome, ['stoploss hit', 'closed in loss', 'closed loss', 'loss', 'losing'], true)) {
                 $dateFields = ['stoploss_trigger_time', 'close_time', 'closed_at', 'event_time', 'entry_trigger_time', 'entry_anchor_time'];
@@ -777,12 +1051,12 @@ if (!function_exists('progInvestorFetchAnalytics')) {
                 $dateValue = trim((string)($row[$dateField] ?? ''));
                 if ($dateValue !== '') { $tradeDate = substr($dateValue, 0, 10); break; }
             }
-            if (!preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $tradeDate)) $tradeDate = '';
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tradeDate)) $tradeDate = '';
 
-            // This is the complete investor-facing row. No strategy IDs,
-            // confirmation IDs, family numbers/signatures, prices, directions,
-            // orders, chart identifiers or exact trigger timestamps are exposed.
-            $publicRows[] = [
+            // This is the only per-row data sent to the investor's browser.
+            // Setup-group IDs, family numbers/signatures, strategy and confirmation
+            // IDs/names, prices, directions, orders and exact event times are omitted.
+            $publicRow = [
                 'symbol' => $symbol,
                 'outcome' => (string)($row['outcome'] ?? ''),
                 'risk_reward' => $row['risk_reward'] ?? null,
@@ -790,10 +1064,17 @@ if (!function_exists('progInvestorFetchAnalytics')) {
                 'live_trades' => (int)($row['live_trades'] ?? 1),
                 'trade_date' => $tradeDate
             ];
+            $publicRows[] = $publicRow;
+            $analyticsPairs[] = [
+                'internal' => $row,
+                'public' => $publicRow,
+                'main_setup' => $confirmationId <= 0
+            ];
         }
 
         $result['rows'] = $publicRows;
         $result['symbols'] = $symbols;
+        $result['statistics'] = progInvestorBuildAnalyticsStatistics($analyticsPairs);
         // Do not send roots or confirmation configuration to the client.
         $result['roots'] = [];
         return $result;
@@ -830,6 +1111,7 @@ if (
                 'success'=>true,
                 'programme_name'=>(string)($programme['program_name'] ?? 'Programme'),
                 'rows'=>$data['rows'],
+                'statistics'=>$data['statistics'],
                 'error'=>$data['error']
             ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         } catch (Throwable $e) {
@@ -902,11 +1184,11 @@ if (
                 $req = $stmt->fetch(PDO::FETCH_ASSOC);
             }
 
-            $srvRow = $pdo->query("SELECT contract_duration, min_broker_balance, server_share_percent, user_share_percent FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-            $srvContractDuration = (int)($srvRow['contract_duration'] ?? 30);
-            $srvMinBrokerBalance = (float)($srvRow['min_broker_balance'] ?? 0);
-            $srvServerShare      = (int)($srvRow['server_share_percent'] ?? 30);
-            $srvUserShare        = (int)($srvRow['user_share_percent'] ?? 70);
+            $serverRequirements = progInvestorLoadServerRequirements($pdo);
+            $srvContractDuration = max(1, (int)$serverRequirements['contract_duration']);
+            $srvMinBrokerBalance = (float)$serverRequirements['min_broker_balance'];
+            $srvServerShare      = (float)$serverRequirements['server_share_percent'];
+            $srvUserShare        = (float)$serverRequirements['user_share_percent'];
 
             $contractDuration = $req && (int)$req['contract_duration'] > 0 ? (int)$req['contract_duration'] : $srvContractDuration;
             $minInvestment    = $req && (float)$req['minimum_investment_amount'] > 0 ? (float)$req['minimum_investment_amount'] : $srvMinBrokerBalance;
@@ -1218,14 +1500,8 @@ if (
             $hasActiveContract     = false;
             $hasPaymentRequirement = false;
 
-            $contract_duration_cfg = 30;
-            try {
-                $cfgStmt = $pdo->query("SELECT contract_duration FROM server_account LIMIT 1");
-                $cfg = $cfgStmt->fetch(PDO::FETCH_ASSOC);
-                if ($cfg && !empty($cfg['contract_duration'])) {
-                    $contract_duration_cfg = (int)$cfg['contract_duration'];
-                }
-            } catch (Exception $e) {}
+            $serverRequirements = progInvestorLoadServerRequirements($pdo);
+            $contract_duration_cfg = max(1, (int)$serverRequirements['contract_duration']);
 
             $exec_start = $user['execution_start_date'] ?? null;
             if ($exec_start && $exec_start !== '0000-00-00' && $exec_start !== null) {
@@ -1402,6 +1678,13 @@ if (
 // NON-AJAX page render
 // =====================================================================
 
+// Read platform-wide defaults from the normalized server_requirements table.
+$serverRequirements = progInvestorLoadServerRequirements($pdo);
+$defaultContractDuration = max(1, (int)$serverRequirements['contract_duration']);
+$defaultMinimumInvestment = (float)$serverRequirements['min_broker_balance'];
+$defaultDeveloperPercentage = (float)$serverRequirements['server_share_percent'];
+$defaultInvestorPercentage = (float)$serverRequirements['user_share_percent'];
+
 // ---- SUB-ACCOUNT SCOPED: this sub-account's active investment ----
 $activeInvestment = null;
 $activeProgrammeId = 0;
@@ -1519,10 +1802,14 @@ try {
             'developer_first_name' => $p['first_name'],
             'developer_last_name' => $p['last_name'],
             'developer_fullname' => $p['fullname'],
-            'contract_duration' => $req ? (int)$req['contract_duration'] : 30,
-            'developer_percentage' => $req ? (int)$req['developer_percentage'] : 30,
-            'investor_percentage' => $req ? (int)$req['investor_percentage'] : 70,
-            'minimum_investment_amount' => $req ? (float)$req['minimum_investment_amount'] : 0,
+            'contract_duration' => $req && (int)$req['contract_duration'] > 0
+                ? (int)$req['contract_duration'] : $defaultContractDuration,
+            'developer_percentage' => $req && (float)$req['developer_percentage'] > 0
+                ? (float)$req['developer_percentage'] : $defaultDeveloperPercentage,
+            'investor_percentage' => $req && (float)$req['investor_percentage'] > 0
+                ? (float)$req['investor_percentage'] : $defaultInvestorPercentage,
+            'minimum_investment_amount' => $req && (float)$req['minimum_investment_amount'] > 0
+                ? (float)$req['minimum_investment_amount'] : $defaultMinimumInvestment,
             'maximum_investment_amount' => $req ? (float)$req['maximum_investment_amount'] : 0,
             'period' => $periodLabel,
         ];
@@ -1576,11 +1863,10 @@ if ($userHasProgramme) {
 
 
 
-        $srvRow = $pdo->query("SELECT contract_duration, min_broker_balance, server_share_percent, user_share_percent FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-        $srvContractDuration = (int)($srvRow['contract_duration'] ?? 30);
-        $srvMinBrokerBalance = (float)($srvRow['min_broker_balance'] ?? 0);
-        $srvServerShare      = (int)($srvRow['server_share_percent'] ?? 30);
-        $srvUserShare        = (int)($srvRow['user_share_percent'] ?? 70);
+        $srvContractDuration = $defaultContractDuration;
+        $srvMinBrokerBalance = $defaultMinimumInvestment;
+        $srvServerShare      = $defaultDeveloperPercentage;
+        $srvUserShare        = $defaultInvestorPercentage;
 
         $investedProgrammeData = [
             'id'                        => (int)$investedProgramme['id'],
@@ -1609,14 +1895,7 @@ if ($userHasProgramme) {
         ];
     }
 
-    $contract_duration_cfg = 30;
-    try {
-        $cfgStmt = $pdo->query("SELECT contract_duration FROM server_account LIMIT 1");
-        $cfg = $cfgStmt->fetch(PDO::FETCH_ASSOC);
-        if ($cfg && !empty($cfg['contract_duration'])) {
-            $contract_duration_cfg = (int)$cfg['contract_duration'];
-        }
-    } catch (Exception $e) {}
+    $contract_duration_cfg = $defaultContractDuration;
 
     $exec_start = $user['execution_start_date'] ?? null;
     if ($exec_start && $exec_start !== '0000-00-00' && $exec_start !== null) {
@@ -1845,6 +2124,13 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
             text-align: center;
         }
     }
+
+    .pa-streak-groups{display:grid;gap:12px;margin-top:12px}
+    .pa-streak-group{min-width:0;border:1px solid var(--border-color,#dfe9e5);border-radius:13px;background:var(--bg-card,#fff);padding:12px}
+    .pa-streak-group .pa-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+    .pa-streak-group .pa-section-title{font-weight:800;font-size:.84rem}
+    .pa-streak-group .pa-section-sub{font-size:.7rem;color:var(--text-muted,#718078);margin-top:2px}
+    .pa-signal-date{font-size:.66rem;color:var(--text-muted,#718078);margin-top:3px}
 </style>
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?> prog-page-body">
@@ -3089,6 +3375,7 @@ $defaultTab = ($linkedProgrammeId > 0) ? 'programmes' : ($userHasProgramme ? 'in
 'use strict';
 
 var PA_ROWS = [];
+var PA_STATS = {live:null, history:null};
 var activeTradeSource = 'live';
 var pageStack = [];
 var viewState = {page:'dashboard'};
@@ -3116,75 +3403,52 @@ function normalizedOutcome(value){
 function outcomeLabel(value){
     var v = normalizedOutcome(value);
     var labels = {
-        'stoploss hit':'Stoploss hit',
-        'take profit reached':'Profit reached',
-        'closed flat':'Closed flat',
-        'closed in profit':'Profit reached',
-        'closed in loss':'Stoploss hit',
-        'matched family':'Signal recorded',
-        "identify but don't trade":'Signal recorded'
+        'stoploss hit':'Stoploss hit','take profit reached':'Profit reached','closed flat':'Closed Flat',
+        'closed in profit':'Closed in Profit','closed in loss':'Closed in Loss',
+        'pending entry':'Pending entry','in trade':'In trade','matched family':'Matched setup',
+        "identify but don't trade":"Identify but don't trade"
     };
-    return labels[v] || (value ? String(value) : 'Signal recorded');
+    return labels[v] || (value ? String(value) : 'Trade configured · outcome not recorded');
 }
 function isLoss(row){ var v = normalizedOutcome(row && row.outcome); return v === 'stoploss hit' || v === 'closed in loss'; }
 function isProfit(row){ var v = normalizedOutcome(row && row.outcome); return v === 'take profit reached' || v === 'closed in profit'; }
 function isFlat(row){ return normalizedOutcome(row && row.outcome) === 'closed flat'; }
 function isClosed(row){ return isLoss(row) || isProfit(row) || isFlat(row) || ['closed','position closed','manual close','manually closed'].indexOf(normalizedOutcome(row && row.outcome)) !== -1; }
 function tradeDateFor(row){ return dateKey(row && row.trade_date); }
-function isNonTradeStatus(row){
-    var status = normalizedOutcome(row && row.outcome);
-    return status === 'pending entry' || status === 'in trade';
-}
-function tradeRows(rows){
-    return (rows || []).filter(function(row){
-        // Only completed trade outcomes belong in the investor trade totals/lists.
-        // Pending entries and trades still in progress are deliberately excluded.
-        return num(row.trade_configured) === 1 && !isNonTradeStatus(row);
-    });
-}
+function tradeRows(rows){ return (rows || []).filter(function(row){ return num(row.trade_configured) === 1; }); }
 
-function calculate(rows){
+// Fallback for older cached responses. The server-provided statistics are authoritative
+// because they preserve exact event ordering and private stream boundaries.
+function calculateFallback(rows){
     rows = Array.isArray(rows) ? rows : [];
-    var trades = tradeRows(rows);
-    var closed = trades.filter(isClosed);
-    var sl = trades.filter(isLoss).length;
-    var tp = trades.filter(isProfit).length;
-    var flat = trades.filter(isFlat).length;
-    var winsR = trades.reduce(function(total, row){ return total + (isProfit(row) ? Math.abs(num(row.risk_reward)) : 0); }, 0);
-    var maxLoss = 0, maxWin = 0, lossRun = 0, winRun = 0;
-    var equity = 100, highest = 100, maxDrawdown = 0;
-    var ordered = closed.slice().sort(function(a,b){ return tradeDateFor(a).localeCompare(tradeDateFor(b)); });
-    ordered.forEach(function(row){
-        if (isLoss(row)) { lossRun++; winRun = 0; maxLoss = Math.max(maxLoss, lossRun); }
-        else if (isProfit(row)) { winRun++; lossRun = 0; maxWin = Math.max(maxWin, winRun); }
-        else { lossRun = 0; winRun = 0; }
-        equity += isLoss(row) ? -1 : (isProfit(row) ? Math.abs(num(row.risk_reward)) : 0);
-        highest = Math.max(highest, equity);
-        var drawdown = highest > 0 ? ((highest - equity) / highest) * 100 : 0;
-        maxDrawdown = Math.max(maxDrawdown, drawdown);
+    var trades = tradeRows(rows), closed = trades.filter(isClosed);
+    var sl = trades.filter(isLoss).length, tp = trades.filter(isProfit).length;
+    var flat = trades.filter(isFlat).length, pending = trades.filter(function(r){return normalizedOutcome(r.outcome)==='pending entry';}).length;
+    var active = trades.filter(function(r){return normalizedOutcome(r.outcome)==='in trade';});
+    var winsR = trades.reduce(function(total,row){return total + (isProfit(row) ? num(row.risk_reward) : 0);},0);
+    var equity = 100, highest = 100, maxDrawdown = 0, lossRun = 0, winRun = 0, maxLoss = 0, maxWin = 0;
+    closed.slice().sort(function(a,b){return tradeDateFor(a).localeCompare(tradeDateFor(b));}).forEach(function(row){
+        if(isLoss(row)){lossRun++;winRun=0;maxLoss=Math.max(maxLoss,lossRun);}
+        else if(isProfit(row)){winRun++;lossRun=0;maxWin=Math.max(maxWin,winRun);}
+        else{lossRun=0;winRun=0;}
+        equity += isLoss(row) ? -1 : (isProfit(row) ? Math.max(0,num(row.risk_reward)) : 0);
+        highest=Math.max(highest,equity);
+        maxDrawdown=Math.max(maxDrawdown,Math.max(0,100-equity));
     });
     return {
-        signals: rows.length,
-        total: trades.length,
-        sl: sl,
-        tp: tp,
-        flat: flat,
-        winsR: winsR,
-        netR: winsR - sl,
-        closed: closed.length,
-        winRate: closed.length ? (tp / closed.length) * 100 : 0,
-        maxLoss: maxLoss,
-        maxWin: maxWin,
-        currentBalance: equity,
-        highestBalance: highest,
-        highestRevenue: Math.max(0, highest - 100),
-        maxDrawdown: maxDrawdown
+        signals:rows.length,mainSetupCount:rows.length,total:trades.length,sl:sl,tp:tp,flat:flat,
+        winsR:winsR,netR:winsR-sl,closed:closed.length,winRate:closed.length?tp/closed.length*100:0,
+        maxLoss:maxLoss,maxWin:maxWin,maxLossStreaks:[],maxWinStreaks:[],
+        highestRevenue:Math.max(0,highest-100),maxDrawdown:maxDrawdown,growth:equity-100,
+        pending:pending,activeCount:active.length,longActive:0,shortActive:0,
+        drawdownSequence:[],peakSequence:[],mainSetups:[],accountExhausted:equity<=0
     };
 }
+function currentStats(){ return PA_STATS[activeTradeSource] || calculateFallback(currentTradeRows); }
 
 function metricCard(label, value, icon, detail, cls, action, buttonLabel){
     var actionHtml = action
-        ? '<button type="button" class="pa-action" data-page-action="' + esc(action) + '">' + esc(buttonLabel || 'See trades') + '</button>'
+        ? '<button type="button" class="pa-action" data-page-action="' + esc(action) + '">' + esc(buttonLabel || 'View trades') + '</button>'
         : '';
     return '<article class="pa-card pa-metric">'
         + '<div class="pa-metric-top"><span class="pa-label">' + esc(label) + '</span><span class="pa-icon"><i class="fa-solid ' + esc(icon) + '"></i></span></div>'
@@ -3194,25 +3458,25 @@ function metricCard(label, value, icon, detail, cls, action, buttonLabel){
         + '</article>';
 }
 function renderDashboard(){
-    var x = calculate(currentTradeRows);
+    var x = currentStats();
     lastStats = x;
     if (!PA_ROWS.length) {
         $('paDashboardContent').innerHTML = '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No recorded signals</strong>No analytics records are available for this programme yet.</div>';
         return;
     }
     var html = '';
-    html += metricCard('Total Signals', fmt(x.signals,0), 'fa-signal', 'Combined strategy and confirmation signals');
-    html += metricCard('Total Trades', fmt(x.total,0), 'fa-arrow-right-arrow-left', 'All selected programme symbols and timeframes', '', 'trades-provision', 'Trades Provision');
-    html += metricCard('Stoploss hit', fmt(x.sl,0), 'fa-shield-halved', 'Trades closed at stoploss', 'negative');
-    html += metricCard('Lost Risks', '-' + fmt(x.sl,0) + 'RR', 'fa-arrow-trend-down', 'One risk unit for each stoploss', 'negative');
-    html += metricCard('Profit reached', fmt(x.tp,0), 'fa-trophy', 'Trades closed in profit', 'positive');
-    html += metricCard('Risk rewards', '+' + fmt(x.winsR,2) + 'RR', 'fa-coins', 'Combined realised profit', 'positive');
-    html += metricCard('Consecutive Loss', fmt(x.maxLoss,0), 'fa-arrow-down', 'Longest recorded losing sequence');
-    html += metricCard('Consecutive Win', fmt(x.maxWin,0), 'fa-arrow-up', 'Longest recorded winning sequence');
-    html += metricCard('Highest Drawdown', fmt(x.maxDrawdown,2) + '%', 'fa-chart-line', 'Maximum recorded drawdown', 'negative');
-    html += metricCard('Highest Revenue Peak', '+' + fmt(x.highestRevenue,2) + '%', 'fa-arrow-trend-up', 'Highest balance above the starting baseline', 'positive');
+    html += metricCard('Total Trades', fmt(x.total,0), 'fa-arrow-right-arrow-left', fmt(x.mainSetupCount,0) + ' main setups', '', 'trades-provision', 'Trades Provision');
+    html += metricCard('Lost Risks', fmt(x.sl,0) + 'R', 'fa-arrow-trend-down', 'Each stoploss = −1R · ' + fmt(x.sl,0) + ' losing trades', 'negative', 'outcome:stoploss hit', 'View trades');
+    html += metricCard('Risk rewards', '+' + fmt(x.winsR,2) + 'R', 'fa-coins', 'Sum of ' + fmt(x.tp,0) + ' winning trades', 'positive', 'outcome:take profit reached', 'View trades');
+    html += metricCard('Profit reached', fmt(x.tp,0), 'fa-trophy', 'Profitable trade setups', 'positive', 'outcome:take profit reached', 'View trades');
+    html += metricCard('Consecutive Loss', fmt(x.maxLoss,0), 'fa-arrow-down', 'Longest losing streak before a profitable trade', 'negative', 'streak:loss', 'View trades');
+    html += metricCard('Consecutive Win', fmt(x.maxWin,0), 'fa-arrow-up', 'Longest winning streak without a loss', 'positive', 'streak:win', 'View trades');
+    html += metricCard('Highest Drawdown', fmt(x.maxDrawdown,2) + '%', 'fa-chart-line', x.accountExhausted ? 'Account exhausted' : 'Drawdown measured from the starting balance', '', 'sequence:drawdown', 'View sequence');
+    html += metricCard('Highest Revenue Peak', '+' + fmt(x.highestRevenue,2) + '%', 'fa-arrow-trend-up', 'Highest growth reached above the starting balance', '', 'sequence:peak', 'View sequence');
     html += metricCard('Win rate', fmt(x.winRate,1) + '%', 'fa-bullseye', fmt(x.tp,0) + ' wins / ' + fmt(x.closed,0) + ' closed');
-    html += metricCard('Current virtual balance', fmt(x.currentBalance,2) + '%', 'fa-scale-balanced', 'Starting baseline adjusted by recorded losses and rewards', x.currentBalance >= 100 ? 'positive' : 'negative');
+    html += metricCard('Growth', (num(x.growth) >= 0 ? '+' : '') + fmt(x.growth,2) + '%', 'fa-scale-balanced', 'Net gain or loss from the starting balance', num(x.growth) >= 0 ? 'positive' : 'negative');
+    html += metricCard('Pending entries', fmt(x.pending,0), 'fa-hourglass-half', 'Matched trade setups awaiting entry', '', 'outcome:pending entry', 'View trades');
+    html += metricCard('In trade', fmt(x.activeCount,0), 'fa-chart-column', fmt(x.longActive,0) + ' long · ' + fmt(x.shortActive,0) + ' short', '', 'outcome:in trade', 'View trades');
     $('paDashboardContent').innerHTML = '<div class="pa-grid">' + html + '</div>';
 }
 
@@ -3226,17 +3490,21 @@ function renderSignalCard(row){
     var outcome = outcomeLabel(row.outcome);
     var resultClass = isProfit(row) ? 'positive' : (isLoss(row) ? 'negative' : '');
     var statusClass = isProfit(row) ? 'take-profit-reached' : (isLoss(row) ? 'stoploss-hit' : '');
+    var date = tradeDateFor(row);
     return '<article class="pa-card pa-signal-card">'
         + '<div class="pa-signal-symbol">' + esc(row.symbol || '—') + '</div>'
         + '<div class="pa-signal-result"><span class="pa-status ' + statusClass + '">' + esc(outcome) + '</span>'
         + '<strong class="pa-signal-rr ' + resultClass + '">' + esc(resultRiskText(row)) + '</strong></div>'
+        + (date ? '<div class="pa-signal-date">' + esc(date) + '</div>' : '')
         + '</article>';
 }
-function renderSignalCards(rows){
-    if (!rows.length) return '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No recorded trades</strong>No trade results were recorded in this period.</div>';
-    return rows.slice().sort(function(a,b){
+function renderSignalCards(rows, preserveOrder){
+    if (!rows || !rows.length) return '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No recorded trades</strong>No matching trade results were recorded.</div>';
+    var ordered = rows.slice();
+    if (!preserveOrder) ordered.sort(function(a,b){
         return tradeDateFor(a).localeCompare(tradeDateFor(b)) || String(a.symbol || '').localeCompare(String(b.symbol || ''));
-    }).map(renderSignalCard).join('');
+    });
+    return ordered.map(renderSignalCard).join('');
 }
 function getDateRows(rows){ return tradeRows(rows).filter(function(row){ return !!tradeDateFor(row); }); }
 function groupBy(rows, keyFn){
@@ -3267,14 +3535,14 @@ function weekRows(rows, weekKey){
         return date.slice(0,7) === parsed.month && monthWeekNumber(date) === parsed.weekNumber;
     });
 }
-function isolatedHeader(title){
-    return '<div class="pa-isolated-head"><h2>' + esc(title) + '</h2></div>';
+function isolatedHeader(title, subtitle){
+    return '<div class="pa-isolated-head"><h2>' + esc(title) + '</h2>' + (subtitle ? '<p>' + esc(subtitle) + '</p>' : '') + '</div>';
 }
 function renderTradesProvision(){
     var trades = getDateRows(currentTradeRows);
     var months = groupBy(trades, function(row){ return tradeDateFor(row).slice(0,7); });
     var keys = Object.keys(months).sort().reverse();
-    var html = isolatedHeader('Trades Provision');
+    var html = isolatedHeader('Trades Provision', 'Month → Week → Day');
     if (!keys.length) {
         $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trade dates yet</strong>Recorded trade dates will appear here.</div>';
         return;
@@ -3292,7 +3560,7 @@ function renderWeeks(month){
     var monthTrades = monthRows(trades, month);
     var weeks = groupBy(monthTrades, function(row){ return String(monthWeekNumber(tradeDateFor(row))); });
     var keys = Object.keys(weeks).sort(function(a,b){ return Number(b) - Number(a); });
-    var html = isolatedHeader(monthName(month));
+    var html = isolatedHeader(monthName(month), 'Select a trading week');
     if (!keys.length) {
         $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trading weeks</strong>No trades were recorded for this month.</div>';
         return;
@@ -3312,7 +3580,7 @@ function renderDays(weekKey){
     var currentWeekRows = weekRows(trades, weekKey);
     var days = groupBy(currentWeekRows, function(row){ return tradeDateFor(row); });
     var keys = Object.keys(days).sort().reverse();
-    var html = isolatedHeader('Week ' + parsed.weekNumber);
+    var html = isolatedHeader('Week ' + parsed.weekNumber, 'Select a trading day');
     if (!keys.length) {
         $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid fa-calendar-days"></i><strong>No trading days</strong>No trades were recorded for this week.</div>';
         return;
@@ -3329,7 +3597,63 @@ function renderDays(weekKey){
 function renderTradeDay(day){
     var trades = getDateRows(currentTradeRows).filter(function(row){ return tradeDateFor(row) === day; });
     var label = new Date(day + 'T12:00:00').toLocaleDateString(undefined, {weekday:'long',day:'numeric',month:'long',year:'numeric'});
-    $('paIsolated').innerHTML = isolatedHeader(label) + '<div class="pa-signal-list">' + renderSignalCards(trades) + '</div>';
+    $('paIsolated').innerHTML = isolatedHeader(label, 'Trades recorded on this day') + '<div class="pa-signal-list">' + renderSignalCards(trades, true) + '</div>';
+}
+function renderMainSetups(){
+    var setups = currentStats().mainSetups || [];
+    $('paIsolated').innerHTML = isolatedHeader('Main Setups', 'Matched main setups across the programme’s selected symbols')
+        + '<div class="pa-signal-list">' + renderSignalCards(setups) + '</div>';
+}
+function renderOutcomeTrades(){
+    var outcome = String(viewState.outcome || '');
+    var matching = currentTradeRows.filter(function(row){
+        if (num(row.trade_configured) !== 1) return false;
+        if (outcome === 'stoploss hit') return isLoss(row);
+        if (outcome === 'take profit reached') return isProfit(row);
+        return normalizedOutcome(row.outcome) === normalizedOutcome(outcome);
+    });
+    var title = outcome === 'stoploss hit' ? 'Stoploss Trades'
+        : (outcome === 'take profit reached' ? 'Profitable Trades'
+        : (outcome === 'pending entry' ? 'Pending Entries' : (outcome === 'in trade' ? 'Trades In Progress' : 'Trade Results')));
+    $('paIsolated').innerHTML = isolatedHeader(title, matching.length + (matching.length === 1 ? ' matching trade' : ' matching trades'))
+        + '<div class="pa-signal-list">' + renderSignalCards(matching) + '</div>';
+}
+function renderStreakTrades(){
+    var isLoss = viewState.streak === 'loss';
+    var stat = currentStats();
+    var sequences = isLoss ? (stat.maxLossStreaks || []) : (stat.maxWinStreaks || []);
+    var title = isLoss ? 'Consecutive Loss Trades' : 'Consecutive Win Trades';
+    var streakLabel = isLoss ? 'consecutive losses' : 'consecutive wins';
+    var total = sequences.reduce(function(sum, sequence){ return sum + sequence.length; }, 0);
+    var subtitle = sequences.length
+        ? 'Showing ' + fmt(total,0) + ' trades across ' + fmt(sequences.length,0) + ' longest ' + streakLabel + ' streak' + (sequences.length === 1 ? '' : 's') + '.'
+        : 'No closed ' + (isLoss ? 'losing' : 'winning') + ' streaks were recorded for this source.';
+    var html = isolatedHeader(title, subtitle);
+    if (!sequences.length) {
+        $('paIsolated').innerHTML = html + '<div class="pa-panel pa-empty"><i class="fa-solid ' + (isLoss ? 'fa-arrow-down' : 'fa-arrow-up') + '"></i><strong>No ' + (isLoss ? 'consecutive losses' : 'consecutive wins') + ' found</strong>No matching trade sequence is available in this source.</div>';
+        return;
+    }
+    html += '<div class="pa-streak-groups">';
+    sequences.forEach(function(sequence, index){
+        var symbol = sequence.length ? String(sequence[0].symbol || '') : '';
+        html += '<section class="pa-streak-group"><div class="pa-section-head"><div>'
+            + '<div class="pa-section-title">Streak ' + (index + 1) + '</div>'
+            + '<div class="pa-section-sub">' + esc(symbol) + '</div></div>'
+            + '<span class="pa-status ' + (isLoss ? 'stoploss-hit' : 'take-profit-reached') + '">' + sequence.length + ' ' + streakLabel + '</span></div>'
+            + '<div class="pa-signal-list">' + renderSignalCards(sequence, true) + '</div></section>';
+    });
+    html += '</div>';
+    $('paIsolated').innerHTML = html;
+}
+function renderSequenceTrades(){
+    var stat = currentStats();
+    var isDrawdown = viewState.sequence === 'drawdown';
+    var sequence = isDrawdown ? (stat.drawdownSequence || []) : (stat.peakSequence || []);
+    var title = isDrawdown ? 'Highest Drawdown Sequence' : 'Highest Revenue Peak Sequence';
+    var subtitle = isDrawdown ? 'Trades contributing to the highest recorded drawdown from the starting balance.'
+        : 'Trades contributing to the highest recorded growth above the starting balance.';
+    $('paIsolated').innerHTML = isolatedHeader(title, subtitle)
+        + '<div class="pa-signal-list">' + renderSignalCards(sequence, true) + '</div>';
 }
 function syncParentChrome(){
     var nested = viewState.page !== 'dashboard';
@@ -3347,6 +3671,10 @@ function renderCurrentView(){
     else if (viewState.page === 'trades-weeks') renderWeeks(viewState.month);
     else if (viewState.page === 'trades-days') renderDays(viewState.week);
     else if (viewState.page === 'trades-day') renderTradeDay(viewState.day);
+    else if (viewState.page === 'main-setups') renderMainSetups();
+    else if (viewState.page === 'outcome-trades') renderOutcomeTrades();
+    else if (viewState.page === 'streak-trades') renderStreakTrades();
+    else if (viewState.page === 'sequence-trades') renderSequenceTrades();
 }
 function goPage(page, extra){
     pageStack.push(viewState);
@@ -3370,6 +3698,7 @@ function refresh(){
     currentTradeRows = PA_ROWS.filter(function(row){
         return num(row.live_trades) === (activeTradeSource === 'live' ? 1 : 0);
     });
+    lastStats = currentStats();
     renderCurrentView();
 }
 
@@ -3390,7 +3719,14 @@ $('paSourceTabs').addEventListener('click', function(event){
 document.addEventListener('click', function(event){
     var action = event.target.closest('[data-page-action]');
     if (action) {
-        if (action.dataset.pageAction === 'trades-provision') goPage('trades-provision');
+        var pageAction = action.dataset.pageAction || '';
+        if (pageAction === 'trades-provision') goPage('trades-provision');
+        else if (pageAction === 'main-setups') goPage('main-setups');
+        else if (pageAction === 'streak:loss') goPage('streak-trades', {streak:'loss'});
+        else if (pageAction === 'streak:win') goPage('streak-trades', {streak:'win'});
+        else if (pageAction === 'sequence:drawdown') goPage('sequence-trades', {sequence:'drawdown'});
+        else if (pageAction === 'sequence:peak') goPage('sequence-trades', {sequence:'peak'});
+        else if (pageAction.indexOf('outcome:') === 0) goPage('outcome-trades', {outcome:pageAction.slice(8)});
         return;
     }
     var month = event.target.closest('[data-month]');
@@ -3404,6 +3740,7 @@ document.addEventListener('click', function(event){
 window.setProgrammeAnalyticsData = function(payload){
     payload = payload && typeof payload === 'object' ? payload : {};
     PA_ROWS = Array.isArray(payload.rows) ? payload.rows : [];
+    PA_STATS = payload.statistics && typeof payload.statistics === 'object' ? payload.statistics : {live:null,history:null};
     activeTradeSource = 'live';
     pageStack = [];
     viewState = {page:'dashboard'};
@@ -3416,6 +3753,7 @@ window.setProgrammeAnalyticsData = function(payload){
 };
 window.resetProgrammeAnalyticsData = function(){
     PA_ROWS = [];
+    PA_STATS = {live:null,history:null};
     currentTradeRows = [];
     pageStack = [];
     viewState = {page:'dashboard'};

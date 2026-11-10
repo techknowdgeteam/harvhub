@@ -848,6 +848,21 @@ function showSpinner() {
     </script>';
 }
 showSpinner();
+// Public VPS catalogue: public offer fields only; provisioning data is excluded.
+$catalogueCsrf = $_SESSION['vps_purchase_csrf'] ??= bin2hex(random_bytes(32));
+$availableVpsPlans = [];
+try {
+    $catalogueQ = $pdo->query("SELECT id, product_name, provider_name, plan_name, plan_description,
+        cpu_type, vcpu_count, ram_gb, storage_type, storage_gb, network_port_speed_mbps,
+        data_transfer, server_location, operating_system, billing_period,
+        subscription_duration_days, price, currency, setup_fee, stock_quantity, allocated_quantity
+        FROM server_available_vps
+        WHERE status = 'published' AND allocated_quantity < stock_quantity
+        ORDER BY price ASC, id DESC");
+    $availableVpsPlans = $catalogueQ->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $catalogueError) {
+    error_log('Programme VPS catalogue unavailable: ' . $catalogueError->getMessage());
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -936,6 +951,11 @@ showSpinner();
         .vps-visibility-select { min-width:108px; }
     }
 </style>
+
+<style>
+.market-vps-intro{margin:5px 0 16px}.market-vps-intro h3{margin:0 0 4px;font-size:18px}.market-vps-intro p{margin:0;color:var(--text-muted,#8291a3);font-size:13px}.market-vps-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.market-vps-card{background:var(--card-bg,#fff);border:1px solid var(--border-color,#e4eaf0);border-radius:14px;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.04)}.market-vps-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.market-vps-provider{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted,#8090a0)}.market-vps-card h3{font-size:17px;margin:4px 0 0}.market-vps-card-head p{margin:2px 0;color:var(--text-muted,#8090a0);font-size:12px}.market-vps-price{text-align:right;white-space:nowrap}.market-vps-price strong{display:block;font-size:17px;color:var(--accent-color,#159a6d)}.market-vps-price span{display:block;font-size:11px;color:var(--text-muted,#8090a0)}.market-vps-description{font-size:12px;color:var(--text-muted,#7d8a99);margin:12px 0}.market-vps-specs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}.market-vps-specs>div{background:var(--bg-secondary,#f6f8fa);padding:9px;border-radius:8px;min-width:0}.market-vps-specs b{display:block;font-size:12px;overflow-wrap:anywhere}.market-vps-specs span{font-size:10px;color:var(--text-muted,#8793a2)}.market-vps-card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--border-color,#e8edf2);padding-top:12px;font-size:12px;color:var(--text-muted,#8793a2)}.market-vps-card-foot button{margin:0}.market-vps-card-foot button:disabled{opacity:.55;cursor:not-allowed}
+</style>
+
 </head>
 <body class="<?= htmlspecialchars($darkModeClass) ?> vps-page-body">
 
@@ -966,7 +986,23 @@ showSpinner();
         </div>
 
         <div class="vps-scroll-area" id="vpsScrollArea">
-            <div class="vps-tab-content active" id="vpsTabPurchase"><div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>Not available at the moment</p></div></div>
+            <div class="vps-tab-content active" id="vpsTabPurchase">
+                <div class="market-vps-intro"><h3>Available VPS Plans</h3><p>Choose a published VPS plan for this programme. Registration follows payment confirmation.</p></div>
+                <?php if (empty($availableVpsPlans)): ?>
+                    <div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>No published VPS plans are currently available.</p></div>
+                <?php else: ?>
+                    <div class="market-vps-grid">
+                    <?php foreach ($availableVpsPlans as $plan): ?>
+                        <article class="market-vps-card">
+                            <div class="market-vps-card-head"><div><span class="market-vps-provider"><?= htmlspecialchars($plan['provider_name'] ?: 'HarvHub VPS', ENT_QUOTES, 'UTF-8') ?></span><h3><?= htmlspecialchars($plan['product_name'], ENT_QUOTES, 'UTF-8') ?></h3><p><?= htmlspecialchars($plan['plan_name'], ENT_QUOTES, 'UTF-8') ?></p></div><div class="market-vps-price"><strong><?= htmlspecialchars($plan['currency'], ENT_QUOTES, 'UTF-8') ?> <?= number_format((float)$plan['price'], 2) ?></strong><span>per <?= htmlspecialchars($plan['billing_period'], ENT_QUOTES, 'UTF-8') ?></span><?php if ((float)$plan['setup_fee'] > 0): ?><span>+ <?= htmlspecialchars($plan['currency'], ENT_QUOTES, 'UTF-8') ?> <?= number_format((float)$plan['setup_fee'], 2) ?> setup fee</span><?php endif; ?></div></div>
+                            <?php if (!empty($plan['plan_description'])): ?><p class="market-vps-description"><?= nl2br(htmlspecialchars($plan['plan_description'], ENT_QUOTES, 'UTF-8')) ?></p><?php endif; ?>
+                            <div class="market-vps-specs"><div><b><?= (int)$plan['vcpu_count'] ?> vCPU</b><span><?= htmlspecialchars($plan['cpu_type'] ?: 'Processor', ENT_QUOTES, 'UTF-8') ?></span></div><div><b><?= htmlspecialchars($plan['ram_gb'], ENT_QUOTES, 'UTF-8') ?> GB RAM</b><span>Memory</span></div><div><b><?= htmlspecialchars($plan['storage_gb'], ENT_QUOTES, 'UTF-8') ?> GB</b><span><?= htmlspecialchars($plan['storage_type'], ENT_QUOTES, 'UTF-8') ?> storage</span></div><div><b><?= htmlspecialchars($plan['server_location'], ENT_QUOTES, 'UTF-8') ?></b><span>Location</span></div><div><b><?= htmlspecialchars($plan['network_port_speed_mbps'] ? $plan['network_port_speed_mbps'].' Mbps' : 'Not specified', ENT_QUOTES, 'UTF-8') ?></b><span>Network port</span></div><div><b><?= htmlspecialchars($plan['data_transfer'] ?: 'Not specified', ENT_QUOTES, 'UTF-8') ?></b><span>Transfer</span></div><div><b><?= htmlspecialchars($plan['operating_system'] ?: 'Choose at provisioning', ENT_QUOTES, 'UTF-8') ?></b><span>Operating system</span></div><div><b><?= (int)$plan['subscription_duration_days'] ?> days</b><span>Subscription term</span></div></div>
+                            <div class="market-vps-card-foot"><span><?= max(0,(int)$plan['stock_quantity']-(int)$plan['allocated_quantity']) ?> available</span><button type="button" class="vps-btn-link" onclick="startProgrammeVpsPurchase(<?= (int)$plan['id'] ?>, this)" <?= !empty($userOwnsProgrammeVps) ? 'disabled title="This programme already has a VPS"' : '' ?>>Buy now</button></div>
+                        </article>
+                    <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
 
             <div class="vps-tab-content" id="vpsTabUsers">
                 <?php if ($isAlreadyFollowerProg): ?>
@@ -1742,5 +1778,19 @@ showSpinner();
     });
     if (userOwnsProgrammeVps) refreshIncomingBadge();
 </script>
+
+<script>
+async function startProgrammeVpsPurchase(planId, button){
+    if(!confirm('Create a VPS purchase request for this programme and continue to checkout?'))return;
+    const old=button.textContent;button.disabled=true;button.textContent='Preparing…';
+    try{
+        const body=new URLSearchParams({action:'begin_purchase',vps_id:String(planId),csrf_token:<?= json_encode($catalogueCsrf) ?>});
+        const response=await fetch('purchaseprogrammevps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body});
+        const data=await response.json();if(!data.success)throw new Error(data.message||'Unable to start purchase.');
+        window.top.location.href=data.redirect;
+    }catch(error){alert(error.message);button.disabled=false;button.textContent=old;}
+}
+</script>
+
 </body>
 </html>

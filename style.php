@@ -1,3 +1,4 @@
+
 <style>
     /* ============================================================
     GLOBAL iOS ZOOM FIX
@@ -3518,9 +3519,12 @@
     TRADES PAGE STYLES
     ============================================ */
     .trade-container {
-        max-width: 800px;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
         margin: 0 auto;
-        padding: 0 15px;
+        padding: 0 20px;
+        box-sizing: border-box;
     }
 
     .trades-header {
@@ -3693,9 +3697,12 @@
     }
 
     .menu-container {
-        max-width: 800px;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
         margin: 0 auto;
-        padding: 0 15px;
+        padding: 0 20px;
+        box-sizing: border-box;
     }
 
     /* User card */
@@ -4460,9 +4467,12 @@
     ACTIVITY PAGE STYLES (Balance Log)
     ============================================ */
     .activi-container {
-        max-width: 800px;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
         margin: 0 auto;
-        padding: 0 15px;
+        padding: 0 20px;
+        box-sizing: border-box;
     }
 
     .activity-header {
@@ -4671,9 +4681,16 @@
    ANALYTICS PAGE STYLES
    ============================================ */
     .analytics-container {
-        max-width: 800px;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
         margin: 0 auto;
-        padding: 0 15px;
+        padding: 0 20px;
+        box-sizing: border-box;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
     }
 
     .analytics-header {
@@ -5172,6 +5189,11 @@
         top: 0;
         left: 0;
         right: 0;
+        width: 100%;
+        max-width: 1100px;
+        margin-left: auto;
+        margin-right: auto;
+        box-sizing: border-box;
         height: 60px;
         background: var(--bg, #ffffff);
         backdrop-filter: blur(20px);
@@ -6606,6 +6628,10 @@
     .vps-page-wrapper {
         position: relative;
         width: 100%;
+        max-width: 1100px;
+        min-width: 0;
+        margin: 0 auto;
+        box-sizing: border-box;
         height: 100%;
         display: flex;
         flex-direction: column;
@@ -6620,6 +6646,11 @@
        ============================================================ */
     .vps-sticky-top {
         flex: 0 0 auto;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
+        margin: 0 auto;
+        box-sizing: border-box;
         background: var(--bg, #ffffff);
         z-index: 10;
         transform: translateY(0);
@@ -6642,7 +6673,7 @@
     .vps-sticky-top > .vps-topbar,
     .vps-sticky-top > .vps-search-wrap,
     .vps-sticky-top > .vps-tabs {
-        max-width: 720px;
+        max-width: 1100px;
         margin-left: auto;
         margin-right: auto;
         width: 100%;
@@ -6994,6 +7025,11 @@
        ============================================================ */
     .vps-scroll-area {
         flex: 1 1 auto;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
+        margin: 0 auto;
+        box-sizing: border-box;
         overflow-y: auto;
         overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
@@ -7012,6 +7048,10 @@
        ============================================================ */
     .vps-tab-content {
         display: none;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
     }
 
     .vps-tab-content.active {
@@ -7046,6 +7086,10 @@
     .vps-hosts-list {
         display: flex;
         flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
         gap: var(--spacing-sm, 12px);
     }
 
@@ -7331,6 +7375,10 @@
     .vps-requests-list {
         display: flex;
         flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
         gap: var(--spacing-sm, 12px);
     }
 

@@ -12,7 +12,7 @@
 
 
     $tableName              = "harvhub";
-    $serverAccountTable     = "server_account";
+    $serverRequirementsTable = "server_requirements";
     $revenueHistoryTable    = "revenue_history";
     $programmeInvestorsTable= "programme_investors";
     $programmeTable         = "programme";
@@ -82,13 +82,19 @@
     }
 
     // ==================== FETCH SERVER ACCOUNT ====================
-    $stmt = $pdo->prepare("SELECT * FROM $serverAccountTable WHERE id = 1 LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM $serverRequirementsTable WHERE id = 1 LIMIT 1");
     $stmt->execute();
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$serverAccount) {
-        die("Server configuration not found.");
+        die("Server requirements are not configured. Check the server_requirements table.");
     }
+
+    // Only enabled, generic payment-method rows are available to investors.
+    $paymentMethods = $pdo->query(
+        'SELECT id, method_name, account_or_address, additional_info, company_name, sort_order '
+        . 'FROM server_payment_methods WHERE is_enabled = 1 ORDER BY sort_order ASC, id ASC'
+    )->fetchAll(PDO::FETCH_ASSOC);
 
     $darkMode      = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
     $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
@@ -235,120 +241,53 @@
             }
         }
 
-        // ---- Broker link resolution ----
-        $allowed_brokers = [];
+        // ---- Broker link resolution from server_brokers only ----
         $broker_links = [];
-
-        try {
-            $stmt = $pdo->query("SELECT brokers, brokers_link FROM server_account LIMIT 1");
-            $config = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($config) {
-                $raw_brokers = explode(',', $config['brokers'] ?? '');
-                $raw_links = explode(',', $config['brokers_link'] ?? '');
-
-                $cleaned_links = [];
-                foreach ($raw_links as $link) {
-                    $link = trim($link);
-                    if (empty($link)) continue;
-
-                    if (strpos($link, ':') !== false) {
-                        $link = trim(substr($link, strrpos($link, ':') + 1));
-                    }
-
-                    if (preg_match('/([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})/', $link, $matches)) {
-                        $link = $matches[1];
-                    }
-
-                    $link = strtolower(trim($link));
-                    if (!empty($link)) {
-                        $cleaned_links[] = $link;
-                    }
-                }
-
-                foreach ($raw_brokers as $index => $entry) {
-                    $entry = trim($entry);
-                    if (empty($entry)) continue;
-
-                    $broker_name = (strpos($entry, ':') !== false)
-                        ? trim(substr($entry, strrpos($entry, ':') + 1))
-                        : $entry;
-
-                    $broker_name = preg_replace('/[^a-zA-Z0-9\s]/', '', $broker_name);
-                    $broker_name = trim($broker_name);
-                    $broker_name_clean = strtolower($broker_name);
-
-                    if (!empty($broker_name)) {
-                        $formatted_name = ucfirst($broker_name);
-                        $link = '';
-
-                        foreach ($cleaned_links as $cleaned_link) {
-                            if (strpos($cleaned_link, $broker_name_clean) !== false) {
-                                $link = $cleaned_link;
-                                break;
-                            }
-                        }
-
-                        if (empty($link) && isset($cleaned_links[$index])) {
-                            $link = $cleaned_links[$index];
-                        }
-
-                        if (!in_array($formatted_name, $allowed_brokers)) {
-                            $allowed_brokers[] = $formatted_name;
-                            $broker_links[$formatted_name] = $link;
-                        }
-                    }
-                }
-                sort($allowed_brokers);
+        $brokerRows = $pdo->query(
+            'SELECT broker_name, broker_url FROM server_brokers WHERE is_enabled = 1 ORDER BY sort_order ASC, id ASC'
+        )->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($brokerRows as $brokerRow) {
+            $name = trim((string)($brokerRow['broker_name'] ?? ''));
+            $url = trim((string)($brokerRow['broker_url'] ?? ''));
+            if ($name !== '') {
+                $broker_links[$name] = ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)
+                    && preg_match('#^https?://#i', $url)) ? $url : '';
             }
-        } catch (PDOException $e) {}
+        }
 
         $brokerLink = '';
-        $userBrokerRaw = trim($user['broker'] ?? '');
-        $userBroker = ucfirst(strtolower($userBrokerRaw));
-
-        if (!empty($userBroker) && isset($broker_links[$userBroker]) && !empty($broker_links[$userBroker])) {
-            $brokerLink = $broker_links[$userBroker];
-        } else {
+        $userBrokerRaw = trim((string)($user['broker'] ?? ''));
+        $matchedLink = '';
+        foreach ($broker_links as $name => $url) {
+            if ($url !== '' && strcasecmp($name, $userBrokerRaw) === 0) {
+                $matchedLink = $url;
+                break;
+            }
+        }
+        if ($matchedLink === '' && $userBrokerRaw !== '') {
             foreach ($broker_links as $name => $url) {
-                if (strcasecmp($name, $userBroker) === 0 && !empty($url)) {
-                    $brokerLink = $url;
+                if ($url !== '' && stripos($userBrokerRaw, $name) !== false) {
+                    $matchedLink = $url;
                     break;
                 }
             }
-
-            if (empty($brokerLink)) {
-                foreach ($broker_links as $name => $url) {
-                    if (!empty($url) && stripos($userBrokerRaw, $name) !== false) {
-                        $brokerLink = $url;
-                        break;
-                    }
-                }
-            }
         }
-
-        if (empty($brokerLink)) {
+        if ($matchedLink === '') {
             foreach ($broker_links as $name => $url) {
-                if ((strcasecmp($name, 'Harvhub') === 0 || strcasecmp($name, 'HarvHub') === 0) && !empty($url)) {
-                    $brokerLink = $url;
+                if ($url !== '' && strcasecmp($name, 'HarvHub') === 0) {
+                    $matchedLink = $url;
                     break;
                 }
             }
-            if (empty($brokerLink)) {
-                foreach ($broker_links as $name => $url) {
-                    if (!empty($url)) {
-                        $brokerLink = $url;
-                        break;
-                    }
-                }
+        }
+        if ($matchedLink === '') {
+            foreach ($broker_links as $url) {
+                if ($url !== '') { $matchedLink = $url; break; }
             }
         }
-
-        if (!empty($brokerLink) && strpos($brokerLink, '://') === false) {
-            $brokerLink = 'https://' . $brokerLink;
-        }
-
-        $brokerTarget = !empty($brokerLink) ? $brokerLink : 'about:blank';
+        if ($matchedLink !== '') $brokerLink = $matchedLink;
+        // The caller escapes this value once when rendering it into href.
+        $brokerTarget = $brokerLink !== '' ? $brokerLink : 'about:blank';
 
         return [
             'hasProgramme'         => $hasProgramme,
@@ -500,10 +439,38 @@
     // POST Handling — Confirm Payment (NOW SUB-ACCOUNT SCOPED)
     // =========================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['final_confirm_payment'])) {
-        $coin = $_POST['payment_coin'] ?? 'N/A';
-        $amount = $_POST['server_share_amount'] ?? 0.00;
+        $paymentMethodId = (int)($_POST['payment_method_id'] ?? 0);
+        $amount = max(0, (float)($_POST['server_share_amount'] ?? 0));
         $datetime = date('Y-m-d H:i:s');
-        $paymentDetails = "Amount: $" . number_format($amount, 2) . ", Coin: " . htmlspecialchars($coin) . ", Confirmed_at: " . $datetime;
+
+        // Re-check against the enabled relational record at submit time. Never
+        // trust method details sent by the browser or fall back to legacy crypto fields.
+        $paymentMethodQuery = $pdo->prepare(
+            'SELECT id, method_name, account_or_address, additional_info, company_name '
+            . 'FROM server_payment_methods WHERE id = ? AND is_enabled = 1 LIMIT 1'
+        );
+        $paymentMethodQuery->execute([$paymentMethodId]);
+        $selectedPaymentMethod = $paymentMethodQuery->fetch(PDO::FETCH_ASSOC);
+        if (!$selectedPaymentMethod) {
+            $_SESSION['prg_redirect_safe'] = true;
+            $_SESSION['payment_error_message'] = 'That payment method is no longer available. Choose an enabled method and try again.';
+            header('Location: investorapp.php?tab=profit_split&retry=1');
+            exit;
+        }
+
+        $paymentDetailParts = [
+            'Amount: $' . number_format($amount, 2),
+            'Payment Method: ' . trim((string)$selectedPaymentMethod['method_name']),
+            'Payment Method ID: ' . (int)$selectedPaymentMethod['id']
+        ];
+        $companyName = trim((string)($selectedPaymentMethod['company_name'] ?? ''));
+        $accountOrAddress = trim((string)($selectedPaymentMethod['account_or_address'] ?? ''));
+        $additionalInfo = trim((string)($selectedPaymentMethod['additional_info'] ?? ''));
+        if ($companyName !== '') $paymentDetailParts[] = 'Company: ' . $companyName;
+        if ($accountOrAddress !== '') $paymentDetailParts[] = 'Account / Address: ' . $accountOrAddress;
+        if ($additionalInfo !== '') $paymentDetailParts[] = 'Additional Information: ' . $additionalInfo;
+        $paymentDetailParts[] = 'Submitted_at: ' . $datetime;
+        $paymentDetails = implode(' | ', $paymentDetailParts);
 
         // STRICT: update only THIS sub-account's latest revenue_history row
         try {
@@ -550,6 +517,8 @@
 
     $paymentSuccessMessage = $_SESSION['payment_success_message'] ?? null;
     unset($_SESSION['payment_success_message']);
+    $paymentErrorMessage = $_SESSION['payment_error_message'] ?? null;
+    unset($_SESSION['payment_error_message']);
 
     $showPaymentForm = ($isUnpaid || $isFailed || $isRetry);
 ?>
@@ -897,9 +866,9 @@
     .btn-confirm-payment:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
     /* ============================================================
-       COIN SELECTOR
+       PAYMENT METHOD SELECTOR
        ============================================================ */
-    .coin-selector {
+    .payment-method-selector {
         display: flex;
         gap: 12px;
         justify-content: center;
@@ -907,7 +876,17 @@
         flex-wrap: wrap;
     }
 
-    .coin-selector input[type="radio"] {
+    .payment-method-empty {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px dashed var(--border-color);
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        text-align: center;
+        line-height: 1.5;
+    }
+
+    .payment-method-selector input[type="radio"] {
         position: absolute;
         width: 1px; height: 1px;
         padding: 0; margin: -1px;
@@ -917,7 +896,7 @@
         border: 0;
     }
 
-    .coin-selector label {
+    .payment-method-selector label {
         padding: 10px 24px;
         border: 2px solid var(--border-color);
         border-radius: var(--radius-sm);
@@ -935,21 +914,21 @@
         outline: none;
     }
 
-    .coin-selector label:hover {
+    .payment-method-selector label:hover {
         border-color: var(--accent, #2e8b57);
         background: rgba(46, 139, 87, 0.08);
         color: var(--accent, #2e8b57);
     }
 
-    .coin-selector label:active {
+    .payment-method-selector label:active {
         background: rgba(46, 139, 87, 0.16);
         border-color: var(--accent, #2e8b57);
         color: var(--accent, #2e8b57);
         box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.25);
     }
 
-    .coin-selector label:focus,
-    .coin-selector label:focus-visible {
+    .payment-method-selector label:focus,
+    .payment-method-selector label:focus-visible {
         outline: none;
         border-color: var(--accent, #2e8b57);
         box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
@@ -957,28 +936,28 @@
         color: var(--accent, #2e8b57);
     }
 
-    .coin-selector input[type="radio"]:checked + label {
+    .payment-method-selector input[type="radio"]:checked + label {
         border-color: var(--accent, #2e8b57);
         background: rgba(46, 139, 87, 0.12);
         color: var(--accent, #2e8b57);
         font-weight: 700;
     }
 
-    .coin-selector input[type="radio"]:checked + label:hover {
+    .payment-method-selector input[type="radio"]:checked + label:hover {
         border-color: var(--accent, #2e8b57);
         background: rgba(46, 139, 87, 0.12);
         color: var(--accent, #2e8b57);
     }
 
-    .coin-selector input[type="radio"]:checked + label:active {
+    .payment-method-selector input[type="radio"]:checked + label:active {
         border-color: var(--accent, #2e8b57);
         background: rgba(46, 139, 87, 0.2);
         color: var(--accent, #2e8b57);
         box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
-    .coin-selector input[type="radio"]:checked + label:focus,
-    .coin-selector input[type="radio"]:checked + label:focus-visible {
+    .payment-method-selector input[type="radio"]:checked + label:focus,
+    .payment-method-selector input[type="radio"]:checked + label:focus-visible {
         outline: none;
         border-color: var(--accent, #2e8b57);
         background: rgba(46, 139, 87, 0.12);
@@ -986,24 +965,24 @@
         box-shadow: 0 0 0 3px rgba(46, 139, 87, 0.35);
     }
 
-    body.dark-mode .coin-selector label {
+    body.dark-mode .payment-method-selector label {
         background: var(--bg-card);
         color: var(--text);
     }
 
-    body.dark-mode .coin-selector label:hover,
-    body.dark-mode .coin-selector label:focus,
-    body.dark-mode .coin-selector label:focus-visible,
-    body.dark-mode .coin-selector input[type="radio"]:checked + label,
-    body.dark-mode .coin-selector input[type="radio"]:checked + label:hover,
-    body.dark-mode .coin-selector input[type="radio"]:checked + label:focus {
+    body.dark-mode .payment-method-selector label:hover,
+    body.dark-mode .payment-method-selector label:focus,
+    body.dark-mode .payment-method-selector label:focus-visible,
+    body.dark-mode .payment-method-selector input[type="radio"]:checked + label,
+    body.dark-mode .payment-method-selector input[type="radio"]:checked + label:hover,
+    body.dark-mode .payment-method-selector input[type="radio"]:checked + label:focus {
         background: rgba(46, 139, 87, 0.2);
         color: #f3f9fd;
         border-color: var(--accent, #2e8b57);
     }
 
-    body.dark-mode .coin-selector label:active,
-    body.dark-mode .coin-selector input[type="radio"]:checked + label:active {
+    body.dark-mode .payment-method-selector label:active,
+    body.dark-mode .payment-method-selector input[type="radio"]:checked + label:active {
         background: rgba(46, 139, 87, 0.3);
         color: #ffffff;
         border-color: var(--accent, #2e8b57);
@@ -1011,9 +990,9 @@
     }
 
     /* ============================================================
-       CRYPTO DETAILS
+       PAYMENT METHOD DETAILS
        ============================================================ */
-    .crypto-details {
+    .payment-method-details {
         background: var(--bg);
         padding: 16px;
         border-radius: var(--radius-sm);
@@ -1021,7 +1000,7 @@
         text-align: center;
     }
 
-    .crypto-details .address {
+    .payment-method-details .address {
         font-family: 'SF Mono', 'Courier New', monospace;
         font-size: 0.9rem;
         word-break: break-all;
@@ -1038,16 +1017,16 @@
         -webkit-tap-highlight-color: transparent;
     }
 
-    .crypto-details .address:hover {
+    .payment-method-details .address:hover {
         background: rgba(46, 139, 87, 0.08);
         color: var(--accent, #2e8b57);
         border-color: var(--accent, #2e8b57);
     }
 
-    .crypto-details .address:active,
-    .crypto-details .address:focus,
-    .crypto-details .address:focus-visible,
-    .crypto-details .address.selected {
+    .payment-method-details .address:active,
+    .payment-method-details .address:focus,
+    .payment-method-details .address:focus-visible,
+    .payment-method-details .address.selected {
         background: rgba(46, 139, 87, 0.16);
         color: var(--accent, #2e8b57);
         border-color: var(--accent, #2e8b57);
@@ -1056,22 +1035,22 @@
         font-weight: 600;
     }
 
-    body.dark-mode .crypto-details .address {
+    body.dark-mode .payment-method-details .address {
         background: #1a2733;
         color: #cfe4f2;
         border-color: transparent;
     }
 
-    body.dark-mode .crypto-details .address:hover {
+    body.dark-mode .payment-method-details .address:hover {
         background: rgba(46, 139, 87, 0.15);
         color: #e4f0fa;
         border-color: var(--accent, #2e8b57);
     }
 
-    body.dark-mode .crypto-details .address:active,
-    body.dark-mode .crypto-details .address:focus,
-    body.dark-mode .crypto-details .address:focus-visible,
-    body.dark-mode .crypto-details .address.selected {
+    body.dark-mode .payment-method-details .address:active,
+    body.dark-mode .payment-method-details .address:focus,
+    body.dark-mode .payment-method-details .address:focus-visible,
+    body.dark-mode .payment-method-details .address.selected {
         background: rgba(46, 139, 87, 0.25);
         color: #f3f9fd;
         border-color: var(--accent, #2e8b57);
@@ -1185,13 +1164,16 @@
 
 <div class="profit-split-container">
 
-    <div id="paymentSuccessNotice" style="<?= $paymentSuccessMessage ? '' : 'display:none;' ?>">
-        <?php if ($paymentSuccessMessage): ?>
-            <div class="payment-status success">
-                <span><?= htmlspecialchars($paymentSuccessMessage) ?></span>
-            </div>
-        <?php endif; ?>
-    </div>
+    <?php if ($paymentSuccessMessage): ?>
+        <div id="paymentSuccessNotice" class="payment-status success">
+            <span><?= htmlspecialchars($paymentSuccessMessage, ENT_QUOTES, 'UTF-8') ?></span>
+        </div>
+    <?php endif; ?>
+    <?php if ($paymentErrorMessage): ?>
+        <div id="paymentErrorNotice" class="payment-status danger">
+            <span><?= htmlspecialchars($paymentErrorMessage, ENT_QUOTES, 'UTF-8') ?></span>
+        </div>
+    <?php endif; ?>
 
     <div id="profitSplitStateBlock">
         <?php if (!$hasProgramme): ?>
@@ -1329,30 +1311,44 @@
     <div class="modal-content">
         <h2 style="color: var(--cb-deep);">Pay Programme Share</h2>
         <p style="margin: 1rem 0; opacity: 0.8; text-align: center;">
-            Send <strong id="paymentAmountDisplay">$<?= number_format($serverShare, 2) ?></strong> worth of the selected cryptocurrency
+            Use one of the currently enabled payment methods below to pay
+            <strong id="paymentAmountDisplay">$<?= number_format($serverShare, 2) ?></strong>.
         </p>
 
         <input type="hidden" id="serverShareAmountHidden" value="<?= number_format($serverShare, 2, '.', '') ?>">
 
-        <div class="coin-selector">
-            <input type="radio" id="coin_btc" name="coin" value="btc" checked onchange="updatePaymentDetails('btc')">
-            <label for="coin_btc">BTC</label>
-
-            <input type="radio" id="coin_eth" name="coin" value="eth" onchange="updatePaymentDetails('eth')">
-            <label for="coin_eth">ETH</label>
-
-            <input type="radio" id="coin_usdt" name="coin" value="usdt" onchange="updatePaymentDetails('usdt')">
-            <label for="coin_usdt">USDT</label>
+        <div class="payment-method-selector">
+            <?php if (empty($paymentMethods)): ?>
+                <div class="payment-method-empty">No enabled payment methods are currently configured. Please contact the administrator.</div>
+            <?php else: ?>
+                <?php foreach ($paymentMethods as $index => $method): ?>
+                    <?php $methodId = (int)$method['id']; ?>
+                    <input
+                        type="radio"
+                        id="payment_method_<?= $methodId ?>"
+                        name="payment_method_id"
+                        value="<?= $methodId ?>"
+                        data-method-name="<?= htmlspecialchars((string)($method['method_name'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                        data-company-name="<?= htmlspecialchars((string)($method['company_name'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                        data-account-or-address="<?= htmlspecialchars((string)($method['account_or_address'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                        data-additional-info="<?= htmlspecialchars((string)($method['additional_info'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                        <?= $index === 0 ? 'checked' : '' ?>
+                        onchange="updatePaymentDetails()"
+                    >
+                    <label for="payment_method_<?= $methodId ?>"><?= htmlspecialchars((string)$method['method_name'], ENT_QUOTES, 'UTF-8') ?></label>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </div>
 
-        <div class="crypto-details">
-            <p>Network: <strong id="paymentNetwork">N/A</strong></p>
-            <p>Address:</p>
+        <div class="payment-method-details">
+            <p id="paymentCompanyRow" style="display:none;">Company: <strong id="paymentCompany"></strong></p>
+            <p id="paymentAdditionalInfo" style="display:none; white-space:pre-wrap;"></p>
+            <p>Account / Address:</p>
             <span class="address" id="paymentAddress">N/A</span>
         </div>
 
         <button type="button" class="btn-confirm-payment" id="copyAddressBtn" style="margin-bottom: 12px;">
-            Copy Address
+            Copy Account / Address
         </button>
 
         <label class="checkbox-container">
@@ -1376,8 +1372,8 @@
     <div class="modal-content">
         <h2 style="color: var(--success);">Final Confirmation</h2>
         <p style="margin: 1.5rem 0; line-height: 1.6; text-align: center;">
-            Confirm that you have sent <strong id="finalConfirmAmount" style="color: var(--success);">$<?= number_format($serverShare, 2) ?></strong> to the
-            <strong id="finalConfirmCoin">N/A</strong> address.
+            Confirm that you have submitted <strong id="finalConfirmAmount" style="color: var(--success);">$<?= number_format($serverShare, 2) ?></strong> using
+            <strong id="finalConfirmMethod">the selected payment method</strong>.
         </p>
 
         <div class="modal-actions">
@@ -1387,7 +1383,7 @@
             <form method="POST" style="display:inline;" id="finalPaymentForm">
                 <input type="hidden" name="final_confirm_payment" value="1">
                 <input type="hidden" name="server_share_amount" id="formServerShareAmount" value="<?= number_format($serverShare, 2, '.', '') ?>">
-                <input type="hidden" name="payment_coin" id="formPaymentCoin" value="">
+                <input type="hidden" name="payment_method_id" id="formPaymentMethodId" value="">
                 <button type="submit" id="finalConfirmButton" class="btn-confirm">
                     Yes, I've Paid
                 </button>
@@ -1445,23 +1441,10 @@
     }
     window.closeProfitSplit = closeProfitSplit;
 
-    const serverAccounts = {
-        btc: {
-            address: "<?= htmlspecialchars($serverAccount['btc_address'] ?? 'N/A') ?>",
-            network: "Bitcoin"
-        },
-        eth: {
-            address: "<?= htmlspecialchars($serverAccount['eth_address'] ?? 'N/A') ?>",
-            network: "<?= htmlspecialchars($serverAccount['eth_network'] ?? 'ERC20') ?>"
-        },
-        usdt: {
-            address: "<?= htmlspecialchars($serverAccount['usdt_address'] ?? 'N/A') ?>",
-            network: "<?= htmlspecialchars($serverAccount['usdt_network'] ?? 'TRC20') ?>"
-        }
-    };
-
     const paymentAddressElement = document.getElementById('paymentAddress');
-    const paymentNetworkElement = document.getElementById('paymentNetwork');
+    const paymentCompanyRow = document.getElementById('paymentCompanyRow');
+    const paymentCompanyElement = document.getElementById('paymentCompany');
+    const paymentAdditionalInfoElement = document.getElementById('paymentAdditionalInfo');
     const copyAddressBtn = document.getElementById('copyAddressBtn');
     const confirmPaidBtn = document.getElementById('confirmPaidBtn');
     const paymentConfirmationCheck = document.getElementById('paymentConfirmationCheck');
@@ -1473,7 +1456,7 @@
         if (!modal) return;
         modalOpen = true;
         modal.classList.add('active');
-        updatePaymentDetails(getSelectedCoin());
+        updatePaymentDetails();
         togglePaidButton();
     }
 
@@ -1486,43 +1469,58 @@
         togglePaidButton();
     }
 
-    function getSelectedCoin() {
-        const selected = document.querySelector('input[name="coin"]:checked');
-        return selected ? selected.value : 'btc';
+    function getSelectedPaymentMethod() {
+        return document.querySelector('input[name="payment_method_id"]:checked');
     }
 
-    function updatePaymentDetails(coin) {
-        const data = serverAccounts[coin];
-        if (data) {
-            if (paymentAddressElement) {
-                paymentAddressElement.textContent = data.address;
-                paymentAddressElement.dataset.address = data.address;
-            }
-            if (paymentNetworkElement) {
-                paymentNetworkElement.textContent = data.network;
-            }
+    function updatePaymentDetails() {
+        const selected = getSelectedPaymentMethod();
+        const methodName = selected ? (selected.dataset.methodName || 'Payment method') : 'N/A';
+        const companyName = selected ? (selected.dataset.companyName || '') : '';
+        const accountOrAddress = selected ? (selected.dataset.accountOrAddress || '') : '';
+        const additionalInfo = selected ? (selected.dataset.additionalInfo || '') : '';
+
+        if (paymentCompanyRow && paymentCompanyElement) {
+            paymentCompanyRow.style.display = companyName ? '' : 'none';
+            paymentCompanyElement.textContent = companyName;
         }
+        if (paymentAdditionalInfoElement) {
+            paymentAdditionalInfoElement.style.display = additionalInfo ? '' : 'none';
+            paymentAdditionalInfoElement.textContent = additionalInfo;
+        }
+        if (paymentAddressElement) {
+            paymentAddressElement.textContent = accountOrAddress || 'Not supplied';
+            paymentAddressElement.dataset.address = accountOrAddress;
+        }
+        if (copyAddressBtn) copyAddressBtn.disabled = !accountOrAddress;
+        if (confirmPaidBtn) confirmPaidBtn.disabled = !(selected && paymentConfirmationCheck && paymentConfirmationCheck.checked);
+        return { id: selected ? selected.value : '', name: methodName };
     }
 
     function togglePaidButton() {
         if (!confirmPaidBtn) return;
-        confirmPaidBtn.disabled = !(paymentConfirmationCheck && paymentConfirmationCheck.checked);
+        confirmPaidBtn.disabled = !(getSelectedPaymentMethod() && paymentConfirmationCheck && paymentConfirmationCheck.checked);
     }
 
     function triggerFinalConfirmation() {
-        const selectedCoin = getSelectedCoin();
+        const selected = getSelectedPaymentMethod();
+        if (!selected) {
+            alert('No enabled payment method is available. Please contact the administrator.');
+            return;
+        }
+        const selectedMethodName = selected.dataset.methodName || 'selected payment method';
         const amountEl = document.getElementById('serverShareAmountHidden');
         const serverShareAmount = amountEl ? parseFloat(amountEl.value) : 0;
 
         const finalAmountEl = document.getElementById('finalConfirmAmount');
-        const finalCoinEl   = document.getElementById('finalConfirmCoin');
-        const formAmount    = document.getElementById('formServerShareAmount');
-        const formCoin      = document.getElementById('formPaymentCoin');
+        const finalMethodEl = document.getElementById('finalConfirmMethod');
+        const formAmount = document.getElementById('formServerShareAmount');
+        const formMethodId = document.getElementById('formPaymentMethodId');
 
-        if (finalAmountEl) finalAmountEl.innerHTML = '$' + serverShareAmount.toFixed(2);
-        if (finalCoinEl)   finalCoinEl.innerHTML   = selectedCoin.toUpperCase();
-        if (formAmount)    formAmount.value        = serverShareAmount;
-        if (formCoin)      formCoin.value          = selectedCoin;
+        if (finalAmountEl) finalAmountEl.textContent = '$' + serverShareAmount.toFixed(2);
+        if (finalMethodEl) finalMethodEl.textContent = selectedMethodName;
+        if (formAmount) formAmount.value = serverShareAmount.toFixed(2);
+        if (formMethodId) formMethodId.value = selected.value;
 
         const payModal = document.getElementById('paymentModal');
         const confModal = document.getElementById('finalConfirmationModal');
@@ -1533,7 +1531,7 @@
     if (copyAddressBtn) {
         copyAddressBtn.addEventListener('click', function() {
             const address = paymentAddressElement ? paymentAddressElement.textContent : '';
-            if (navigator.clipboard && address && address !== 'N/A') {
+            if (navigator.clipboard && address && address !== 'N/A' && address !== 'Not supplied') {
                 navigator.clipboard.writeText(address).then(() => {
                     const originalText = this.textContent;
                     this.textContent = 'Copied!';
@@ -1542,7 +1540,7 @@
                     alert('Could not copy address. Please copy manually.');
                 });
             } else {
-                alert('Address not available.');
+                alert('Account or address details are not available for this payment method.');
             }
         });
     }
@@ -1579,7 +1577,7 @@
     })();
 
     document.addEventListener('DOMContentLoaded', function() {
-        updatePaymentDetails(getSelectedCoin());
+        updatePaymentDetails();
         togglePaidButton();
     });
 

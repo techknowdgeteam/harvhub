@@ -73,7 +73,9 @@ if (!$activeRow) {
 }
 
 $activeSubAccountId = (int)($activeRow['sub_account_id'] ?? $activeRow['id']);
+
 $darkMode = !empty($activeRow['dark_mode']);
+
 $darkModeClass = $darkMode ? 'dark-mode' : '';
 
 $activeUserId       = (int)$activeRow['id'];
@@ -633,7 +635,24 @@ $symbols              = $payload['symbols'];
 <title>🌾Harvhub</title>
 
 <?php include 'style.php'; ?>
+
 <?php include __DIR__ . '/useranalytics_style.php'; ?>
+<style>
+    /* User Analytics is the page's direct content shell, aligned with My Dashboard. */
+    .analytics-container {
+        display: block;
+        width: 100%;
+        max-width: 1100px;
+        min-width: 0;
+        margin: 0 auto;
+        padding: 0 20px;
+        box-sizing: border-box;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+</style>
 
 <style>
 
@@ -669,9 +688,7 @@ $symbols              = $payload['symbols'];
 
 <body class="<?= htmlspecialchars($darkModeClass, ENT_QUOTES, 'UTF-8') ?>">
 
-<div class="custom-body page-container">
-
-    <div class="analytics-container">
+<div class="analytics-container">
 
         <div class="analytics-header">
 
@@ -1015,10 +1032,8 @@ $symbols              = $payload['symbols'];
 
         </div>
 
-    </div>
 
 </div>
-
 <script>
 
     var ANALYTICS_POLL_URL = (function() {
@@ -1434,14 +1449,21 @@ $symbols              = $payload['symbols'];
     (function () {
 
         function applyAnalyticsTheme(isDark) {
+
             var dark = !!isDark;
+
             document.body.classList.toggle('dark-mode', dark);
+
             document.documentElement.classList.toggle('dark-mode', dark);
+
         }
 
         window.addEventListener('message', function (e) {
+
             if (!e.data || typeof e.data !== 'object') return;
+
             if (e.data.type === 'theme') applyAnalyticsTheme(e.data.dark);
+
         });
 
         var WATCHED = [

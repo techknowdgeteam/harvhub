@@ -543,7 +543,7 @@ try {
     }
 } catch (Exception $e) {}
 
-$userTierRaw = trim($user['tier_limit'] ?? '');
+$userTierRaw = trim((string)($user['tier_limit'] ?? ''));
 $userTierKeys = [];
 if ($userTierRaw !== '') {
     foreach (explode(',', $userTierRaw) as $key) {
@@ -551,14 +551,54 @@ if ($userTierRaw !== '') {
         if ($key !== '') $userTierKeys[] = $key;
     }
 }
+
+/*
+ * Automatically assign the lowest-numbered available tier when this account
+ * has no tier assignment. Sort the tier keys numerically (so 4 is selected
+ * before 5 and 6), rather than relying on JSON/object insertion order.
+ * Keys such as "Tier 4" and "tier_4" are also supported. If the available
+ * keys contain no number, use natural alphabetical order as a fallback.
+ */
 if (empty($userTierKeys) && !empty($serverTiers)) {
-    $firstKey = array_key_first($serverTiers);
+    $availableTierKeys = array_keys($serverTiers);
+
+    $extractTierNumber = static function ($tierKey): ?int {
+        if (preg_match('/\d+/', (string)$tierKey, $matches) === 1) {
+            return (int)$matches[0];
+        }
+        return null;
+    };
+
+    usort($availableTierKeys, static function ($a, $b) use ($extractTierNumber): int {
+        $numberA = $extractTierNumber($a);
+        $numberB = $extractTierNumber($b);
+
+        if ($numberA !== null && $numberB !== null && $numberA !== $numberB) {
+            return $numberA <=> $numberB;
+        }
+        if ($numberA !== null && $numberB === null) return -1;
+        if ($numberA === null && $numberB !== null) return 1;
+
+        return strnatcasecmp((string)$a, (string)$b);
+    });
+
+    $firstKey = $availableTierKeys[0] ?? null;
     if ($firstKey !== null) {
-        $userTierKeys = [$firstKey];
+        $firstKey = (string)$firstKey;
+
+        // The page represents the currently active account, so persist only
+        // to that account's row rather than every row sharing the same email.
         try {
-            $upd = $pdo->prepare("UPDATE {$tableName} SET tier_limit = ? WHERE email = ?");
-            $upd->execute([$firstKey, $email]);
-        } catch (Exception $e) {}
+            $upd = $pdo->prepare("UPDATE {$tableName} SET tier_limit = ? WHERE id = ? LIMIT 1");
+            $upd->execute([$firstKey, $userId]);
+            $user['tier_limit'] = $firstKey;
+            $userTierKeys = [$firstKey];
+        } catch (Throwable $e) {
+            error_log('menu.php automatic tier assignment failed for account ' . $userId . ': ' . $e->getMessage());
+            // Keep the selected default visible for this request even if the
+            // database update fails; the next request can attempt it again.
+            $userTierKeys = [$firstKey];
+        }
     }
 }
 

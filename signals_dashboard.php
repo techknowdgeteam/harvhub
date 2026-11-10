@@ -103,6 +103,34 @@ if ($programme) {
             $tradeColumns = $pdo->query("SHOW COLUMNS FROM `programme_trades`")->fetchAll(PDO::FETCH_COLUMN);
             if (!in_array('contract_id', $tradeColumns, true)) {
                 $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `contract_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `programmeid`");
+                $tradeColumns[] = 'contract_id';
+            }
+            if (!in_array('setup_group_id', $tradeColumns, true)) {
+                $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `contract_id`");
+                $tradeColumns[] = 'setup_group_id';
+            }
+            // Existing rows default to History (live=0). Signal producers must
+            // explicitly set live=1 for newly generated live programme signals.
+            if (!in_array('live', $tradeColumns, true)) {
+                $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `live` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=Live, 0=History' AFTER `tradeid`");
+                $tradeColumns[] = 'live';
+            }
+            // Keep the execution timestamp available to the investor-side Python pipeline.
+            if (!in_array('trade_time', $tradeColumns, true)) {
+                $afterTradeTime = in_array('live', $tradeColumns, true) ? 'live' : 'tradeid';
+                $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `trade_time` DATETIME NULL DEFAULT NULL AFTER `{$afterTradeTime}`");
+                $tradeColumns[] = 'trade_time';
+            }
+            $orderRequestDefinitions = [
+                'order_request_status' => 'VARCHAR(64) NULL DEFAULT NULL',
+                'order_request_filled' => 'TINYINT(1) NOT NULL DEFAULT 0',
+                'order_request_filled_failure_reason' => 'VARCHAR(500) NULL DEFAULT NULL'
+            ];
+            foreach ($orderRequestDefinitions as $requestColumn => $requestDefinition) {
+                if (!in_array($requestColumn, $tradeColumns, true)) {
+                    $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `{$requestColumn}` {$requestDefinition}");
+                    $tradeColumns[] = $requestColumn;
+                }
             }
             $pdo->exec("CREATE TABLE IF NOT EXISTS `programme_trade_chart_identity` (
                 `programme_trade_id` BIGINT(20) UNSIGNED NOT NULL,
@@ -114,6 +142,7 @@ if ($programme) {
                 `root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
                 `confirmation_root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
                 `family_number` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
+                `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1,
                 `family_signature` TEXT NULL,
                 `symbol` VARCHAR(64) NOT NULL,
                 `timeframe` VARCHAR(32) NOT NULL,
@@ -128,6 +157,10 @@ if ($programme) {
                 KEY `idx_programme_trade_chart_root` (`userid`,`programmeid`,`root_id`,`confirmation_root_id`),
                 KEY `idx_programme_trade_chart_contract` (`userid`,`programmeid`,`contract_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            $identityColumns = $pdo->query("SHOW COLUMNS FROM `programme_trade_chart_identity`")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('setup_group_id', $identityColumns, true)) {
+                $pdo->exec("ALTER TABLE `programme_trade_chart_identity` ADD COLUMN `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `family_number`");
+            }
         }
     } catch (Throwable $migrationError) {
         error_log('Signals Dashboard programme trade identity migration failed: ' . $migrationError->getMessage());
@@ -368,7 +401,21 @@ function spc_ensureLiveTradesColumn(PDO $pdo): bool {
             $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `live_trades` TINYINT(1) NOT NULL DEFAULT 0");
             $columns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
         }
-        return in_array('live_trades', $columns, true);
+        $orderRequestDefinitions = [
+            'order_request_status' => 'VARCHAR(64) NULL DEFAULT NULL',
+            'order_request_filled' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'order_request_filled_failure_reason' => 'VARCHAR(500) NULL DEFAULT NULL'
+        ];
+        foreach ($orderRequestDefinitions as $requestColumn => $requestDefinition) {
+            if (!in_array($requestColumn, $columns, true)) {
+                $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `{$requestColumn}` {$requestDefinition}");
+                $columns[] = $requestColumn;
+            }
+        }
+        return in_array('live_trades', $columns, true)
+            && in_array('order_request_status', $columns, true)
+            && in_array('order_request_filled', $columns, true)
+            && in_array('order_request_filled_failure_reason', $columns, true);
     } catch (Throwable $e) {
         error_log('[signals challenge] live_trades schema check failed: ' . $e->getMessage());
         return false;
@@ -1290,9 +1337,15 @@ function getSignalProviderInterest($pdo, $userId, $programmeId) {
 
 function getServerAccountConfig($pdo) {
     try {
-        $q = $pdo->query("SELECT * FROM server_account WHERE id = 1 LIMIT 1");
-        return $q->fetch(PDO::FETCH_ASSOC) ?: [];
+        $requirements = $pdo->query(
+            'SELECT * FROM server_requirements WHERE id = 1 LIMIT 1'
+        )->fetch(PDO::FETCH_ASSOC) ?: [];
+        $operational = $pdo->query(
+            'SELECT * FROM server_operational_settings WHERE id = 1 LIMIT 1'
+        )->fetch(PDO::FETCH_ASSOC) ?: [];
+        return array_merge($requirements, $operational);
     } catch (Throwable $e) {
+        error_log('signals_dashboard.php relational server settings lookup failed: ' . $e->getMessage());
         return [];
     }
 }
@@ -1432,6 +1485,8 @@ function syncInterestRiskRewardIntoTrades($pdo, $userId, $programmeId, $interest
             SET interest_risk_reward_type = ?,
                 interest_risk_reward      = ?
             WHERE userid = ? AND programmeid = ?
+              AND live = 1
+              AND LOWER(TRIM(COALESCE(orderstatus, ''))) = 'pending'
               AND (
                     interest_risk_reward_type IS NULL OR interest_risk_reward_type <> ?
                  OR interest_risk_reward      IS NULL OR interest_risk_reward      <> ?
@@ -1529,35 +1584,73 @@ function getAllInvestorsCountForProgramme($pdo, $programmeId) {
 
 function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
     try {
+        // Fail closed: no sync until the explicit source live flag exists.
+        $tradeColumns = $pdo->query("SHOW COLUMNS FROM `programme_trades`")->fetchAll(PDO::FETCH_COLUMN);
+        foreach (['live', 'trade_time', 'tradeid', 'orderstatus', 'investor_id', 'investor_sub_account_id'] as $requiredColumn) {
+            if (!in_array($requiredColumn, $tradeColumns, true)) {
+                error_log('[syncProgrammeTradesToInvestors] Missing required programme_trades column: ' . $requiredColumn);
+                return;
+            }
+        }
+
+        // Mirror the parent's independent request state into already-distributed
+        // active investor rows. This does not touch their broker/chart orderstatus.
+        // It also carries an executor-confirmed fill (1) after the request was sent.
+        $requestMirror = $pdo->prepare("UPDATE programme_trades investor_trade
+            INNER JOIN programme_trades parent_trade
+                ON parent_trade.userid = investor_trade.userid
+               AND parent_trade.programmeid = investor_trade.programmeid
+               AND parent_trade.tradeid = investor_trade.tradeid
+               AND parent_trade.investor_id IS NULL
+            SET investor_trade.order_request_status = parent_trade.order_request_status,
+                investor_trade.order_request_filled = parent_trade.order_request_filled,
+                investor_trade.order_request_filled_failure_reason = parent_trade.order_request_filled_failure_reason
+            WHERE parent_trade.userid = ?
+              AND parent_trade.programmeid = ?
+              AND parent_trade.live = 1
+              AND (NULLIF(parent_trade.order_request_status, '') IS NOT NULL
+                   OR COALESCE(parent_trade.order_request_filled,0) = 1
+                   OR NULLIF(parent_trade.order_request_filled_failure_reason, '') IS NOT NULL)
+              AND investor_trade.investor_id IS NOT NULL
+              AND investor_trade.live = 1
+              AND LOWER(TRIM(COALESCE(investor_trade.orderstatus, ''))) IN ('pending','running')");
+        $requestMirror->execute([$userId, $programmeId]);
+
+        // Only current live, pending source signals may be newly distributed.
+        // Historical signals (live=0), closed signals, running signals and
+        // failed signals are displayed in the dashboard but never newly synced.
         $pq = $pdo->prepare("
             SELECT *
             FROM programme_trades
-            WHERE userid = ? AND programmeid = ? AND investor_id IS NULL
+            WHERE userid = ?
+              AND programmeid = ?
+              AND investor_id IS NULL
+              AND live = 1
+              AND LOWER(TRIM(COALESCE(orderstatus, ''))) = 'pending'
+              AND tradeid IS NOT NULL
+              AND TRIM(tradeid) <> ''
         ");
         $pq->execute([$userId, $programmeId]);
         $programmeTrades = $pq->fetchAll(PDO::FETCH_ASSOC);
 
         $programmeByTradeId = [];
         foreach ($programmeTrades as $pt) {
-            $tid = (string)($pt['tradeid'] ?? '');
+            if ((int)($pt['live'] ?? 0) !== 1) continue;
+            if (strtolower(trim((string)($pt['orderstatus'] ?? ''))) !== 'pending') continue;
+            $tid = trim((string)($pt['tradeid'] ?? ''));
             if ($tid === '') continue;
             $programmeByTradeId[$tid] = $pt;
         }
 
+        if (!$programmeByTradeId) return;
+
         $activeInvestors = getActiveInvestorsForProgramme($pdo, $programmeId);
+        if (!$activeInvestors) return;
 
-        $activePairs = [];
-        foreach ($activeInvestors as $inv) {
-            $invId = (int)$inv['investor_id'];
-            $subId = (int)$inv['sub_account_id'];
-            if ($invId <= 0 || $subId <= 0) continue;
-            $activePairs[$invId . '|' . $subId] = true;
-        }
-        $activePairs = array_keys($activePairs);
-
+        // Existing investor rows are indexed by source trade + investor + subaccount.
+        // This check prevents duplicate copies and protects all existing execution state.
         $iq = $pdo->prepare("
-            SELECT id, tradeid, investor_id, investor_sub_account_id,
-                   contract_id, modify_trade, orderstatus, pnl, pnl_risk_reward
+            SELECT id, tradeid, investor_id, investor_sub_account_id, orderstatus
             FROM programme_trades
             WHERE userid = ? AND programmeid = ? AND investor_id IS NOT NULL
         ");
@@ -1566,70 +1659,96 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
 
         $investorIndex = [];
         foreach ($investorRows as $ir) {
-            $tid   = (string)($ir['tradeid'] ?? '');
+            $tid = trim((string)($ir['tradeid'] ?? ''));
             $invId = (int)($ir['investor_id'] ?? 0);
             $subId = (int)($ir['investor_sub_account_id'] ?? 0);
+            if ($tid === '' || $invId <= 0 || $subId <= 0) continue;
             $investorIndex[$tid . '|' . $invId . '|' . $subId] = $ir;
         }
 
-        $insStmt = $pdo->prepare("
+        // For an existing investor row, only a still-pending copy may receive
+        // updated signal parameters. orderstatus and failure_reason are
+        // intentionally absent from this UPDATE and are never overwritten.
+        $updatePendingStmt = $pdo->prepare("
+            UPDATE programme_trades
+            SET contract_id = ?,
+                ordertype = ?,
+                symbol = ?,
+                entry = ?,
+                stoploss = ?,
+                takeprofit = ?,
+                trade_risk_reward = ?,
+                interest_risk_reward = ?,
+                interest_risk_reward_type = ?,
+                trade_time = ?,
+                order_request_status = ?,
+                order_request_filled = ?,
+                order_request_filled_failure_reason = ?,
+                live = 1
+            WHERE id = ?
+              AND LOWER(TRIM(COALESCE(orderstatus, ''))) = 'pending'
+        ");
+
+        // New investor copies are always inserted as pending and live.
+        // Existing statuses/reasons are never copied over by this operation.
+        $insertStmt = $pdo->prepare("
             INSERT INTO programme_trades
                 (userid, programmeid, investor_id, investor_sub_account_id,
                  tradeid, contract_id, ordertype, symbol, entry, stoploss, takeprofit,
                  orderstatus, trade_risk_reward, interest_risk_reward, interest_risk_reward_type,
-                 pnl, pnl_risk_reward, modify_trade, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pnl, pnl_risk_reward, modify_trade, live, trade_time,
+                 order_request_status, order_request_filled, order_request_filled_failure_reason, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
         ");
 
         foreach ($activeInvestors as $inv) {
+            $invId = (int)($inv['investor_id'] ?? 0);
+            $subId = (int)($inv['sub_account_id'] ?? 0);
+            if ($invId <= 0 || $subId <= 0) continue;
+
             foreach ($programmeByTradeId as $tid => $pt) {
-                $key = $tid . '|' . $inv['investor_id'] . '|' . $inv['sub_account_id'];
+                $key = $tid . '|' . $invId . '|' . $subId;
                 if (isset($investorIndex[$key])) {
                     $existing = $investorIndex[$key];
+                    $existingStatus = strtolower(trim((string)($existing['orderstatus'] ?? '')));
 
-                    $progModify = (string)($pt['modify_trade'] ?? '');
-                    $invModify  = (string)($existing['modify_trade'] ?? '');
-                    $progStatus = (string)($pt['orderstatus'] ?? '');
-                    $invStatus  = (string)($existing['orderstatus'] ?? '');
-                    $progPnl    = $pt['pnl'] ?? null;
-                    $invPnl     = $existing['pnl'] ?? null;
-                    $progPrr    = $pt['pnl_risk_reward'] ?? null;
-                    $invPrr     = $existing['pnl_risk_reward'] ?? null;
-                    $progContract = (int)($pt['contract_id'] ?? 1);
-                    $invContract  = (int)($existing['contract_id'] ?? 0);
-
-                    if (
-                        $progModify !== $invModify ||
-                        $progStatus !== $invStatus ||
-                        (string)$progPnl !== (string)$invPnl ||
-                        (string)$progPrr !== (string)$invPrr ||
-                        $progContract !== $invContract
-                    ) {
+                    // Only pending investor orders may receive signal-parameter
+                    // updates. Running, closed and failed rows remain untouched.
+                    if ($existingStatus === 'pending') {
                         try {
-                            $u = $pdo->prepare("
-                                UPDATE programme_trades
-                                SET modify_trade = ?, orderstatus = ?, pnl = ?, pnl_risk_reward = ?, contract_id = ?
-                                WHERE id = ?
-                            ");
-                            $u->execute([
-                                $progModify,
-                                $progStatus !== '' ? $progStatus : null,
-                                $progPnl,
-                                $progPrr,
-                                $progContract,
-                                (int)$existing['id']
+                            $updatePendingStmt->execute([
+                                $pt['contract_id'] ?? 1,
+                                $pt['ordertype'] ?? null,
+                                $pt['symbol'] ?? null,
+                                $pt['entry'] ?? null,
+                                $pt['stoploss'] ?? null,
+                                $pt['takeprofit'] ?? null,
+                                $pt['trade_risk_reward'] ?? null,
+                                $pt['interest_risk_reward'] ?? null,
+                                $pt['interest_risk_reward_type'] ?? null,
+                                $pt['trade_time'] ?? null,
+                                $pt['order_request_status'] ?? null,
+                                (int)($pt['order_request_filled'] ?? 0),
+                                $pt['order_request_filled_failure_reason'] ?? null,
+                                (int)$existing['id'],
                             ]);
-                        } catch (Throwable $e) {}
+                        } catch (Throwable $e) {
+                            error_log('[syncProgrammeTradesToInvestors] Pending-row update failed for trade ' . $tid . ': ' . $e->getMessage());
+                        }
                     }
                     continue;
                 }
 
+                // Source must still qualify at insertion time.
+                if ((int)($pt['live'] ?? 0) !== 1) continue;
+                if (strtolower(trim((string)($pt['orderstatus'] ?? ''))) !== 'pending') continue;
+
                 try {
-                    $insStmt->execute([
+                    $insertStmt->execute([
                         $userId,
                         $programmeId,
-                        $inv['investor_id'],
-                        $inv['sub_account_id'] ?: null,
+                        $invId,
+                        $subId,
                         $tid,
                         $pt['contract_id'] ?? 1,
                         $pt['ordertype'] ?? null,
@@ -1637,80 +1756,35 @@ function syncProgrammeTradesToInvestors($pdo, $userId, $programmeId) {
                         $pt['entry'] ?? null,
                         $pt['stoploss'] ?? null,
                         $pt['takeprofit'] ?? null,
-                        $pt['orderstatus'] ?? null,
                         $pt['trade_risk_reward'] ?? null,
                         $pt['interest_risk_reward'] ?? null,
                         $pt['interest_risk_reward_type'] ?? null,
                         $pt['pnl'] ?? null,
                         $pt['pnl_risk_reward'] ?? null,
                         $pt['modify_trade'] ?? null,
+                        $pt['trade_time'] ?? null,
+                        $pt['order_request_status'] ?? null,
+                        (int)($pt['order_request_filled'] ?? 0),
+                        $pt['order_request_filled_failure_reason'] ?? null,
                         $pt['created_at'] ?? date('Y-m-d H:i:s'),
                     ]);
-                } catch (Throwable $e) {}
+                    // Keep this in-memory index current so duplicate active-investor
+                    // rows cannot insert a second copy during the same run.
+                    $investorIndex[$key] = [
+                        'id' => (int)$pdo->lastInsertId(),
+                        'tradeid' => $tid,
+                        'investor_id' => $invId,
+                        'investor_sub_account_id' => $subId,
+                        'orderstatus' => 'pending',
+                    ];
+                } catch (Throwable $e) {
+                    error_log('[syncProgrammeTradesToInvestors] Insert failed for trade ' . $tid . ', investor ' . $invId . ', subaccount ' . $subId . ': ' . $e->getMessage());
+                }
             }
         }
 
-        $programmeTradeIds = array_keys($programmeByTradeId);
-        if (!empty($programmeTradeIds)) {
-            $placeholders = implode(',', array_fill(0, count($programmeTradeIds), '?'));
-            $params = array_merge([$userId, $programmeId], $programmeTradeIds);
-            try {
-                $sql = "
-                    DELETE FROM programme_trades
-                    WHERE userid = ?
-                      AND programmeid = ?
-                      AND investor_id IS NOT NULL
-                      AND (tradeid IS NULL OR tradeid = '' OR tradeid NOT IN ($placeholders))
-                ";
-                $d = $pdo->prepare($sql);
-                $d->execute($params);
-            } catch (Throwable $e) {}
-        } else {
-            try {
-                $d = $pdo->prepare("
-                    DELETE FROM programme_trades
-                    WHERE userid = ?
-                      AND programmeid = ?
-                      AND investor_id IS NOT NULL
-                ");
-                $d->execute([$userId, $programmeId]);
-            } catch (Throwable $e) {}
-        }
-
-        if (!empty($activePairs)) {
-            $pairConditions = [];
-            $pairParams = [];
-            foreach ($activePairs as $pair) {
-                list($pInv, $pSub) = explode('|', $pair);
-                $pairConditions[] = "(investor_id = ? AND investor_sub_account_id = ?)";
-                $pairParams[] = (int)$pInv;
-                $pairParams[] = (int)$pSub;
-            }
-            $pairSql = implode(' OR ', $pairConditions);
-            $params = array_merge([$userId, $programmeId], $pairParams);
-            try {
-                $sql = "
-                    DELETE FROM programme_trades
-                    WHERE userid = ?
-                      AND programmeid = ?
-                      AND investor_id IS NOT NULL
-                      AND NOT ($pairSql)
-                ";
-                $d = $pdo->prepare($sql);
-                $d->execute($params);
-            } catch (Throwable $e) {}
-        } else {
-            try {
-                $d = $pdo->prepare("
-                    DELETE FROM programme_trades
-                    WHERE userid = ?
-                      AND programmeid = ?
-                      AND investor_id IS NOT NULL
-                ");
-                $d->execute([$userId, $programmeId]);
-            } catch (Throwable $e) {}
-        }
-
+        // Deliberately do not delete investor rows. Closed, failed and historical
+        // execution records must remain available and retain their own state.
     } catch (Throwable $e) {
         error_log('[syncProgrammeTradesToInvestors] ' . $e->getMessage());
     }
@@ -1725,6 +1799,8 @@ function propagateTradeToInvestors($pdo, $userId, $programmeId, $tradeId, $chang
             FROM programme_trades
             WHERE id = ? AND userid = ? AND programmeid = ?
               AND investor_id IS NULL
+              AND live = 1
+              AND LOWER(TRIM(COALESCE(orderstatus, ''))) IN ('pending', 'running')
             LIMIT 1
         ");
         $q->execute([$tradeId, $userId, $programmeId]);
@@ -1747,6 +1823,8 @@ function propagateTradeToInvestors($pdo, $userId, $programmeId, $tradeId, $chang
             WHERE tradeid = ?
               AND programmeid = ?
               AND investor_id IS NOT NULL
+              AND live = 1
+              AND LOWER(TRIM(COALESCE(orderstatus, ''))) IN ('pending', 'running')
         ");
         $u->execute($params);
     } catch (Throwable $e) {}
@@ -2108,10 +2186,18 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
     $groups = ['running' => [], 'pending' => [], 'closed' => [], 'failed' => []];
 
     foreach ($programmeRows as $t) {
+        // `orderstatus` remains chart/Python-owned. A manual request moves to
+        // Closed only after the separate executor confirms order_request_filled=1.
         $status = strtolower(trim((string)($t['orderstatus'] ?? '')));
         $tid    = (string)($t['tradeid'] ?? '');
+        $requestStatus = strtolower(trim((string)($t['order_request_status'] ?? '')));
+        $requestFilled = (int)($t['order_request_filled'] ?? 0) === 1;
+        // Breakeven is a stop-loss adjustment request, not a closure request.
+        $validRequestStatuses = ['order closing requested', 'position closing requested'];
+        $isClosedByRequest = $requestFilled && in_array($requestStatus, $validRequestStatuses, true);
 
-        if ($status === 'running')      $groups['running'][] = $t;
+        if ($isClosedByRequest)         $groups['closed'][]  = $t;
+        elseif ($status === 'running')  $groups['running'][] = $t;
         elseif ($status === 'pending')  $groups['pending'][] = $t;
         elseif ($status === 'closed')   $groups['closed'][]  = $t;
         elseif ($status === 'failed')   $groups['failed'][]  = $t;
@@ -2119,11 +2205,15 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
 
         $stats = ($tid !== '' && isset($investorStats[$tid])) ? $investorStats[$tid] : null;
 
-        if ($status !== 'failed' && $stats && $stats['failed'] > 0) {
-            $groups['failed'][] = $t;
-        }
-        if ($status !== 'running' && $stats && $stats['success'] > 0) {
-            if ($status === 'failed') $groups['running'][] = $t;
+        // Do not duplicate a request-closed programme trade in investor-derived
+        // Running/Failed lists. The filled manual request is authoritative here.
+        if (!$isClosedByRequest) {
+            if ($status !== 'failed' && $stats && $stats['failed'] > 0) {
+                $groups['failed'][] = $t;
+            }
+            if ($status !== 'running' && $stats && $stats['success'] > 0) {
+                if ($status === 'failed') $groups['running'][] = $t;
+            }
         }
     }
 
@@ -2165,17 +2255,30 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                 $entry     = $t['entry']      !== null ? rtrim(rtrim(number_format((float)$t['entry'], 5), '0'), '.') : '—';
                 $sl        = $t['stoploss']   !== null ? rtrim(rtrim(number_format((float)$t['stoploss'], 5), '0'), '.') : '—';
                 $tp        = $t['takeprofit'] !== null ? rtrim(rtrim(number_format((float)$t['takeprofit'], 5), '0'), '.') : '—';
-                $status    = strtoupper((string)($t['orderstatus'] ?? '—'));
+                $chartStatus = strtoupper((string)($t['orderstatus'] ?? '—'));
+                $statusLower = strtolower(trim((string)($t['orderstatus'] ?? '')));
+                $requestStatus = strtolower(trim((string)($t['order_request_status'] ?? '')));
+                $requestFilled = (int)($t['order_request_filled'] ?? 0) === 1;
+                // Breakeven is a stop-loss adjustment request, not a closure request.
+                $validRequestStatuses = ['order closing requested', 'position closing requested'];
+                $isClosedByRequest = $requestFilled && in_array($requestStatus, $validRequestStatuses, true);
+                if ($isClosedByRequest && $requestStatus === 'position closing requested') {
+                    $status = 'CLOSED POSITION BY REQUEST';
+                } elseif ($isClosedByRequest && $requestStatus === 'order closing requested') {
+                    $status = 'CLOSED ORDER BY REQUEST';
+                } else {
+                    $status = $chartStatus;
+                }
                 $trr       = $t['trade_risk_reward'] !== null ? number_format((float)$t['trade_risk_reward'], 2) : '—';
                 $irr       = $t['interest_risk_reward'] !== null ? number_format((float)$t['interest_risk_reward'], 2) : '—';
                 $irrType   = normalizeInterestRiskRewardType($t['interest_risk_reward_type'] ?? '');
 
-                $statusLower = strtolower((string)($t['orderstatus'] ?? ''));
                 $statusClass = 'sd-order-status';
-                if ($statusLower === 'running')      $statusClass .= ' is-running';
-                elseif ($statusLower === 'pending')  $statusClass .= ' is-pending';
-                elseif ($statusLower === 'closed')   $statusClass .= ' is-closed';
-                elseif ($statusLower === 'failed')   $statusClass .= ' is-failed';
+                if ($isClosedByRequest)               $statusClass .= ' is-closed';
+                elseif ($statusLower === 'running')   $statusClass .= ' is-running';
+                elseif ($statusLower === 'pending')   $statusClass .= ' is-pending';
+                elseif ($statusLower === 'closed')    $statusClass .= ' is-closed';
+                elseif ($statusLower === 'failed')    $statusClass .= ' is-failed';
 
                 $tid = (string)($t['tradeid'] ?? '');
                 $stats = ($tid !== '' && isset($investorStats[$tid])) ? $investorStats[$tid] : ['success' => 0, 'failed' => 0, 'total' => 0];
@@ -2189,16 +2292,29 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                 $html .=     '<div><div class="sd-t-label">Stop loss</div><b>' . esc_h($sl) . '</b></div>';
                 $html .=     '<div><div class="sd-t-label">Take profit</div><b>' . esc_h($tp) . '</b></div>';
                 $html .=     '<div><div class="sd-t-label">Order status</div><b class="' . $statusClass . '">' . esc_h($status) . '</b></div>';
+                if ($isClosedByRequest) {
+                    $html .= '<div><div class="sd-t-label">Chart order status</div><b>' . esc_h($chartStatus) . '</b></div>';
+                }
+                if ($requestStatus !== '') {
+                    $requestLabel = ucwords($requestStatus);
+                    $requestStateLabel = $requestFilled ? 'Filled' : 'Awaiting fill';
+                    $html .= '<div><div class="sd-t-label">Manual request</div><b>' . esc_h($requestLabel) . ' · ' . esc_h($requestStateLabel) . '</b>';
+                    $requestFailure = trim((string)($t['order_request_filled_failure_reason'] ?? ''));
+                    if ($requestFailure !== '') $html .= '<div class="sd-t-label" style="margin-top:3px;white-space:normal;">' . esc_h($requestFailure) . '</div>';
+                    $html .= '</div>';
+                }
                 $html .=     '<div><div class="sd-t-label">Trade risk reward</div><b> 1:' . esc_h($trr) . '</b></div>';
                 $html .=     '<div><div class="sd-t-label">Interest risk reward</div><b> 1:' . esc_h($irr) . '</b></div>';
                 $html .=     '<div><div class="sd-t-label">Interest risk reward type</div><b>' . esc_h($irrType) . '</b></div>';
 
-                if ($statusLower === 'closed') {
+                $prrRaw = $t['pnl_risk_reward'] ?? null;
+                $prrVal = ($prrRaw !== null && $prrRaw !== '' && is_numeric($prrRaw)) ? (float)$prrRaw : null;
+                $prrTxt = $prrVal !== null ? number_format($prrVal, 2) : '—';
+
+                if ($statusLower === 'closed' || $isClosedByRequest) {
                     $pnlRaw = $t['pnl'] ?? null;
                     $chartOutcome = strtolower(trim((string)($t['chart_outcome'] ?? '')));
                     $chartOutcome = preg_replace('/[\s_-]+/', ' ', $chartOutcome);
-                    $prrVal = $t['pnl_risk_reward'] !== null ? (float)$t['pnl_risk_reward'] : null;
-                    $prrTxt = $prrVal !== null ? number_format($prrVal, 2) : '—';
 
                     // An actual PnL value is authoritative: every positive value
                     // is profit, every negative value is loss, and exactly zero
@@ -2209,13 +2325,13 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                         if ($pnlVal > 0.0)      { $pnlLabel = 'Closed in Profit'; $pnlClass = 'is-profit'; }
                         elseif ($pnlVal < 0.0)  { $pnlLabel = 'Closed in Loss';   $pnlClass = 'is-loss'; }
                         else                    { $pnlLabel = 'Closed Flat';      $pnlClass = 'is-flat'; }
-                    } elseif (in_array($chartOutcome, ['take profit reached', 'closed in profit', 'closed profit', 'profit'], true)) {
+                    } elseif (in_array($chartOutcome, ['take profit reached', 'closed in profit', 'closed profit', 'profit', 'profitable'], true)) {
                         $pnlLabel = 'Closed in Profit';
                         $pnlClass = 'is-profit';
-                    } elseif (in_array($chartOutcome, ['stoploss hit', 'closed in loss', 'closed loss', 'loss'], true)) {
+                    } elseif (in_array($chartOutcome, ['stoploss hit', 'closed in loss', 'closed loss', 'loss', 'losing'], true)) {
                         $pnlLabel = 'Closed in Loss';
                         $pnlClass = 'is-loss';
-                    } elseif (in_array($chartOutcome, ['closed flat', 'breakeven', 'break even', 'closed at breakeven'], true)) {
+                    } elseif (in_array($chartOutcome, ['closed flat', 'closed in flat', 'breakeven', 'break even', 'closed at breakeven', 'closed breakeven'], true)) {
                         $pnlLabel = 'Closed Flat';
                         $pnlClass = 'is-flat';
                     } else {
@@ -2224,8 +2340,14 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                     }
 
                     $html .= '<div><div class="sd-t-label">Outcome</div><b class="sd-pnl-outcome ' . $pnlClass . '">' . esc_h($pnlLabel) . '</b></div>';
-                    $html .= '<div><div class="sd-t-label">PnL risk reward</div><b> 1:' . esc_h($prrTxt) . '</b></div>';
                 }
+
+                // PnL R:R is shown for every signal (— until a closed trade
+                // has a recorded result), followed immediately by Live/History.
+                $html .= '<div><div class="sd-t-label">PnL risk reward</div><b> 1:' . esc_h($prrTxt) . '</b></div>';
+                $signalType = ((int)($t['live'] ?? 0) === 1) ? 'Live' : 'History';
+                $signalTypeClass = $signalType === 'Live' ? 'is-live' : 'is-history';
+                $html .= '<div><div class="sd-t-label">Signal type</div><b class="sd-signal-type ' . $signalTypeClass . '">' . esc_h($signalType) . '</b></div>';
 
                 if ($showInvestorCounts) {
                     $html .= '<div style="grid-column:1/-1;">';
@@ -2239,30 +2361,52 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
 
                 $html .=   '</div>';
 
-                $modifyVal = (string)($t['modify_trade'] ?? '');
-                if ($key === 'running') {
-                    $html .=   '<div class="sd-trade-modify">';
-                    $html .=     '<div class="sd-t-label">Modify trade</div>';
-                    $html .=     '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '">';
-                    $html .=       '<option value="">Select action</option>';
-                    $html .=       '<option value="breakeven"' . ($modifyVal === 'breakeven' ? ' selected' : '') . '>Breakeven</option>';
-                    $html .=       '<option value="close-position"' . ($modifyVal === 'close-position' ? ' selected' : '') . '>Close Position</option>';
-                    $html .=     '</select>';
-                    $html .=   '</div>';
-                } elseif ($key === 'pending') {
-                    $html .=   '<div class="sd-trade-modify">';
-                    $html .=     '<div class="sd-t-label">Modify trade</div>';
-                    $html .=     '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '">';
-                    $html .=       '<option value="">Select action</option>';
-                    $html .=       '<option value="delete-order"' . ($modifyVal === 'delete-order' ? ' selected' : '') . '>Delete Order</option>';
-                    $html .=     '</select>';
-                    $html .=   '</div>';
+                if (in_array($key, ['running', 'pending'], true) && !$requestFilled) {
+                    // The tab determines the only actions that may be offered:
+                    // Running = Close Position / Breakeven; Pending = Close Order.
+                    // Once a request exists, show only that request as the selected
+                    // default plus Cancel Request. Never expose another tab's actions.
+                    $requestActionMap = [
+                        'order closing requested'    => ['action' => 'close-order',    'label' => 'Closure Requested', 'tab' => 'pending'],
+                        'position closing requested' => ['action' => 'close-position', 'label' => 'Position Closing Requested', 'tab' => 'running'],
+                        'breakeven requested'        => ['action' => 'breakeven',      'label' => 'Breakeven Requested', 'tab' => 'running']
+                    ];
+                    $currentRequest = $requestActionMap[$requestStatus] ?? null;
+                    $currentAction = ($currentRequest && $currentRequest['tab'] === $key) ? $currentRequest['action'] : '';
+                    $hasStoredRequest = ($requestStatus !== '');
+
+                    $html .= '<div class="sd-trade-modify">';
+                    $html .= '<div class="sd-t-label">Trade request</div>';
+
+                    if ($hasStoredRequest && $currentAction === '') {
+                        // Preserve an older/incompatible request without presenting
+                        // an invalid action for this tab. Let the owner cancel it.
+                        $html .= '<div class="sd-request-state-warning">An existing request does not match this trade status. Cancel it before submitting another request.</div>';
+                        $html .= '<button type="button" class="sd-cancel-request-button" data-trade-id="' . (int)$t['id'] . '">Cancel Request</button>';
+                    } else {
+                        $html .= '<select class="sd-modify-select" data-trade-id="' . (int)$t['id'] . '" data-current-action="' . esc_h($currentAction) . '">';
+                        if ($currentAction !== '') {
+                            $html .= '<option value="' . esc_h($currentAction) . '" selected>' . esc_h($currentRequest['label']) . '</option>';
+                            $html .= '<option value="cancel-request">Cancel Request</option>';
+                        } else {
+                            $html .= '<option value="" selected disabled>Select action</option>';
+                            if ($key === 'running') {
+                                $html .= '<option value="close-position">Close Position</option>';
+                                $html .= '<option value="breakeven">Breakeven</option>';
+                            } else {
+                                $html .= '<option value="close-order">Close Order</option>';
+                            }
+                        }
+                        $html .= '</select>';
+                    }
+                    $html .= '</div>';
                 }
 
                 $chartRootId = isset($t['chart_root_id']) ? (int)$t['chart_root_id'] : 0;
                 $chartConfirmationRaw = $t['chart_confirmation_root_id'] ?? null;
                 $chartConfirmationId = ($chartConfirmationRaw === null || $chartConfirmationRaw === '') ? '' : (string)(int)$chartConfirmationRaw;
                 $chartFamilyNumber = isset($t['chart_family_number']) ? (int)$t['chart_family_number'] : 0;
+                $chartSetupGroupId = max(1, (int)($t['chart_setup_group_id'] ?? 1));
                 $chartTradeId = trim((string)($t['chart_trade_id'] ?? ''));
                 $chartTimeframe = strtolower(trim((string)($t['chart_timeframe'] ?? $t['timeframe'] ?? '')));
                 $chartSymbol = trim((string)($t['chart_symbol'] ?? $t['symbol'] ?? ''));
@@ -2274,6 +2418,7 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
                     . ' data-root-id="' . $chartRootId . '"'
                     . ' data-confirmation-root-id="' . esc_h($chartConfirmationId) . '"'
                     . ' data-family-number="' . $chartFamilyNumber . '"'
+                    . ' data-setup-group-id="' . $chartSetupGroupId . '"'
                     . ' data-chart-trade-id="' . esc_h($chartTradeId) . '"'
                     . ' data-family-signature="' . esc_h($t['chart_family_signature'] ?? '') . '"'
                     . ' data-symbol="' . esc_h($chartSymbol) . '"'
@@ -2297,6 +2442,9 @@ function renderProgrammeTradesHtml(array $trades, array $activeIds = []) {
 }
 
 function fetchActiveProgrammeTrades($pdo, $userId, $programmeId, $limit = 400) {
+    // Trade cards are sourced from programme_trades (including live=0 history
+    // and live=1 current signals). programme_analytics is only used elsewhere
+    // for provision analytics / the chart-identity outcome mapping.
     $trades = [];
     try {
         $mappingExists = false;
@@ -2308,6 +2456,7 @@ function fetchActiveProgrammeTrades($pdo, $userId, $programmeId, $limit = 400) {
                 c.root_id AS chart_root_id,
                 c.confirmation_root_id AS chart_confirmation_root_id,
                 c.family_number AS chart_family_number,
+                c.setup_group_id AS chart_setup_group_id,
                 c.chart_trade_id AS chart_trade_id,
                 c.family_signature AS chart_family_signature,
                 c.symbol AS chart_symbol,
@@ -2318,17 +2467,76 @@ function fetchActiveProgrammeTrades($pdo, $userId, $programmeId, $limit = 400) {
                 c.outcome AS chart_outcome" : '';
         $identityJoin = $mappingExists ? " LEFT JOIN programme_trade_chart_identity c
                 ON c.programme_trade_id = t.id AND c.userid = t.userid AND c.programmeid = t.programmeid" : '';
+        $analyticsJoin = '';
+        $analyticsSelect = '';
+        $analyticsAvailable = false;
+        if ($mappingExists) {
+            try {
+                $analyticsAvailable = (bool)$pdo->query("SHOW TABLES LIKE 'programme_analytics'")->fetchColumn();
+                if ($analyticsAvailable) {
+                    $analyticsColumns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
+                    $neededAnalyticsColumns = ['programme_id','userid','root_id','confirmation_root_id','family_number','setup_group_id','symbol','timeframe','source_timeframe','outcome','order_request_status','order_request_filled','order_request_filled_failure_reason'];
+                    $analyticsAvailable = !array_diff($neededAnalyticsColumns, $analyticsColumns);
+                }
+                if ($analyticsAvailable) {
+                    $analyticsJoin = " LEFT JOIN programme_analytics pa
+                        ON pa.programme_id = c.programmeid AND pa.userid = c.userid
+                       AND pa.root_id = c.root_id
+                       AND pa.confirmation_root_id <=> c.confirmation_root_id
+                       AND pa.family_number = c.family_number
+                       AND pa.setup_group_id = c.setup_group_id
+                       AND UPPER(pa.symbol) = UPPER(c.symbol)
+                       AND LOWER(pa.timeframe) = LOWER(c.timeframe)
+                       AND pa.source_timeframe <=> c.source_timeframe";
+                    $analyticsSelect = ", pa.outcome AS analytics_chart_outcome,
+                        pa.order_request_status AS analytics_order_request_status,
+                        pa.order_request_filled AS analytics_order_request_filled,
+                        pa.order_request_filled_failure_reason AS analytics_order_request_failure_reason";
+                }
+            } catch (Throwable $analyticsReadError) {
+                error_log('Signals Dashboard analytics request-state join skipped: ' . $analyticsReadError->getMessage());
+            }
+        }
         $s = $pdo->prepare("
-            SELECT t.* {$identitySelect}
+            SELECT t.* {$identitySelect} {$analyticsSelect}
             FROM programme_trades t
             {$identityJoin}
+            {$analyticsJoin}
             WHERE t.userid = ? AND t.programmeid = ?
             ORDER BY t.created_at DESC
             LIMIT " . (int)$limit . "
         ");
         $s->execute([$userId, $programmeId]);
         $trades = $s->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {}
+        foreach ($trades as &$tradeRow) {
+            // Prefer the chart-identity outcome, falling back to the matching
+            // Analytics outcome when the identity snapshot is empty.
+            $identityOutcome = trim((string)($tradeRow['chart_outcome'] ?? ''));
+            $analyticsOutcome = trim((string)($tradeRow['analytics_chart_outcome'] ?? ''));
+            if ($identityOutcome === '' && $analyticsOutcome !== '') {
+                $tradeRow['chart_outcome'] = $analyticsOutcome;
+            }
+            unset($tradeRow['analytics_chart_outcome']);
+
+            if (!array_key_exists('analytics_order_request_filled', $tradeRow)) continue;
+            $tradeFilled = (int)($tradeRow['order_request_filled'] ?? 0);
+            $analyticsFilled = (int)($tradeRow['analytics_order_request_filled'] ?? 0);
+            $tradeRequestStatus = trim((string)($tradeRow['order_request_status'] ?? ''));
+            $analyticsRequestStatus = trim((string)($tradeRow['analytics_order_request_status'] ?? ''));
+            if ($tradeFilled === 1 && $tradeRequestStatus !== '') $resolvedStatus = $tradeRequestStatus;
+            elseif ($analyticsFilled === 1 && $analyticsRequestStatus !== '') $resolvedStatus = $analyticsRequestStatus;
+            else $resolvedStatus = $tradeRequestStatus !== '' ? $tradeRequestStatus : $analyticsRequestStatus;
+            $tradeRow['order_request_status'] = $resolvedStatus !== '' ? $resolvedStatus : null;
+            $tradeRow['order_request_filled'] = max($tradeFilled, $analyticsFilled);
+            $tradeFailure = trim((string)($tradeRow['order_request_filled_failure_reason'] ?? ''));
+            $analyticsFailure = trim((string)($tradeRow['analytics_order_request_failure_reason'] ?? ''));
+            $tradeRow['order_request_filled_failure_reason'] = $tradeFailure !== '' ? $tradeFailure : ($analyticsFailure !== '' ? $analyticsFailure : null);
+            unset($tradeRow['analytics_order_request_status'], $tradeRow['analytics_order_request_filled'], $tradeRow['analytics_order_request_failure_reason']);
+        }
+        unset($tradeRow);
+    } catch (Throwable $e) {
+        error_log('Signals Dashboard trade fetch failed: ' . $e->getMessage());
+    }
     return $trades;
 }
 
@@ -2558,7 +2766,7 @@ function buildLiveState($pdo, $userId, $programme, $email) {
     $serverContractDuration = 0;
     $serverMinBrokerBalance = 0.0;
     try {
-        $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_requirements WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         if ($srv) {
             $serverContractDuration = (int)($srv['contract_duration'] ?? 0);
             $serverMinBrokerBalance = (float)($srv['min_broker_balance'] ?? 0);
@@ -2992,7 +3200,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $floorContract = 0; $floorMinBal = 0.0;
             try {
-                $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_requirements WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
                 if ($srv) { $floorContract = (int)($srv['contract_duration'] ?? 0); $floorMinBal = (float)($srv['min_broker_balance'] ?? 0); }
             } catch (Throwable $e) {}
 
@@ -3022,6 +3230,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             jres(['success'=>true, 'developer_percentage'=>$developerPercent, 'investor_percentage'=>$investorPercent, 'timezone'=>$timezone]);
         } catch (Throwable $e) { jres(['success' => false, 'message' => 'Failed to save requirements.']); }
+    }
+
+    if ($action === 'modify_order_request') {
+        if (!$programme) jres(['success' => false, 'message' => 'No programme']);
+        $tradeId = (int)($_POST['trade_id'] ?? 0);
+        $requestedAction = strtolower(trim((string)($_POST['request_status'] ?? '')));
+        $actionToRequestStatus = [
+            'close-order' => 'order closing requested',
+            'close-position' => 'position closing requested',
+            'breakeven' => 'breakeven requested'
+        ];
+        $isCancel = ($requestedAction === 'cancel-request');
+        if ($tradeId <= 0 || (!$isCancel && !isset($actionToRequestStatus[$requestedAction]))) {
+            jres(['success' => false, 'message' => 'Invalid trade request.']);
+        }
+
+        try {
+            // Run the additive analytics-column migration before the data transaction;
+            // MySQL DDL can implicitly commit an open transaction.
+            $analyticsSchemaReady = spc_ensureLiveTradesColumn($pdo);
+            if (!$pdo->inTransaction()) $pdo->beginTransaction();
+            $lock = $pdo->prepare("SELECT `id`, `orderstatus`, `live`, `tradeid`, `order_request_status`, `order_request_filled`
+                FROM `programme_trades`
+                WHERE `id` = ? AND `userid` = ? AND `programmeid` = ? AND `investor_id` IS NULL
+                LIMIT 1 FOR UPDATE");
+            $lock->execute([$tradeId, $userId, (int)$programme['id']]);
+            $tradeRow = $lock->fetch(PDO::FETCH_ASSOC);
+            if (!$tradeRow) throw new RuntimeException('Trade not found or access denied.');
+            $chartStatus = strtolower(trim((string)($tradeRow['orderstatus'] ?? '')));
+            $existingRequestStatus = strtolower(trim((string)($tradeRow['order_request_status'] ?? '')));
+            if (!in_array($chartStatus, ['pending', 'running'], true)) {
+                throw new RuntimeException('Only pending or running trades can receive or cancel a request.');
+            }
+            if ((int)($tradeRow['order_request_filled'] ?? 0) === 1) {
+                throw new RuntimeException('This request has already been filled and cannot be changed or cancelled.');
+            }
+
+            if ($isCancel) {
+                if ($existingRequestStatus === '') {
+                    throw new RuntimeException('There is no outstanding request to cancel.');
+                }
+            } else {
+                if ($existingRequestStatus !== '') {
+                    throw new RuntimeException('Cancel the existing request before submitting another request.');
+                }
+                if ($requestedAction === 'close-order' && $chartStatus !== 'pending') {
+                    throw new RuntimeException('Close Order is available only for Pending trades.');
+                }
+                if (in_array($requestedAction, ['close-position', 'breakeven'], true) && $chartStatus !== 'running') {
+                    throw new RuntimeException('Close Position and Breakeven are available only for Running trades.');
+                }
+            }
+
+            $newStatus = $isCancel ? null : $actionToRequestStatus[$requestedAction];
+            $updateTrade = $pdo->prepare("UPDATE `programme_trades`
+                SET `order_request_status` = ?, `order_request_filled` = 0,
+                    `order_request_filled_failure_reason` = NULL
+                WHERE `id` = ? AND `userid` = ? AND `programmeid` = ? AND `investor_id` IS NULL");
+            $updateTrade->execute([$newStatus, $tradeId, $userId, (int)$programme['id']]);
+
+            $analyticsUpdated = 0;
+            if ($analyticsSchemaReady) {
+                $identityTable = $pdo->query("SHOW TABLES LIKE 'programme_trade_chart_identity'")->fetchColumn();
+                if ($identityTable) {
+                    $updateAnalytics = $pdo->prepare("UPDATE `programme_analytics` pa
+                        INNER JOIN `programme_trade_chart_identity` c
+                            ON c.`programmeid` = pa.`programme_id`
+                           AND c.`userid` = pa.`userid`
+                           AND c.`root_id` = pa.`root_id`
+                           AND c.`confirmation_root_id` <=> pa.`confirmation_root_id`
+                           AND c.`family_number` = pa.`family_number`
+                           AND c.`setup_group_id` = pa.`setup_group_id`
+                           AND UPPER(c.`symbol`) = UPPER(pa.`symbol`)
+                           AND LOWER(c.`timeframe`) = LOWER(pa.`timeframe`)
+                           AND c.`source_timeframe` <=> pa.`source_timeframe`
+                        SET pa.`order_request_status` = ?,
+                            pa.`order_request_filled` = 0,
+                            pa.`order_request_filled_failure_reason` = NULL
+                        WHERE c.`programme_trade_id` = ?
+                          AND c.`userid` = ? AND c.`programmeid` = ?
+                          AND pa.`trade_configured` = 1");
+                    $updateAnalytics->execute([$newStatus, $tradeId, $userId, (int)$programme['id']]);
+                    $analyticsUpdated = $updateAnalytics->rowCount();
+                }
+            }
+            $pdo->commit();
+
+            $propagated = [
+                'order_request_status' => $newStatus,
+                'order_request_filled' => 0,
+                'order_request_filled_failure_reason' => null
+            ];
+            propagateTradeToInvestors($pdo, $userId, (int)$programme['id'], $tradeId, $propagated);
+
+            jres([
+                'success' => true,
+                'order_request_status' => $newStatus,
+                'order_request_action' => $isCancel ? null : $requestedAction,
+                'order_request_filled' => 0,
+                'order_request_filled_failure_reason' => null,
+                'analytics_updated' => $analyticsUpdated
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Signals Dashboard manual trade request failed: ' . $e->getMessage());
+            jres(['success' => false, 'message' => $e instanceof RuntimeException ? $e->getMessage() : 'Failed to update trade request.']);
+        }
     }
 
     if ($action === 'modify_trade') {
@@ -3153,7 +3468,7 @@ if ($programme) {
 
 $serverContractDuration = 0; $serverMinBrokerBalance = 0.0;
 try {
-    $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_account WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    $srv = $pdo->query("SELECT contract_duration, min_broker_balance FROM server_requirements WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
     if ($srv) { $serverContractDuration = (int)($srv['contract_duration'] ?? 0); $serverMinBrokerBalance = (float)($srv['min_broker_balance'] ?? 0); }
 } catch (Throwable $e) {}
 if ($contractDuration < $serverContractDuration) $contractDuration = $serverContractDuration;
@@ -3421,6 +3736,9 @@ if ($programme && !empty($email)) {
 
     .sd-modify-select { width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--sd-border); background: var(--sd-card); color: var(--sd-text); font-family: inherit; font-size: .82rem; font-weight: 600; cursor: pointer; }
     .sd-modify-select:focus { outline: none; border-color: var(--sd-accent); }
+    .sd-request-state-warning { margin: 5px 0 8px; color: var(--sd-muted); font-size: .76rem; line-height: 1.4; }
+    .sd-cancel-request-button { border: 1px solid var(--sd-border); border-radius: 9px; padding: 8px 12px; background: var(--sd-card); color: var(--sd-text); font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; }
+    .sd-cancel-request-button:disabled { opacity: .55; cursor: wait; }
 
     .sd-status-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
     @media (max-width: 640px) { .sd-status-grid { grid-template-columns: 1fr; } }
@@ -4373,7 +4691,7 @@ if ($programme && !empty($email)) {
         var parts = [];
         for (var i = 0; i < trades.length; i++) {
             var t = trades[i] || {};
-            parts.push((t.id || '') + ':' + (t.modify_trade || '') + ':' + (t.orderstatus || ''));
+            parts.push((t.id || '') + ':' + (t.orderstatus || '') + ':' + (t.order_request_status || '') + ':' + (t.order_request_filled || 0) + ':' + (t.order_request_filled_failure_reason || ''));
         }
         return parts.join('|');
     }
@@ -4588,36 +4906,54 @@ if ($programme && !empty($email)) {
         });
     };
 
+    function submitTradeRequest(tradeId, action, control, restoreAction, displayLabel) {
+        if (tradeId <= 0 || !action) return;
+        sdShowConfirm(
+            'Confirm Action',
+            'Are you sure you want to "' + displayLabel + '" for trade #' + tradeId + '?',
+            displayLabel,
+            function () {
+                control.disabled = true;
+                post({ action: 'modify_order_request', trade_id: tradeId, request_status: action }, function (d) {
+                    control.disabled = false;
+                    if (d && d.success) {
+                        // Rebuild the control from the authoritative trade/request state.
+                        // That makes the requested action the selected default and exposes
+                        // only Cancel Request until the outstanding request is cancelled.
+                        LIVE_STATE_LAST = null;
+                        fetchLiveState();
+                    } else {
+                        if (control.classList.contains('sd-modify-select')) control.value = restoreAction || '';
+                        sdAlert((d && d.message) ? d.message : 'Failed to update trade request.', 'error', 'Trade request failed');
+                    }
+                });
+            },
+            function () {
+                if (control.classList.contains('sd-modify-select')) control.value = restoreAction || '';
+            }
+        );
+    }
+
     function bindModifySelects() {
         document.querySelectorAll('.sd-modify-select').forEach(function (sel) {
             if (sel.dataset.sdBound === '1') return;
             sel.dataset.sdBound = '1';
             sel.addEventListener('change', function () {
                 var tradeId = parseInt(sel.getAttribute('data-trade-id'), 10) || 0;
-                var mode    = sel.value;
-                if (tradeId <= 0 || mode === '') return;
+                var action = sel.value;
+                if (tradeId <= 0 || action === '') return;
+                var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : action;
+                var restoreAction = sel.getAttribute('data-current-action') || '';
+                submitTradeRequest(tradeId, action, sel, restoreAction, label);
+            });
+        });
 
-                var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : mode;
-                sdShowConfirm(
-                    'Confirm Action',
-                    'Are you sure you want to "' + label + '" for trade #' + tradeId + '?',
-                    label,
-                    function () {
-                        sel.disabled = true;
-                        post({ action: 'modify_trade', trade_id: tradeId, modify_trade: mode }, function (d) {
-                            sel.disabled = false;
-                            if (d && d.success) {
-                                sel.value = mode;
-                            } else {
-                                sdAlert((d && d.message) ? d.message : 'Failed to update trade.', 'error', 'Trade update failed');
-                                sel.value = '';
-                            }
-                        });
-                    },
-                    function () {
-                        sel.value = '';
-                    }
-                );
+        document.querySelectorAll('.sd-cancel-request-button').forEach(function (button) {
+            if (button.dataset.sdBound === '1') return;
+            button.dataset.sdBound = '1';
+            button.addEventListener('click', function () {
+                var tradeId = parseInt(button.getAttribute('data-trade-id'), 10) || 0;
+                submitTradeRequest(tradeId, 'cancel-request', button, '', 'Cancel Request');
             });
         });
     }
@@ -4680,6 +5016,7 @@ if ($programme && !empty($email)) {
         var confirmationRaw = button.getAttribute('data-confirmation-root-id');
         var confirmationId = confirmationRaw === null || confirmationRaw === '' ? null : (parseInt(confirmationRaw, 10) || 0);
         var familyNumber = parseInt(button.dataset.familyNumber || '0', 10) || 0;
+        var setupGroupId = Math.max(1, parseInt(button.dataset.setupGroupId || '1', 10) || 1);
         var timeframe = String(button.dataset.timeframe || '').toLowerCase();
         var symbol = String(button.dataset.symbol || '').trim();
         var chartTradeId = String(button.dataset.chartTradeId || '').trim();
@@ -4699,6 +5036,7 @@ if ($programme && !empty($email)) {
                 root_id: rootId,
                 confirmation_root_id: confirmationId,
                 family_number: familyNumber,
+                setup_group_id: setupGroupId,
                 chart_trade_id: chartTradeId,
                 trade_id: chartTradeId,
                 request_id: requestId,

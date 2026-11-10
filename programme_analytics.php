@@ -77,7 +77,27 @@ function pa_ensureLiveTradesColumn(PDO $pdo): bool {
             $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `live_trades` TINYINT(1) NOT NULL DEFAULT 0" . $position);
             $columns = pa_tableColumns($pdo, 'programme_analytics');
         }
-        return in_array('live_trades', $columns, true);
+        // Setup-group identity is stored on analytics rows; legacy rows default to group 1.
+        if (!in_array('setup_group_id', $columns, true)) {
+            $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `family_number`");
+            $columns = pa_tableColumns($pdo, 'programme_analytics');
+        }
+        $requestDefinitions = [
+            'order_request_status' => 'VARCHAR(64) NULL DEFAULT NULL',
+            'order_request_filled' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'order_request_filled_failure_reason' => 'VARCHAR(500) NULL DEFAULT NULL'
+        ];
+        foreach ($requestDefinitions as $column => $definition) {
+            if (!in_array($column, $columns, true)) {
+                $pdo->exec("ALTER TABLE `programme_analytics` ADD COLUMN `{$column}` {$definition}");
+                $columns[] = $column;
+            }
+        }
+        return in_array('live_trades', $columns, true)
+            && in_array('setup_group_id', $columns, true)
+            && in_array('order_request_status', $columns, true)
+            && in_array('order_request_filled', $columns, true)
+            && in_array('order_request_filled_failure_reason', $columns, true);
     } catch (Throwable $e) {
         error_log('Programme analytics live_trades migration failed: ' . $e->getMessage());
         return false;
@@ -221,6 +241,33 @@ function pa_ensureProgrammeTradeSyncSchema(PDO $pdo): bool {
     $columns = pa_tableColumns($pdo, 'programme_trades');
     if (!in_array('contract_id', $columns, true)) {
         $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `contract_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `programmeid`");
+        $columns[] = 'contract_id';
+    }
+    if (!in_array('setup_group_id', $columns, true)) {
+        $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `contract_id`");
+        $columns[] = 'setup_group_id';
+    }
+    // programme_analytics.live_trades is the authoritative Live/History flag.
+    // Keep its mirrored value in programme_trades.live for the Signals Dashboard
+    // and investor distribution pipeline. Existing rows default to History.
+    if (!in_array('live', $columns, true)) {
+        $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `live` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=Live, 0=History' AFTER `tradeid`");
+        $columns[] = 'live';
+    }
+    if (!in_array('trade_time', $columns, true)) {
+        $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `trade_time` DATETIME NULL DEFAULT NULL AFTER `live`");
+        $columns[] = 'trade_time';
+    }
+    $requestDefinitions = [
+        'order_request_status' => 'VARCHAR(64) NULL DEFAULT NULL',
+        'order_request_filled' => 'TINYINT(1) NOT NULL DEFAULT 0',
+        'order_request_filled_failure_reason' => 'VARCHAR(500) NULL DEFAULT NULL'
+    ];
+    foreach ($requestDefinitions as $column => $definition) {
+        if (!in_array($column, $columns, true)) {
+            $pdo->exec("ALTER TABLE `programme_trades` ADD COLUMN `{$column}` {$definition}");
+            $columns[] = $column;
+        }
     }
     $indexes = [];
     try {
@@ -245,6 +292,7 @@ function pa_ensureProgrammeTradeSyncSchema(PDO $pdo): bool {
         `root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
         `confirmation_root_id` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
         `family_number` BIGINT(20) UNSIGNED NULL DEFAULT NULL,
+        `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1,
         `family_signature` TEXT NULL,
         `symbol` VARCHAR(64) NOT NULL,
         `timeframe` VARCHAR(32) NOT NULL,
@@ -259,6 +307,10 @@ function pa_ensureProgrammeTradeSyncSchema(PDO $pdo): bool {
         KEY `idx_programme_trade_chart_root` (`userid`,`programmeid`,`root_id`,`confirmation_root_id`),
         KEY `idx_programme_trade_chart_contract` (`userid`,`programmeid`,`contract_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $identityColumns = pa_tableColumns($pdo, 'programme_trade_chart_identity');
+    if (!in_array('setup_group_id', $identityColumns, true)) {
+        $pdo->exec("ALTER TABLE `programme_trade_chart_identity` ADD COLUMN `setup_group_id` BIGINT(20) UNSIGNED NOT NULL DEFAULT 1 AFTER `family_number`");
+    }
     return true;
 }
 
@@ -268,6 +320,71 @@ function pa_ensureProgrammeTradeSyncSchema(PDO $pdo): bool {
  * inspected so a contract producer can publish a newer version there. A
  * programme with no previously published version starts at contract 1.
  */
+/**
+ * Merge the manual request state between programme_trades and its mapped
+ * programme_analytics family. The filled flag is monotonic (max of both sides);
+ * chart-derived orderstatus/outcome are never changed here.
+ */
+function pa_syncOrderRequestStates(PDO $pdo, int $programmeId, int $userId): void {
+    if ($programmeId <= 0 || $userId <= 0
+        || !pa_tableExists($pdo, 'programme_trades')
+        || !pa_tableExists($pdo, 'programme_analytics')
+        || !pa_tableExists($pdo, 'programme_trade_chart_identity')) return;
+    try {
+        $pdo->exec("UPDATE `programme_trades` t
+            INNER JOIN `programme_trade_chart_identity` c
+                ON c.`programme_trade_id` = t.`id`
+               AND c.`userid` = t.`userid`
+               AND c.`programmeid` = t.`programmeid`
+            INNER JOIN `programme_analytics` pa
+                ON pa.`programme_id` = c.`programmeid`
+               AND pa.`userid` = c.`userid`
+               AND pa.`root_id` = c.`root_id`
+               AND pa.`confirmation_root_id` <=> c.`confirmation_root_id`
+               AND pa.`family_number` = c.`family_number`
+               AND pa.`setup_group_id` = c.`setup_group_id`
+               AND UPPER(pa.`symbol`) = UPPER(c.`symbol`)
+               AND LOWER(pa.`timeframe`) = LOWER(c.`timeframe`)
+               AND pa.`source_timeframe` <=> c.`source_timeframe`
+            SET t.`order_request_status` = CASE
+                    WHEN COALESCE(t.`order_request_filled`,0) = 1 AND NULLIF(t.`order_request_status`,'') IS NOT NULL THEN t.`order_request_status`
+                    WHEN COALESCE(pa.`order_request_filled`,0) = 1 AND NULLIF(pa.`order_request_status`,'') IS NOT NULL THEN pa.`order_request_status`
+                    WHEN NULLIF(t.`order_request_status`,'') IS NOT NULL THEN t.`order_request_status`
+                    ELSE pa.`order_request_status` END,
+                t.`order_request_filled` = GREATEST(COALESCE(t.`order_request_filled`,0), COALESCE(pa.`order_request_filled`,0)),
+                t.`order_request_filled_failure_reason` = COALESCE(NULLIF(t.`order_request_filled_failure_reason`,''), NULLIF(pa.`order_request_filled_failure_reason`,''))
+            WHERE t.`userid` = " . (int)$userId . "
+              AND t.`programmeid` = " . (int)$programmeId . "
+              AND t.`investor_id` IS NULL");
+
+        $pdo->exec("UPDATE `programme_analytics` pa
+            INNER JOIN `programme_trade_chart_identity` c
+                ON c.`programmeid` = pa.`programme_id`
+               AND c.`userid` = pa.`userid`
+               AND c.`root_id` = pa.`root_id`
+               AND c.`confirmation_root_id` <=> pa.`confirmation_root_id`
+               AND c.`family_number` = pa.`family_number`
+               AND c.`setup_group_id` = pa.`setup_group_id`
+               AND UPPER(c.`symbol`) = UPPER(pa.`symbol`)
+               AND LOWER(c.`timeframe`) = LOWER(pa.`timeframe`)
+               AND c.`source_timeframe` <=> pa.`source_timeframe`
+            INNER JOIN `programme_trades` t
+                ON t.`id` = c.`programme_trade_id`
+               AND t.`userid` = c.`userid`
+               AND t.`programmeid` = c.`programmeid`
+            SET pa.`order_request_status` = CASE
+                    WHEN COALESCE(t.`order_request_filled`,0) = 1 AND NULLIF(t.`order_request_status`,'') IS NOT NULL THEN t.`order_request_status`
+                    ELSE COALESCE(NULLIF(pa.`order_request_status`,''), t.`order_request_status`) END,
+                pa.`order_request_filled` = GREATEST(COALESCE(pa.`order_request_filled`,0), COALESCE(t.`order_request_filled`,0)),
+                pa.`order_request_filled_failure_reason` = COALESCE(NULLIF(pa.`order_request_filled_failure_reason`,''), NULLIF(t.`order_request_filled_failure_reason`,''))
+            WHERE pa.`userid` = " . (int)$userId . "
+              AND pa.`programme_id` = " . (int)$programmeId . "
+              AND pa.`trade_configured` = 1");
+    } catch (Throwable $e) {
+        error_log('Programme Analytics request-state synchronization failed: ' . $e->getMessage());
+    }
+}
+
 function pa_latestProgrammeContractId(PDO $pdo, int $programmeId, int $userId): int {
     $latest = 0;
     $programmeColumns = pa_tableColumns($pdo, 'programme');
@@ -345,22 +462,26 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
     $mapBackfill->execute([$contractId, $userId, $programmeId, $contractId]);
 
     $findIdentity = $pdo->prepare('SELECT `programme_trade_id` FROM `programme_trade_chart_identity` WHERE `userid` = ? AND `programmeid` = ? AND `identity_hash` = ? LIMIT 1');
+    $findIdentityBySignature = $pdo->prepare('SELECT `programme_trade_id` FROM `programme_trade_chart_identity`
+        WHERE `userid` = ? AND `programmeid` = ? AND `root_id` <=> ? AND `confirmation_root_id` <=> ?
+          AND `symbol` = ? AND LOWER(`timeframe`) = LOWER(?) AND `source_timeframe` <=> ? AND `family_signature` = ?
+        ORDER BY `programme_trade_id` DESC LIMIT 2');
     $insertTrade = $pdo->prepare("INSERT INTO `programme_trades`
-        (`userid`,`programmeid`,`contract_id`,`investor_id`,`tradeid`,`symbol`,`ordertype`,`orderstatus`,`timeframe`,`entry`,`stoploss`,`takeprofit`,`trade_risk_reward`,`pnl`,`pnl_risk_reward`,`trade_status`)
-        VALUES (?,?,?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?)");
+        (`userid`,`programmeid`,`contract_id`,`setup_group_id`,`investor_id`,`tradeid`,`symbol`,`ordertype`,`orderstatus`,`timeframe`,`entry`,`stoploss`,`takeprofit`,`trade_risk_reward`,`pnl`,`pnl_risk_reward`,`trade_status`,`live`,`trade_time`,`order_request_status`,`order_request_filled`,`order_request_filled_failure_reason`)
+        VALUES (?,?,?, ?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $updateTrade = $pdo->prepare("UPDATE `programme_trades` SET
-        `contract_id` = ?, `symbol` = ?, `ordertype` = ?, `orderstatus` = ?, `timeframe` = ?,
+        `contract_id` = ?, `setup_group_id` = ?, `symbol` = ?, `ordertype` = ?, `orderstatus` = ?, `timeframe` = ?,
         `entry` = ?, `stoploss` = ?, `takeprofit` = ?, `trade_risk_reward` = ?, `pnl` = ?,
-        `pnl_risk_reward` = ?, `trade_status` = ?
+        `pnl_risk_reward` = ?, `trade_status` = ?, `live` = ?, `trade_time` = ?
         WHERE `id` = ? AND `userid` = ? AND `programmeid` = ? AND `investor_id` IS NULL");
     $upsertIdentity = $pdo->prepare("INSERT INTO `programme_trade_chart_identity`
-        (`programme_trade_id`,`userid`,`programmeid`,`contract_id`,`identity_hash`,`chart_trade_id`,`root_id`,`confirmation_root_id`,`family_number`,`family_signature`,`symbol`,`timeframe`,`source_timeframe`,`entry_anchor_time`,`entry_trigger_time`,`outcome`)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        (`programme_trade_id`,`userid`,`programmeid`,`contract_id`,`identity_hash`,`chart_trade_id`,`root_id`,`confirmation_root_id`,`family_number`,`setup_group_id`,`family_signature`,`symbol`,`timeframe`,`source_timeframe`,`entry_anchor_time`,`entry_trigger_time`,`outcome`)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
         `programme_trade_id` = VALUES(`programme_trade_id`), `contract_id` = VALUES(`contract_id`),
         `chart_trade_id` = VALUES(`chart_trade_id`), `root_id` = VALUES(`root_id`),
         `confirmation_root_id` = VALUES(`confirmation_root_id`), `family_number` = VALUES(`family_number`),
-        `family_signature` = VALUES(`family_signature`), `symbol` = VALUES(`symbol`),
+        `setup_group_id` = VALUES(`setup_group_id`), `family_signature` = VALUES(`family_signature`), `symbol` = VALUES(`symbol`),
         `timeframe` = VALUES(`timeframe`), `source_timeframe` = VALUES(`source_timeframe`),
         `entry_anchor_time` = VALUES(`entry_anchor_time`), `entry_trigger_time` = VALUES(`entry_trigger_time`),
         `outcome` = VALUES(`outcome`)");
@@ -374,14 +495,18 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
         if ($symbol === '' || $timeframe === '') continue;
 
         $rootId = (int)($row['root_id'] ?? 0);
-        $confirmationPresent = array_key_exists('confirmation_root_id', $row) && $row['confirmation_root_id'] !== null && $row['confirmation_root_id'] !== '';
-        $confirmationId = $confirmationPresent ? (int)$row['confirmation_root_id'] : null;
+        $confirmationRaw = $row['confirmation_root_id'] ?? null;
+        $confirmationId = ($confirmationRaw === null || $confirmationRaw === '') ? 0 : (int)$confirmationRaw;
+        $confirmationDbId = $confirmationId > 0 ? $confirmationId : null;
         $familyNumber = isset($row['family_number']) && $row['family_number'] !== '' ? (int)$row['family_number'] : null;
-        $isIdentifiable = $rootId > 0 && $confirmationPresent && $familyNumber !== null && $familyNumber > 0;
-        $isConfirmation = $confirmationPresent && (int)$confirmationId > 0;
+        $setupGroupId = max(1, (int)($row['setup_group_id'] ?? 1));
+        // Main-root rows legitimately have no confirmation_root_id. Their stable
+        // chart identity uses confirmation ID 0 rather than being treated as unidentified.
+        $isIdentifiable = $rootId > 0 && $familyNumber !== null && $familyNumber > 0;
+        $isConfirmation = $confirmationId > 0;
         $tradeType = $isConfirmation ? 'confirmation' : 'root';
         $chartTradeId = $isIdentifiable
-            ? implode('|', [$tradeType, (string)$rootId, (string)(int)$confirmationId, $timeframe, (string)$familyNumber])
+            ? implode('|', [$tradeType, (string)$rootId, (string)$confirmationId, $timeframe, (string)$setupGroupId, (string)$familyNumber])
             : null;
         $signatureSeed = $chartTradeId !== null
             ? $symbol . '|' . $chartTradeId
@@ -398,6 +523,15 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
         $pnl = pa_firstRowValue($row, ['pnl', 'profit_loss', 'profitandloss']);
         $pnl = ($pnl !== null && $pnl !== '' && is_numeric($pnl)) ? (float)$pnl : null;
         $pnlRiskReward = pa_firstRowValue($row, ['pnl_risk_reward']);
+
+        // Mirror programme_analytics.live_trades onto programme_trades.live.
+        // This is deliberately recalculated on every sync, so transitions in
+        // either direction (Live -> History or History -> Live) are reflected.
+        $live = ((int)($row['live_trades'] ?? 0) === 1) ? 1 : 0;
+        $tradeTime = pa_firstRowValue($row, [
+            'trade_time', 'entry_trigger_time', 'entry_anchor_time',
+            'event_time', 'open_time', 'created_at'
+        ]);
 
         $flatOutcomes = ['closed flat', 'breakeven', 'break even', 'closed at breakeven', 'closed breakeven'];
         $profitOutcomes = ['closed in profit', 'closed profit', 'profit', 'profitable'];
@@ -442,6 +576,17 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
 
         $findIdentity->execute([$userId, $programmeId, $identityHash]);
         $tradeRowId = (int)($findIdentity->fetchColumn() ?: 0);
+        // If the previous group backfill changed the canonical identity hash,
+        // adopt the existing mapped trade by its candle-family signature. Only
+        // adopt when the signature resolves to exactly one row.
+        if ($tradeRowId <= 0 && !empty($row['family_signature'])) {
+            $findIdentityBySignature->execute([
+                $userId, $programmeId, $rootId > 0 ? $rootId : null,
+                $confirmationDbId, $symbol, $timeframe, ($row['source_timeframe'] ?? null), (string)$row['family_signature']
+            ]);
+            $signatureIds = $findIdentityBySignature->fetchAll(PDO::FETCH_COLUMN);
+            if (count($signatureIds) === 1) $tradeRowId = (int)$signatureIds[0];
+        }
         $tradeExists = false;
         if ($tradeRowId > 0) {
             $check = $pdo->prepare('SELECT `id` FROM `programme_trades` WHERE `id` = ? AND `userid` = ? AND `programmeid` = ? AND `investor_id` IS NULL LIMIT 1');
@@ -472,16 +617,25 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
         }
 
         if ($tradeRowId > 0 && $tradeExists) {
-            $updateTrade->execute([$contractId,$symbol,$orderType,$orderStatus,$timeframe,$entry,$stoploss,$takeprofit,$riskReward,$pnl,$pnlRiskReward,$tradeStatus,$tradeRowId,$userId,$programmeId]);
+            $updateTrade->execute([
+                $contractId,$setupGroupId,$symbol,$orderType,$orderStatus,$timeframe,$entry,$stoploss,$takeprofit,
+                $riskReward,$pnl,$pnlRiskReward,$tradeStatus,$live,$tradeTime,
+                $tradeRowId,$userId,$programmeId
+            ]);
         } else {
-            $insertTrade->execute([$userId,$programmeId,$contractId,$symbol,$orderType,$orderStatus,$timeframe,$entry,$stoploss,$takeprofit,$riskReward,$pnl,$pnlRiskReward,$tradeStatus]);
+            $insertTrade->execute([
+                $userId,$programmeId,$contractId,$setupGroupId,$symbol,$orderType,$orderStatus,$timeframe,
+                $entry,$stoploss,$takeprofit,$riskReward,$pnl,$pnlRiskReward,$tradeStatus,
+                $live,$tradeTime,($row['order_request_status'] ?? null),
+                (int)($row['order_request_filled'] ?? 0),($row['order_request_filled_failure_reason'] ?? null)
+            ]);
             $tradeRowId = (int)$pdo->lastInsertId();
         }
         if ($tradeRowId <= 0) continue;
 
         $upsertIdentity->execute([
             $tradeRowId,$userId,$programmeId,$contractId,$identityHash,$chartTradeId,
-            $rootId > 0 ? $rootId : null,$confirmationId,$familyNumber,$row['family_signature'] ?? null,
+            $rootId > 0 ? $rootId : null,$confirmationDbId,$familyNumber,$setupGroupId,$row['family_signature'] ?? null,
             $symbol,$timeframe,($row['source_timeframe'] ?? null),($row['entry_anchor_time'] ?? null),
             ($row['entry_trigger_time'] ?? null),($sourceOutcome !== '' ? $sourceOutcome : null)
         ]);
@@ -489,6 +643,14 @@ function pa_syncProgrammeTrades(PDO $pdo, int $programmeId, int $userId, array $
 }
 $programmeId = $programme ? (int)$programme['id'] : 0;
 $programmeName = (string)($programme['program_name'] ?? 'Programme');
+$tradesSetupPerGroup = 100;
+try {
+    $setupLimitQuery = $pdo->query("SELECT `trades_setup_per_group` FROM `server_account` WHERE `id` = 1 LIMIT 1");
+    $configuredSetupLimit = (int)($setupLimitQuery ? $setupLimitQuery->fetchColumn() : 0);
+    if ($configuredSetupLimit > 0) $tradesSetupPerGroup = $configuredSetupLimit;
+} catch (Throwable $e) {
+    error_log('Programme analytics trades_setup_per_group read failed: ' . $e->getMessage());
+}
 $programmeSymbols = $programme ? pa_loadSymbols($programme['selected_symbols'] ?? '') : [];
 $mainRootRows = $programme ? pa_fetchConfigRows($pdo, 'programme_training_configuration', $programmeId, $userId) : [];
 $hasProgrammeRoots = false;
@@ -501,36 +663,237 @@ foreach ($mainRootRows as $mainRootRow) {
 $rootOptions = $hasProgrammeRoots ? pa_loadRootConfiguration($pdo, $programmeId, $userId) : [];
 $analyticsRows = [];
 $analyticsError = '';
+$analyticsLoadStage = 'schema validation';
 if ($programme && $hasProgrammeRoots) {
     try {
-        if (!pa_tableExists($pdo, 'programme_analytics')) throw new RuntimeException('programme_analytics does not exist.');
-        if (!pa_ensureLiveTradesColumn($pdo)) throw new RuntimeException('The programme_analytics.live_trades column is not available. Run programme_analytics_live_trades.sql.');
+        if (!pa_tableExists($pdo, 'programme_analytics')) {
+            throw new RuntimeException('Table `programme_analytics` does not exist in database `' . (string)$pdo->query('SELECT DATABASE()')->fetchColumn() . '`.');
+        }
+
+        // This migration is additive and safe: it only adds the two columns if
+        // they are absent. Existing columns/data are never dropped or renamed.
+        if (!pa_ensureLiveTradesColumn($pdo)) {
+            throw new RuntimeException('Required columns `live_trades` and `setup_group_id` could not be verified or added.');
+        }
+
+        $analyticsColumns = pa_tableColumns($pdo, 'programme_analytics');
+        $requiredAnalyticsColumns = [
+            'programme_id', 'userid', 'root_id', 'symbol', 'timeframe',
+            'source_timeframe', 'family_number', 'setup_group_id',
+            'matched_family', 'trade_configured', 'live_trades', 'outcome'
+        ];
+        $missingAnalyticsColumns = array_values(array_diff($requiredAnalyticsColumns, $analyticsColumns));
+        if ($missingAnalyticsColumns) {
+            throw new RuntimeException('Missing required programme_analytics column(s): ' . implode(', ', $missingAnalyticsColumns) . '.');
+        }
+
+        // Keep loading Analytics data separate from optional display-name and
+        // group-backfill maintenance. A maintenance UPDATE must never make an
+        // installed/readable analytics table look as though its schema is absent.
+        $analyticsLoadStage = 'reading programme analytics rows';
+        $q = $pdo->prepare('SELECT * FROM `programme_analytics` WHERE `programme_id` = ? AND `userid` = ?');
+        $q->execute([$programmeId, $userId]);
+        $analyticsRows = $q->fetchAll(PDO::FETCH_ASSOC);
+
+        // Match the newest-first stream order used by Programme Training.
+        usort($analyticsRows, static function(array $a, array $b): int {
+            foreach (['root_id','confirmation_root_id'] as $column) {
+                $cmp = ((int)($a[$column] ?? 0)) <=> ((int)($b[$column] ?? 0));
+                if ($cmp !== 0) return $cmp;
+            }
+            foreach (['symbol','timeframe','source_timeframe'] as $column) {
+                $cmp = strcasecmp((string)($a[$column] ?? ''), (string)($b[$column] ?? ''));
+                if ($cmp !== 0) return $cmp;
+            }
+            $ta = (string)($a['event_time'] ?? $a['entry_trigger_time'] ?? $a['entry_anchor_time'] ?? $a['created_at'] ?? '');
+            $tb = (string)($b['event_time'] ?? $b['entry_trigger_time'] ?? $b['entry_anchor_time'] ?? $b['created_at'] ?? '');
+            $cmp = strcmp($tb, $ta);
+            if ($cmp !== 0) return $cmp;
+            return ((int)($b['id'] ?? 0)) <=> ((int)($a['id'] ?? 0));
+        });
+    } catch (Throwable $e) {
+        $analyticsError = 'Unable to load programme analytics during ' . $analyticsLoadStage . ': ' . $e->getMessage();
+        error_log('programme_analytics ' . $analyticsLoadStage . ' failed: ' . $e->getMessage());
+    }
+}
+
+if ($programme && $hasProgrammeRoots && $analyticsError === '') {
+    // Configuration-name synchronization is cosmetic. Run independently so
+    // a failure here cannot block the Analytics dashboard or misreport storage.
+    try {
         $mainColumns = pa_tableColumns($pdo, 'programme_training_configuration');
         $analyticsColumns = pa_tableColumns($pdo, 'programme_analytics');
-        if (in_array('programme_id', $mainColumns, true) && in_array('user_id', $mainColumns, true) && in_array('root_id', $mainColumns, true) && in_array('root_name', $mainColumns, true) && in_array('programme_id', $analyticsColumns, true) && in_array('userid', $analyticsColumns, true) && in_array('root_id', $analyticsColumns, true) && in_array('root_name', $analyticsColumns, true)) {
+        if (in_array('programme_id', $mainColumns, true)
+            && in_array('user_id', $mainColumns, true)
+            && in_array('root_id', $mainColumns, true)
+            && in_array('root_name', $mainColumns, true)
+            && in_array('programme_id', $analyticsColumns, true)
+            && in_array('userid', $analyticsColumns, true)
+            && in_array('root_id', $analyticsColumns, true)
+            && in_array('root_name', $analyticsColumns, true)) {
             $syncMain = $pdo->prepare(
-                'UPDATE `programme_analytics` pa INNER JOIN (SELECT `programme_id`,`user_id`,`root_id`,MAX(`root_name`) AS `root_name` FROM `programme_training_configuration` WHERE `programme_id` = ? AND `user_id` = ? GROUP BY `programme_id`,`user_id`,`root_id`) cfg ON cfg.`programme_id` = pa.`programme_id` AND cfg.`user_id` = pa.`userid` AND cfg.`root_id` = pa.`root_id` SET pa.`root_name` = cfg.`root_name` WHERE pa.`programme_id` = ? AND pa.`userid` = ? AND cfg.`root_name` IS NOT NULL AND cfg.`root_name` <> ""'
+                'UPDATE `programme_analytics` pa
+                 INNER JOIN (
+                    SELECT `programme_id`, `user_id`, `root_id`, MAX(`root_name`) AS `root_name`
+                    FROM `programme_training_configuration`
+                    WHERE `programme_id` = ? AND `user_id` = ?
+                    GROUP BY `programme_id`, `user_id`, `root_id`
+                 ) cfg
+                   ON cfg.`programme_id` = pa.`programme_id`
+                  AND cfg.`user_id` = pa.`userid`
+                  AND cfg.`root_id` = pa.`root_id`
+                 SET pa.`root_name` = cfg.`root_name`
+                 WHERE pa.`programme_id` = ? AND pa.`userid` = ?
+                   AND cfg.`root_name` IS NOT NULL AND LENGTH(TRIM(cfg.`root_name`)) > 0'
             );
             $syncMain->execute([$programmeId, $userId, $programmeId, $userId]);
         }
+
+        // The current confirmation table uses confirmation_root_id (not root_id).
         $confirmationColumns = pa_tableColumns($pdo, 'programme_training_confirmation_configuration');
-        if (in_array('programme_id', $confirmationColumns, true) && in_array('user_id', $confirmationColumns, true) && in_array('parent_root_id', $confirmationColumns, true) && in_array('root_id', $confirmationColumns, true) && in_array('root_name', $confirmationColumns, true) && in_array('programme_id', $analyticsColumns, true) && in_array('userid', $analyticsColumns, true) && in_array('root_id', $analyticsColumns, true) && in_array('confirmation_root_id', $analyticsColumns, true) && in_array('confirmation_root_name', $analyticsColumns, true)) {
-            $syncConfirmation = $pdo->prepare(
-                'UPDATE `programme_analytics` pa INNER JOIN (SELECT `programme_id`,`user_id`,`parent_root_id`,`root_id`,MAX(`root_name`) AS `root_name` FROM `programme_training_confirmation_configuration` WHERE `programme_id` = ? AND `user_id` = ? GROUP BY `programme_id`,`user_id`,`parent_root_id`,`root_id`) cfg ON cfg.`programme_id` = pa.`programme_id` AND cfg.`user_id` = pa.`userid` AND cfg.`parent_root_id` = pa.`root_id` AND cfg.`root_id` = pa.`confirmation_root_id` SET pa.`confirmation_root_name` = cfg.`root_name` WHERE pa.`programme_id` = ? AND pa.`userid` = ? AND pa.`confirmation_root_id` > 0 AND cfg.`root_name` IS NOT NULL AND cfg.`root_name` <> ""'
-            );
+        $confirmationIdColumn = in_array('confirmation_root_id', $confirmationColumns, true)
+            ? 'confirmation_root_id'
+            : (in_array('root_id', $confirmationColumns, true) ? 'root_id' : '');
+        if ($confirmationIdColumn !== ''
+            && in_array('programme_id', $confirmationColumns, true)
+            && in_array('user_id', $confirmationColumns, true)
+            && in_array('parent_root_id', $confirmationColumns, true)
+            && in_array('root_name', $confirmationColumns, true)
+            && in_array('programme_id', $analyticsColumns, true)
+            && in_array('userid', $analyticsColumns, true)
+            && in_array('root_id', $analyticsColumns, true)
+            && in_array('confirmation_root_id', $analyticsColumns, true)
+            && in_array('confirmation_root_name', $analyticsColumns, true)) {
+            $syncConfirmationSql =
+                'UPDATE `programme_analytics` pa
+                 INNER JOIN (
+                    SELECT `programme_id`, `user_id`, `parent_root_id`, `' . $confirmationIdColumn . '` AS `confirmation_id`, MAX(`root_name`) AS `root_name`
+                    FROM `programme_training_confirmation_configuration`
+                    WHERE `programme_id` = ? AND `user_id` = ?
+                    GROUP BY `programme_id`, `user_id`, `parent_root_id`, `' . $confirmationIdColumn . '`
+                 ) cfg
+                   ON cfg.`programme_id` = pa.`programme_id`
+                  AND cfg.`user_id` = pa.`userid`
+                  AND cfg.`parent_root_id` = pa.`root_id`
+                  AND cfg.`confirmation_id` = pa.`confirmation_root_id`
+                 SET pa.`confirmation_root_name` = cfg.`root_name`
+                 WHERE pa.`programme_id` = ? AND pa.`userid` = ?
+                   AND pa.`confirmation_root_id` > 0
+                   AND cfg.`root_name` IS NOT NULL AND LENGTH(TRIM(cfg.`root_name`)) > 0';
+            $syncConfirmation = $pdo->prepare($syncConfirmationSql);
             $syncConfirmation->execute([$programmeId, $userId, $programmeId, $userId]);
         }
-        $q = $pdo->prepare('SELECT * FROM `programme_analytics` WHERE `programme_id` = ? AND `userid` = ? ORDER BY `symbol` ASC, `timeframe` ASC, `root_id` ASC, `confirmation_root_id` ASC, `family_number` ASC');
-        $q->execute([$programmeId, $userId]);
-        $analyticsRows = $q->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) {
-        $analyticsError = 'The programme analytics table is not ready. Import programme_analytics_schema.sql and verify its columns.';
-        error_log('programme_analytics read/sync failed: ' . $e->getMessage());
+    } catch (Throwable $nameSyncError) {
+        error_log('Programme Analytics optional configuration-name sync failed: ' . $nameSyncError->getMessage());
+    }
+
+    // Normalize family numbers and setup groups in Programme Training's candle order.
+    // candle_records are loaded oldest -> newest and _drawMatches assigns family indexes
+    // in that order. The former newest-first normalization reversed the group identity,
+    // which made Analytics clicks resolve a different family (or no trade) in Training.
+    // This pass recalculates group IDs without changing the newest-first display order.
+    try {
+        $normalizationRows = $analyticsRows;
+        usort($normalizationRows, static function(array $a, array $b): int {
+            foreach (['root_id','confirmation_root_id'] as $column) {
+                $cmp = ((int)($a[$column] ?? 0)) <=> ((int)($b[$column] ?? 0));
+                if ($cmp !== 0) return $cmp;
+            }
+            foreach (['symbol','timeframe','source_timeframe'] as $column) {
+                $cmp = strcasecmp((string)($a[$column] ?? ''), (string)($b[$column] ?? ''));
+                if ($cmp !== 0) return $cmp;
+            }
+            $ta = (string)($a['event_time'] ?? $a['entry_trigger_time'] ?? $a['entry_anchor_time'] ?? $a['created_at'] ?? '');
+            $tb = (string)($b['event_time'] ?? $b['entry_trigger_time'] ?? $b['entry_anchor_time'] ?? $b['created_at'] ?? '');
+            $cmp = strcmp($ta, $tb);
+            if ($cmp !== 0) return $cmp;
+            return ((int)($a['id'] ?? 0)) <=> ((int)($b['id'] ?? 0));
+        });
+
+        $familyOccurrences = [];
+        $signatureGroups = [];
+        $normalizedById = [];
+        foreach ($normalizationRows as $analyticsRow) {
+            $storedFamilyNo = max(1, (int)($analyticsRow['family_number'] ?? 1));
+            $familyNo = $storedFamilyNo;
+            $derivedGroup = 1;
+            if ($familyNo > $tradesSetupPerGroup) {
+                $derivedGroup = intdiv($familyNo - 1, $tradesSetupPerGroup) + 1;
+                $familyNo = (($familyNo - 1) % $tradesSetupPerGroup) + 1;
+            }
+
+            $streamKey = implode('|', [
+                (string)($analyticsRow['root_id'] ?? 0),
+                (string)($analyticsRow['confirmation_root_id'] ?? 0),
+                strtolower((string)($analyticsRow['symbol'] ?? '')),
+                strtolower((string)($analyticsRow['timeframe'] ?? '')),
+                strtolower((string)($analyticsRow['source_timeframe'] ?? ''))
+            ]);
+            $signature = trim((string)($analyticsRow['family_signature'] ?? ''));
+            $signatureKey = $signature !== '' ? $streamKey . '|' . $familyNo . '|' . $signature : '';
+            if ($signatureKey !== '' && isset($signatureGroups[$signatureKey])) {
+                // Repeated snapshots of the same matched candle family remain one identity.
+                $groupId = $signatureGroups[$signatureKey];
+            } else {
+                $familyKey = $streamKey . '|' . $familyNo;
+                $occurrence = (int)($familyOccurrences[$familyKey] ?? 0) + 1;
+                $familyOccurrences[$familyKey] = $occurrence;
+                $groupId = max($derivedGroup, $occurrence);
+                if ($signatureKey !== '') $signatureGroups[$signatureKey] = $groupId;
+            }
+
+            $rowId = (int)($analyticsRow['id'] ?? 0);
+            if ($rowId > 0) $normalizedById[$rowId] = [$familyNo, $groupId];
+        }
+
+        $groupUpdates = [];
+        foreach ($analyticsRows as &$analyticsRow) {
+            $rowId = (int)($analyticsRow['id'] ?? 0);
+            if ($rowId <= 0 || !isset($normalizedById[$rowId])) continue;
+            $storedFamilyNo = max(1, (int)($analyticsRow['family_number'] ?? 1));
+            $storedGroupId = max(1, (int)($analyticsRow['setup_group_id'] ?? 1));
+            [$familyNo, $groupId] = $normalizedById[$rowId];
+            $analyticsRow['family_number'] = $familyNo;
+            $analyticsRow['setup_group_id'] = $groupId;
+            if ($familyNo !== $storedFamilyNo || $groupId !== $storedGroupId) {
+                $groupUpdates[] = [$rowId, $familyNo, $groupId];
+            }
+        }
+        unset($analyticsRow);
+
+        if ($groupUpdates) {
+            $updateGroup = $pdo->prepare(
+                'UPDATE `programme_analytics`
+                 SET `family_number` = ?, `setup_group_id` = ?
+                 WHERE `id` = ? AND `programme_id` = ? AND `userid` = ?'
+            );
+            foreach ($groupUpdates as $groupUpdate) {
+                $updateGroup->execute([$groupUpdate[1], $groupUpdate[2], $groupUpdate[0], $programmeId, $userId]);
+            }
+        }
+    } catch (Throwable $groupSyncError) {
+        error_log('Programme Analytics optional setup-group normalization failed: ' . $groupSyncError->getMessage());
     }
 }
 if ($programme && $hasProgrammeRoots && $analyticsError === '') {
     try {
         pa_syncProgrammeTrades($pdo, $programmeId, $userId, $analyticsRows, $rootOptions);
+        pa_syncOrderRequestStates($pdo, $programmeId, $userId);
+        $requestStateQuery = $pdo->prepare('SELECT `id`,`order_request_status`,`order_request_filled`,`order_request_filled_failure_reason` FROM `programme_analytics` WHERE `programme_id` = ? AND `userid` = ?');
+        $requestStateQuery->execute([$programmeId, $userId]);
+        $requestStateById = [];
+        foreach ($requestStateQuery->fetchAll(PDO::FETCH_ASSOC) as $requestStateRow) {
+            $requestStateById[(int)$requestStateRow['id']] = $requestStateRow;
+        }
+        foreach ($analyticsRows as &$analyticsRow) {
+            $analyticsRowId = (int)($analyticsRow['id'] ?? 0);
+            if ($analyticsRowId > 0 && isset($requestStateById[$analyticsRowId])) {
+                foreach (['order_request_status','order_request_filled','order_request_filled_failure_reason'] as $requestField) {
+                    $analyticsRow[$requestField] = $requestStateById[$analyticsRowId][$requestField] ?? null;
+                }
+            }
+        }
+        unset($analyticsRow);
     } catch (Throwable $tradeSyncError) {
         error_log('Programme Analytics programme_trades sync failed: ' . $tradeSyncError->getMessage());
     }
@@ -600,6 +963,7 @@ body::-webkit-scrollbar{display:none}
 .pa-status.take-profit-reached{background:color-mix(in srgb,var(--pa-green) 13%,transparent);color:var(--pa-green)}
 .pa-status.in-trade{background:color-mix(in srgb,var(--pa-blue) 13%,transparent);color:var(--pa-blue)}
 .pa-status.pending-entry{background:color-mix(in srgb,var(--pa-amber) 14%,transparent);color:var(--pa-amber)}
+.pa-status.closed-by-request{background:color-mix(in srgb,var(--pa-accent) 14%,transparent);color:var(--pa-accent)}
 .pa-trade-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:11px}
 .pa-trade-cell{min-width:0}
 .pa-trade-cell span{display:block;color:var(--pa-muted);font-size:.63rem}
@@ -621,11 +985,15 @@ body.pa-modal-open{position:fixed;left:0;right:0;width:100%;touch-action:none}
 .pa-symbol-scope{margin:13px 0 16px}
 .pa-symbol-scope-title{font-size:.83rem;font-weight:850;margin-bottom:7px}
 .pa-symbol-note{font-size:.73rem;color:var(--pa-muted);padding:8px 0}
-.pa-isolated-head{display:flex;align-items:center;gap:12px;margin:0 0 15px}
+.pa-isolated-head{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;margin:0 0 15px;padding:10px 0;background:var(--pa-bg);box-shadow:0 6px 12px rgba(12,35,27,.06);isolation:isolate}
+.pa-isolated-head .pa-back{flex:0 0 auto}
+.pa-isolated-head>div{min-width:0}
+.pa-isolated-head h2,.pa-isolated-head p{overflow-wrap:anywhere}
 .pa-isolated-head h2{font-size:.98rem;margin:0}
 .pa-isolated-head p{font-size:.7rem;color:var(--pa-muted);margin:2px 0 0}
 .pa-period-list{display:grid;gap:8px}
 .pa-period{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border:1px solid var(--pa-border);border-radius:12px;background:var(--pa-card);color:var(--pa-text);padding:13px 14px;text-align:left;font:inherit;cursor:pointer}
+.pa-streak-groups{display:grid;gap:18px}.pa-streak-group{min-width:0}.pa-streak-group .pa-section-head{margin-bottom:8px}
 .pa-period strong{font-size:.81rem}
 .pa-period span{color:var(--pa-muted);font-size:.7rem}
 .pa-hidden{display:none!important}.pa-no-data{min-height:calc(100vh - 20px);display:flex;align-items:center;justify-content:center;text-align:center;font-size:1rem;font-weight:800;color:var(--pa-muted)}
@@ -639,7 +1007,7 @@ body.pa-modal-open{position:fixed;left:0;right:0;width:100%;touch-action:none}
 <?php if (!$programme || !$hasProgrammeRoots): ?>
     <div class="pa-no-data">No data yet</div>
 <?php elseif ($analyticsError !== ''): ?>
-    <div class="pa-panel pa-empty"><i class="fa-solid fa-database"></i><strong>Analytics storage is not installed</strong><?= pa_h($analyticsError) ?></div>
+    <div class="pa-panel pa-empty"><i class="fa-solid fa-database"></i><strong>Programme Analytics could not be loaded</strong><?= pa_h($analyticsError) ?></div>
 <?php else: ?>
     <div id="paDashboard">
         <div style="margin-top: 60px;"></div>
@@ -723,11 +1091,13 @@ function tfms(tf){var m=String(tf).toLowerCase().match(/^(\d+)\s*(m|h|d|w)$/);re
 function sortTfs(arr){return Array.from(new Set((arr||[]).map(low).filter(Boolean))).sort(function(a,b){return tfms(a)-tfms(b)||a.localeCompare(b);});}
 function statusClass(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
 function normalizedOutcome(s){var value=low(s).replace(/[\s_-]+/g,' ');var aliases={'breakeven':'closed flat','break even':'closed flat','closed at breakeven':'closed flat','closed breakeven':'closed flat','closed profit':'closed in profit','profit':'closed in profit','profitable':'closed in profit','closed loss':'closed in loss','loss':'closed in loss','losing':'closed in loss'};return aliases[value]||value;}
-function outcomeLabel(s){var value=normalizedOutcome(s),labels={'stoploss hit':'Stoploss hit','take profit reached':'Profit reached','closed flat':'Closed Flat','closed in profit':'Closed in Profit','closed in loss':'Closed in Loss','pending entry':'Pending entry','in trade':'In trade','matched family':'Matched family',"identify but don't trade":"Identify but don't trade"};return labels[value]||s||'Trade configured · outcome not recorded';}
+function outcomeLabel(s){var value=normalizedOutcome(s),labels={'stoploss hit':'Stoploss hit','take profit reached':'Profit reached','closed flat':'Closed Flat','closed in profit':'Closed in Profit','closed in loss':'Closed in Loss','pending entry':'Pending entry','in trade':'In trade','matched family':'Matched setup',"identify but don't trade":"Identify but don't trade"};return labels[value]||s||'Trade configured · outcome not recorded';}
 function isLossOutcome(r){var value=normalizedOutcome(r&&r.outcome);return value==='stoploss hit'||value==='closed in loss';}
 function isProfitOutcome(r){var value=normalizedOutcome(r&&r.outcome);return value==='take profit reached'||value==='closed in profit';}
 function isFlatOutcome(r){return normalizedOutcome(r&&r.outcome)==='closed flat';}
-function isClosed(r){return isLossOutcome(r)||isProfitOutcome(r)||isFlatOutcome(r)||['closed','position closed','manual close','manually closed'].includes(normalizedOutcome(r&&r.outcome));}
+function requestStatusValue(r){return low(r&&r.order_request_status).replace(/[\s_-]+/g,' ');}
+function isClosedByRequest(r){return num(r&&r.order_request_filled)===1&&['order closing requested','position closing requested','breakeven requested'].includes(requestStatusValue(r));}
+function isClosed(r){return isClosedByRequest(r)||isLossOutcome(r)||isProfitOutcome(r)||isFlatOutcome(r)||['closed','position closed','manual close','manually closed'].includes(normalizedOutcome(r&&r.outcome));}
 function tradeRows(rows){return rows.filter(function(r){return num(r.trade_configured)===1;});}
 function rootFor(id){return rootMap[String(id)]||null;}
 function confirmationFor(root,id){if(!root)return null;return root.confirmations[String(id)]||null;}
@@ -916,7 +1286,7 @@ function mainFamilyRowsForConfirmation(confirmationRows){
             var root=rootFor(rootId);
             if(root&&root.timeframes.includes(selectedTf))return mainTf===selectedTf;
             // A confirmation timeframe may not share the same label as its main strategy timeframe.
-            // When no source-timeframe mapping exists, keep the parent strategy's main families visible.
+            // When no source-timeframe mapping exists, keep the parent strategy's main setups visible.
         }
         return true;
     });
@@ -933,28 +1303,42 @@ function renderNoDataNotes(rows){
 }
 function calculate(rows,mainFamilyRows){
     var matchedRows=Array.isArray(mainFamilyRows)?mainFamilyRows:rows.filter(function(r){return num(r.confirmation_root_id)===0;});
-    var trades=tradeRows(rows),closed=trades.filter(isClosed),sl=trades.filter(isLossOutcome).length,tp=trades.filter(isProfitOutcome).length,flat=trades.filter(isFlatOutcome).length,pending=trades.filter(function(r){return normalizedOutcome(r.outcome)==='pending entry';}).length,active=trades.filter(function(r){return normalizedOutcome(r.outcome)==='in trade';}),winsR=trades.reduce(function(s,r){return s+(isProfitOutcome(r)?num(r.risk_reward):0);},0),maxLoss=0,maxWin=0,equity=100,highest=100,maxDrawdown=0,activeSequence=[],ddSequence=[],peakSequence=[],accountLostAt=null;
-    var streams={};
+    var trades=tradeRows(rows),closed=trades.filter(isClosed),requestClosed=trades.filter(isClosedByRequest),resolvedClosed=closed.filter(function(r){return !isClosedByRequest(r);}),resolvedTrades=trades.filter(function(r){return !isClosedByRequest(r);}),sl=resolvedTrades.filter(isLossOutcome).length,tp=resolvedTrades.filter(isProfitOutcome).length,flat=resolvedTrades.filter(isFlatOutcome).length,pending=trades.filter(function(r){return !isClosedByRequest(r)&&normalizedOutcome(r.outcome)==='pending entry';}).length,active=trades.filter(function(r){return !isClosedByRequest(r)&&normalizedOutcome(r.outcome)==='in trade';}),winsR=resolvedTrades.reduce(function(s,r){return s+(isProfitOutcome(r)?num(r.risk_reward):0);},0),maxLoss=0,maxWin=0,equity=100,highest=100,maxDrawdown=0,activeSequence=[],ddSequence=[],peakSequence=[],accountLostAt=null;
+    var streams={},maxLossStreaks=[],maxWinStreaks=[];
     closed.forEach(function(r){var key=[r.symbol,r.timeframe,r.source_timeframe,r.root_id,r.confirmation_root_id].join('|');(streams[key]||(streams[key]=[])).push(r);});
     Object.keys(streams).forEach(function(key){
-        var lossRun=0,winRun=0;
+        var lossRun=[],winRun=[];
         streams[key].sort(function(a,b){return stamp(a.event_time).localeCompare(stamp(b.event_time));}).forEach(function(r){
-            if(isLossOutcome(r)){lossRun++;winRun=0;maxLoss=Math.max(maxLoss,lossRun);}
-            else if(isProfitOutcome(r)){winRun++;lossRun=0;maxWin=Math.max(maxWin,winRun);}
-            else{lossRun=0;winRun=0;}
+            if(isClosedByRequest(r)){
+                lossRun=[];
+                winRun=[];
+            }else if(isLossOutcome(r)){
+                lossRun.push(r);
+                winRun=[];
+                if(lossRun.length>maxLoss){maxLoss=lossRun.length;maxLossStreaks=[lossRun.slice()];}
+                else if(lossRun.length===maxLoss&&maxLoss>0){maxLossStreaks.push(lossRun.slice());}
+            }else if(isProfitOutcome(r)){
+                winRun.push(r);
+                lossRun=[];
+                if(winRun.length>maxWin){maxWin=winRun.length;maxWinStreaks=[winRun.slice()];}
+                else if(winRun.length===maxWin&&maxWin>0){maxWinStreaks.push(winRun.slice());}
+            }else{
+                lossRun=[];
+                winRun=[];
+            }
         });
     });
-    closed.sort(function(a,b){return stamp(a.event_time).localeCompare(stamp(b.event_time));}).forEach(function(r){
+    resolvedClosed.sort(function(a,b){return stamp(a.event_time).localeCompare(stamp(b.event_time));}).forEach(function(r){
         var value=isLossOutcome(r)?-1:(isProfitOutcome(r)?Math.max(0,num(r.risk_reward)):0);
         equity+=value;
         activeSequence.push({row:r,value:value});
         var dd=Math.max(0,100-equity);
         if(dd>maxDrawdown){maxDrawdown=dd;ddSequence=activeSequence.slice();}
         if(equity>highest){highest=equity;peakSequence=activeSequence.slice();}
-        if(equity<=0&&accountLostAt===null)accountLostAt='Strategy '+r.root_id+' · Family '+r.family_number;
+        if(equity<=0&&accountLostAt===null)accountLostAt='Strategy '+r.root_id+' · Setup '+r.family_number+' · Group '+(r.setup_group_id||1);
         if(equity>=100)activeSequence=[];
     });
-    return {trades:trades,total:trades.length,matched:matchedRows.filter(function(r){return num(r.matched_family)!==0;}).length,sl:sl,tp:tp,flat:flat,pending:pending,active:active,longActive:active.filter(function(r){return String(r.direction)==='long';}).length,shortActive:active.filter(function(r){return String(r.direction)==='short';}).length,winsR:winsR,netR:winsR-sl,closed:closed.length,winRate:closed.length?tp/closed.length*100:0,maxLoss:maxLoss,maxWin:maxWin,currentBalance:equity,highestBalance:highest,highestRevenue:Math.max(0,highest-100),maxDrawdown:maxDrawdown,drawdownSequence:ddSequence,peakSequence:peakSequence,accountLostAt:accountLostAt};
+    return {trades:trades,total:trades.length,matched:matchedRows.filter(function(r){return num(r.matched_family)!==0;}).length,sl:sl,tp:tp,flat:flat,requestClosed:requestClosed.length,pending:pending,active:active,longActive:active.filter(function(r){return String(r.direction)==='long';}).length,shortActive:active.filter(function(r){return String(r.direction)==='short';}).length,winsR:winsR,netR:winsR-sl,closed:closed.length,winRate:resolvedClosed.length?tp/resolvedClosed.length*100:0,maxLoss:maxLoss,maxWin:maxWin,maxLossStreaks:maxLossStreaks,maxWinStreaks:maxWinStreaks,currentBalance:equity,highestBalance:highest,highestRevenue:Math.max(0,highest-100),maxDrawdown:maxDrawdown,drawdownSequence:ddSequence,peakSequence:peakSequence,accountLostAt:accountLostAt};
 }
 function metricCard(label,value,icon,detail,cls,action,buttonLabel){
     return '<article class="pa-card pa-metric"><div class="pa-metric-top"><span class="pa-label">'+label+'</span><span class="pa-icon"><i class="fa-solid '+icon+'"></i></span></div><div class="pa-value '+(cls||'')+'">'+value+'</div><div class="pa-detail">'+(detail||'')+'</div>'+(action?'<button type="button" class="pa-action" data-page-action="'+action+'">'+esc(buttonLabel||'See trades')+'</button>':'')+'</article>';
@@ -963,19 +1347,21 @@ function renderMetrics(rows,mainFamilyRows){
     var x=calculate(rows,mainFamilyRows);
     lastStats=x;
     var html='';
-    html+=metricCard('Total Main Families',fmt(x.matched,0),'fa-diagram-project','Main strategy matches, including strategies without trade setup','','matched-families','View main families');
-    html+=metricCard('Total Trades',fmt(x.total,0),'fa-arrow-right-arrow-left',fmt(x.matched,0)+' main families','','trades-provision','Trades Provision');
-    html+=metricCard('Stoploss hit',fmt(x.sl,0),'fa-shield-halved','Trade families closed at stoploss','negative','outcome:stoploss hit','View trades');
+    html+=metricCard('Total Main Setups',fmt(x.matched,0),'fa-diagram-project','Matched main strategy setups, including setups without trade configuration','','matched-families','View Main Setups');
+    html+=metricCard('Total Trades',fmt(x.total,0),'fa-arrow-right-arrow-left',fmt(x.matched,0)+' main setups','','trades-provision','Trades Provision');
+    html+=metricCard('Closed by request',fmt(x.requestClosed,0),'fa-hand', 'Manually requested closures confirmed as filled', '', 'outcome:closed by request', 'View trades');
+    html+=metricCard('Stoploss hit',fmt(x.sl,0),'fa-shield-halved','Trade setups closed at stoploss','negative','outcome:stoploss hit','View trades');
     html+=metricCard('Lost Risks',fmt(x.sl,0)+'R','fa-arrow-trend-down','Each stoploss = −1R · '+fmt(x.sl,0)+' losing families','negative','outcome:stoploss hit','View trades');
-    html+=metricCard('Profit reached',fmt(x.tp,0),'fa-trophy','Profitable trade families','positive','outcome:take profit reached','View trades');
+    html+=metricCard('Profit reached',fmt(x.tp,0),'fa-trophy','Profitable trade setups','positive','outcome:take profit reached','View trades');
     html+=metricCard('Risk rewards','+'+fmt(x.winsR)+'R','fa-coins','Sum of '+fmt(x.tp,0)+' winning families','positive','outcome:take profit reached','View trades');
-    html+=metricCard('Consecutive Loss',fmt(x.maxLoss,0),'fa-arrow-down','Longest losing streak before a profitable trade');
-    html+=metricCard('Consecutive Win',fmt(x.maxWin,0),'fa-arrow-up','Longest winning streak without a loss');
-    html+=metricCard('Highest Drawdown',fmt(x.maxDrawdown,2)+'%','fa-chart-line',x.accountLostAt?('Account exhausted at '+esc(x.accountLostAt)):'100% baseline drawdown sequence','','outcome:drawdown','View sequence');
-    html+=metricCard('Highest Revenue Peak','+'+fmt(x.highestRevenue,2)+'%','fa-arrow-trend-up','Highest balance reached: '+fmt(x.highestBalance,2)+'%','','outcome:peak','View sequence');
+    html+=metricCard('Consecutive Loss',fmt(x.maxLoss,0),'fa-arrow-down','Longest losing streak before a profitable trade','negative','streak:loss','View trades');
+    html+=metricCard('Consecutive Win',fmt(x.maxWin,0),'fa-arrow-up','Longest winning streak without a loss','positive','streak:win','View trades');
+    html+=metricCard('Highest Drawdown',fmt(x.maxDrawdown,2)+'%','fa-chart-line',x.accountLostAt?('Account exhausted at '+esc(x.accountLostAt)):'Drawdown measured from the starting balance','','outcome:drawdown','View sequence');
+    html+=metricCard('Highest Revenue Peak',fmt(x.highestRevenue,2)+'%','fa-arrow-trend-up','Highest growth reached above the starting balance','','outcome:peak','View sequence');
     html+=metricCard('Win rate',fmt(x.winRate,1)+'%','fa-bullseye',fmt(x.tp,0)+' wins / '+fmt(x.closed,0)+' closed');
-    html+=metricCard('Current virtual balance',fmt(x.currentBalance,2)+'%','fa-scale-balanced','100% baseline − lost risks + profit risk rewards',x.currentBalance>=100?'positive':'negative');
-    html+=metricCard('Pending entries',fmt(x.pending,0),'fa-hourglass-half','Matched trade families awaiting entry','','outcome:pending entry','View trades');
+    var growth=x.currentBalance-100;
+    html+=metricCard('Growth',fmt(growth,2)+'%','fa-scale-balanced','Net gain or loss from the starting balance',growth>=0?'positive':'negative');
+    html+=metricCard('Pending entries',fmt(x.pending,0),'fa-hourglass-half','Matched trade setups awaiting entry','','outcome:pending entry','View trades');
     html+=metricCard('In trade',fmt(x.active.length,0),'fa-chart-column',fmt(x.longActive,0)+' long · '+fmt(x.shortActive,0)+' short','','outcome:in trade','View trades');
     $('paDashboardContent').innerHTML='<div class="pa-grid">'+html+'</div>';
 }
@@ -992,29 +1378,36 @@ function parseMonthWeekKey(key){
 function monthName(key){var d=new Date(key+'-01T12:00:00');return d.toLocaleDateString(undefined,{month:'long',year:'numeric'});}
 function tradeDateFor(r){
     var outcome=normalizedOutcome(r.outcome);
+    if(isClosedByRequest(r))return dateKey(r.close_time||r.closed_at||r.event_time||r.entry_trigger_time||r.entry_anchor_time);
     if(outcome==='stoploss hit'||outcome==='closed in loss')return dateKey(r.stoploss_trigger_time||r.close_time||r.closed_at||r.event_time||r.entry_trigger_time||r.entry_anchor_time);
     if(outcome==='take profit reached'||outcome==='closed in profit')return dateKey(r.take_profit_trigger_time||r.close_time||r.closed_at||r.event_time||r.entry_trigger_time||r.entry_anchor_time);
     if(outcome==='closed flat')return dateKey(r.breakeven_trigger_time||r.close_time||r.closed_at||r.event_time||r.entry_trigger_time||r.entry_anchor_time);
     return dateKey(r.entry_trigger_time||r.entry_anchor_time||r.event_time);
 }
-function familyTitle(r){var root=rootFor(r.root_id),conf=confirmationFor(root,String(r.confirmation_root_id));return (root?root.name:('Strategy '+r.root_id))+(num(r.confirmation_root_id)>0?' · '+(conf?conf.name:('Confirmation '+r.confirmation_root_id)):'')+' · Family '+r.family_number;}
+function familyTitle(r){var root=rootFor(r.root_id),conf=confirmationFor(root,String(r.confirmation_root_id));return (root?root.name:('Strategy '+r.root_id))+(num(r.confirmation_root_id)>0?' · '+(conf?conf.name:('Confirmation '+r.confirmation_root_id)):'')+' · Setup '+r.family_number+' Group '+Math.max(1,num(r.setup_group_id)||1);}
 function renderFamilyCard(r){
-    var trade=num(r.trade_configured)===1,cl=statusClass(r.outcome),idx=PA_ROWS.indexOf(r),root=rootFor(r.root_id),conf=confirmationFor(root,String(r.confirmation_root_id)),tf=String(r.timeframe||'').toUpperCase(),source=r.source_timeframe&&r.source_timeframe!==r.timeframe?' · Parent '+String(r.source_timeframe).toUpperCase():'';
+    var trade=num(r.trade_configured)===1,isRequestClosed=isClosedByRequest(r),requestStatus=requestStatusValue(r),requestLabel=requestStatus.replace(/(^|\s)\S/g,function(part){return part.toUpperCase();}),requestFailure=String(r.order_request_filled_failure_reason||'').trim(),cl=isRequestClosed?'closed-by-request':statusClass(r.outcome),idx=PA_ROWS.indexOf(r),root=rootFor(r.root_id),conf=confirmationFor(root,String(r.confirmation_root_id)),tf=String(r.timeframe||'').toUpperCase(),source=r.source_timeframe&&r.source_timeframe!==r.timeframe?' · Parent '+String(r.source_timeframe).toUpperCase():'';
     var details=[['Entry anchor',stamp(r.entry_anchor_time)],['Entry trigger',stamp(r.entry_trigger_time)],['Stoploss',stamp(r.stoploss_time)+' · '+fmt(r.stoploss_price,5)],['Take profit',stamp(r.take_profit_time)+' · '+fmt(r.take_profit_price,5)]];
-    var html='<article class="pa-card pa-family"><div class="pa-family-head"><div><div class="pa-family-title">'+esc(familyTitle(r))+'</div><div class="pa-family-meta">'+esc(r.symbol)+' · '+esc(tf)+esc(source)+' · '+esc(root?root.name:r.root_name||'')+(conf?' · '+esc(conf.name):'')+'</div></div><span class="pa-status '+cl+'">'+esc(outcomeLabel(r.outcome))+'</span></div>';
+    var displayedOutcome=isRequestClosed?'Closed by request':outcomeLabel(r.outcome);
+    var html='<article class="pa-card pa-family"><div class="pa-family-head"><div><div class="pa-family-title">'+esc(familyTitle(r))+'</div><div class="pa-family-meta">'+esc(r.symbol)+' · '+esc(tf)+esc(source)+' · '+esc(root?root.name:r.root_name||'')+(conf?' · '+esc(conf.name):'')+'</div></div><span class="pa-status '+cl+'">'+esc(displayedOutcome)+'</span></div>';
+    if(isRequestClosed){html+='<div class="pa-family-meta">Closed by request · Chart outcome still reports: '+esc(outcomeLabel(r.outcome))+'</div>';}
+    else if(requestLabel){html+='<div class="pa-family-meta">Request: '+esc(requestLabel)+' · Awaiting fill</div>';}
+    if(requestFailure){html+='<div class="pa-family-meta">Request execution failure: '+esc(requestFailure)+'</div>';}
     if(trade){
-        var resultRiskText=isProfitOutcome(r)?'+'+fmt(r.risk_reward,2)+'R':(isLossOutcome(r)?'−1R':(isFlatOutcome(r)?'0R · breakeven':fmt(r.risk_reward,2)+'R planned'));
+        var resultRiskText=isRequestClosed?'Closed by request · result not calculated':(isProfitOutcome(r)?'+'+fmt(r.risk_reward,2)+'R':(isLossOutcome(r)?'−1R':(isFlatOutcome(r)?'0R · breakeven':fmt(r.risk_reward,2)+'R planned')));
         html+='<div class="pa-trade-grid">'+details.map(function(item){return '<div class="pa-trade-cell"><span>'+item[0]+'</span><b>'+esc(item[1])+'</b></div>';}).join('')+'</div><div class="pa-family-meta">'+esc(r.direction||'')+' · '+esc(r.order_type||'')+' · '+resultRiskText+'</div>';
     }else{
-        html+='<div class="pa-family-meta">Matched family · no trade configured for this family</div>';
+        html+='<div class="pa-family-meta">Matched setup · no trade configured for this setup</div>';
     }
-    if(trade)html+='<div class="pa-family-actions"><button type="button" class="pa-locate" data-locate="'+idx+'"><i class="fa-solid fa-crosshairs"></i> Locate on chart</button></div>';
+    html+='<div class="pa-family-actions"><button type="button" class="pa-locate" data-locate="'+idx+'"><i class="fa-solid fa-crosshairs"></i> Locate on chart</button></div>';
     html+='</article>';
     return html;
 }
-function renderFamilyCards(rows){
-    if(!rows.length)return '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No matched families found</strong>No family records match the selected symbols and configured timeframes.</div>';
-    return rows.slice().sort(function(a,b){return num(a.root_id)-num(b.root_id)||num(a.confirmation_root_id)-num(b.confirmation_root_id)||stamp(a.event_time).localeCompare(stamp(b.event_time))||num(a.family_number)-num(b.family_number);}).map(renderFamilyCard).join('');
+function renderFamilyCards(rows,preserveOrder){
+    if(!rows.length)return '<div class="pa-panel pa-empty"><i class="fa-solid fa-chart-line"></i><strong>No matched setups found</strong>No setup records match the selected symbols and configured timeframes.</div>';
+    var ordered=rows.slice();
+    if(!preserveOrder)ordered.sort(function(a,b){return stamp(b.event_time||b.entry_trigger_time||b.entry_anchor_time||b.created_at).localeCompare(stamp(a.event_time||a.entry_trigger_time||a.entry_anchor_time||a.created_at))||num(b.setup_group_id)-num(a.setup_group_id)||num(b.family_number)-num(a.family_number);});
+    return ordered.map(renderFamilyCard).join('');
 }
 function renderFamilyPage(rows,title){
     return '<div class="pa-section-head"><div class="pa-section-title">'+esc(title)+'</div></div><div class="pa-family-list">'+renderFamilyCards(rows)+'</div>';
@@ -1044,7 +1437,7 @@ function updateTabs(){
             tabs.classList.add('pa-hidden');
             activeTab='root';
         }else if(mode.confirmationTrade){
-            html='<button type="button" class="pa-tab '+(activeTab==='matched'?'active':'')+'" data-tab="matched">Matched families</button><button type="button" class="pa-tab '+(activeTab==='confirmation'?'active':'')+'" data-tab="confirmation">Confirmation</button>';
+            html='<button type="button" class="pa-tab '+(activeTab==='matched'?'active':'')+'" data-tab="matched">Matched Setups</button><button type="button" class="pa-tab '+(activeTab==='confirmation'?'active':'')+'" data-tab="confirmation">Confirmation</button>';
             tabs.classList.remove('pa-hidden');
         }else{
             tabs.classList.add('pa-hidden');
@@ -1080,7 +1473,7 @@ function renderDashboard(){
             // Confirmation mode is an independent category: include confirmation
             // families from every strategy and exclude every main-root record.
             var confirmationRows=selectedRows('confirmation');
-            $('paDashboardContent').innerHTML='<div class="pa-grid">'+renderMetricCardsOnly(confirmationRows,confirmationRows,'Total Confirmation Families')+'</div>';
+            $('paDashboardContent').innerHTML='<div class="pa-grid">'+renderMetricCardsOnly(confirmationRows,confirmationRows,'Total Confirmation Setups')+'</div>';
         }else if(hasAnyMainRootTradeSetup()){
             // All Strategies shows only trades configured on main roots.
             var allRootTradeRows=selectedRows('root');
@@ -1089,14 +1482,14 @@ function renderDashboard(){
         }else{
             // When no main root has a trade setup, show the matched main-root
             // families themselves instead of empty trade-statistic cards.
-            $('paDashboardContent').innerHTML=renderFamilyPage(selectedRows('matched'),'Matched Families');
+            $('paDashboardContent').innerHTML=renderFamilyPage(selectedRows('matched'),'Main Setups');
         }
         return;
     }
     if(activeTab==='confirmation'){
         // Confirmation statistics and family drill-downs contain confirmations only.
         var selectedConfirmationRows=selectedRows('confirmation');
-        $('paDashboardContent').innerHTML='<div class="pa-grid">'+renderMetricCardsOnly(selectedConfirmationRows,selectedConfirmationRows,'Total Confirmation Families')+'</div>';
+        $('paDashboardContent').innerHTML='<div class="pa-grid">'+renderMetricCardsOnly(selectedConfirmationRows,selectedConfirmationRows,'Total Confirmation Setups')+'</div>';
         return;
     }
     if(activeTab==='root'&&mode.rootTrade){
@@ -1105,29 +1498,30 @@ function renderDashboard(){
         return;
     }
     var matchedRows=selectedRows('matched');
-    $('paDashboardContent').innerHTML=renderFamilyPage(matchedRows,'Matched Families');
+    $('paDashboardContent').innerHTML=renderFamilyPage(matchedRows,'Main Setups');
 }
 function renderMetricCardsOnly(rows,mainFamilyRows,familyLabel){
     var x=calculate(rows,mainFamilyRows);
     lastStats=x;
     var html='';
-    var familyMetricLabel=familyLabel||'Total Main Families';
-    var familyMetricDetail=familyLabel==='Total Confirmation Families'?'Matched confirmation families across the selected scope':'Main strategy matches, including strategies without trade setup';
-    var familyNoun=familyLabel==='Total Confirmation Families'?'confirmation families':'main families';
-    html+=metricCard(familyMetricLabel,fmt(x.matched,0),'fa-diagram-project',familyMetricDetail,'','matched-families',familyLabel==='Total Confirmation Families'?'View confirmation families':'View main families');
+    var familyMetricLabel=familyLabel||'Total Main Setups';
+    var familyMetricDetail=familyLabel==='Total Confirmation Setups'?'Matched confirmation setups across the selected scope':'Main strategy setups, including setups without trade configuration';
+    var familyNoun=familyLabel==='Total Confirmation Setups'?'confirmation setups':'main setups';
+    html+=metricCard(familyMetricLabel,fmt(x.matched,0),'fa-diagram-project',familyMetricDetail,'','matched-families',familyLabel==='Total Confirmation Setups'?'View confirmation setups':'View Main Setups');
     html+=metricCard('Total Trades',fmt(x.total,0),'fa-arrow-right-arrow-left',fmt(x.matched,0)+' '+familyNoun,'','trades-provision','Trades Provision');
-    html+=metricCard('Stoploss hit',fmt(x.sl,0),'fa-shield-halved','Trade families closed at stoploss','negative','outcome:stoploss hit','View trades');
+    html+=metricCard('Stoploss hit',fmt(x.sl,0),'fa-shield-halved','Trade setups closed at stoploss','negative','outcome:stoploss hit','View trades');
     html+=metricCard('Lost Risks',fmt(x.sl,0)+'R','fa-arrow-trend-down','Each stoploss = −1R · '+fmt(x.sl,0)+' losing families','negative','outcome:stoploss hit','View trades');
-    html+=metricCard('Profit reached',fmt(x.tp,0),'fa-trophy','Profitable trade families','positive','outcome:take profit reached','View trades');
+    html+=metricCard('Profit reached',fmt(x.tp,0),'fa-trophy','Profitable trade setups','positive','outcome:take profit reached','View trades');
     html+=metricCard('Risk rewards','+'+fmt(x.winsR)+'R','fa-coins','Sum of '+fmt(x.tp,0)+' winning families','positive','outcome:take profit reached','View trades');
-    html+=metricCard('Consecutive Loss',fmt(x.maxLoss,0),'fa-arrow-down','Longest losing streak before a profitable trade');
-    html+=metricCard('Consecutive Win',fmt(x.maxWin,0),'fa-arrow-up','Longest winning streak without a loss');
-    html+=metricCard('Highest Drawdown',fmt(x.maxDrawdown,2)+'%','fa-chart-line',x.accountLostAt?('Account exhausted at '+esc(x.accountLostAt)):'100% baseline drawdown sequence','','outcome:drawdown','View sequence');
-    html+=metricCard('Highest Revenue Peak','+'+fmt(x.highestRevenue,2)+'%','fa-arrow-trend-up','Highest balance reached: '+fmt(x.highestBalance,2)+'%','','outcome:peak','View sequence');
-    // Keep Win rate immediately beside Current virtual balance in the card grid.
+    html+=metricCard('Consecutive Loss',fmt(x.maxLoss,0),'fa-arrow-down','Longest losing streak before a profitable trade','negative','streak:loss','View trades');
+    html+=metricCard('Consecutive Win',fmt(x.maxWin,0),'fa-arrow-up','Longest winning streak without a loss','positive','streak:win','View trades');
+    html+=metricCard('Highest Drawdown',fmt(x.maxDrawdown,2)+'%','fa-chart-line',x.accountLostAt?('Account exhausted at '+esc(x.accountLostAt)):'Drawdown measured from the starting balance','','outcome:drawdown','View sequence');
+    html+=metricCard('Highest Revenue Peak',fmt(x.highestRevenue,2)+'%','fa-arrow-trend-up','Highest growth reached above the starting balance','','outcome:peak','View sequence');
+    // Keep Win rate beside Growth in the card grid.
     html+=metricCard('Win rate',fmt(x.winRate,1)+'%','fa-bullseye',fmt(x.tp,0)+' wins / '+fmt(x.closed,0)+' closed');
-    html+=metricCard('Current virtual balance',fmt(x.currentBalance,2)+'%','fa-scale-balanced','100% baseline − lost risks + profit risk rewards',x.currentBalance>=100?'positive':'negative');
-    html+=metricCard('Pending entries',fmt(x.pending,0),'fa-hourglass-half','Matched trade families awaiting entry','','outcome:pending entry','View trades');
+    var growth=x.currentBalance-100;
+    html+=metricCard('Growth',fmt(growth,2)+'%','fa-scale-balanced','Net gain or loss from the starting balance',growth>=0?'positive':'negative');
+    html+=metricCard('Pending entries',fmt(x.pending,0),'fa-hourglass-half','Matched trade setups awaiting entry','','outcome:pending entry','View trades');
     html+=metricCard('In trade',fmt(x.active.length,0),'fa-chart-column',fmt(x.longActive,0)+' long · '+fmt(x.shortActive,0)+' short','','outcome:in trade','View trades');
     return html;
 }
@@ -1208,12 +1602,41 @@ function renderMatchedIsolated(){
         if(viewState.outcome==='drawdown'||viewState.outcome==='peak'){
             var stat=lastStats||calculate(currentTradeRows),seq=viewState.outcome==='drawdown'?stat.drawdownSequence:stat.peakSequence;
             rows=seq.map(function(x){return x.row;});
+        }else if(viewState.outcome==='closed by request'){
+            rows=currentTradeRows.filter(function(r){return num(r.trade_configured)===1&&isClosedByRequest(r);});
         }else rows=currentTradeRows.filter(function(r){return num(r.trade_configured)===1&&r.outcome===viewState.outcome;});
     }
     var confirmationMode=currentMode()==='confirmation';
-    var pageTitle=viewState.outcome&&viewState.outcome!=='all'?'Trade results':(confirmationMode?'Confirmation Families':'Matched Families');
+    var pageTitle=viewState.outcome&&viewState.outcome!=='all'?'Trade results':(confirmationMode?'Confirmation Setups':'Main Setups');
     var pageSubtitle=confirmationMode?'Confirmation family records for the current strategy, symbol and timeframe filters':'Main-root family records for the current strategy, symbol and timeframe filters';
     $('paIsolated').innerHTML=isolatedHeader(pageTitle,pageSubtitle)+'<div class="pa-family-list">'+renderFamilyCards(rows)+'</div>';
+}
+function renderStreakTrades(){
+    var isLoss=viewState.streak==='loss';
+    var title=isLoss?'Consecutive Loss Trades':'Consecutive Win Trades';
+    var stat=lastStats||calculate(currentTradeRows,currentMatchedRows);
+    var sequences=isLoss?(stat.maxLossStreaks||[]):(stat.maxWinStreaks||[]);
+    var streakLabel=isLoss?'consecutive losses':'consecutive wins';
+    var total=sequences.reduce(function(sum,sequence){return sum+sequence.length;},0);
+    var subtitle=sequences.length
+        ?('Showing '+fmt(total,0)+' trades across '+fmt(sequences.length,0)+' longest '+streakLabel+' streak'+(sequences.length===1?'':'s')+'. Each group is kept in chronological order.')
+        :'The current filters contain no closed '+(isLoss?'losing':'winning')+' streaks.';
+    var html=isolatedHeader(title,subtitle);
+    if(!sequences.length){
+        $('paIsolated').innerHTML=html+'<div class="pa-panel pa-empty"><i class="fa-solid '+(isLoss?'fa-arrow-down':'fa-arrow-up')+'"></i><strong>No '+(isLoss?'consecutive losses':'consecutive wins')+' found</strong>No matching trade sequence is available for the selected Live/History source, strategy, symbols and timeframe.</div>';
+        return;
+    }
+    html+='<div class="pa-streak-groups">';
+    sequences.forEach(function(sequence,index){
+        var first=sequence[0]||{},root=rootFor(first.root_id),conf=confirmationFor(root,String(first.confirmation_root_id));
+        var scope=[String(first.symbol||''),String(first.timeframe||'').toUpperCase()];
+        if(first.source_timeframe&&first.source_timeframe!==first.timeframe)scope.push('Parent '+String(first.source_timeframe).toUpperCase());
+        if(root)scope.push(root.name); else if(first.root_id)scope.push('Strategy '+first.root_id);
+        if(conf)scope.push(conf.name);
+        html+='<section class="pa-streak-group"><div class="pa-section-head"><div><div class="pa-section-title">Streak '+(index+1)+'</div><div class="pa-section-sub">'+esc(scope.filter(Boolean).join(' · '))+'</div></div><span class="pa-status '+(isLoss?'stoploss-hit':'take-profit-reached')+'">'+sequence.length+' '+streakLabel+'</span></div><div class="pa-family-list">'+renderFamilyCards(sequence,true)+'</div></section>';
+    });
+    html+='</div>';
+    $('paIsolated').innerHTML=html;
 }
 function syncParentChrome(){
     try{window.parent.postMessage({type:'programmeAnalyticsView',nested:viewState.page!=='dashboard'},'*');}catch(e){}
@@ -1229,6 +1652,7 @@ function renderCurrentView(){
     else if(viewState.page==='trades-days')renderDays(viewState.week);
     else if(viewState.page==='trades-day')renderTradeDay(viewState.day);
     else if(viewState.page==='matched-families')renderMatchedIsolated();
+    else if(viewState.page==='streak-trades')renderStreakTrades();
 }
 function refresh(){
     configureTimeframeSelect();
@@ -1330,6 +1754,8 @@ document.addEventListener('click',function(e){
         var action=pageAction.dataset.pageAction;
         if(action==='trades-provision')goPage('trades-provision');
         else if(action==='matched-families')goPage('matched-families',{outcome:'all'});
+        else if(action==='streak:loss')goPage('streak-trades',{streak:'loss'});
+        else if(action==='streak:win')goPage('streak-trades',{streak:'win'});
         else if(action.indexOf('outcome:')===0)goPage('matched-families',{outcome:action.slice(8)});
         return;
     }
@@ -1353,13 +1779,19 @@ document.addEventListener('click',function(e){
             ?(configuredTimeframe(r,confirmation?confirmation.timeframes:[])||low(r.source_timeframe)||low(r.timeframe))
             :(configuredTimeframe(r,root?root.timeframes:[])||low(r.timeframe)||low(r.source_timeframe));
         var tradeType=isConfirmation?'confirmation':'root';
-        var hasConfirmationId=Object.prototype.hasOwnProperty.call(r,'confirmation_root_id')&&r.confirmation_root_id!==null&&r.confirmation_root_id!=='';
+        var tradeConfigured=num(r.trade_configured)===1;
+        var locateOrderType=low(r.order_type);
+        if(locateOrderType.indexOf('buy')!==0&&locateOrderType.indexOf('sell')!==0){
+            var locateDirection=low(r.direction);
+            locateOrderType=locateDirection==='short'?'sell':(locateDirection==='long'?'buy':'');
+        }
         var familyNumber=num(r.family_number);
-        if(num(r.root_id)<=0||!hasConfirmationId||familyNumber<=0||!chartTimeframe||!String(r.symbol||'').trim()){
+        var setupGroupId=Math.max(1,num(r.setup_group_id)||1);
+        if(num(r.root_id)<=0||familyNumber<=0||!chartTimeframe||!String(r.symbol||'').trim()){
             showLocateFailure('unidentifiable');
             return;
         }
-        var chartTradeId=[tradeType,String(r.root_id),String(confirmationId),chartTimeframe,String(r.family_number)].join('|');
+        var chartTradeId=[tradeType,String(r.root_id),String(confirmationId),chartTimeframe,String(setupGroupId),String(r.family_number)].join('|');
         var requestId='pa-'+String(Date.now())+'-'+String(familyNumber);
         window.parent.postMessage({
             type:'programmeAnalyticsLocate',
@@ -1370,6 +1802,11 @@ document.addEventListener('click',function(e){
                 is_confirmation:isConfirmation,
                 trade_type:tradeType,
                 family_number:r.family_number,
+                setup_group_id:setupGroupId,
+                trade_configured:tradeConfigured?1:0,
+                locate_setup:!tradeConfigured,
+                order_type:locateOrderType,
+                direction:r.direction||'',
                 chart_trade_id:chartTradeId,
                 trade_id:chartTradeId,
                 request_id:requestId,

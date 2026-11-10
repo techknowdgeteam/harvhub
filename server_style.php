@@ -48,8 +48,8 @@
         --danger-hover: #c0392b;
         --success-color: #4CAF50;
         --success-hover: #45a049;
-        --info-color: #2196F3;
-        --info-hover: #1976D2;
+        --info-color: #b88720;
+        --info-hover: #946b16;
         --tag-saved-bg: #1a3a5c;
         --tag-saved-color: #90caf9;
         --tag-temp-bg: #3d2d00;
@@ -83,10 +83,10 @@
             --danger-hover: #c0392b;
             --success-color: #4CAF50;
             --success-hover: #45a049;
-            --info-color: #2196F3;
-            --info-hover: #1976D2;
+            --info-color: #b88720;
+            --info-hover: #946b16;
             --tag-saved-bg: #e3f2fd;
-            --tag-saved-color: #0d47a1;
+            --tag-saved-color: #8a6519;
             --tag-temp-bg: #fff3e0;
             --tag-temp-color: #e65100;
             --settings_modal-overlay: rgba(0,0,0,0.4);
@@ -266,7 +266,7 @@
     }
 
     .nav-menu > a:nth-child(1) .nav-icon { color: #ffd700; }
-    .nav-menu > a:nth-child(2) .nav-icon { color: #00bcd4; }
+    .nav-menu > a:nth-child(2) .nav-icon { color: #d2a640; }
     .nav-menu > a:nth-child(3) .nav-icon { color: #4caf50; }
     .nav-menu > a:nth-child(4) .nav-icon { color: #9c27b0; }
     .nav-menu > a:nth-child(5) .nav-icon { color: #ff6b6b; }
@@ -692,13 +692,13 @@
         font-weight: 600;
         transition: all 0.2s ease;
         width: auto;
-        box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2);
+        box-shadow: 0 2px 8px rgba(184, 135, 32, 0.20);
     }
     
     .btn-save-columns:hover {
         background-color: var(--info-hover);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+        box-shadow: 0 4px 12px rgba(184, 135, 32, 0.32);
     }
     
     .btn-save-columns:active {
@@ -1112,6 +1112,10 @@
             max-width: 100%;
         }
     }
+
+/* Legacy Server App styles: phone-first overrides */
+@media(max-width:760px){#custom-body{width:100%;padding:10px 10px 24px}.container,.settings-container,.revenue-container,.risk-dictionary-container,.vps-container{width:100%!important;max-width:100%!important;padding-left:0!important;padding-right:0!important}.nav-menu{grid-template-columns:1fr!important;gap:10px}.nav-menu>a{min-height:84px!important;height:auto!important;flex-direction:row!important;justify-content:flex-start!important;text-align:left!important;padding:14px!important}.nav-icon{font-size:25px!important;margin:0!important}.nav-label{text-align:left!important}.settings-tabs,.revenue-tabs{overflow-x:auto!important;max-width:100%}.settings-card-body,.revenue-card-body{padding:12px!important}.settings-field,.form-group{min-width:0!important}.settings-input,input,select,textarea{max-width:100%}.table-responsive,.table-wrapper,.revenue-table-wrapper,.recovery-table-wrapper{overflow-x:auto!important;max-width:100%!important;-webkit-overflow-scrolling:touch}.settings-modal-container,.modal-content{max-width:calc(100vw - 20px)!important;width:calc(100vw - 20px)!important;max-height:90dvh!important;overflow:auto!important}}
+@media(max-width:480px){#custom-body{padding:8px 8px 22px}.nav-menu>a{padding:12px!important}.settings-btn,button{min-height:40px}.settings-card-header,.settings-card-footer{padding:12px!important}.settings-card-body{padding:10px!important}}
 </style>
 
 <style>
@@ -1281,7 +1285,7 @@
     }
 
     .accountmanagementmodal-header .accountmanagementmodal-close:hover {
-        background: var(--accent-color, #3498db);
+        background: var(--accent-color, #b88720);
         color: white;
     }
 
@@ -1380,7 +1384,7 @@
 
     .json-password-input:focus {
         outline: none;
-        border-color: var(--accent-color, #3498db);
+        border-color: var(--accent-color, #b88720);
     }
 
     /* User Info Section - Fixed */
@@ -1810,12 +1814,12 @@
     }
 
     .copy-json-btn-header {
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
     }
 
     .copy-json-btn-header:hover {
-        background: #2980b9;
+        background: var(--primary-hover);
         transform: translateY(-1px);
     }
 
@@ -1836,7 +1840,7 @@
     .refresh-justjoined-btn,
     .refresh-justjoinedvalid-btn,
     .refresh-approved-btn {
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
     }
     
@@ -1847,7 +1851,7 @@
     .refresh-justjoined-btn:hover,
     .refresh-justjoinedvalid-btn:hover,
     .refresh-approved-btn:hover {
-        background: #2980b9;
+        background: var(--primary-hover);
         transform: translateY(-1px);
     }
 
@@ -2274,7 +2278,7 @@
 
     .execution-record {
         background: var(--bg-tertiary);
-        border-left: 4px solid #3498db;
+        border-left: 4px solid var(--accent-color);
         border-radius: 8px;
         margin-bottom: 16px;
         padding: 15px;
@@ -2325,7 +2329,7 @@
     }
 
     .execution-type-info {
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
     }
 
@@ -2568,8 +2572,8 @@
         border-radius: 12px;
         font-size: 10px;
         font-weight: bold;
-        background: #2c3e50;
-        color: white;
+        background: #4a3b1c;
+        color: #f5d98d;
     }
 
     .status-select {
@@ -2725,12 +2729,12 @@
     }
 
     .edit-config-btn {
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
     }
 
     .edit-config-btn:hover {
-        background: #2980b9;
+        background: var(--primary-hover);
     }
 
     .copy-config-btn {
@@ -2907,7 +2911,7 @@
 
     .apply-action-btn {
         padding: 6px 12px;
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
         border: none;
         border-radius: 6px;
@@ -2917,7 +2921,7 @@
     }
 
     .apply-action-btn:hover {
-        background: #2980b9;
+        background: var(--primary-hover);
         transform: translateY(-1px);
     }
 
@@ -5103,7 +5107,7 @@
     .update-btn {
         width: auto;
         padding: 8px 14px;
-        background-color: #2196F3;
+        background-color: var(--primary-color);
         color: white;
         border: none;
         border-radius: 8px;
@@ -5114,7 +5118,7 @@
         white-space: nowrap;
     }
     .update-btn:hover {
-        background-color: #1976D2;
+        background-color: var(--primary-hover);
     }
     
     .status-badge-new {
@@ -5123,7 +5127,7 @@
         border-radius: 20px;
         font-weight: bold;
         font-size: 11px;
-        background-color: #2196F3;
+        background-color: var(--primary-color);
         color: white;
         white-space: nowrap;
     }
@@ -5564,7 +5568,7 @@
 
     .status-active {
         background: #e3f2fd;
-        color: #1565c0;
+        color: #8a6519;
     }
 
     .status-above {
@@ -5630,7 +5634,7 @@
 
     .status-below {
         background: #e3f2fd;
-        color: #0d47a1;
+        color: #8a6519;
     }
 
     .status-expired {
@@ -6016,7 +6020,7 @@
 
     .status-pending {
         background: #e3f2fd;
-        color: #0d47a1;
+        color: #8a6519;
     }
 
     .status-not-listed {
@@ -6441,8 +6445,8 @@
         }
         
         .status-active {
-            background: #1a3a5c;
-            color: #64b5f6;
+            background: #3a2e17;
+            color: #f5d98d;
         }
         
         .status-above,
@@ -6488,8 +6492,8 @@
         }
         
         .status-below {
-            background: #1a2a3a;
-            color: #64b5f6;
+            background: #3a2e17;
+            color: #f5d98d;
         }
 
         .status-met {
@@ -6503,8 +6507,8 @@
         }
 
         .status-pending {
-            background: #1a2a3a;
-            color: #64b5f6;
+            background: #3a2e17;
+            color: #f5d98d;
         }
 
         .status-not-listed {
@@ -6969,7 +6973,7 @@
 
     .refresh-risk-btn {
         padding: 6px 14px;
-        background: #3498db;
+        background: var(--primary-color);
         color: white;
         border: none;
         border-radius: 4px;
@@ -6980,7 +6984,7 @@
     }
 
     .refresh-risk-btn:hover {
-        background: #2980b9;
+        background: var(--primary-hover);
         transform: translateY(-1px);
     }
 
@@ -7164,13 +7168,38 @@
     }
 
     /* Status vocab additions (revenue already defines confirmed/made/unpaid/failed/active/cancelled) */
-    .status-active { background: #e3f2fd; color: #1565c0; }
+    .status-active { background: #f5ebcf; color: #8a6519; }
     .status-confirmed { background: #e8f5e9; color: #2e7d32; }
     .status-made { background: #fff3e0; color: #e65100; }
     .status-unpaid { background: #ffebee; color: #c62828; }
     .status-failed { background: #f5f5f5; color: #616161; }
-    .status-pending { background: #e3f2fd; color: #0d47a1; }
+    .status-pending { background: #f5ebcf; color: #8a6519; }
     .status-declined { background: #ffebee; color: #c62828; }
     .status-inactive { background: #f5f5f5; color: #616161; }
     .status-suspended { background: #f3e5f5; color: #7b1fa2; }
+</style>
+
+<style>
+/* Unified gold controls and invisible scrollbars for legacy Server App pages. */
+:root{--primary-color:#b88720;--primary-hover:#946b16;--accent-color:#b88720;--accent-hover:#946b16;--info-color:#b88720;--info-hover:#946b16;--tag-saved-bg:#f5ebcf;--tag-saved-color:#6e4d0d}
+html[data-theme="dark"]{--primary-color:#d2a640;--primary-hover:#e0b957;--accent-color:#d2a640;--accent-hover:#e0b957;--info-color:#d2a640;--info-hover:#e0b957;--tag-saved-bg:#3a2e17;--tag-saved-color:#f5d98d}
+*{scrollbar-width:none!important;-ms-overflow-style:none!important}
+*::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
+button,input,select,textarea{max-width:100%}
+@media(max-width:850px){
+ #custom-body{width:100%;padding:10px 9px calc(26px + env(safe-area-inset-bottom));}
+ .container{width:100%;max-width:100%;padding:12px 9px;border-radius:14px}
+ .status-update-form{gap:8px}
+ .status-input{min-width:0;min-height:42px;font-size:16px}
+ .update-btn{min-height:42px;border-radius:10px;background:var(--primary-color);color:#21180a}
+ .new-users-table{font-size:12px}
+}
+</style>
+
+<style>
+/* Warm status pills replace blue informational fills without changing status meaning. */
+.status-active,.status-below,.status-pending{background:#f5ebcf!important;color:#76550f!important;border-color:#dfc887!important}
+html[data-theme="dark"] .status-active,html[data-theme="dark"] .status-below,html[data-theme="dark"] .status-pending{background:#3a2e17!important;color:#f5d98d!important;border-color:#705927!important}
+.refresh-risk-btn,.refresh-invested-btn,.refresh-verified-btn,.refresh-pending-btn,.refresh-suspended-btn,.refresh-justjoined-btn,.refresh-justjoinedvalid-btn,.refresh-approved-btn,.copy-json-btn-header{background:var(--primary-color)!important;color:#21180a!important}
+.refresh-risk-btn:hover,.refresh-invested-btn:hover,.refresh-verified-btn:hover,.refresh-pending-btn:hover,.refresh-suspended-btn:hover,.refresh-justjoined-btn:hover,.refresh-justjoinedvalid-btn:hover,.refresh-approved-btn:hover,.copy-json-btn-header:hover{background:var(--primary-hover)!important}
 </style>

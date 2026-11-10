@@ -128,7 +128,30 @@ $activeProgrammeName= trim((string)($programme['program_name'] ?? ''));
 $darkMode           = !empty($user['dark_mode']);
 
 $_SESSION['selected_programme_id'] = $activeProgrammeId;
-$_SESSION['user_email'] = strtolower($user['email']);
+$email = strtolower(trim((string)$user['email']));
+$_SESSION['user_email'] = $email;
+
+/*
+ * Persist the active workspace independently of logout.
+ * The shell executes this on entry and on its normal authenticated AJAX
+ * requests, so last_app remains accurate even when a session expires.
+ */
+$shouldRefreshLastApp = ($_SERVER['REQUEST_METHOD'] !== 'POST')
+    || isset($_POST['poll_shell_state'])
+    || isset($_POST['save_last_app']);
+if ($shouldRefreshLastApp) {
+    try {
+        $lastAppStmt = $pdo->prepare(
+            "UPDATE harvhub
+             SET last_app = ?
+             WHERE LOWER(email) = ?
+               AND COALESCE(last_app, '') <> ?"
+        );
+        $lastAppStmt->execute(['traderapp', $email, 'traderapp']);
+    } catch (Throwable $e) {
+        error_log('traderapp.php could not update harvhub.last_app: ' . $e->getMessage());
+    }
+}
 
 function normalizeProgrammeKey($name) {
     $name = preg_replace('/[^A-Za-z0-9]+/', '', (string)$name);
@@ -561,16 +584,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['save_last_app'])) {
         header('Content-Type: application/json; charset=utf-8');
         $app = trim((string)($_POST['app'] ?? ''));
-        $allowed = ['investorapp', 'trader_app', 'managerapp', 'traderapp'];
-        if ($app === '' || !in_array($app, $allowed, true)) {
+        if ($app !== 'traderapp') {
             echo json_encode(['success' => false, 'message' => 'Invalid app value.']);
             exit;
         }
         try {
-            $u = $pdo->prepare("UPDATE harvhub SET last_app = ? WHERE LOWER(email) = ?");
-            $u->execute([$app, $email]);
-            echo json_encode(['success' => true, 'last_app' => $app]);
+            $u = $pdo->prepare(
+                "UPDATE harvhub
+                 SET last_app = ?
+                 WHERE LOWER(email) = ?
+                   AND COALESCE(last_app, '') <> ?"
+            );
+            $u->execute(['traderapp', $email, 'traderapp']);
+            echo json_encode(['success' => true, 'last_app' => 'traderapp']);
         } catch (Throwable $e) {
+            error_log('traderapp.php save_last_app failed: ' . $e->getMessage());
             echo json_encode(['success' => false, 'message' => 'Failed to save app.']);
         }
         exit;

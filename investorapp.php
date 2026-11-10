@@ -111,8 +111,32 @@ try {
     $mainAccountId      = (int)($user['main_account_id'] ?? 0);
     $activeSubName      = trim((string)($user['sub_account_name'] ?? ''));
     $darkMode           = !empty($user['dark_mode']);
+    $email              = strtolower(trim((string)($user['email'] ?? $email)));
+    $_SESSION['user_email'] = $email;
     $_SESSION['active_sub_account_id']  = $activeSubAccountId;
     $_SESSION['active_main_account_id'] = $mainAccountId;
+
+    /*
+     * Persist the active workspace independently of logout.
+     * This runs on initial entry and on the authenticated shell AJAX poll,
+     * keeping last_app correct when the session later expires automatically.
+     */
+    $shouldRefreshLastApp = ($_SERVER['REQUEST_METHOD'] !== 'POST')
+        || isset($_POST['poll_shell_state'])
+        || isset($_POST['save_last_app']);
+    if ($shouldRefreshLastApp) {
+        try {
+            $lastAppStmt = $pdo->prepare(
+                "UPDATE $tableName
+                 SET last_app = ?
+                 WHERE LOWER(email) = ?
+                   AND COALESCE(last_app, '') <> ?"
+            );
+            $lastAppStmt->execute(['investorapp', $email, 'investorapp']);
+        } catch (Throwable $e) {
+            error_log('investorapp.php could not update harvhub.last_app: ' . $e->getMessage());
+        }
+    }
     if (!function_exists('normalizeAccountName')) {
         function normalizeAccountName($name) {
             $name = preg_replace('/[^A-Za-z0-9 ]+/', '', (string)$name);
@@ -142,6 +166,29 @@ try {
         }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (isset($_POST['save_last_app'])) {
+            header('Content-Type: application/json; charset=utf-8');
+            $app = trim((string)($_POST['app'] ?? ''));
+            if ($app !== 'investorapp') {
+                echo json_encode(['success' => false, 'message' => 'Invalid app value.']);
+                exit;
+            }
+            try {
+                $u = $pdo->prepare(
+                    "UPDATE $tableName
+                     SET last_app = ?
+                     WHERE LOWER(email) = ?
+                       AND COALESCE(last_app, '') <> ?"
+                );
+                $u->execute(['investorapp', $email, 'investorapp']);
+                echo json_encode(['success' => true, 'last_app' => 'investorapp']);
+            } catch (Throwable $e) {
+                error_log('investorapp.php save_last_app failed: ' . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Failed to save app.']);
+            }
+            exit;
+        }
+
         if (isset($_POST['get_sub_accounts'])) {
             header('Content-Type: application/json; charset=utf-8');
             try {
@@ -430,19 +477,20 @@ try {
         'revenue_history'         => 'revenue_history.php',
         'profit_split'            => 'profit_split.php',
         'vps'                     => 'vps.php',
+        'purchase_vps'            => 'purchaseaccountvps.php',
         'disconnect_broker'       => 'disconnect_broker.php',
         'programmes'              => 'programmes.php',
         'connect_investor_broker' => 'connect_investor_broker.php',
     ];
     if (!array_key_exists($defaultTab, $tabSrc)) $defaultTab = 'mydashboard';
     $hiddenTabs = [
-        'revenue_history','profit_split','vps','disconnect_broker','programmes','connect_investor_broker'
+        'revenue_history','profit_split','vps','purchase_vps','disconnect_broker','programmes','connect_investor_broker'
     ];
     $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
     $tabsWithBrandHeader = ['mydashboard'];
     $tabsWithNav         = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
     $tabsWithPageHeader  = ['trades', 'activity', 'analytics', 'menu'];
-    $tabsWithNoChrome    = ['vps', 'programmes', 'revenue_history'];
+    $tabsWithNoChrome    = ['vps', 'purchase_vps', 'programmes', 'revenue_history'];
     $tabTitles = [
         'mydashboard'             => 'Dashboard',
         'trades'                  => 'Daily Revenue',
@@ -452,6 +500,7 @@ try {
         'revenue_history'         => 'Revenue History',
         'profit_split'            => 'Profit Split',
         'vps'                     => 'VPS Hub',
+        'purchase_vps'            => 'Purchase VPS',
         'programmes'              => 'Programmes',
         'disconnect_broker'       => 'Disconnect Broker',
         'connect_investor_broker' => 'Connect Broker',
@@ -464,7 +513,7 @@ try {
         $showNav         = false;
         $showPageHeader  = false;
     }
-    $takeoverTabs = ['programmes', 'revenue_history', 'profit_split', 'vps', 'disconnect_broker', 'connect_investor_broker'];
+    $takeoverTabs = ['programmes', 'revenue_history', 'profit_split', 'vps', 'purchase_vps', 'disconnect_broker', 'connect_investor_broker'];
     $bodyExtraClass = in_array($defaultTab, $takeoverTabs, true) ? 'page-' . $defaultTab : '';
     $chromeClasses = [];
     if (!$showBrandHeader && !$showPageHeader) $chromeClasses[] = 'shell-no-header';
@@ -1525,7 +1574,7 @@ try {
                 class="app-frame <?= $defaultTab === $tab ? 'active' : '' ?>"
                 data-tab="<?= $tab ?>"
                 data-hidden="<?= in_array($tab, $hiddenTabs, true) ? '1' : '0' ?>"
-                src="<?= htmlspecialchars($file) ?>"
+                src="<?= htmlspecialchars($tab === 'purchase_vps' && (int)($_GET['request_id'] ?? 0) > 0 ? 'purchaseaccountvps.php?request_id='.(int)$_GET['request_id'] : $file) ?>"
                 title="<?= ucfirst(str_replace('_', ' ', $tab)) ?>"
                 loading="eager"></iframe>
         <?php endforeach; ?>
@@ -1558,11 +1607,11 @@ try {
     var TABS_WITH_BRAND_HEADER = ['mydashboard'];
     var TABS_WITH_NAV          = ['mydashboard', 'trades', 'activity', 'analytics', 'menu'];
     var TABS_WITH_PAGE_HEADER  = ['trades', 'activity', 'analytics', 'menu'];
-    var TABS_NO_CHROME         = ['vps', 'programmes', 'revenue_history'];
+    var TABS_NO_CHROME         = ['vps', 'purchase_vps', 'programmes', 'revenue_history'];
     var TAB_TITLES = {
         'mydashboard':'Dashboard','trades':'Daily Revenue','activity':'Activity',
         'analytics':'Analytics','menu':'Menu','revenue_history':'Revenue History',
-        'profit_split':'Profit Split','vps':'VPS Hub','programmes':'Programmes',
+        'profit_split':'Profit Split','vps':'VPS Hub','purchase_vps':'Purchase VPS','programmes':'Programmes',
         'disconnect_broker':'Disconnect Broker','connect_investor_broker':'Connect Broker'
     };
     window.__harvhubModalOpen = false;
@@ -1593,6 +1642,7 @@ try {
         revenue_history:         document.getElementById('frame-revenue_history'),
         profit_split:            document.getElementById('frame-profit_split'),
         vps:                     document.getElementById('frame-vps'),
+        purchase_vps:            document.getElementById('frame-purchase_vps'),
         disconnect_broker:       document.getElementById('frame-disconnect_broker'),
         programmes:              document.getElementById('frame-programmes'),
         connect_investor_broker: document.getElementById('frame-connect_investor_broker')
@@ -1623,7 +1673,7 @@ try {
     var FILE_TO_TAB = {
         'mydashboard.php':'mydashboard','revenue_target.php':'trades','activity.php':'activity',
         'useranalytics.php':'analytics','analytics.php':'analytics','menu.php':'menu',
-        'revenue_history.php':'revenue_history','profit_split.php':'profit_split','vps.php':'vps',
+        'revenue_history.php':'revenue_history','profit_split.php':'profit_split','vps.php':'vps','purchaseaccountvps.php':'purchase_vps',
         'disconnect_broker.php':'disconnect_broker','programmes.php':'programmes',
         'connect_investor_broker.php':'connect_investor_broker'
     };
@@ -1809,7 +1859,7 @@ try {
         }
         if (e.data.type === 'saveLastApp') {
             try {
-                fetch('menu.php', {
+                fetch('investorapp.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',
@@ -2119,7 +2169,7 @@ try {
     if (confirmYes) {
         confirmYes.addEventListener('click', function () {
             try {
-                fetch('menu.php', {
+                fetch('investorapp.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
                     credentials: 'same-origin',

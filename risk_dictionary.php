@@ -1,14 +1,24 @@
 <?php
-// risk_dictionary.php
+/** Recovery table generator, using the persisted Server App light/dark theme. */
+require_once __DIR__ . '/serverapp_guard.php';
+if ($isServerAppAjax && (string)($_POST['action'] ?? '') === 'risk_live_ping') {
+    serverAppJson(['success'=>true,'server_time'=>date(DATE_ATOM),'calculator'=>'client-side']);
+}
 ?>
-
+<!doctype html>
+<html lang="en" data-theme="<?= serverAppH($serverAppTheme) ?>">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Risk Dictionary</title><link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232ecc71'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white'>H</text></svg>">
+<?php require_once __DIR__ . '/server_feature_style.php'; ?>
+</head>
+<body><main class="server-feature-wrap">
 <h2> Recovery Table Generator</h2>
 
 <div class="risk-dictionary-container">
     <!-- Recovery Table Controller -->
     <div id="recovery-tab" class="risk-tab-content active">
         <div class="management-header">
-            <h3>Recovery Table Controller</h3>
+            <h3>Recovery Table Controller</h3><span id="riskLiveStatus" style="font-size:11px;color:var(--text-muted)">Calculator ready</span>
         </div>
 
         <div class="recovery-generator-container">
@@ -403,4 +413,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     generateRecoveryTable();
 });
+async function refreshRiskLive(){
+    if(document.hidden||window.__serverAppActive===false)return;
+    try{
+        const body=new URLSearchParams({action:'risk_live_ping'});
+        const response=await fetch('risk_dictionary.php',{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},body});
+        const data=await response.json();
+        const status=document.getElementById('riskLiveStatus');
+        if(status)status.textContent=data.success?'Server connected · local calculations':'Server reconnecting';
+    }catch(e){const status=document.getElementById('riskLiveStatus');if(status)status.textContent='Server reconnecting';}
+}
+let riskLiveTimer=setInterval(refreshRiskLive,60000);
+window.addEventListener('serverapp:activechange',e=>{if(e.detail?.active)refreshRiskLive();});
+window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data?.type==='serverapp:module-state'&&e.data.active)refreshRiskLive();});
 </script>
+</main></body></html>

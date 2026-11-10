@@ -94,7 +94,7 @@ $violation_reason = '';
 
 $contract_duration = 30;
 try {
-    $stmt = $pdo->query("SELECT contract_duration FROM server_account LIMIT 1");
+    $stmt = $pdo->query("SELECT contract_duration FROM server_requirements WHERE id = 1 LIMIT 1");
     $cfg = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($cfg && !empty($cfg['contract_duration'])) {
         $contract_duration = (int)$cfg['contract_duration'];

@@ -144,6 +144,29 @@ try {
     error_log('Programme training annotation-column migration: ' . $e->getMessage());
 }
 
+// Manual execution requests are deliberately separate from chart-derived order status.
+// Keep both canonical trade and analytics rows ready before any chart/request reads.
+try {
+    foreach (['programme_trades', 'programme_analytics'] as $requestTable) {
+        $tableExists = $pdo->query('SHOW TABLES LIKE ' . $pdo->quote($requestTable))->fetchColumn();
+        if (!$tableExists) continue;
+        $requestColumns = $pdo->query('SHOW COLUMNS FROM `' . $requestTable . '`')->fetchAll(PDO::FETCH_COLUMN);
+        $requestDefinitions = [
+            'order_request_status' => 'VARCHAR(64) NULL DEFAULT NULL',
+            'order_request_filled' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'order_request_filled_failure_reason' => 'VARCHAR(500) NULL DEFAULT NULL'
+        ];
+        foreach ($requestDefinitions as $requestColumn => $requestDefinition) {
+            if (!in_array($requestColumn, $requestColumns, true)) {
+                $pdo->exec('ALTER TABLE `' . $requestTable . '` ADD COLUMN `' . $requestColumn . '` ' . $requestDefinition);
+                $requestColumns[] = $requestColumn;
+            }
+        }
+    }
+} catch (Throwable $requestMigrationError) {
+    error_log('Programme training order-request schema migration failed: ' . $requestMigrationError->getMessage());
+}
+
 if (!isset($_SESSION['user_email'])) { header("Location: index.php"); exit; }
 $email = strtolower($_SESSION['user_email']);
 
@@ -179,6 +202,14 @@ if ($selectedProgrammeId > 0) {
 
 $programmeId   = $programme ? (int)$programme['id'] : 0;
 $programmeName = $programme ? ($programme['program_name'] ?? 'Programme') : 'Programme';
+$tradesSetupPerGroup = 100;
+try {
+    $setupLimitQuery = $pdo->query("SELECT `trades_setup_per_group` FROM `server_account` WHERE `id` = 1 LIMIT 1");
+    $configuredSetupLimit = (int)($setupLimitQuery ? $setupLimitQuery->fetchColumn() : 0);
+    if ($configuredSetupLimit > 0) $tradesSetupPerGroup = $configuredSetupLimit;
+} catch (Throwable $e) {
+    error_log('Programme training trades_setup_per_group read failed: ' . $e->getMessage());
+}
 $ptRootsRequireUnlock = $programme && (int)($programme['advertisement'] ?? 0) === 1 && (int)($programme['server_advertisement_approval'] ?? 0) === 1;
 
 // ==================== LIST PARSER ====================
@@ -239,6 +270,96 @@ function ptResolveOwnedProgramme($pdo, $userId, $programmeId) {
     $row = $q->fetch(PDO::FETCH_ASSOC) ?: null;
     $cache[$programmeId] = $row;
     return $row;
+}
+
+/**
+ * Returns the manual request state for chart families, keyed by the same root /
+ * confirmation / group / family / symbol / timeframe identity used by the chart.
+ * The programme_trades row is the execution-facing copy; the analytics copy is
+ * also consulted so a fill recorded on either side remains visible in Training.
+ */
+function ptLoadOrderRequestStateMap(PDO $pdo, int $userId, int $programmeId): array {
+    if ($userId <= 0 || $programmeId <= 0) return [];
+    try {
+        $identityExists = $pdo->query("SHOW TABLES LIKE 'programme_trade_chart_identity'")->fetchColumn();
+        if (!$identityExists) return [];
+        $tradeColumns = $pdo->query("SHOW COLUMNS FROM `programme_trades`")->fetchAll(PDO::FETCH_COLUMN);
+        $analyticsExists = $pdo->query("SHOW TABLES LIKE 'programme_analytics'")->fetchColumn();
+        if (!in_array('order_request_status', $tradeColumns, true)
+            || !in_array('order_request_filled', $tradeColumns, true)
+            || !in_array('order_request_filled_failure_reason', $tradeColumns, true)) return [];
+
+        $analyticsJoin = '';
+        $analyticsSelect = 'NULL AS analytics_request_status, 0 AS analytics_request_filled, NULL AS analytics_failure_reason';
+        if ($analyticsExists) {
+            $analyticsColumns = $pdo->query("SHOW COLUMNS FROM `programme_analytics`")->fetchAll(PDO::FETCH_COLUMN);
+            $requiredAnalytics = ['programme_id','userid','root_id','confirmation_root_id','family_number','setup_group_id','symbol','timeframe','source_timeframe','order_request_status','order_request_filled','order_request_filled_failure_reason'];
+            if (!array_diff($requiredAnalytics, $analyticsColumns)) {
+                $analyticsJoin = " LEFT JOIN `programme_analytics` pa
+                    ON pa.`programme_id` = c.`programmeid`
+                   AND pa.`userid` = c.`userid`
+                   AND pa.`root_id` = c.`root_id`
+                   AND pa.`confirmation_root_id` <=> c.`confirmation_root_id`
+                   AND pa.`family_number` = c.`family_number`
+                   AND pa.`setup_group_id` = c.`setup_group_id`
+                   AND UPPER(pa.`symbol`) = UPPER(c.`symbol`)
+                   AND LOWER(pa.`timeframe`) = LOWER(c.`timeframe`)
+                   AND pa.`source_timeframe` <=> c.`source_timeframe`";
+                $analyticsSelect = 'pa.`order_request_status` AS analytics_request_status, pa.`order_request_filled` AS analytics_request_filled, pa.`order_request_filled_failure_reason` AS analytics_failure_reason';
+            }
+        }
+        $sql = "SELECT c.`root_id`, c.`confirmation_root_id`, c.`family_number`, c.`setup_group_id`,
+                       c.`symbol`, c.`timeframe`, c.`source_timeframe`,
+                       t.`order_request_status`, t.`order_request_filled`, t.`order_request_filled_failure_reason`,
+                       {$analyticsSelect}
+                  FROM `programme_trades` t
+                  INNER JOIN `programme_trade_chart_identity` c
+                    ON c.`programme_trade_id` = t.`id`
+                   AND c.`userid` = t.`userid`
+                   AND c.`programmeid` = t.`programmeid`
+                  {$analyticsJoin}
+                 WHERE t.`userid` = ? AND t.`programmeid` = ?
+                   AND t.`investor_id` IS NULL";
+        $q = $pdo->prepare($sql);
+        $q->execute([$userId, $programmeId]);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        $map = [];
+        foreach ($rows as $row) {
+            $status = trim((string)($row['order_request_status'] ?? ''));
+            $analyticsStatus = trim((string)($row['analytics_request_status'] ?? ''));
+            $tradeFilled = (int)($row['order_request_filled'] ?? 0);
+            $analyticsFilled = (int)($row['analytics_request_filled'] ?? 0);
+            if ($tradeFilled === 1 && $status !== '') $resolvedStatus = $status;
+            elseif ($analyticsFilled === 1 && $analyticsStatus !== '') $resolvedStatus = $analyticsStatus;
+            else $resolvedStatus = $status !== '' ? $status : $analyticsStatus;
+            $status = $resolvedStatus;
+            $filled = max($tradeFilled, $analyticsFilled);
+            $reason = trim((string)($row['order_request_filled_failure_reason'] ?? ''));
+            if ($reason === '') $reason = trim((string)($row['analytics_failure_reason'] ?? ''));
+            if ($status === '' && $filled !== 1 && $reason === '') continue;
+            $base = [
+                (string)(int)($row['root_id'] ?? 0),
+                (string)(int)($row['confirmation_root_id'] ?? 0),
+                (string)(int)($row['family_number'] ?? 0),
+                (string)max(1, (int)($row['setup_group_id'] ?? 1)),
+                strtolower(trim((string)($row['symbol'] ?? '')))
+            ];
+            $state = [
+                'status' => $status,
+                'filled' => $filled,
+                'failure_reason' => $reason
+            ];
+            foreach (['timeframe', 'source_timeframe'] as $timeframeColumn) {
+                $tf = strtolower(trim((string)($row[$timeframeColumn] ?? '')));
+                if ($tf === '') continue;
+                $map[implode('|', array_merge($base, [$tf]))] = $state;
+            }
+        }
+        return $map;
+    } catch (Throwable $e) {
+        error_log('Programme training order-request state load failed: ' . $e->getMessage());
+        return [];
+    }
 }
 
 // ==================== BROKER CONNECTION CHECK ====================
@@ -934,6 +1055,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_configuration'])
     exit;
 }
 
+// ==================== AJAX: ORDER REQUEST STATES ====================
+// Training refreshes this small identity map so an already-open chart reflects
+// request fills made from the Signals Dashboard without changing chart outcomes.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_order_request_states'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($_SESSION['user_email'])) {
+        http_response_code(401);
+        echo json_encode(['success'=>false,'message'=>'Not authenticated.','rows'=>[]]);
+        exit;
+    }
+    $reqProgrammeId = (int)($_POST['programme_id'] ?? 0);
+    if ($reqProgrammeId <= 0 || !ptResolveOwnedProgramme($pdo, $userId, $reqProgrammeId)) {
+        http_response_code(403);
+        echo json_encode(['success'=>false,'message'=>'Programme not found or access denied.','rows'=>[]]);
+        exit;
+    }
+    ptReleaseSessionLock();
+    echo json_encode([
+        'success' => true,
+        'rows' => ptLoadOrderRequestStateMap($pdo, $userId, $reqProgrammeId)
+    ], JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
+
 // ==================== AJAX: LIVE STATE (symbols / timeframes / broker) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_live_state'])) {
     header('Content-Type: application/json');
@@ -1192,45 +1337,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fetch_candles_latest'
     }
     exit;
 }
-// Signals Provision is authoritative whenever it contains a non-empty,
-// positive numeric risk-reward value. Its interest/test status is deliberately
-// NOT consulted: ongoing, passed, failed, breached, cancelled, or any other
-// status must not change the configured ratio used by Programme Training.
+// Resolve the exact Signals Provision requirement for this programme owner.
+// A provision changes to `ongoing` as soon as its test starts. Older code only
+// queried interested/pending/active rows, so the RR became NULL during the test
+// and the trade builder silently defaulted to 1:1. Always inspect the newest
+// provision row for this user + programme, then ignore it if it was cancelled.
 $providerRiskReward = null;
 $providerRiskRewardType = '';
+$providerProvisionStatus = '';
 try {
     if ($programmeId > 0) {
         $rrStmt = $pdo->prepare("
-            SELECT `risk_reward`, `risk_reward_type`
+            SELECT `risk_reward`, `risk_reward_type`, `interest_status`
             FROM `signals_provider_interest`
             WHERE `programme_id` = ?
               AND `user_id` = ?
               AND COALESCE(`accountmanagement_id`, 0) = 0
-              AND `risk_reward` IS NOT NULL
-              AND TRIM(CAST(`risk_reward` AS CHAR)) <> ''
             ORDER BY `id` DESC
             LIMIT 1
         ");
         $rrStmt->execute([$programmeId, $userId]);
         $providerRow = $rrStmt->fetch(PDO::FETCH_ASSOC) ?: null;
         if ($providerRow) {
-            $rrValue = $providerRow['risk_reward'] ?? null;
-            if ($rrValue !== null && trim((string)$rrValue) !== '' && is_numeric($rrValue) && (float)$rrValue > 0) {
-                $providerRiskReward = (float)$rrValue;
-            }
+            $providerProvisionStatus = strtolower(trim((string)($providerRow['interest_status'] ?? '')));
+            $validProvisionStatuses = ['interested', 'pending', 'active', 'ongoing', 'passed', 'failed', 'breached'];
+            if (in_array($providerProvisionStatus, $validProvisionStatuses, true)) {
+                $rrValue = $providerRow['risk_reward'] ?? null;
+                if ($rrValue !== null && $rrValue !== '' && is_numeric($rrValue) && (float)$rrValue > 0) {
+                    $providerRiskReward = (float)$rrValue;
+                }
 
-            $rrTypeValue = strtolower(trim((string)($providerRow['risk_reward_type'] ?? '')));
-            $validRiskRewardTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
-            if (in_array($rrTypeValue, $validRiskRewardTypes, true)) {
-                $providerRiskRewardType = $rrTypeValue;
+                $rrTypeValue = strtolower(trim((string)($providerRow['risk_reward_type'] ?? '')));
+                $validRiskRewardTypes = ['fixed_risk_reward', 'minimum_risk_reward', 'custom_and_default_risk_reward'];
+                if (in_array($rrTypeValue, $validRiskRewardTypes, true)) {
+                    $providerRiskRewardType = $rrTypeValue;
+                }
             }
         }
     }
 } catch (Throwable $e) {
     $providerRiskReward = null;
     $providerRiskRewardType = '';
+    $providerProvisionStatus = '';
     error_log('[programme_training] Signals Provision RR lookup failed: ' . $e->getMessage());
 }
+$ptInitialOrderRequestStates = ptLoadOrderRequestStateMap($pdo, $userId, $programmeId);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -2396,15 +2547,8 @@ try {
     /* Dynamic diagnostics console */
     .pt-dynamic-console-modal{position:fixed;inset:0;z-index:100500;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.72);backdrop-filter:blur(5px)}
     .pt-dynamic-console-modal.active{display:flex}
-    .pt-dynamic-console-box{position:relative;width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
-    .pt-roots-data-loading{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;box-sizing:border-box;text-align:center;background:var(--pt-card);color:var(--pt-text)}
-    .pt-roots-data-loading[hidden]{display:none!important}
-    .pt-roots-data-spinner{width:42px;height:42px;border:4px solid rgba(128,128,128,.22);border-top-color:var(--pt-accent);border-radius:50%;animation:ptRootsDataSpin .8s linear infinite}
-    .pt-roots-data-loading strong{font-size:15px;font-weight:800}
-    .pt-roots-data-loading span.pt-roots-data-message{max-width:440px;color:var(--pt-muted);font-size:12px;line-height:1.55}
-    .pt-roots-data-loading .pt-roots-data-error{color:#dc3545;font-size:22px}
-    @keyframes ptRootsDataSpin{to{transform:rotate(360deg)}}
-    .pt-dynamic-console-head{position:relative;z-index:7;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;flex-shrink:0}
+    .pt-dynamic-console-box{width:min(1100px,98vw);height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden;background:var(--pt-card);color:var(--pt-text);border:1px solid var(--pt-border);border-radius:16px;box-shadow:0 25px 90px rgba(0,0,0,.45)}
+    .pt-dynamic-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;flex-shrink:0}
     .pt-dynamic-console-title{font-size:1rem;font-weight:800}
     .pt-dynamic-console-subtitle{font-size:.78rem;color:var(--pt-muted);margin-top:2px}
     .pt-dynamic-console-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -2554,7 +2698,7 @@ try {
                 <span>Configuration</span>
             </button>
 
-            <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View trade records for matched root families">
+            <button type="button" class="pt-topbar-btn" id="ptRootsDataBtn" onclick="ptOpenRootsData()" title="View matched root setups and trade records">
                 <span>Roots Data</span>
             </button>
 
@@ -2748,17 +2892,11 @@ try {
 <div class="pt-dynamic-console-modal" id="ptRootsDataModal" role="dialog" aria-modal="true" aria-labelledby="ptRootsDataTitle">
     <div class="pt-dynamic-console-box">
         <div class="pt-dynamic-console-head">
-            <div><div class="pt-dynamic-console-title" id="ptRootsDataTitle"><i class="fa-solid fa-list-check"></i> Roots Data — Trade Families</div><div class="pt-dynamic-console-subtitle">Matched root families and their entry/exit trigger records</div></div>
+            <div><div class="pt-dynamic-console-title" id="ptRootsDataTitle"><i class="fa-solid fa-list-check"></i> Root Setups &amp; Trades</div><div class="pt-dynamic-console-subtitle">Matched setups and their entry/exit trigger records</div></div>
             <div class="pt-dynamic-console-actions"><button type="button" class="pt-dynamic-console-action" onclick="ptRefreshRootsData()"><i class="fa-solid fa-rotate"></i> Refresh</button><button type="button" class="pt-dynamic-console-action" onclick="ptCloseRootsData()"><i class="fa-solid fa-xmark"></i> Close</button></div>
         </div>
-        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Preparing the current timeframe's saved root matches and trade records. Chart updates pause while this data panel is open.</div>
+        <div class="pt-dynamic-console-status" id="ptRootsDataStatus">Only native data for roots configured on the currently viewed timeframe is shown here. Higher-timeframe projection data is not included.</div>
         <div id="ptRootsDataBody" style="flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:16px 18px"></div>
-        <div class="pt-roots-data-loading" id="ptRootsDataLoading" role="status" aria-live="polite" hidden>
-            <span class="pt-roots-data-spinner" id="ptRootsDataSpinner" aria-hidden="true"></span>
-            <i class="fa-solid fa-triangle-exclamation pt-roots-data-error" id="ptRootsDataErrorIcon" aria-hidden="true" hidden></i>
-            <strong id="ptRootsDataLoadingTitle">Preparing Roots Data…</strong>
-            <span class="pt-roots-data-message" id="ptRootsDataLoadingMessage">Loading saved configuration, candle history and matching trade records.</span>
-        </div>
     </div>
 </div>
 
@@ -2786,24 +2924,21 @@ try {
     var PT_DRAW_FRAME = null;
     var PT_PROJECTION_REFRESH_PENDING = false;
     var PT_PROJECTION_PRESERVE_PENDING = true;
-    // A successful configuration save invalidates cached higher-timeframe
-    // sources; the next page-work resume must rebuild them from saved settings.
-    var PT_FORCE_PROJECTION_REFRESH_ON_RESUME = false;
     var PT_PROJECTION_REFRESH_BUSY = false;
     var PT_OLDER_LOAD_PENDING = false;
     var PT_PENDING_LIVE_CANDLES = null;
     var PT_INTERACTION_HELD = false;
-    // Named holds prevent background chart/candle work from restarting while
-    // either modal (or a nested modal flow) still owns the screen.
-    var PT_MODAL_BACKGROUND_HOLDS = Object.create(null);
     var PT_INTERACTION_SETTLE_MS = 360;
 
     var PT_PROGRAMME_ID      = <?= (int)$programmeId ?>;
     var PT_PROGRAMME_NAME    = <?= json_encode($programmeName) ?>;
-    // Values are read from the latest non-empty Signals Provision RR for this
-    // exact programme owner. Provision status never controls whether it applies.
+    var PT_TRADES_SETUP_PER_GROUP = <?= max(1, (int)$tradesSetupPerGroup) ?>;
+    var PT_ORDER_REQUEST_STATES = <?= json_encode($ptInitialOrderRequestStates, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?> || {};
+    // Values are read from the latest non-cancelled Signals Provision for this
+    // exact programme owner. Do not infer the requested ratio from a chart row.
     var PT_PROVIDER_RISK_REWARD = <?= $providerRiskReward === null ? 'null' : json_encode($providerRiskReward) ?>;
     var PT_PROVIDER_RISK_REWARD_TYPE = <?= json_encode($providerRiskRewardType) ?>;
+    var PT_PROVIDER_PROVISION_STATUS = <?= json_encode($providerProvisionStatus) ?>;
     var PT_HAS_BROKER        = <?= $hasBroker ? 'true' : 'false' ?>;
     var PT_USER_ID           = <?= (int)$userId ?>;
     var PT_DARK_MODE          = <?= $darkMode ? 'true' : 'false' ?>;
@@ -2958,32 +3093,8 @@ try {
         } catch (e) {}
     }
 
-    function ptHasModalBackgroundHold() {
-        return Object.keys(PT_MODAL_BACKGROUND_HOLDS).length > 0;
-    }
-
     function ptPageCanWork() {
-        return PT_WORK_ENABLED && !document.hidden && !ptHasModalBackgroundHold();
-    }
-
-    function ptAcquireModalBackgroundHold(reason) {
-        reason = String(reason || '').trim();
-        if (!reason || PT_MODAL_BACKGROUND_HOLDS[reason]) return;
-        var wasHeld = ptHasModalBackgroundHold();
-        PT_MODAL_BACKGROUND_HOLDS[reason] = true;
-        // Suspend only once even when nested modal interactions request a hold.
-        if (!wasHeld) ptSuspendPageWork();
-    }
-
-    function ptReleaseModalBackgroundHold(reason) {
-        reason = String(reason || '').trim();
-        if (!reason || !PT_MODAL_BACKGROUND_HOLDS[reason]) return;
-        delete PT_MODAL_BACKGROUND_HOLDS[reason];
-        // Retain the pause while any other modal remains open. Resume the work
-        // scheduler only after the final hold has been released.
-        if (!ptHasModalBackgroundHold() && PT_WORK_ENABLED && !document.hidden) {
-            ptResumePageWork();
-        }
+        return PT_WORK_ENABLED && !document.hidden;
     }
 
     // Only chart/live-data requests use this wrapper. User-initiated saves and
@@ -3104,9 +3215,47 @@ try {
         }, delay);
     }
 
+    var PT_ORDER_REQUEST_REFRESH_TIMER = null;
+    var PT_ORDER_REQUEST_REFRESH_BUSY = false;
+    var PT_ORDER_REQUEST_REFRESH_MS = 10000;
+    function ptStopOrderRequestStateRefresh() {
+        if (PT_ORDER_REQUEST_REFRESH_TIMER) {
+            clearTimeout(PT_ORDER_REQUEST_REFRESH_TIMER);
+            PT_ORDER_REQUEST_REFRESH_TIMER = null;
+        }
+    }
+    function ptFetchOrderRequestStates() {
+        if (PT_ORDER_REQUEST_REFRESH_BUSY || !ptPageCanWork() || PT_PROGRAMME_ID <= 0) return Promise.resolve();
+        PT_ORDER_REQUEST_REFRESH_BUSY = true;
+        return fetch('programme_training.php', {
+            method: 'POST',
+            headers: {'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
+            credentials: 'same-origin',
+            body: 'get_order_request_states=1&programme_id=' + encodeURIComponent(PT_PROGRAMME_ID)
+        }).then(function (response) { return response.json(); }).then(function (data) {
+            if (data && data.success && data.rows && typeof data.rows === 'object') {
+                PT_ORDER_REQUEST_STATES = data.rows;
+                if (PT_HOVER_LOOKUP_INDEX >= 0 && PT_CANVAS) ptScheduleDraw();
+            }
+        }).catch(function (error) {
+            console.warn('[programme_training] Could not refresh order request states:', error);
+        }).finally(function () {
+            PT_ORDER_REQUEST_REFRESH_BUSY = false;
+        });
+    }
+    function ptScheduleOrderRequestStateRefresh() {
+        ptStopOrderRequestStateRefresh();
+        if (!ptPageCanWork()) return;
+        PT_ORDER_REQUEST_REFRESH_TIMER = setTimeout(function () {
+            PT_ORDER_REQUEST_REFRESH_TIMER = null;
+            ptFetchOrderRequestStates().finally(ptScheduleOrderRequestStateRefresh);
+        }, PT_ORDER_REQUEST_REFRESH_MS);
+    }
+
     function ptSuspendPageWork() {
         // Invalidate every continuation first, then abort any browser requests.
         // Already-loaded candles remain in memory so Training can continue later.
+        ptStopOrderRequestStateRefresh();
         ptStopLiveState();
         ptStopCandleRefresh();
         PT_LOAD_TOKEN++;
@@ -3135,28 +3284,14 @@ try {
         PT_DRAW_SCHEDULED = false;
         if (typeof ptStopLocateArrowAnimation === 'function') ptStopLocateArrowAnimation();
         PT_LOCATE_ARROW = null;
-        // Clear deferred touch/crosshair work as well. These callbacks only
-        // affect the chart canvas, so they must not fire behind an active modal.
-        if (typeof PT_TOUCH_STATE !== 'undefined' && PT_TOUCH_STATE) {
-            if (PT_TOUCH_STATE.crosshairTimer) {
-                clearTimeout(PT_TOUCH_STATE.crosshairTimer);
-                PT_TOUCH_STATE.crosshairTimer = null;
-            }
-            PT_TOUCH_STATE.pointers = {};
-            PT_TOUCH_STATE.crosshairActive = false;
-            PT_TOUCH_STATE.crosshairDragActive = false;
-            PT_TOUCH_STATE._lastPan = null;
-        }
-        if (typeof PT_DRAG_STATE !== 'undefined' && PT_DRAG_STATE) {
-            PT_DRAG_STATE.mode = null;
-            PT_DRAG_STATE.moved = false;
-        }
     }
 
     function ptResumePageWork() {
         if (!ptPageCanWork()) return;
 
         if (PT_PROGRAMME_ID > 0) {
+            ptFetchOrderRequestStates();
+            ptScheduleOrderRequestStateRefresh();
             ptStartLiveState();
             ptStartCandleRefresh();
         }
@@ -3172,9 +3307,7 @@ try {
         }
 
         if (PT_HAS_BROKER && PT_CURRENT_SYMBOL && PT_CURRENT_TIMEFRAME) {
-            var preserveProjectionCache = !PT_FORCE_PROJECTION_REFRESH_ON_RESUME;
-            PT_FORCE_PROJECTION_REFRESH_ON_RESUME = false;
-            ptRefreshHigherTimeframeProjection(preserveProjectionCache);
+            ptRefreshHigherTimeframeProjection(true);
         }
         if (PT_CANDLES.length) ptScheduleDraw();
     }
@@ -3757,12 +3890,10 @@ try {
         return ptPrice((fallbackCandles || PT_CANDLES)[index], level);
     }
     function ptRefreshHigherTimeframeProjection(preserveCompletedCache) {
-        if (!ptPageCanWork() || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) {
-            return Promise.resolve(false);
-        }
+        if (!ptPageCanWork() || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME || !PT_HAS_BROKER) return;
         if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
             ptQueueProjectionRefresh(!!preserveCompletedCache);
-            return Promise.resolve(false);
+            return;
         }
         var token = ++PT_PROJECTION_REQUEST_TOKEN;
         PT_PROJECTION_REFRESH_BUSY = true;
@@ -3771,16 +3902,16 @@ try {
         var configPromise = (typeof ptLoadSavedConfiguration === 'function')
             ? ptLoadSavedConfiguration(false).catch(function(){ return null; })
             : Promise.resolve(null);
-        return configPromise.then(function(){
-            if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return false;
+        configPromise.then(function(){
+            if (!ptPageCanWork() || token !== PT_PROJECTION_REQUEST_TOKEN) return;
             if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
                 PT_PROJECTION_REFRESH_BUSY = false;
                 ptQueueProjectionRefresh(!!preserveCompletedCache);
-                return false;
+                return;
             }
             var config = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
             var tfs = ptProjectionRootsForCurrentView(config);
-            if (!tfs.length) { PT_PROJECTION_REFRESH_BUSY = false; ptProjectionStatus('', ''); return true; }
+            if (!tfs.length) { PT_PROJECTION_REFRESH_BUSY = false; ptProjectionStatus('', ''); return; }
             var rootNames = [];
             (config.roots || []).forEach(function(root){
                 if (root.applyToChart === false || root.applyToChart === 0 || root.applyToChart === '0') return;
@@ -3797,14 +3928,12 @@ try {
                     PT_PROJECTION_REFRESH_BUSY = false;
                     ptProjectionStatus('Projecting ' + Array.from(new Set(rootNames)).join(', ') + ' — ready', 'done');
                     ptScheduleDraw();
-                    return true;
                 }).catch(function(err){
-                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return false;
+                    if (token !== PT_PROJECTION_REQUEST_TOKEN) return;
                     PT_PROJECTION_REFRESH_BUSY = false;
-                    if (err && err.name === 'AbortError') return false;
+                    if (err && err.name === 'AbortError') return;
                     ptProjectionStatus('Projection loading failed: ' + (err.message || 'unknown error'), 'error');
                     console.warn('Higher-timeframe projection load failed', err);
-                    return false;
                 });
         });
     }
@@ -4898,6 +5027,7 @@ try {
             PT_HOVER_LOOKUP_INDEX = -2;
             PT_HOVERED_FAMILY_INFO = null;
             PT_HOVERED_TRADE_INFO = null;
+            PT_HOVERED_ORDER_REQUEST_INFO = null;
         }
         if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return;
         var config = (typeof window.ptGetTrainingConfiguration === 'function')
@@ -5199,10 +5329,12 @@ try {
                     all[mainIdx]._matchTreeIds.push(condition.treeId);
                 });
             });
+            var setupGroupLimit = Math.max(1, Number(PT_TRADES_SETUP_PER_GROUP) || 100);
             root._drawMatches = completeStates.map(function (state, familyIndex) {
                 var conditions = Array.isArray(state.conditions) ? state.conditions : [];
                 return {
-                    familyNumber: familyIndex + 1,
+                    familyNumber: (familyIndex % setupGroupLimit) + 1,
+                    setupGroupId: Math.floor(familyIndex / setupGroupLimit) + 1,
                     map: Object.assign({}, state.map),
                     conditions: conditions,
                     noTrade: conditions.some(function (condition) {
@@ -5214,7 +5346,7 @@ try {
                 root._drawMatches.forEach(function (family) {
                     PT_HOVER_FAMILY_MATCHES.push({
                         rootId: root.id, rootName: root.name || ('Root ' + root.id),
-                        familyNumber: family.familyNumber, map: family.map,
+                        familyNumber: family.familyNumber, setupGroupId: family.setupGroupId, map: family.map,
                         noTrade: !!family.noTrade, confirmationRootName: '', confirmationRootId: null,
                         timeframe: String(PT_CURRENT_TIMEFRAME || '').toLowerCase()
                     });
@@ -5616,7 +5748,8 @@ try {
                         confirmationRoot: winner.confirmationRoot,
                         confirmationRootName: winner.confirmationRoot.name || ('Confirmation Root ' + winner.confirmationRoot.id),
                         parentFamily: parentFamily,
-                        familyNumber: parentFamily.familyNumber || (parentFamilyIndex + 1),
+                        familyNumber: parentFamily.familyNumber || ((parentFamilyIndex % Math.max(1, Number(PT_TRADES_SETUP_PER_GROUP) || 100)) + 1),
+                        setupGroupId: parentFamily.setupGroupId || (Math.floor(parentFamilyIndex / Math.max(1, Number(PT_TRADES_SETUP_PER_GROUP) || 100)) + 1),
                         confirmationOccurrenceIndex: winner.occurrenceIndex,
                         noTrade: !!parentFamily.noTrade || (winner.match.conditions || []).some(function (condition) { return condition.ifGroupFound === 'identify_but_dont_trade'; })
                     });
@@ -5625,7 +5758,7 @@ try {
                     root._confirmationMatchesByRootId[String(winner.confirmationRoot.id)] = winner.confirmationRoot._confirmationDrawMatches;
                     PT_HOVER_FAMILY_MATCHES.push({
                         rootId: root.id, rootName: root.name || ('Root ' + root.id),
-                        familyNumber: selectedFamily.familyNumber, map: selectedFamily.map,
+                        familyNumber: selectedFamily.familyNumber, setupGroupId: selectedFamily.setupGroupId, map: selectedFamily.map,
                         noTrade: !!selectedFamily.noTrade,
                         confirmationRootName: selectedFamily.confirmationRootName,
                         confirmationRootId: selectedFamily.confirmationRootId,
@@ -5914,8 +6047,8 @@ try {
     var PT_PROJECTION_TARGET_TIMEFRAME = '';
     var PT_CONFIRMATION_TRADE_DATA = [];
     var PT_FAMILY_HOVER_NOTE = null;
-    function ptShowFamilyHoverNote(familyInfo, trade, clientX, clientY) {
-        if (!familyInfo && !trade) {
+    function ptShowFamilyHoverNote(familyInfo, trade, orderRequestInfo, clientX, clientY) {
+        if (!familyInfo && !trade && !orderRequestInfo) {
             if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display = 'none';
             return;
         }
@@ -5949,6 +6082,23 @@ try {
                 ? (trade.isLong ? (actual - entry) / risk : (entry - actual) / risk) : 0;
             html += '<strong>Minimum risk/reward applied</strong><div>This trade family\'s configured take-profit provides approximately 1:' + actualRR.toFixed(2) +
                 ' reward. The minimum permitted target is 1:1, so the take-profit was adjusted to the minimum allowed level.</div>';
+        }
+        if (orderRequestInfo) {
+            var requestStatus = String(orderRequestInfo.status || '').trim();
+            var requestLabel = requestStatus.replace(/\s+/g, ' ').replace(/(^|\s)\S/g, function (part) { return part.toUpperCase(); });
+            var requestFilled = Number(orderRequestInfo.filled) === 1;
+            var failureReason = String(orderRequestInfo.failure_reason || '').trim();
+            var chartOutcome = String((trade && trade.outcome) || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+            if (requestFilled) {
+                var chartDescription = chartOutcome === 'in trade' ? 'still in trade' : (chartOutcome === 'pending entry' ? 'still pending entry' : (chartOutcome || 'not yet marked closed'));
+                html += '<strong>Closed by request</strong><div>This trade has been closed by request although chart data still reports it as ' + ptEscapeHtml(chartDescription) + '.</div>';
+                if (requestLabel) html += '<div>Request: ' + ptEscapeHtml(requestLabel) + '.</div>';
+            } else if (requestLabel) {
+                html += '<strong>Execution request</strong><div>' + ptEscapeHtml(requestLabel) + ' · Awaiting fill.</div>';
+            }
+            if (failureReason) {
+                html += '<strong>Request execution failure</strong><div>' + ptEscapeHtml(failureReason) + '</div>';
+            }
         }
         if (!html) {
             if (PT_FAMILY_HOVER_NOTE) PT_FAMILY_HOVER_NOTE.style.display = 'none';
@@ -6082,6 +6232,7 @@ try {
             String(record.rootId == null ? '' : record.rootId),
             String(confirmationId),
             String(record.timeframe || '').toLowerCase(),
+            String(record.setupGroupId == null ? 1 : record.setupGroupId),
             String(record.familyNumber == null ? '' : record.familyNumber)
         ].join('|');
     }
@@ -6301,11 +6452,12 @@ try {
                 var riskDistance=Math.abs(entryPrice-slPrice);
                 var rewardDistance=(tpPrice!==null && Number.isFinite(Number(tpPrice)))?Math.abs(Number(tpPrice)-entryPrice):null;
                 var familyRiskReward=(riskDistance>0 && rewardDistance!==null)?(rewardDistance/riskDistance):null;
-                var resolvedFamilyNumber = (family.familyNumber != null ? Number(family.familyNumber) : famIndex+1);
+                var resolvedFamilyNumber = (family.familyNumber != null ? Number(family.familyNumber) : (famIndex % Math.max(1, Number(PT_TRADES_SETUP_PER_GROUP) || 100)) + 1);
+                var resolvedSetupGroupId = Math.max(1, Number(family.setupGroupId) || (Math.floor(famIndex / Math.max(1, Number(PT_TRADES_SETUP_PER_GROUP) || 100)) + 1));
                 var resolvedFamilySignature = ptBuildAnalyticsFamilySignature(root,family,candles);
                 var resolvedConfirmationRootId = Number(family.confirmationRootId || 0);
                 var resolvedChartTimeframe = String(PT_CURRENT_TIMEFRAME).toLowerCase();
-                var tradeRecord = {rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:resolvedFamilyNumber,confirmationRootId:resolvedConfirmationRootId||null,familySignature:resolvedFamilySignature,timeframe:resolvedChartTimeframe,sourceTimeframe:resolvedChartTimeframe,dataMode:'main',orderType:order,
+                var tradeRecord = {rootId:root.id,rootName:root.name||('Root '+root.id),familyNumber:resolvedFamilyNumber,setupGroupId:resolvedSetupGroupId,confirmationRootId:resolvedConfirmationRootId||null,familySignature:resolvedFamilySignature,timeframe:resolvedChartTimeframe,sourceTimeframe:resolvedChartTimeframe,dataMode:'main',orderType:order,
                     entryIndex:actualEntryIndex,entryAtIndex:entryAtIndex,entryName:targetLabel(root,root.entryFrom),entryPriceLevel:entryResolvedLevel,entryPrice:entryPrice,entryTime:entryC?stamp(entryC):null,entryAtTime:stamp(entryAtC),
                     slName:targetLabel(root,root.stoplossFrom),slPrice:slPrice,slTime:stamp(slC),tpType:effectiveTpType,
                     riskReward:familyRiskReward,configuredRiskReward:rr,isLong:isLong,isShort:isShort,configuredTpPrice:configuredTpPrice,minimumRiskRewardApplied:minimumRiskRewardApplied,tpName:tpC?targetLabel(root,root.takeProfitFrom):null,tpPrice:tpPrice,tpTime:tpC?stamp(tpC):null,
@@ -6317,176 +6469,9 @@ try {
         });
         return records;
     }
-    var PT_ROOTS_DATA_OPEN_TOKEN = 0;
-    var PT_ROOTS_DATA_PRELOAD_PROMISE = null;
-
-    function ptSetRootsDataLoading(show, title, message, isError) {
-        var overlay = document.getElementById('ptRootsDataLoading');
-        var titleEl = document.getElementById('ptRootsDataLoadingTitle');
-        var messageEl = document.getElementById('ptRootsDataLoadingMessage');
-        var spinner = document.getElementById('ptRootsDataSpinner');
-        var errorIcon = document.getElementById('ptRootsDataErrorIcon');
-        var refreshButton = document.querySelector('#ptRootsDataModal .pt-dynamic-console-actions button:first-child');
-        if (!overlay) return;
-        overlay.hidden = !show;
-        if (titleEl && title) titleEl.textContent = title;
-        if (messageEl && message) messageEl.textContent = message;
-        if (spinner) spinner.hidden = !!isError;
-        if (errorIcon) errorIcon.hidden = !isError;
-        // The Close control stays available in the header; Refresh is disabled
-        // until the data has been preloaded so the modal cannot be half-used.
-        if (refreshButton) refreshButton.disabled = !!show;
-    }
-
-    function ptBuildRootsDataSnapshot() {
-        if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length || typeof ptDrawChart !== 'function') return;
-        // Root matching is independent of the user's current pan/zoom window.
-        // Temporarily fit all loaded candles so the matcher is guaranteed to run
-        // even when the chart had been panned into blank space, then restore view.
-        var savedView = {
-            candleWidth: PT_VIEW.candleWidth,
-            candleSpacing: PT_VIEW.candleSpacing,
-            offsetX: PT_VIEW.offsetX,
-            offsetY: PT_VIEW.offsetY,
-            priceScale: PT_VIEW.priceScale
-        };
-        try {
-            ptFitViewportToCandles();
-            ptDrawChart();
-        } finally {
-            Object.keys(savedView).forEach(function (key) { PT_VIEW[key] = savedView[key]; });
-        }
-    }
-
-    function ptWaitForRootsDataCandles(token, timeoutMs) {
-        return new Promise(function(resolve, reject) {
-            var startedAt = Date.now();
-            var timeout = Math.max(5000, Number(timeoutMs) || 45000);
-            function check() {
-                var modal = document.getElementById('ptRootsDataModal');
-                if (token !== PT_ROOTS_DATA_OPEN_TOKEN || !modal || !modal.classList.contains('active')) {
-                    reject(new Error('Roots Data loading was cancelled.'));
-                    return;
-                }
-                if (!PT_HAS_BROKER || !PT_CURRENT_SYMBOL || !PT_CURRENT_TIMEFRAME) {
-                    resolve({complete:true, noChart:true});
-                    return;
-                }
-                if (!PT_CHART_STARTED && ptPageCanWork()) {
-                    ptLoadChart();
-                }
-                if (PT_INITIAL_LOADED) {
-                    if (PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
-                        window.setTimeout(check, 120);
-                        return;
-                    }
-                    var targetReached = PT_REQUESTED_AMOUNT === null || PT_CANDLES.length >= PT_REQUESTED_AMOUNT;
-                    var stoppedByLimit = PT_CONSECUTIVE_ERRORS >= PT_MAX_CONSECUTIVE_ERRORS;
-                    var historyFinished = !PT_HAS_MORE_OLDER || targetReached || stoppedByLimit;
-                    var schedulerIdle = !PT_IS_LOADING_OLDER && PT_AUTO_LOAD_TIMER === null;
-                    if (schedulerIdle && historyFinished) {
-                        resolve({complete:!stoppedByLimit, partial:!!stoppedByLimit, noChart:!PT_CANDLES.length});
-                        return;
-                    }
-                    // Re-enter the existing history loader if a previous interaction
-                    // left it idle between pages. It still respects the chart work gate.
-                    if (schedulerIdle && PT_HAS_MORE_OLDER && PT_CANDLES.length && ptPageCanWork()) {
-                        ptAutoLoadUpToTarget(PT_LOAD_TOKEN);
-                    }
-                }
-                if (Date.now() - startedAt >= timeout) {
-                    if (PT_INITIAL_LOADED) {
-                        resolve({complete:false, partial:true, timedOut:true, noChart:!PT_CANDLES.length});
-                    } else {
-                        reject(new Error('Candle data did not finish loading. Close Roots Data and check the chart connection, then try again.'));
-                    }
-                    return;
-                }
-                window.setTimeout(check, 120);
-            }
-            check();
-        });
-    }
-
-    window.ptOpenRootsData = function () {
-        var modal = document.getElementById('ptRootsDataModal');
-        if (!modal) return;
-        if (modal.classList.contains('active') && PT_ROOTS_DATA_PRELOAD_PROMISE) return PT_ROOTS_DATA_PRELOAD_PROMISE;
-
-        PT_ROOTS_DATA_OPEN_TOKEN++;
-        var token = PT_ROOTS_DATA_OPEN_TOKEN;
-        modal.classList.add('active');
-        modal.setAttribute('aria-busy', 'true');
-        ptSetRootsDataLoading(true, 'Preparing Roots Data…', 'Loading saved root configuration and the candle data required to calculate this timeframe.', false);
-
-        // Do not pause until the data required by this modal has been prepared.
-        // The loading overlay prevents interaction during this one-time preload.
-        PT_ROOTS_DATA_PRELOAD_PROMISE = Promise.resolve()
-            .then(function () {
-                if (typeof ptLoadSavedConfiguration === 'function') {
-                    return ptLoadSavedConfiguration(false);
-                }
-                return null;
-            })
-            .then(function () {
-                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) throw new Error('Roots Data loading was cancelled.');
-                ptSetRootsDataLoading(true, 'Loading candle history…', 'Waiting for the current chart timeframe to finish its configured candle load.', false);
-                return ptWaitForRootsDataCandles(token, 45000);
-            })
-            .then(function (loadState) {
-                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) throw new Error('Roots Data loading was cancelled.');
-                if (loadState && !loadState.noChart && PT_CANDLES.length) {
-                    ptSetRootsDataLoading(true, 'Preparing root matches…', 'Loading any higher-timeframe source candles needed by configured roots and confirmations.', false);
-                    return ptRefreshHigherTimeframeProjection(true).then(function (projectionReady) {
-                        if (!projectionReady) loadState.projectionIncomplete = true;
-                        return loadState;
-                    });
-                }
-                return loadState;
-            })
-            .then(function (loadState) {
-                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) return;
-                // One deterministic final chart pass builds the native and projected
-                // root/confirmation trade arrays before the modal becomes interactive.
-                ptBuildRootsDataSnapshot();
-                window.ptRefreshRootsData();
-
-                // Hold every chart/candle/configuration background process while the
-                // user inspects the fully-prepared data. Closing the modal releases it.
-                ptAcquireModalBackgroundHold('roots-data-modal');
-                modal.setAttribute('aria-busy', 'false');
-                ptSetRootsDataLoading(false);
-                var status = document.getElementById('ptRootsDataStatus');
-                if (status) {
-                    status.textContent = (loadState && (loadState.partial || loadState.timedOut || loadState.projectionIncomplete))
-                        ? 'Roots Data is ready using the available candle/projection data. Chart updates are paused while this panel is open.'
-                        : 'Roots Data is ready. Chart updates and background candle loading are paused while this panel is open.';
-                }
-            })
-            .catch(function (error) {
-                if (token !== PT_ROOTS_DATA_OPEN_TOKEN) return;
-                modal.setAttribute('aria-busy', 'false');
-                ptSetRootsDataLoading(true, 'Could not prepare Roots Data', (error && error.message) || 'The required data could not be loaded. Close this panel and try again.', true);
-                console.warn('[programme_training] Roots Data preload failed:', error);
-            })
-            .finally(function () {
-                if (token === PT_ROOTS_DATA_OPEN_TOKEN) PT_ROOTS_DATA_PRELOAD_PROMISE = null;
-            });
-        return PT_ROOTS_DATA_PRELOAD_PROMISE;
-    };
-
+    window.ptOpenRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.add('active');ptRefreshRootsData();};
     window.ptSetRootsDataMode=function(){PT_ROOTS_DATA_MODE='main';PT_ROOT_TRADE_DATA=PT_MAIN_TRADE_DATA;ptRefreshRootsData();};
-
-    window.ptCloseRootsData = function () {
-        var modal = document.getElementById('ptRootsDataModal');
-        PT_ROOTS_DATA_OPEN_TOKEN++;
-        if (modal) {
-            modal.classList.remove('active');
-            modal.setAttribute('aria-busy', 'false');
-        }
-        ptSetRootsDataLoading(false);
-        ptReleaseModalBackgroundHold('roots-data-modal');
-    };
+    window.ptCloseRootsData=function(){var m=document.getElementById('ptRootsDataModal');if(m)m.classList.remove('active');};
     // Resolve a configured candle timestamp to the currently loaded chart index.
     function ptIndexForTradeTime(value) {
         if (value == null || value === '' || !Array.isArray(PT_CANDLES)) return -1;
@@ -6504,6 +6489,91 @@ try {
         }
     }
 
+    // Main Setup location marker. It uses the exact PT_LOCATE_ARROW lifecycle,
+    // target index, price mapping, chart expansion and camera positioning created
+    // by ptLocateTrade(), but renders a location pin instead of a trade arrow.
+    // The animated rings make the first root MAIN candle easy to identify.
+    function ptDrawLocateSetupMarker(geo, a, now) {
+        var ctx = geo.ctx;
+        var x = geo.baseX + a.index * geo.step + geo.step / 2;
+        var targetY = geo.pToY(a.targetPrice);
+        var elapsed = Math.max(0, now - a.startedAt);
+        var bob = Math.sin(elapsed / 230) * 2.5;
+        var pinCenterY = targetY - 42 + bob;
+
+        // Three expanding/fading wave rings centred on the location icon.
+        // They are drawn first so the pin remains crisp and readable.
+        ctx.save();
+        ctx.lineCap = 'round';
+        for (var ring = 0; ring < 3; ring++) {
+            var phase = ((elapsed % 1050) / 1050 + ring / 3) % 1;
+            var radius = 12 + phase * 31;
+            var alpha = (1 - phase) * 0.72;
+            ctx.beginPath();
+            ctx.arc(x, pinCenterY - 2, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(25, 169, 255, ' + alpha.toFixed(3) + ')';
+            ctx.lineWidth = Math.max(1, 2.8 - phase * 1.4);
+            ctx.shadowColor = 'rgba(25,169,255,0.55)';
+            ctx.shadowBlur = 8;
+            ctx.stroke();
+        }
+
+        // A subtle target ripple sits directly on the first root MAIN candle.
+        var targetPulse = 7 + (1 + Math.sin(elapsed / 115)) * 3;
+        ctx.beginPath();
+        ctx.arc(x, targetY, targetPulse, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 212, 0, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(255,212,0,0.8)';
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+
+        // Classic map pin: its pointed tip lands on the actual root main candle.
+        ctx.beginPath();
+        ctx.moveTo(x, targetY + 1);
+        ctx.bezierCurveTo(x - 7, targetY - 11, x - 18, pinCenterY + 15, x - 18, pinCenterY);
+        ctx.bezierCurveTo(x - 18, pinCenterY - 10, x - 10, pinCenterY - 18, x, pinCenterY - 18);
+        ctx.bezierCurveTo(x + 10, pinCenterY - 18, x + 18, pinCenterY - 10, x + 18, pinCenterY);
+        ctx.bezierCurveTo(x + 18, pinCenterY + 15, x + 7, targetY - 11, x, targetY + 1);
+        ctx.closePath();
+        ctx.fillStyle = '#159DFA';
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = 'rgba(0,0,0,0.78)';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.stroke();
+
+        // White centre makes the map-pin symbol legible at every chart zoom.
+        ctx.beginPath();
+        ctx.arc(x, pinCenterY, 6.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = 'rgba(0,0,0,0.45)';
+        ctx.shadowBlur = 3;
+        ctx.fill();
+
+        // Small hovering cursor pointer aimed at the location pin.
+        var cursorX = x + 23;
+        var cursorY = pinCenterY - 29 + Math.sin(elapsed / 190) * 2;
+        ctx.beginPath();
+        ctx.moveTo(cursorX, cursorY);
+        ctx.lineTo(cursorX + 1, cursorY + 22);
+        ctx.lineTo(cursorX + 7, cursorY + 16);
+        ctx.lineTo(cursorX + 13, cursorY + 26);
+        ctx.lineTo(cursorX + 18, cursorY + 23);
+        ctx.lineTo(cursorX + 12, cursorY + 13);
+        ctx.lineTo(cursorX + 21, cursorY + 12);
+        ctx.closePath();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#14202B';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(0,0,0,0.65)';
+        ctx.shadowBlur = 5;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+
     function ptDrawLocateArrow(geo) {
         var a = PT_LOCATE_ARROW;
         if (!a) return;
@@ -6511,6 +6581,13 @@ try {
         if (now >= a.expiresAt) {
             PT_LOCATE_ARROW = null;
             ptStopLocateArrowAnimation();
+            return;
+        }
+
+        // Setup-only requests share the original trade locate state and camera
+        // calculations but use the animated location-pin indicator, never a trade arrow.
+        if (a.markerType === 'setup') {
+            ptDrawLocateSetupMarker(geo, a, now);
             return;
         }
 
@@ -6601,7 +6678,7 @@ try {
     }
 
     // Close the records modal, zoom to the full trade area, and point to its entry trigger.
-    window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe,familySignature){
+    window.ptLocateTrade=function(rootId,familyNumber,sourceTimeframe,familySignature,setupGroupId){
         // The argument may be an already-resolved chart trade object. Analytics
         // uses this path after an exact trade identity lookup; legacy chart buttons
         // may continue using the four-argument form below.
@@ -6621,6 +6698,7 @@ try {
                 if (familySignature) return String(t.familySignature || '') === String(familySignature) &&
                     (!sourceTimeframe || String(t.sourceTimeframe || '').toLowerCase() === String(sourceTimeframe).toLowerCase());
                 return Number(t.familyNumber) === Number(familyNumber) &&
+                    Number(t.setupGroupId || 1) === Number(setupGroupId || 1) &&
                     (!sourceTimeframe || String(t.sourceTimeframe || '').toLowerCase() === String(sourceTimeframe).toLowerCase());
             });
         }
@@ -6696,11 +6774,15 @@ try {
             priceMin -= pricePad; priceMax += pricePad;
         }
 
-        // Infer direction from stop-loss versus entry:
-        // SL above entry => sell/down; SL below entry => buy/up.
+        // The configured order type is authoritative for the arrow approach:
+        // SELL enters from above and points down; BUY enters from below and points up.
+        // Keep the original SL-vs-entry inference only for legacy records with no order type.
+        var normalizedLocateOrder = String(trade.orderType || '').toLowerCase().trim();
+        var isExplicitSell = normalizedLocateOrder.indexOf('sell') === 0;
+        var isExplicitBuy = normalizedLocateOrder.indexOf('buy') === 0;
         var isSell = slPrice > entryPrice;
         var isBuy = slPrice < entryPrice;
-        var direction = isSell ? 'down' : (isBuy ? 'up' : (String(trade.orderType || '').toLowerCase().indexOf('sell') === 0 ? 'down' : 'up'));
+        var direction = isExplicitSell ? 'down' : (isExplicitBuy ? 'up' : (isSell ? 'down' : (isBuy ? 'up' : 'up')));
         var targetIndex = hasStoplossTrigger ? slTriggerIndex : entryIndex;
         var targetPrice = (anchorOnly && !hasStoplossTrigger) ? entryPrice : slPrice;
         if (hasStoplossTrigger) {
@@ -6736,6 +6818,7 @@ try {
             priceMin: priceMin,
             priceMax: priceMax,
             direction: direction,
+            markerType: trade.setupLocation === true ? 'setup' : 'trade',
             startedAt: Date.now(),
             expiresAt: Date.now() + 4000
         };
@@ -6765,8 +6848,9 @@ try {
         var roots=configuredRoots.filter(function(root){
             if(root.applyToChart===false || root.applyToChart===0 || root.applyToChart==='0') return false;
             var nativeMatch = ptNormTfList(root).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
-            var confirmationMatch = root.tradeFor === 'root_confirmation' && ptGetConfirmationRoots(root).some(function(cr){
-                return cr && cr.useForTrades && (cr.timeframes || []).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0;
+            var confirmationMatch = ptGetConfirmationRoots(root).some(function(cr){
+                return cr && (cr.timeframes || []).map(function(tf){return String(tf).toLowerCase();}).indexOf(currentTf)>=0 &&
+                    Array.isArray(cr.trees) && cr.trees.length > 0;
             });
             return nativeMatch || confirmationMatch;
         });
@@ -6776,8 +6860,16 @@ try {
                 rootIds.has(String(t.rootId));
         });
         var guidance = ptConfirmationTradeGuidance();
+        function rootSetupsFor(root){
+            var mainSetups = Array.isArray(root._drawMatches) ? root._drawMatches.slice() : [];
+            if (mainSetups.length) return mainSetups;
+            return (Array.isArray(root._confirmationDrawMatches) ? root._confirmationDrawMatches : []).filter(function(m){
+                return String(m.sourceTimeframe || m.timeframe || '').toLowerCase() === currentTf;
+            });
+        }
+        var totalSetupsFound = roots.reduce(function(sum,root){ return sum + rootSetupsFor(root).length; },0);
         var subtitle = document.querySelector('#ptRootsDataTitle') && document.querySelector('#ptRootsDataTitle').parentElement ? document.querySelector('#ptRootsDataTitle').parentElement.querySelector('.pt-dynamic-console-subtitle') : null;
-        if (subtitle) subtitle.textContent = guidance ? ('Matched root families and entry/exit trigger records.\n' + guidance) : 'Matched root families and their entry/exit trigger records';
+        if (subtitle) subtitle.textContent = guidance ? ('Matched root setups and entry/exit trigger records. ' + guidance) : 'Matched root setups, including setups without trade configuration.';
         function fmtRR(value){return Number(value).toLocaleString(undefined,{maximumFractionDigits:3});}
         function closed(items){return items.filter(function(t){return t.outcome==='stoploss hit'||t.outcome==='take profit reached';}).sort(function(a,b){
             var ai=a.slTriggerIndex!=null?a.slTriggerIndex:(a.tpTriggerIndex!=null?a.tpTriggerIndex:(a.triggerIndex!=null?a.triggerIndex:a.entryIndex));
@@ -6816,7 +6908,7 @@ try {
                 }
                 equity += tradeR;
                 currentVirtualBalance = equity;
-                activeDrawdownTrades.push({label:tradeR<0?'-1R':'+'+fmtRR(tradeR)+'RR',value:tradeR,outcome:t.outcome,rootId:t.rootId,familyNumber:t.familyNumber});
+                activeDrawdownTrades.push({label:tradeR<0?'-1R':'+'+fmtRR(tradeR)+'RR',value:tradeR,outcome:t.outcome,rootId:t.rootId,familyNumber:t.familyNumber,setupGroupId:t.setupGroupId||1});
                 // Highest drawdown remains measured against the 100% baseline and can recover.
                 var dd=Math.max(0,100-equity);
                 if(dd>maxDrawdown){
@@ -6832,7 +6924,7 @@ try {
                     highestRevenuePeakTrades=activeDrawdownTrades.slice();
                 }
                 if(equity<=0 && accountLostAt===null){
-                    accountLostAt='Root '+String(t.rootId!=null?t.rootId:'?')+' · Trade '+String(t.familyNumber!=null?t.familyNumber:'?');
+                    accountLostAt='Root '+String(t.rootId!=null?t.rootId:'?')+' · Setup '+String(t.familyNumber!=null?t.familyNumber:'?')+' · Group '+String(t.setupGroupId||1);
                 }
                 if(equity>=100) activeDrawdownTrades=[];
             });
@@ -6861,23 +6953,23 @@ try {
                     var tf=ptEscapeHtml(t.sourceTimeframe||t.timeframe||'');
                     var confirmationName=t.confirmationRootName?' · '+ptEscapeHtml(t.confirmationRootName):'';
                     var chipClass=outcome==='stoploss hit'?'loss':(outcome==='take profit reached'?'profit':(outcome==='in trade'?'profit':'pending'));
-                    return '<button type="button" class="pt-dd-chip '+chipClass+'" title="Locate Root '+rootId+' · Family '+family+' on chart" onclick="ptLocateTrade(\''+rootId+'\','+family+',\''+tf+'\')">Root '+rootId+' · Family #'+ptEscapeHtml(family)+confirmationName+'</button>';
+                    return '<button type="button" class="pt-dd-chip '+chipClass+'" title="Locate Root '+rootId+' · Setup '+family+' · Group '+Number(t.setupGroupId||1)+' on chart" onclick="ptLocateTrade(\''+rootId+'\','+family+',\''+tf+'\',\'\','+Number(t.setupGroupId||1)+')">Root '+rootId+' · Setup #'+ptEscapeHtml(family)+' · Group '+Number(t.setupGroupId||1)+confirmationName+'</button>';
                 }).join('')+'</div>'
                 : '<div class="pt-dd-empty">No trades in this category.</div>';
             return '<div class="pt-rd-stat '+cls+' pt-rd-drawdown-card" id="'+key+'">'+
-                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+matched.length+'</div><div class="pt-rd-stat-label">'+(matched.length===1?'1 trade family':matched.length+' trade families')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid '+icon+'"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">'+label+'</div><div class="pt-rd-stat-value">'+matched.length+'</div><div class="pt-rd-stat-label">'+(matched.length===1?'1 trade setup':matched.length+' trade setups')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
                 '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">'+label+' trades</div>'+sequenceHtml+
-                '<div class="pt-dd-totals"><div><span>Trade families</span><strong>'+matched.length+'</strong></div><div><span>Status</span><strong>'+ptEscapeHtml(label)+'</strong></div></div>'+
+                '<div class="pt-dd-totals"><div><span>Trade setups</span><strong>'+matched.length+'</strong></div><div><span>Status</span><strong>'+ptEscapeHtml(label)+'</strong></div></div>'+
                 '</div></div>';
         }
         function drawdownCard(x,scopeKey){
             var key='pt-dd-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
             var sequenceHtml=x.highestDrawdownTrades.length
-                ? '<div class="pt-dd-sequence">'+x.highestDrawdownTrades.map(function(t){return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Family '+ptEscapeHtml(t.familyNumber)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';}).join('')+'</div>'
+                ? '<div class="pt-dd-sequence">'+x.highestDrawdownTrades.map(function(t){return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Setup '+ptEscapeHtml(t.familyNumber)+' · Group '+ptEscapeHtml(t.setupGroupId||1)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\'\',\'\','+Number(t.setupGroupId||1)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';}).join('')+'</div>'
                 : '<div class="pt-dd-empty">No drawdown sequence has been recorded.</div>';
             var rewards=(x.highestDrawdownRewards>=0?'+':'')+fmtRR(x.highestDrawdownRewards)+'R';
             return '<div class="pt-rd-stat loss pt-rd-drawdown-card" id="'+key+'">'+
-                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-chart-line"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Drawdown</div><div class="pt-rd-stat-value">'+fmtRR(x.maxDrawdown)+'%</div><div class="pt-rd-stat-label">'+ptEscapeHtml(x.accountLostAt?'Account exhausted at '+x.accountLostAt:'Fixed 100% balance ceiling · wins restore balance but never exceed 100%')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-chart-line"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Drawdown</div><div class="pt-rd-stat-value">'+fmtRR(x.maxDrawdown)+'%</div><div class="pt-rd-stat-label">'+ptEscapeHtml(x.accountLostAt?'Account exhausted at '+x.accountLostAt:'Drawdown from the starting balance, offset by subsequent gains')+'</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
                 '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">Trades making up the highest drawdown</div>'+sequenceHtml+
                 '<div class="pt-dd-totals"><div><span>Lost risks</span><strong>'+fmtRR(x.highestDrawdownLostRisks)+'R</strong></div><div><span>Risk rewards</span><strong>'+rewards+'</strong></div></div>'+
                 '</div></div>';
@@ -6886,13 +6978,13 @@ try {
             var key='pt-peak-'+String(scopeKey).replace(/[^a-zA-Z0-9_-]/g,'-');
             var sequenceHtml=x.highestRevenuePeakTrades.length
                 ? '<div class="pt-dd-sequence">'+x.highestRevenuePeakTrades.map(function(t){
-                    return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Family '+ptEscapeHtml(t.familyNumber)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
+                    return '<button type="button" class="pt-dd-chip '+(t.value<0?'loss':'profit')+'" title="Locate Root '+ptEscapeHtml(t.rootId)+' · Setup '+ptEscapeHtml(t.familyNumber)+' · Group '+ptEscapeHtml(t.setupGroupId||1)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\'\',\'\','+Number(t.setupGroupId||1)+')">'+ptEscapeHtml(t.label)+' <span aria-hidden="true">#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
                   }).join('')+'</div>'
-                : '<div class="pt-dd-empty">No profitable peak above the initial 100% balance has been recorded.</div>';
+                : '<div class="pt-dd-empty">No positive growth peak has been recorded.</div>';
             return '<div class="pt-rd-stat profit pt-rd-drawdown-card" id="'+key+'">'+
-                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-arrow-trend-up"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Revenue Peak</div><div class="pt-rd-stat-value">+'+fmtRR(x.highestRevenuePeak)+'%</div><div class="pt-rd-stat-label">Highest balance reached: '+fmtRR(x.highestPeakBalance)+'%</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
+                '<div class="pt-dd-cover"><span class="pt-rd-stat-icon"><i class="fa-solid fa-arrow-trend-up"></i></span><div class="pt-dd-content"><div class="pt-rd-stat-label">Highest Revenue Peak</div><div class="pt-rd-stat-value">'+fmtRR(x.highestRevenuePeak)+'%</div><div class="pt-rd-stat-label">Peak growth above the starting balance</div><button type="button" class="pt-dd-button" onclick="ptToggleDrawdown(\''+key+'\',true)">See trades</button></div></div>'+
                 '<div class="pt-dd-details" hidden><button type="button" class="pt-dd-button secondary pt-dd-back" onclick="ptToggleDrawdown(\''+key+'\',false)">Back</button><div class="pt-dd-detail-heading">Trades contributing to the highest revenue peak</div>'+sequenceHtml+
-                '<div class="pt-dd-totals"><div><span>Peak revenue above 100%</span><strong>+'+fmtRR(x.highestRevenuePeak)+'%</strong></div><div><span>Peak balance</span><strong>'+fmtRR(x.highestPeakBalance)+'%</strong></div></div>'+
+                '<div class="pt-dd-totals"><div><span>Peak growth</span><strong>'+fmtRR(x.highestRevenuePeak)+'%</strong></div><div><span>Growth at peak</span><strong>'+fmtRR(x.highestRevenuePeak)+'%</strong></div></div>'+
                 '</div></div>';
         }
         window.ptToggleDrawdown=function(key,showDetails){
@@ -6935,7 +7027,7 @@ try {
             if(!items.length)return '<div class="pt-dd-empty">No closed trades in this period.</div>';
             return '<div class="pt-dd-sequence">'+items.map(function(t){
                 var v=ptTradeValue(t),label=v<0?'-1R':'+'+fmtRR(v)+'R';
-                return '<button type="button" class="pt-dd-chip '+(v<0?'loss':'profit')+'" title="Locate trade '+t.familyNumber+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+')">'+ptEscapeHtml(label)+' <span>#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
+                return '<button type="button" class="pt-dd-chip '+(v<0?'loss':'profit')+'" title="Locate setup '+t.familyNumber+' group '+(t.setupGroupId||1)+' on chart" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\'\',\'\','+Number(t.setupGroupId||1)+')">'+ptEscapeHtml(label)+' <span>#'+ptEscapeHtml(t.familyNumber)+'</span></button>';
             }).join('')+'</div>';
         }
         function ptPeriodCard(title,items,rangeLabel,buttonHtml){
@@ -7021,16 +7113,16 @@ try {
             window.PT_PROVISION_ITEMS=window.PT_PROVISION_ITEMS||{};window.PT_PROVISION_ITEMS[scopeKey]=items.slice();
             return '<button type="button" class="pt-dd-button pt-provision-toggle" onclick="ptProvisionToggle(\''+scopeKey+'\',true)">Trades Provision</button>'+
                 '<div id="pt-summary-'+key+'"><div class="pt-rd-dashboard">'+
-                card('Total Trades',x.total,'pending','fa-list-check','Total matched families')+
+                card('Total Trades',x.total,'pending','fa-list-check','Total matched setups')+
                 statusCard('Stoploss hit',items,'stoploss hit','loss','fa-arrow-trend-down',scopeKey)+
-                card('Lost Risks',fmtRR(x.lostR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+x.sl+' losing families')+
+                card('Lost Risks',fmtRR(x.lostR)+'R','loss','fa-shield-halved','Each stoploss = −1R · '+x.sl+' losing trades')+
                 statusCard('Profit reached',items,'take profit reached','profit','fa-arrow-trend-up',scopeKey)+
-                card('Risk rewards',(x.winsR>=0?'+':'')+fmtRR(x.winsR)+'R','profit','fa-gift','Sum of '+x.tp+' winning families')+
+                card('Risk rewards',(x.winsR>=0?'+':'')+fmtRR(x.winsR)+'R','profit','fa-gift','Sum of '+x.tp+' winning trades')+
                 card('Win rate',fmtRR(x.winRate)+'%','active','fa-bullseye',x.tp+' wins / '+x.closed+' closed')+
                 card('Consecutive Loss',x.maxLoss,'loss','fa-arrow-trend-down','Longest losing streak before a profitable trade')+
                 card('Consecutive Win',x.maxWin,'profit','fa-trophy','Longest winning streak without a stoploss')+
                 drawdownCard(x,scopeKey)+highestRevenuePeakCard(x,scopeKey)+
-                card('Current virtual balance',fmtRR(x.currentVirtualBalance)+'%',x.currentVirtualBalance>=100?'profit':'loss','fa-scale-balanced','100% baseline − all lost risks + all profitable risk rewards')+
+                card('Growth',fmtRR(x.currentVirtualBalance-100)+'%',x.currentVirtualBalance>=100?'profit':'loss','Net gain or loss from the starting balance')+
                 statusCard('Pending entries',items,'pending entry','pending','fa-hourglass-half',scopeKey)+
                 statusCard('In trade',items,'in trade','active','fa-chart-line',scopeKey)+'</div></div>'+
                 '<div class="pt-provision-panel" id="pt-provision-'+key+'" hidden><div class="pt-provision-nav"><strong>Trades Provision</strong><button type="button" class="pt-dd-button secondary" onclick="ptProvisionToggle(\''+scopeKey+'\',false)">Back to summary</button></div></div>';
@@ -7042,20 +7134,33 @@ try {
         if(!roots.length){
             html='<div class="pt-rd-empty">No root data for '+ptEscapeHtml(PT_CURRENT_SYMBOL)+' · '+ptEscapeHtml(PT_CURRENT_TIMEFRAME)+'. The currently viewed timeframe is not configured in any active root.</div>';
             body.innerHTML=html;
-            if(status)status.textContent='No native root data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+'. Configure this timeframe in a root to see its data here. Projection data is excluded.';
+            if(status)status.textContent='No native setup data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+'. Configure this timeframe in a root to see its data here. Projection data is excluded.';
             return;
         }
-        html+='<section class="pt-rd-global-summary"><div style="font-size:1.05rem;font-weight:800;margin:0 0 12px;display:flex;align-items:center;gap:9px"><i class="fa-solid fa-chart-pie" aria-hidden="true"></i> Global Summary <span style="font-size:.78rem;font-weight:600;color:var(--pt-muted)">· '+all.length+' native trade families across '+roots.length+' root(s)</span></div>';
+        html+='<section class="pt-rd-global-summary"><div style="font-size:1.05rem;font-weight:800;margin:0 0 12px;display:flex;align-items:center;gap:9px"><i class="fa-solid fa-chart-pie" aria-hidden="true"></i> Global Summary <span style="font-size:.78rem;font-weight:600;color:var(--pt-muted)">· '+totalSetupsFound+' setups found · '+all.length+' trade records across '+roots.length+' root(s)</span></div>';
         html+=dashboard(all,'global');
         html+='</section><div style="font-size:1.02rem;font-weight:800;margin:22px 0 12px;display:flex;align-items:center;gap:9px"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> Per-Root Summaries</div>';
         roots.forEach(function(root){
             var items=all.filter(function(t){return String(t.rootId)===String(root.id);});
+            var setups=rootSetupsFor(root);
+            var firstSetup=setups.length?setups[0]:null;
+            var firstFamily=Math.max(1,Number(firstSetup && (firstSetup.familyNumber || (firstSetup.parentFamily && firstSetup.parentFamily.familyNumber)))||1);
+            var firstGroup=Math.max(1,Number(firstSetup && (firstSetup.setupGroupId || (firstSetup.parentFamily && firstSetup.parentFamily.setupGroupId)))||1);
+            var setupButtons=setups.map(function(setup){
+                var family=setup && setup.parentFamily ? setup.parentFamily : setup;
+                var familyNo=Math.max(1,Number(family && family.familyNumber)||1);
+                var groupNo=Math.max(1,Number(family && family.setupGroupId)||1);
+                return '<button type="button" class="pt-dd-chip pending" title="Locate '+ptEscapeHtml(root.name||('Root '+root.id))+' · Setup '+familyNo+' · Group '+groupNo+' on chart" onclick="ptLocateRootSetup(\''+ptEscapeHtml(root.id)+'\','+familyNo+','+groupNo+')">Setup '+familyNo+' · Group '+groupNo+' <i class="fa-solid fa-crosshairs" aria-hidden="true"></i></button>';
+            }).join('');
             var rs=stats(items);
             // Each root's detailed summary lives inside its foldable content.
-            html+='<details class="pt-rd-root"><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+items.length+' families · <b class="is-profit">'+rs.tp+' profit</b> · <b class="is-loss">'+rs.sl+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
-            html+='<div class="pt-rd-root-stats"><span>Pending <b>'+rs.pending+'</b></span><span>In trade <b>'+rs.active+'</b></span><span>Long in trade <b>'+rs.longInTrade+'</b></span><span>Short in trade <b>'+rs.shortInTrade+'</b></span><span>Closed <b>'+rs.closed+'</b></span></div>';
-            html+=dashboard(items,'root-'+root.id);
-            if(!items.length){html+='<div class="pt-rd-empty">No complete matched trade families for this root in the current timeframe.</div>';}
+            html+='<details class="pt-rd-root"><summary><span class="pt-rd-root-title"><i class="fa-solid fa-layer-group"></i> '+ptEscapeHtml(root.name||('Root '+root.id))+'</span><span class="pt-rd-root-summary">'+setups.length+' setups · '+items.length+' trades · <b class="is-profit">'+rs.tp+' profit</b> · <b class="is-loss">'+rs.sl+' stop</b></span><i class="fa-solid fa-chevron-down pt-rd-chevron"></i></summary>';
+            html+='<div class="pt-rd-root-stats"><span>Setups found <b>'+setups.length+'</b></span><span>Pending <b>'+rs.pending+'</b></span><span>In trade <b>'+rs.active+'</b></span><span>Long in trade <b>'+rs.longInTrade+'</b></span><span>Short in trade <b>'+rs.shortInTrade+'</b></span><span>Closed <b>'+rs.closed+'</b></span></div>';
+            if(setups.length) html+='<div class="pt-dd-sequence pt-rd-setups">'+setupButtons+'</div>';
+            else html+='<button type="button" class="pt-dd-button" onclick="ptLocateRootSetup(\''+ptEscapeHtml(root.id)+'\',1,1)"><i class="fa-solid fa-crosshairs"></i> Locate root setup anchor</button>';
+            if(items.length) html+=dashboard(items,'root-'+root.id);
+            else html+='<div class="pt-rd-empty">No trades are configured for these setups. The setup count and chart location remain available above.</div>';
+            if(!setups.length){html+='<div class="pt-rd-empty">No complete matched setups were found for this root in the current timeframe. The locate action points to the first configured root main candle.</div>';}
             // Render individual trade families newest-first; analytics above retain their own chronological order.
             var displayItems=items.slice().sort(function(a,b){
                 var ai=a.triggerIndex!=null?a.triggerIndex:(a.slTriggerIndex!=null?a.slTriggerIndex:(a.tpTriggerIndex!=null?a.tpTriggerIndex:a.entryIndex));
@@ -7065,21 +7170,21 @@ try {
             displayItems.forEach(function(t){
                 var stateClass=t.outcome==='stoploss hit'?'loss':(t.outcome==='take profit reached'?'profit':(t.outcome==='in trade'?'active':'pending'));
                 var rrDisplay=(t.riskReward!==null && Number.isFinite(Number(t.riskReward)))?'1 : '+Number(t.riskReward).toLocaleString(undefined,{maximumFractionDigits:3}):'1 : unavailable';
-                html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">FAMILY '+t.familyNumber+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span>'+(t.confirmationRootName?'<span class="pt-rd-order">'+ptEscapeHtml(t.confirmationRootName)+'</span>':'')+'</div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
-                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime||'Awaiting entry trigger')+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Signals Provision risk/reward target':'Configured price level · Signals Provision policy applied')+'</small></div><div><span>Family Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
+                html+='<article class="pt-rd-trade"><div class="pt-rd-trade-head"><div><span class="pt-rd-family">SETUP '+t.familyNumber+' · GROUP '+(t.setupGroupId||1)+'</span><span class="pt-rd-order">'+ptEscapeHtml(t.orderType)+'</span>'+(t.confirmationRootName?'<span class="pt-rd-order">'+ptEscapeHtml(t.confirmationRootName)+'</span>':'')+'</div><span class="pt-rd-badge '+stateClass+'">'+ptEscapeHtml(t.outcome)+'</span></div>';
+                html+='<div class="pt-rd-metrics"><div><span>Entry price</span><strong>'+ptEscapeHtml(t.entryPrice)+'</strong><small>'+ptEscapeHtml(t.entryTime||'Awaiting entry trigger')+'</small></div><div><span>Stoploss price</span><strong>'+ptEscapeHtml(t.slPrice)+'</strong><small>'+ptEscapeHtml(t.slTime)+'</small></div><div><span>Take profit</span><strong>'+ptEscapeHtml(t.tpPrice==null?'—':t.tpPrice)+'</strong><small>'+ptEscapeHtml(t.tpType==='risk reward'?'Signals Provision risk/reward target':'Configured price level · Signals Provision policy applied')+'</small></div><div><span>Setup Risk Reward</span><strong>'+ptEscapeHtml(rrDisplay)+'</strong><small>Reward distance ÷ risk distance</small></div></div>';
                 html+='<div class="pt-rd-details"><div><span>Entry at (anchor candle)</span><b>'+ptEscapeHtml(t.entryName)+' · '+ptEscapeHtml(t.entryAtTime||'—')+'</b></div><div><span>Stoploss at</span><b>'+ptEscapeHtml(t.slName)+'</b></div>';
                 if(t.tpType==='risk reward') html+='<div><span>Take profit type</span><b>Risk/reward target</b></div>';
                 else html+='<div><span>Take profit at</span><b>'+ptEscapeHtml(t.tpName||'—')+' · '+ptEscapeHtml(t.tpTime||'—')+'</b></div>';
-                html+='<div><span>Family Risk Reward</span><b>'+ptEscapeHtml(rrDisplay)+'</b></div>';
+                html+='<div><span>Setup Risk Reward</span><b>'+ptEscapeHtml(rrDisplay)+'</b></div>';
                 html+='<div><span>Entry trigger</span><b>'+ptEscapeHtml(t.entryTriggerTime||'Waiting for trigger candle')+'</b></div>';
                 if(t.outcome==='stoploss hit')html+='<div><span>Stoploss hit</span><b>'+ptEscapeHtml(t.slTriggerTime||'—')+'</b></div>';
                 if(t.outcome==='take profit reached')html+='<div><span>Profit reached</span><b>'+ptEscapeHtml(t.tpTriggerTime||'—')+'</b></div>';
-                html+='</div><div class="pt-rd-trade-actions"><button type="button" class="pt-dd-locate" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\''+ptEscapeHtml(t.sourceTimeframe||'')+'\')"><i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Locate on chart</button></div></article>';
+                html+='</div><div class="pt-rd-trade-actions"><button type="button" class="pt-dd-locate" onclick="ptLocateTrade(\''+ptEscapeHtml(t.rootId)+'\','+Number(t.familyNumber||0)+',\''+ptEscapeHtml(t.sourceTimeframe||'')+'\',\'\','+Number(t.setupGroupId||1)+')"><i class="fa-solid fa-crosshairs" aria-hidden="true"></i> Locate on chart</button></div></article>';
             });
             html+='</details>';
         });
         body.innerHTML=html;
-        if(status)status.textContent='Native root data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+roots.length+' configured root(s), '+all.length+' matched trade families. Higher-timeframe projection data is excluded. Price-level take profit is hard-enforced to at least 1:1.';
+        if(status)status.textContent='Native root data · '+PT_CURRENT_SYMBOL+' · '+PT_CURRENT_TIMEFRAME+' · '+roots.length+' configured root(s), '+totalSetupsFound+' matched setups, '+all.length+' trade records. Higher-timeframe projection data is excluded. Price-level take profit is hard-enforced to at least 1:1.';
     };
     function ptEscapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 
@@ -7091,9 +7196,39 @@ try {
     window.ptGetVirtualCandleJson = ptGetVirtualCandleJson;
 
     // ==================== HOVER ====================
+    function ptOrderRequestMapKey(rootId, confirmationRootId, familyNumber, setupGroupId, symbol, timeframe) {
+        return [
+            String(Number(rootId) || 0),
+            String(Number(confirmationRootId) || 0),
+            String(Number(familyNumber) || 0),
+            String(Math.max(1, Number(setupGroupId) || 1)),
+            String(symbol || PT_CURRENT_SYMBOL || '').trim().toLowerCase(),
+            String(timeframe || '').trim().toLowerCase()
+        ].join('|');
+    }
+    function ptFindOrderRequestState(trade, familyInfo) {
+        var source = trade || {};
+        var family = familyInfo || {};
+        var rootId = source.rootId != null ? source.rootId : family.rootId;
+        var confirmationId = source.confirmationRootId != null ? source.confirmationRootId : family.confirmationRootId;
+        var familyNumber = source.familyNumber != null ? source.familyNumber : family.familyNumber;
+        var setupGroupId = source.setupGroupId != null ? source.setupGroupId : family.setupGroupId;
+        var symbol = source.symbol || family.symbol || PT_CURRENT_SYMBOL;
+        var timeframes = [source.timeframe, source.sourceTimeframe, family.timeframe, PT_CURRENT_TIMEFRAME];
+        var seenTimeframes = Object.create(null);
+        for (var i = 0; i < timeframes.length; i++) {
+            var tf = String(timeframes[i] || '').trim().toLowerCase();
+            if (!tf || seenTimeframes[tf]) continue;
+            seenTimeframes[tf] = true;
+            var key = ptOrderRequestMapKey(rootId, confirmationId, familyNumber, setupGroupId, symbol, tf);
+            if (PT_ORDER_REQUEST_STATES && PT_ORDER_REQUEST_STATES[key]) return PT_ORDER_REQUEST_STATES[key];
+        }
+        return null;
+    }
     var PT_HOVER_LOOKUP_INDEX = -2;
     var PT_HOVERED_FAMILY_INFO = null;
     var PT_HOVERED_TRADE_INFO = null;
+    var PT_HOVERED_ORDER_REQUEST_INFO = null;
     function ptHandleMouseMove(e) {
         if (!PT_CANVAS || !PT_CANDLES.length) return;
         if (PT_DRAG_STATE.mode) return;
@@ -7133,6 +7268,7 @@ try {
                     PT_HOVERED_TRADE_INFO = tradeRows.find(function (t) {
                         return String(t.rootId) === String(PT_HOVERED_FAMILY_INFO.rootId) &&
                             Number(t.familyNumber) === Number(PT_HOVERED_FAMILY_INFO.familyNumber) &&
+                            Number(t.setupGroupId || 1) === Number(PT_HOVERED_FAMILY_INFO.setupGroupId || 1) &&
                             (!PT_HOVERED_FAMILY_INFO.confirmationRootId || String(t.confirmationRootId || '') === String(PT_HOVERED_FAMILY_INFO.confirmationRootId));
                     }) || null;
                 }
@@ -7148,9 +7284,10 @@ try {
                         return Number.isFinite(first) && Number.isFinite(last) && idx >= Math.min(first, last) && idx <= Math.max(first, last) && !!t.minimumRiskRewardApplied;
                     }) || null;
                 }
+                PT_HOVERED_ORDER_REQUEST_INFO = ptFindOrderRequestState(PT_HOVERED_TRADE_INFO, PT_HOVERED_FAMILY_INFO);
             }
         }
-        ptShowFamilyHoverNote(PT_HOVERED_FAMILY_INFO, PT_HOVERED_TRADE_INFO, e.clientX, e.clientY);
+        ptShowFamilyHoverNote(PT_HOVERED_FAMILY_INFO, PT_HOVERED_TRADE_INFO, PT_HOVERED_ORDER_REQUEST_INFO, e.clientX, e.clientY);
         // Preserve both pointer coordinates even when there is no candle under X.
         // Candle hover lookup is used only for OHLC/time readouts and trade notes.
         var newCursorX = x;
@@ -7594,32 +7731,277 @@ try {
             String(payload.trade_type || '').toLowerCase() === 'confirmation' || confirmationId > 0;
         var requestedType = isConfirmation ? 'confirmation' : 'root';
         var timeframe = String(payload.chart_timeframe || payload.timeframe || '').trim().toLowerCase();
-        var chartTradeId = String(payload.chart_trade_id || payload.trade_id || payload.chartTradeId || '');
+        var chartTradeId = String(payload.chart_trade_id || payload.trade_id || payload.chartTradeId || '').trim();
         var familyNumber = Number(payload.family_number);
-        var familySignature = String(payload.family_signature || '');
-        var candidates;
+        var setupGroupId = Math.max(1, Number(payload.setup_group_id) || 1);
+        var familySignature = String(payload.family_signature || '').trim();
+        var requestedOrderType = String(payload.order_type || '').toLowerCase().trim();
+        requestedOrderType = /^(buy|sell)(-|$)/.test(requestedOrderType)
+            ? ptNormalizeTradeOrder(requestedOrderType) : '';
+        function applyAnalyticsOrder(record) {
+            if (!record) return null;
+            if (!requestedOrderType) return record;
+            // Use the order saved with this Analytics trade for arrow direction;
+            // preserve every original chart index, price, zoom, and animation field.
+            return Object.assign({}, record, {orderType: requestedOrderType});
+        }
+
+        // Build one candidate stream from both aliases. Some older builds keep
+        // PT_ROOT_TRADE_DATA separate from PT_MAIN_TRADE_DATA; an empty array in
+        // one must not hide populated records in the other.
+        var candidates = [];
         if (isConfirmation) {
             candidates = (Array.isArray(PT_PROJECTED_TRADE_DATA) ? PT_PROJECTED_TRADE_DATA : [])
                 .concat(Array.isArray(PT_CONFIRMATION_TRADE_DATA) ? PT_CONFIRMATION_TRADE_DATA : [])
                 .filter(function(t){ return t && t.dataMode === 'confirmation'; });
         } else {
-            candidates = Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA :
-                (Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : []);
-            candidates = candidates.filter(function(t){ return t && t.dataMode !== 'confirmation' && t.dataMode !== 'projected'; });
+            candidates = (Array.isArray(PT_MAIN_TRADE_DATA) ? PT_MAIN_TRADE_DATA : [])
+                .concat(Array.isArray(PT_ROOT_TRADE_DATA) ? PT_ROOT_TRADE_DATA : [])
+                .filter(function(t){ return t && t.dataMode !== 'confirmation' && t.dataMode !== 'projected'; });
         }
-        var exact = candidates.find(function(t) {
-            var recordType = (t.dataMode === 'confirmation' || Number(t.confirmationRootId || 0) > 0) ? 'confirmation' : 'root';
-            if (recordType !== requestedType) return false;
-            if (String(t.rootId == null ? '' : t.rootId) !== rootId) return false;
-            if (Number(t.confirmationRootId || 0) !== confirmationId) return false;
-            if (String(t.timeframe || '').toLowerCase() !== timeframe) return false;
-            var resolvedId = String(t.chartTradeId || ptBuildChartTradeId(t));
-            if (chartTradeId && resolvedId === chartTradeId) return true;
-            if (familySignature && String(t.familySignature || '') === familySignature) return true;
-            return Number.isFinite(familyNumber) && Number(t.familyNumber) === familyNumber;
+
+        // Deduplicate aliased arrays without dropping distinct chart records.
+        var seenObjects = new Set();
+        candidates = candidates.filter(function(t){
+            if (seenObjects.has(t)) return false;
+            seenObjects.add(t);
+            return true;
         });
-        return exact || null;
+
+        // First constrain by the immutable chart context. Group and family
+        // numbers are deliberately NOT used yet: older Analytics rows may have
+        // been assigned group IDs in reverse chronological order by the first
+        // group migration. family_signature is the stronger candle-ID identity.
+        var base = candidates.filter(function(t){
+            var recordType = (t.dataMode === 'confirmation' || Number(t.confirmationRootId || 0) > 0) ? 'confirmation' : 'root';
+            return recordType === requestedType &&
+                String(t.rootId == null ? '' : t.rootId) === rootId &&
+                Number(t.confirmationRootId || 0) === confirmationId &&
+                String(t.timeframe || '').toLowerCase() === timeframe;
+        });
+        if (!base.length) return null;
+
+        // A signature consists of the matched candle-record IDs for the family.
+        // It stays stable if family_number/setup_group_id has to be repaired.
+        if (familySignature) {
+            var signatureMatches = base.filter(function(t){
+                return String(t.familySignature || '').trim() === familySignature;
+            });
+            if (signatureMatches.length === 1) return applyAnalyticsOrder(signatureMatches[0]);
+            if (signatureMatches.length > 1) base = signatureMatches;
+        }
+
+        // Prefer the exact canonical group-aware ID when available.
+        var idMatches = base.filter(function(t){
+            var resolvedId = String(t.chartTradeId || ptBuildChartTradeId(t));
+            return chartTradeId !== '' && resolvedId === chartTradeId;
+        });
+        if (idMatches.length === 1) return applyAnalyticsOrder(idMatches[0]);
+        if (idMatches.length > 1) base = idMatches;
+
+        // Legacy fallback: exact root + confirmation + timeframe + group + setup.
+        // Return only a unique record; never silently choose the first of several.
+        var grouped = base.filter(function(t){
+            return Number(t.familyNumber) === familyNumber &&
+                Number(t.setupGroupId || 1) === setupGroupId;
+        });
+
+        function timeKey(value) {
+            if (value == null || value === '') return '';
+            return String(value).replace('T',' ').slice(0,16);
+        }
+        function narrowWhenAvailable(rows, predicate) {
+            var matched = rows.filter(predicate);
+            return matched.length ? matched : rows;
+        }
+        if (grouped.length > 1) {
+            var anchor = timeKey(payload.entry_anchor_time);
+            var trigger = timeKey(payload.entry_trigger_time);
+            if (anchor) grouped = narrowWhenAvailable(grouped, function(t){ return timeKey(t.entryAtTime || t.entryAnchorTime) === anchor; });
+            if (trigger) grouped = narrowWhenAvailable(grouped, function(t){ return timeKey(t.entryTriggerTime) === trigger; });
+            var requestedOrder = String(payload.order_type || '').toLowerCase().trim();
+            if (requestedOrder) {
+                grouped = narrowWhenAvailable(grouped, function(t){
+                    return ptNormalizeTradeOrder(t.orderType || 'buy') === ptNormalizeTradeOrder(requestedOrder);
+                });
+            }
+        }
+        if (grouped.length === 1) return applyAnalyticsOrder(grouped[0]);
+
+        // Last safe fallback supports older Analytics rows that lack a group ID,
+        // but only when their timestamps/order identify exactly one chart trade.
+        var sameFamily = base.filter(function(t){ return Number(t.familyNumber) === familyNumber; });
+        if (sameFamily.length > 1) {
+            var anchorTime = timeKey(payload.entry_anchor_time);
+            var triggerTime = timeKey(payload.entry_trigger_time);
+            if (anchorTime) sameFamily = narrowWhenAvailable(sameFamily, function(t){ return timeKey(t.entryAtTime || t.entryAnchorTime) === anchorTime; });
+            if (triggerTime) sameFamily = narrowWhenAvailable(sameFamily, function(t){ return timeKey(t.entryTriggerTime) === triggerTime; });
+            var order = String(payload.order_type || '').toLowerCase().trim();
+            if (order) sameFamily = narrowWhenAvailable(sameFamily, function(t){
+                return ptNormalizeTradeOrder(t.orderType || 'buy') === ptNormalizeTradeOrder(order);
+            });
+        }
+        return sameFamily.length === 1 ? applyAnalyticsOrder(sameFamily[0]) : null;
     }
+
+    // Setup locating deliberately delegates to the original trade locator.
+    // A setup is represented as a pending-entry anchor on its first root MAIN
+    // candle. It retains the exact trade-locate zoom, expansion, centring,
+    // price-window, crosshair and animation calculations; only the rendered
+    // indicator changes from a trade arrow to a pulsing location pin.
+    function ptLocateSetupCandle(candleIndex, rootId, familyNumber, setupGroupId, root) {
+        var index = Number(candleIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= PT_CANDLES.length) return false;
+
+        var candle = PT_CANDLES[index];
+        if (!candle) return false;
+
+        // Use the candle body centre as the pending anchor price, so the arrow
+        // identifies the actual main candle rather than a fabricated trade entry.
+        var openPrice = Number(candle.open);
+        var closePrice = Number(candle.close);
+        var entryPrice = Number.isFinite(openPrice) && Number.isFinite(closePrice)
+            ? (openPrice + closePrice) / 2
+            : closePrice;
+        if (!Number.isFinite(entryPrice)) {
+            var highPrice = Number(candle.high);
+            var lowPrice = Number(candle.low);
+            entryPrice = Number.isFinite(highPrice) && Number.isFinite(lowPrice)
+                ? (highPrice + lowPrice) / 2
+                : NaN;
+        }
+        if (!Number.isFinite(entryPrice)) return false;
+
+        // The original ptLocateTrade() derives arrow direction from SL versus
+        // entry: buy -> up (SL below entry), sell -> down (SL above entry).
+        // For a setup-only anchor, use the root's configured order and this
+        // candle's corresponding extreme to preserve that exact direction rule.
+        var orderType = String(
+            (root && (root.orderType || root.entryOrderType || root.order_type || root.entry_order_type)) || 'buy'
+        ).toLowerCase().trim();
+        var isSell = orderType.indexOf('sell') === 0;
+        var slPrice = isSell ? Number(candle.high) : Number(candle.low);
+
+        // Keep a valid directional comparison when candle OHLC data is partial.
+        // If the candle has no wick on the chosen side, ptLocateTrade() falls
+        // back to orderType to determine the same up/down arrow direction.
+        if (!Number.isFinite(slPrice)) slPrice = entryPrice;
+
+        var setupAnchorTrade = {
+            rootId: String(rootId == null ? '' : rootId),
+            familyNumber: Math.max(1, Number(familyNumber) || 1),
+            setupGroupId: Math.max(1, Number(setupGroupId) || 1),
+            timeframe: String(PT_CURRENT_TIMEFRAME || '').toLowerCase(),
+            sourceTimeframe: String(PT_CURRENT_TIMEFRAME || '').toLowerCase(),
+            dataMode: 'main',
+            orderType: orderType,
+            setupLocation: true,
+            entryAtIndex: index,
+            entrySourceIndex: index,
+            // No execution trigger exists for a setup-only location. The
+            // original locator therefore uses entryAtIndex as a pending anchor.
+            entryIndex: null,
+            triggerIndex: null,
+            entryPrice: entryPrice,
+            slPrice: slPrice
+        };
+
+        // Do not duplicate or customize the old arrow/zoom logic here.
+        // Route setup locating through the same exact method as trade locating.
+        return window.ptLocateTrade(setupAnchorTrade) === true;
+    }
+
+    // Locate a setup using the first configured tree's MAIN candle mapping.
+    // For confirmation setups, use the parentFamily mapping so the arrow still
+    // lands on the first main candle belonging to the main root.
+    function ptLocateAnalyticsSetup(payload) {
+        payload = payload || {};
+        var rootId = String(payload.root_id == null ? '' : payload.root_id);
+        var familyNumber = Math.max(1, Number(payload.family_number) || 1);
+        var setupGroupId = Math.max(1, Number(payload.setup_group_id) || 1);
+        var confirmationId = Number(payload.confirmation_root_id || 0);
+        var cfg = typeof window.ptGetTrainingConfiguration === 'function' ? window.ptGetTrainingConfiguration() : null;
+        var roots = cfg && Array.isArray(cfg.roots) ? cfg.roots : [];
+        var root = roots.find(function (r) { return String(r.id) === rootId; });
+        if (!root || !Array.isArray(PT_CANDLES) || !PT_CANDLES.length) return false;
+
+        var trees = (root.trees || []).slice().sort(function (a, b) {
+            return Number(a.id) - Number(b.id);
+        });
+        var firstTree = trees.length ? trees[0] : null;
+        var firstMain = firstTree && firstTree.main ? firstTree.main : null;
+        if (!firstMain) return false;
+
+        // This is the canonical identity for the first main candle in the root.
+        var mainKey = String(firstMain.selectedExistingId || firstMain.offsetTo || firstMain.id || '');
+        if (!mainKey) return false;
+
+        var matches = [];
+        if (confirmationId > 0) {
+            matches = (root._confirmationDrawMatches || []).filter(function (m) {
+                return Number(m.confirmationRootId || 0) === confirmationId;
+            });
+            if (!matches.length) {
+                (root.confirmations || []).forEach(function (cr) {
+                    if (Number(cr.id) === confirmationId && Array.isArray(cr._confirmationDrawMatches)) {
+                        matches = matches.concat(cr._confirmationDrawMatches);
+                    }
+                });
+            }
+        }
+        // Main-root setup requests use _drawMatches. For a confirmation request,
+        // parentFamily below resolves back to the same main-root occurrence.
+        if (!matches.length) matches = Array.isArray(root._drawMatches) ? root._drawMatches : [];
+
+        var matched = matches.find(function (m) {
+            var family = m && m.parentFamily ? m.parentFamily : m;
+            return family && Number(family.familyNumber) === familyNumber &&
+                Number(family.setupGroupId || 1) === setupGroupId;
+        });
+        var mappedFamily = matched ? (matched.parentFamily || matched) : null;
+        var candleIndex = -1;
+
+        // Prefer the actual matched first-tree main candle ID from the match's
+        // condition record. This is more reliable than treating the UI's config ID
+        // as the generated matched-candle ID.
+        if (mappedFamily && Array.isArray(mappedFamily.conditions)) {
+            var firstMainCondition = mappedFamily.conditions.find(function (condition) {
+                return String(condition.treeId) === String(firstTree.id) &&
+                    String(condition.rootId == null ? rootId : condition.rootId) === rootId &&
+                    condition.mainCandleId != null;
+            });
+            if (firstMainCondition) {
+                candleIndex = PT_CANDLES.findIndex(function (c) {
+                    return c && String(c.id) === String(firstMainCondition.mainCandleId);
+                });
+            }
+        }
+
+        // Use the match map when older match records do not have condition IDs.
+        if ((!Number.isInteger(candleIndex) || candleIndex < 0) && mappedFamily && mappedFamily.map &&
+            Object.prototype.hasOwnProperty.call(mappedFamily.map, mainKey)) {
+            candleIndex = Number(mappedFamily.map[mainKey]);
+        }
+
+        // If no match exists (the Root Data empty-state action), locate the first
+        // configured root main candle itself rather than a made-up family/trade.
+        if (!Number.isInteger(candleIndex) || candleIndex < 0 || candleIndex >= PT_CANDLES.length) {
+            candleIndex = PT_CANDLES.findIndex(function (c) { return c && String(c.id) === mainKey; });
+        }
+        if (!Number.isInteger(candleIndex) || candleIndex < 0 || candleIndex >= PT_CANDLES.length) return false;
+
+        return ptLocateSetupCandle(candleIndex, rootId, familyNumber, setupGroupId, root);
+    }
+
+    window.ptLocateRootSetup = function(rootId, familyNumber, setupGroupId) {
+        return ptLocateAnalyticsSetup({
+            root_id: rootId,
+            family_number: familyNumber || 1,
+            setup_group_id: setupGroupId || 1,
+            confirmation_root_id: 0,
+            is_confirmation: false
+        });
+    };
 
     window.ptLocateAnalyticsFamily = function(payload) {
         payload = payload || {};
@@ -7628,17 +8010,20 @@ try {
         var confirmationPresent = Object.prototype.hasOwnProperty.call(payload, 'confirmation_root_id') &&
             payload.confirmation_root_id !== null && payload.confirmation_root_id !== '';
         var rootId = Number(payload.root_id || 0);
-        var confirmationId = confirmationPresent ? Number(payload.confirmation_root_id || 0) : NaN;
+        var confirmationId = confirmationPresent ? Number(payload.confirmation_root_id || 0) : 0;
         var familyNumber = Number(payload.family_number);
+        var setupGroupId = Math.max(1, Number(payload.setup_group_id) || 1);
         var chartTradeId = String(payload.chart_trade_id || payload.trade_id || payload.chartTradeId || '').trim();
+        var payloadHasTrade = payload.trade_configured === true || Number(payload.trade_configured || 0) === 1;
+        var setupOnly = !payloadHasTrade && (payload.locate_setup === true || payload.setup_only === true);
         var token = ++PT_ANALYTICS_LOCATE_TOKEN;
 
-        if (!symbol || !timeframe || rootId <= 0 || !confirmationPresent || !Number.isFinite(confirmationId) ||
-            !Number.isFinite(familyNumber) || familyNumber <= 0 || !chartTradeId) {
-            ptPostAnalyticsLocateResult(payload, false, 'unidentifiable', 'The trade identity is incomplete.');
+        if (!symbol || !timeframe || rootId <= 0 || !Number.isFinite(confirmationId) ||
+            !Number.isFinite(familyNumber) || familyNumber <= 0 || (!setupOnly && !chartTradeId)) {
+            ptPostAnalyticsLocateResult(payload, false, 'unidentifiable', 'The setup identity is incomplete.');
             return false;
         }
-        if (!PT_HAS_BROKER) {
+        if (!setupOnly && !PT_HAS_BROKER) {
             ptPostAnalyticsLocateResult(payload, false, 'not_found', 'Connect your broker before locating this trade.');
             return false;
         }
@@ -7661,67 +8046,183 @@ try {
             if (typeof ptUpdateSymbolLabel === 'function') ptUpdateSymbolLabel();
             if (typeof ptRenderTimeframeStrip === 'function') ptRenderTimeframeStrip();
             if (typeof ptUpdateTimeframeLabel === 'function') ptUpdateTimeframeLabel();
-            ptLoadChart();
-            ptRefreshHigherTimeframeProjection();
-        } else if ((payload.is_confirmation === true || confirmationId > 0) && !PT_PROJECTION_REFRESH_BUSY) {
+            if (ptPageCanWork()) {
+                ptLoadChart();
+            } else {
+                // The shell activates Training asynchronously after the switchTab
+                // message. Mark this as an interrupted initial load so
+                // ptResumePageWork() starts the requested symbol/timeframe as soon
+                // as the iframe becomes active instead of reusing the old candles.
+                PT_CHART_STARTED = false;
+                PT_INITIAL_LOADED = false;
+                PT_CANDLES = [];
+                PT_HAS_MORE_OLDER = true;
+                PT_IS_LOADING_OLDER = false;
+                PT_OLDER_LOAD_PENDING = false;
+            }
+        }
+
+        // Only confirmation trades need the higher-timeframe projection engine.
+        // Root trades are built directly from the visible timeframe and should not
+        // be held hostage by an unrelated background projection request.
+        var needsProjection = !setupOnly && confirmationId > 0;
+        if (needsProjection) {
+            if (changed) ptRefreshHigherTimeframeProjection(true);
+            else if (!PT_PROJECTION_REFRESH_BUSY && !PT_PROJECTION_REFRESH_PENDING) {
+                ptRefreshHigherTimeframeProjection(true);
+            }
+        } else if (setupOnly && confirmationId > 0 && changed) {
             ptRefreshHigherTimeframeProjection(true);
         }
 
-        var attempts = 0;
-        var maxAttempts = 240;
-        function candleForTradeIsMissing() {
-            var outcome = String(payload.outcome || '').trim().toLowerCase();
-            var isPending = outcome === 'pending entry';
-            var expectedTime = isPending ? String(payload.entry_anchor_time || '') : String(payload.entry_trigger_time || '');
-            if (!expectedTime) return true;
-            return ptIndexForTradeTime(expectedTime) < 0;
-        }
-        function retryLocate() {
-            if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
-            attempts++;
-            var chartSelectionMatches = String(PT_CURRENT_SYMBOL) === symbol &&
-                String(PT_CURRENT_TIMEFRAME || '').toLowerCase() === timeframe;
-            var chartReady = chartSelectionMatches && Array.isArray(PT_CANDLES) && PT_CANDLES.length > 0 && PT_INITIAL_LOADED;
-            var projectionReady = !PT_PROJECTION_REFRESH_BUSY && !PT_PROJECTION_RENDER_PASS &&
-                !PT_FAST_INTERACTION && !PT_INTERACTION_HELD;
-            if (chartSelectionMatches && PT_INITIAL_LOADED && Array.isArray(PT_CANDLES) && PT_CANDLES.length === 0 && projectionReady) {
-                ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'No candle records are available for this trade timeframe.');
-                return;
+        // The old implementation retried every 400 ms for 240 attempts (up to
+        // 96 seconds), even after the chart's candle history and match data were
+        // already complete. That made a deleted/obsolete trade appear to hang.
+        // Wait only while the requested candle is genuinely outside the history
+        // loaded so far, or while a required confirmation projection is running.
+        // As soon as the relevant history is present, perform one final chart
+        // draw and return success/not-found immediately.
+        var locateStartedAt = Date.now();
+        var locateMaxWaitMs = 7000;
+        var lookupQueued = false;
+
+        function locateTimeKey(value) {
+            if (value == null || value === '') return '';
+            var key = String(value).trim().replace('T', ' ').replace(/[./]/g, '-');
+            var parts = key.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ ](\d{1,2}):(\d{2})/);
+            if (parts) {
+                return parts[1] + '-' + String(parts[2]).padStart(2, '0') + '-' +
+                    String(parts[3]).padStart(2, '0') + ' ' + String(parts[4]).padStart(2, '0') + ':' + parts[5];
             }
-            if (chartReady && projectionReady) {
-                ptScheduleDraw();
+            return key.slice(0, 16);
+        }
+
+        function locateHistoryState() {
+            if (!Array.isArray(PT_CANDLES) || !PT_CANDLES.length) {
+                return {empty:true, wait:false};
+            }
+            var targetTime = locateTimeKey(payload.entry_anchor_time || payload.entry_trigger_time || '');
+            var oldestTime = locateTimeKey(PT_CANDLES[0] && (PT_CANDLES[0].time || PT_CANDLES[0].open_time));
+            var newestCandle = PT_CANDLES[PT_CANDLES.length - 1];
+            var newestTime = locateTimeKey(newestCandle && (newestCandle.time || newestCandle.open_time));
+            var canLoadOlder = !!(PT_HAS_MORE_OLDER || PT_IS_LOADING_OLDER || PT_OLDER_LOAD_PENDING);
+
+            // When no timestamp was supplied, only declare the lookup definitive
+            // after the chart's normal bounded history load has finished.
+            if (!targetTime || !oldestTime || !newestTime) {
+                return {empty:false, wait:canLoadOlder, covered:!canLoadOlder};
+            }
+            if (targetTime < oldestTime) {
+                return {empty:false, wait:canLoadOlder, covered:false, outOfRange:!canLoadOlder};
+            }
+            if (targetTime > newestTime) {
+                return {empty:false, wait:false, covered:false, outOfRange:true};
+            }
+            return {empty:false, wait:false, covered:true};
+        }
+
+        function finishNotFound(reason, message) {
+            if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+            ptPostAnalyticsLocateResult(payload, false, reason || 'not_found', message || 'The matching chart trade was not found.');
+        }
+
+        function runFinalLookup() {
+            if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+            if (lookupQueued) return;
+            lookupQueued = true;
+            ptScheduleDraw();
+            requestAnimationFrame(function(){
                 requestAnimationFrame(function(){
-                    requestAnimationFrame(function(){
-                        if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
-                        if (PT_PROJECTION_REFRESH_BUSY || PT_PROJECTION_RENDER_PASS || PT_FAST_INTERACTION || PT_INTERACTION_HELD) {
-                            window.setTimeout(retryLocate, 400);
-                            return;
-                        }
-                        if (candleForTradeIsMissing()) {
-                            ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'The entry trigger candle is no longer present in chart data.');
-                            return;
-                        }
-                        var trade = ptFindAnalyticsChartTrade(payload);
-                        if (trade && window.ptLocateTrade(trade) === true) {
+                    lookupQueued = false;
+                    if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+                    if (PT_FAST_INTERACTION || PT_INTERACTION_HELD || PT_PROJECTION_RENDER_PASS ||
+                        (needsProjection && (PT_PROJECTION_REFRESH_BUSY || PT_PROJECTION_REFRESH_PENDING))) {
+                        retryLocate();
+                        return;
+                    }
+                    if (setupOnly) {
+                        if (ptLocateAnalyticsSetup({
+                            root_id: rootId,
+                            confirmation_root_id: confirmationId,
+                            family_number: familyNumber,
+                            setup_group_id: setupGroupId
+                        }) === true) {
                             ptPostAnalyticsLocateResult(payload, true, '', '');
                             return;
                         }
-                        if (attempts >= maxAttempts) {
-                            ptPostAnalyticsLocateResult(payload, false, 'not_found', 'The matching chart trade was not found.');
-                            return;
-                        }
-                        window.setTimeout(retryLocate, 400);
-                    });
+                        finishNotFound('not_found', 'The matching root setup was not found on the chart.');
+                        return;
+                    }
+                    var trade = ptFindAnalyticsChartTrade(payload);
+                    if (trade && window.ptLocateTrade(trade) === true) {
+                        ptPostAnalyticsLocateResult(payload, true, '', '');
+                        return;
+                    }
+                    // One failed exact lookup is definitive once the requested
+                    // candle range and any required confirmation projection exist.
+                    finishNotFound('not_found', 'The matching chart trade was not found.');
                 });
-                return;
-            }
-            if (attempts >= maxAttempts) {
-                ptPostAnalyticsLocateResult(payload, false, 'not_found', 'Chart or projection readiness timed out.');
-                return;
-            }
-            window.setTimeout(retryLocate, 400);
+            });
         }
-        window.setTimeout(retryLocate, 100);
+
+        function retryLocate() {
+            if (token !== PT_ANALYTICS_LOCATE_TOKEN) return;
+            var elapsed = Date.now() - locateStartedAt;
+            var selectionMatches = String(PT_CURRENT_SYMBOL) === symbol &&
+                String(PT_CURRENT_TIMEFRAME || '').toLowerCase() === timeframe;
+            if (!ptPageCanWork()) {
+                if (elapsed >= locateMaxWaitMs) {
+                    finishNotFound('not_found', 'The chart did not become active in time.');
+                    return;
+                }
+                window.setTimeout(retryLocate, 50);
+                return;
+            }
+            if (!selectionMatches) {
+                finishNotFound('not_found', 'The chart selection changed before the trade could be located.');
+                return;
+            }
+
+            if (!PT_INITIAL_LOADED) {
+                if (elapsed >= locateMaxWaitMs) {
+                    finishNotFound('not_found', 'Chart data could not be loaded in time.');
+                    return;
+                }
+                window.setTimeout(retryLocate, 50);
+                return;
+            }
+
+            if (!Array.isArray(PT_CANDLES) || PT_CANDLES.length === 0) {
+                ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'No candle records are available for this setup timeframe.');
+                return;
+            }
+
+            var history = locateHistoryState();
+            if (history.empty) {
+                ptPostAnalyticsLocateResult(payload, false, 'no_chart_data', 'No candle records are available for this setup timeframe.');
+                return;
+            }
+            if (history.wait || (needsProjection && (PT_PROJECTION_REFRESH_BUSY || PT_PROJECTION_REFRESH_PENDING)) ||
+                PT_FAST_INTERACTION || PT_INTERACTION_HELD || PT_PROJECTION_RENDER_PASS) {
+                if (elapsed >= locateMaxWaitMs) {
+                    if (history.outOfRange || history.wait) {
+                        finishNotFound('no_chart_data', 'The requested candle is no longer available in the loaded chart history.');
+                    } else {
+                        finishNotFound('not_found', 'The chart could not finish preparing the requested trade.');
+                    }
+                    return;
+                }
+                window.setTimeout(retryLocate, 50);
+                return;
+            }
+            if (history.outOfRange) {
+                finishNotFound('no_chart_data', 'The requested candle is no longer available in the loaded chart history.');
+                return;
+            }
+            runFinalLookup();
+        }
+
+        window.setTimeout(retryLocate, 0);
         return true;
     };
     window.addEventListener('message', function(e) {
@@ -9754,13 +10255,7 @@ try {
             .then(function (data) {
                 if (btn) btn.disabled = false;
                 if (data && data.success) {
-                    // The database now owns this new configuration. Invalidate the
-                    // previously resolved load promise and higher-timeframe caches;
-                    // rebuilding is deferred until the modal closes and page work
-                    // resumes, so chart traffic cannot compete with modal interaction.
-                    PT_CFG_LOAD_PROMISE = null;
-                    PT_CFG_LOADED = false;
-                    PT_FORCE_PROJECTION_REFRESH_ON_RESUME = true;
+                    ptRefreshHigherTimeframeProjection();
                     setFootStatus(
                         'Saved: ' + data.meta.root_count + ' root(s), ' +
                         data.meta.tree_count + ' tree(s), ' +
@@ -10216,9 +10711,6 @@ try {
         window.ptOpenConfigModal = function () {
             var m = el('ptConfigModal');
             if (!m) return;
-            // Stop candle history, live-tail polling, live configuration polling,
-            // projection fetches and chart redraws before showing editable controls.
-            ptAcquireModalBackgroundHold('configuration-modal');
             // Fold every expanded root and render that state BEFORE the modal becomes visible.
             PT_CFG.roots.forEach(function (root) { root.expanded = false; });
             render();
@@ -10298,8 +10790,6 @@ try {
             window.ptCloseUnlockRootsModal();
             try { parent.postMessage({type:'trainingControlsOpen', open:false}, '*'); } catch(e) {}
             setFootStatus('');
-            // Resume chart/candle work after the modal has fully closed.
-            ptReleaseModalBackgroundHold('configuration-modal');
         };
         window.ptCfgAddRoot = function () {
             if (PT_ROOTS_LOCK_REQUIRED && !PT_ROOTS_UNLOCKED) return;

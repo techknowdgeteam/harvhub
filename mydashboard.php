@@ -23,7 +23,7 @@
 
     $email  = strtolower($_SESSION['user_email']);
 $tableName                 = "harvhub";
-    $serverAccountTable        = "server_account";
+    $serverRequirementsTable   = "server_requirements";
     $revenueHistoryTable       = "revenue_history";
     $vpsTable                  = "vps";
     $vpsFollowersTable         = "vps_hosts_followers";
@@ -53,6 +53,17 @@ try {
     error_log(basename(__FILE__) . ' database connection failed: ' . $e->getMessage());
     http_response_code(500);
     exit('Database connection failed. Please try again later.');
+}
+
+// Broker directory is read exclusively from the normalized relational table.
+try {
+    $serverBrokerRows = $pdo->query(
+        'SELECT id, broker_name, broker_url FROM server_brokers WHERE is_enabled = 1 ORDER BY sort_order ASC, id ASC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log('mydashboard.php server_brokers lookup failed: ' . $e->getMessage());
+    http_response_code(503);
+    exit('The broker directory is unavailable. Check the server_brokers table and database permissions.');
 }
 
     require_once __DIR__ . '/notification_service.php';
@@ -409,27 +420,21 @@ try {
             if ($broker_password === '') $errors[] = 'Password is required';
             if ($errors) { echo json_encode(['success'=>false,'errors'=>$errors]); exit; }
 
-            $allowed_brokers = [];
-            try {
-                $q = $pdo->query("SELECT brokers FROM $serverAccountTable LIMIT 1");
-                $cfg = $q->fetch(PDO::FETCH_ASSOC);
-                foreach (explode(',', $cfg['brokers'] ?? '') as $entry) {
-                    $entry = trim($entry);
-                    if ($entry === '') continue;
-                    $name = strpos($entry, ':') !== false ? trim(substr($entry, strrpos($entry, ':') + 1)) : $entry;
-                    $name = trim(preg_replace('/[^a-zA-Z0-9\s]/', '', $name));
-                    if ($name !== '') $allowed_brokers[] = ucfirst($name);
+            // Match the submitted broker against enabled rows only. The broker
+            // name is canonicalized from the table before it is saved to harvhub.
+            $matchedBrokerName = null;
+            foreach ($serverBrokerRows as $brokerRow) {
+                $configuredName = trim((string)($brokerRow['broker_name'] ?? ''));
+                if ($configuredName !== '' && strcasecmp($configuredName, $broker) === 0) {
+                    $matchedBrokerName = $configuredName;
+                    break;
                 }
-                $allowed_brokers = array_values(array_unique($allowed_brokers));
-                sort($allowed_brokers);
-            } catch (Throwable $e) {
-                echo json_encode(['success'=>false,'errors'=>['Failed to load broker configuration.']]);
-                exit;
             }
-            if (!in_array($broker, $allowed_brokers, true)) {
+            if ($matchedBrokerName === null) {
                 echo json_encode(['success'=>false,'errors'=>['Invalid broker selected.']]);
                 exit;
             }
+            $broker = $matchedBrokerName;
 
             try {
                 $dup = $pdo->prepare("
@@ -540,7 +545,7 @@ try {
         }
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM $serverAccountTable WHERE id = 1 LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM $serverRequirementsTable WHERE id = 1 LIMIT 1");
     $stmt->execute();
     $serverAccount = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -1135,93 +1140,58 @@ try {
     $serverShare   = round($profitToSplit * ($SERVER_SHARE_PERCENT / 100), 2);
     $userShare     = round($profitToSplit * ($USER_SHARE_PERCENT / 100), 2);
 
-    $brokerLink   = '';
-    $brokerLinks  = [];
-
-    if (!empty($serverAccount['brokers_link']) && !empty($serverAccount['brokers'])) {
-        $raw_links   = explode(',', $serverAccount['brokers_link']);
-        $raw_brokers = explode(',', $serverAccount['brokers']);
-
-        $cleaned_links = [];
-        foreach ($raw_links as $link) {
-            $link = trim($link);
-            if ($link === '') continue;
-
-            if (strpos($link, ':') !== false) {
-                $link = trim(substr($link, strrpos($link, ':') + 1));
-            }
-
-            if (preg_match('/([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})/', $link, $matches)) {
-                $link = $matches[1];
-            }
-
-            $link = strtolower(trim($link));
-            if (!empty($link)) $cleaned_links[] = $link;
-        }
-
-        foreach ($raw_brokers as $index => $entry) {
-            $entry = trim($entry);
-            if ($entry === '') continue;
-
-            $broker_name = (strpos($entry, ':') !== false)
-                ? trim(substr($entry, strrpos($entry, ':') + 1))
-                : $entry;
-            $broker_name = preg_replace('/[^a-zA-Z0-9\s]/', '', $broker_name);
-            $broker_name = trim($broker_name);
-            $broker_name_clean = strtolower($broker_name);
-
-            if ($broker_name === '') continue;
-
-            $formatted_name = ucfirst($broker_name);
-            $link = isset($cleaned_links[$index]) ? $cleaned_links[$index] : '';
-
-            if (empty($link)) {
-                foreach ($cleaned_links as $cleaned_link) {
-                    if (strpos($cleaned_link, $broker_name_clean) !== false) {
-                        $link = $cleaned_link;
-                        break;
-                    }
-                }
-            }
-
-            if (!isset($brokerLinks[$formatted_name])) {
-                $brokerLinks[$formatted_name] = $link;
-            }
+    // Broker URLs come directly from server_brokers; no CSV parsing or
+    // legacy broker-list or broker-link fallback is used.
+    $brokerLink = '';
+    $brokerLinks = [];
+    foreach ($serverBrokerRows as $brokerRow) {
+        $brokerName = trim((string)($brokerRow['broker_name'] ?? ''));
+        $brokerUrl = trim((string)($brokerRow['broker_url'] ?? ''));
+        if ($brokerName !== '') {
+            $brokerLinks[$brokerName] = $brokerUrl;
         }
     }
 
-    $userBrokerNormalized = strtolower(trim($broker));
+    $userBrokerNormalized = trim((string)($broker ?? ($user['broker'] ?? '')));
     $matchedLink = '';
-
-    foreach ($brokerLinks as $name => $link) {
-        if (strtolower($name) === $userBrokerNormalized) {
-            $matchedLink = $link;
+    foreach ($brokerLinks as $name => $url) {
+        if ($url !== '' && strcasecmp($name, $userBrokerNormalized) === 0) {
+            $matchedLink = $url;
             break;
         }
     }
 
-    if (empty($matchedLink)) {
-        foreach ($brokerLinks as $name => $link) {
-            if (strpos(strtolower($name), $userBrokerNormalized) !== false) {
-                $matchedLink = $link;
+    // Preserve the former display behavior when an account's broker no longer
+    // appears in the directory, while still taking every URL from the table.
+    if ($matchedLink === '' && $userBrokerNormalized !== '') {
+        foreach ($brokerLinks as $name => $url) {
+            if ($url !== '' && stripos($name, $userBrokerNormalized) !== false) {
+                $matchedLink = $url;
                 break;
             }
         }
     }
-
-    if (empty($matchedLink) && isset($brokerLinks['harvhub'])) {
-        $matchedLink = $brokerLinks['harvhub'];
+    if ($matchedLink === '') {
+        foreach ($brokerLinks as $name => $url) {
+            if (strcasecmp($name, 'HarvHub') === 0 && $url !== '') {
+                $matchedLink = $url;
+                break;
+            }
+        }
     }
-    if (empty($matchedLink) && !empty($brokerLinks)) {
-        $first = reset($brokerLinks);
-        if (!empty($first)) $matchedLink = $first;
+    if ($matchedLink === '') {
+        foreach ($brokerLinks as $url) {
+            if ($url !== '') { $matchedLink = $url; break; }
+        }
     }
 
-    if (!empty($matchedLink)) {
-        $brokerLink = (strpos($matchedLink, '://') === false) ? 'https://' . $matchedLink : $matchedLink;
+    if ($matchedLink !== '' && filter_var($matchedLink, FILTER_VALIDATE_URL)
+        && preg_match('#^https?://#i', $matchedLink)) {
+        $brokerLink = $matchedLink;
     }
-
-    $brokerTarget = !empty($brokerLink) ? htmlspecialchars($brokerLink) : 'about:blank';
+    $brokerTarget = $brokerLink !== ''
+        ? htmlspecialchars($brokerLink, ENT_QUOTES, 'UTF-8')
+        : 'about:blank';
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_balance_display'])) {
         $currentStatus = $user['balance_display'];
@@ -1819,16 +1789,12 @@ try {
             break;
     }
 
+    // Preserve the administrator-defined order from server_brokers.sort_order.
     $availableBrokers = [];
-    foreach (explode(',', $serverAccount['brokers'] ?? '') as $entry) {
-        $entry = trim($entry);
-        if ($entry === '') continue;
-        $name = strpos($entry, ':') !== false ? trim(substr($entry, strrpos($entry, ':') + 1)) : $entry;
-        $name = trim(preg_replace('/[^a-zA-Z0-9\s]/', '', $name));
-        if ($name !== '') $availableBrokers[] = ucfirst($name);
+    foreach ($serverBrokerRows as $brokerRow) {
+        $name = trim((string)($brokerRow['broker_name'] ?? ''));
+        if ($name !== '') $availableBrokers[] = $name;
     }
-    $availableBrokers = array_values(array_unique($availableBrokers));
-    sort($availableBrokers);
 
     $sessionModalState = '';
     $enrollSuccessMessage = $_SESSION['enroll_success_message'] ?? null;
