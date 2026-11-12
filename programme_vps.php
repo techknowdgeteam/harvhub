@@ -47,7 +47,44 @@ $_SESSION['active_sub_account_id'] = $activeSubAccountId;
 $fullName = $user['fullname'] ?? 'User';
 $darkMode = isset($user['dark_mode']) ? (int)$user['dark_mode'] : 0;
 $darkModeClass = ($darkMode === 1) ? 'dark-mode' : '';
-
+$pendingVpsPurchases = [];
+$myProgrammeVpsRegistration = null;
+try {
+    require_once __DIR__ . '/server_vps_schema.php';
+    serverVpsEnsureSchema($pdo);
+    require_once __DIR__ . '/vps_revocation_helpers.php';
+    vpsRevocationEnsureSchema($pdo);
+    vpsRevocationProcessExpired($pdo, 25);
+    $pendingQuery = $pdo->prepare("SELECT r.id AS request_id,r.payment_status,r.request_status,r.amount,r.currency,r.created_at,
+            COALESCE(NULLIF(rv.product_name,''),a.product_name) AS product_name,
+            COALESCE(rv.provider_name,a.provider_name) AS provider_name,
+            COALESCE(NULLIF(rv.plan_name,''),a.plan_name) AS plan_name,
+            COALESCE(rv.plan_description,a.plan_description) AS plan_description,
+            COALESCE(rv.cpu_type,a.cpu_type) AS cpu_type,COALESCE(rv.vcpu_count,a.vcpu_count,0) AS vcpu_count,
+            COALESCE(rv.ram_gb,a.ram_gb,0) AS ram_gb,COALESCE(rv.storage_type,a.storage_type) AS storage_type,
+            COALESCE(rv.storage_gb,a.storage_gb,0) AS storage_gb,
+            COALESCE(rv.network_port_speed_mbps,a.network_port_speed_mbps) AS network_port_speed_mbps,
+            COALESCE(rv.data_transfer,a.data_transfer) AS data_transfer,
+            COALESCE(NULLIF(rv.server_location,''),a.server_location) AS server_location,
+            COALESCE(rv.operating_system,a.operating_system) AS operating_system,
+            COALESCE(rv.billing_period,a.billing_period) AS billing_period,
+            COALESCE(rv.subscription_duration_days,a.subscription_duration_days) AS subscription_duration_days,
+            rv.registration_status
+        FROM server_vps_purchase_requests r
+        LEFT JOIN server_available_vps a ON a.id=r.vps_id
+        LEFT JOIN server_registered_vps rv ON rv.purchase_request_id=r.id
+        WHERE r.request_type='programme' AND r.user_id=? AND r.sub_account_id=? AND r.programme_id=?
+          AND r.payment_status IN ('awaiting_payment','payment-made','payment-confirmed')
+          AND COALESCE(r.request_status,'') <> 'revoked_expired'
+          AND NOT (r.payment_status='payment-confirmed' AND EXISTS (
+              SELECT 1 FROM programme_vps owned WHERE owned.programme_id=r.programme_id
+          ))
+        ORDER BY r.id DESC LIMIT 50");
+    $pendingQuery->execute([$userId,$activeSubAccountId,$activeProgrammeId]);
+    $pendingVpsPurchases = $pendingQuery->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $registeredError) {
+    error_log('Programme VPS purchase/provisioning status could not be loaded: '.$registeredError->getMessage());
+}
 // ==================== HELPERS ====================
 if (!function_exists('resolveProgrammeDisplayName')) {
     function resolveProgrammeDisplayName(array $p) {
@@ -113,92 +150,7 @@ if (!function_exists('countActiveProgrammeFollowers')) {
         } catch (PDOException $e) { return 0; }
     }
 }
-if (!function_exists('programmeOwnsAnyVps')) {
-    function programmeOwnsAnyVps($pdo, $userId) {
-        try {
-            $q = $pdo->prepare("
-                SELECT pv.id
-                FROM programme_vps pv
-                INNER JOIN programme p ON p.id = pv.programme_id
-                WHERE p.userid = ?
-                LIMIT 1
-            ");
-            $q->execute([$userId]);
-            return (bool)$q->fetch(PDO::FETCH_ASSOC);
-        } catch (Throwable $e) { return false; }
-    }
-}
-if (!function_exists('findUserSubAccountVps')) {
-    function findUserSubAccountVps($pdo, $userId, $mainAccountId) {
-        try {
-            // NOTE: v.* already pulls vps_ip_address, but we list it explicitly
-            // so the link helper can propagate it into programme_vps.
-            $sql = "
-                SELECT v.id, v.user_id, v.sub_account_id,
-                       v.server_location, v.subscription_duration,
-                       v.subscription_start_date,
-                       v.vps_ip_address,
-                       v.vps_provider_login, v.vps_provider_password,
-                       v.computer_username, v.computer_password,
-                       v.rdp_password,
-                       v.visibility, v.created_at, v.updated_at,
-                       h.sub_account_name, h.username, h.fullname, h.email,
-                       h.sub_account_id AS h_sub_account_id
-                FROM vps v
-                INNER JOIN harvhub h ON h.id = v.user_id AND h.sub_account_id = v.sub_account_id
-                WHERE v.user_id = ?
-            ";
-            $params = [$userId];
-            if ($mainAccountId > 0) {
-                $sql .= " AND (h.main_account_id = ? OR h.main_account_id = 0)";
-                $params[] = $mainAccountId;
-            }
-            $sql .= " LIMIT 1";
-            $q = $pdo->prepare($sql);
-            $q->execute($params);
-            return $q->fetch(PDO::FETCH_ASSOC) ?: null;
-        } catch (Throwable $e) { return null; }
-    }
-}
-
-// ==================== MODIFIED LINK HELPER ====================
-// Copies the IP address from the source vps row into the new programme_vps
-// row's programme_vps_ip_address column. The IP is stored for background
-// use only — it is never rendered in the UI.
-if (!function_exists('linkSubAccountVpsToProgramme')) {
-    function linkSubAccountVpsToProgramme($pdo, $vpsRow, $programmeId) {
-        try {
-            $chk = $pdo->prepare("SELECT id FROM programme_vps WHERE programme_id = ? LIMIT 1");
-            $chk->execute([$programmeId]);
-            if ($chk->fetch(PDO::FETCH_ASSOC)) return true;
-
-            $ins = $pdo->prepare("
-                INSERT INTO programme_vps
-                  (programme_id, user_id, sub_account_id,
-                   server_location, subscription_duration,
-                   programme_vps_ip_address,
-                   visibility)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ");
-            $ins->execute([
-                (int)$programmeId,
-                (int)$vpsRow['user_id'],
-                (int)($vpsRow['sub_account_id'] ?? 0),
-                (string)($vpsRow['server_location'] ?? ''),
-                (int)($vpsRow['subscription_duration'] ?? 0),
-                // programme_vps_ip_address — comes from vps.vps_ip_address
-                (string)($vpsRow['vps_ip_address'] ?? ''),
-                // Programme VPS visibility always starts private. The owner can
-                // explicitly change it to public from the Programme VPS settings.
-                0,
-            ]);
-            return true;
-        } catch (Throwable $e) {
-            error_log('linkSubAccountVpsToProgramme failed: ' . $e->getMessage());
-            return false;
-        }
-    }
-}
+// Programme VPS allocations are independent; account VPS records are never imported here.
 
 // ==================== CONSISTENCY HELPERS ====================
 if (!function_exists('cleanupStaleAcceptedRequests')) {
@@ -247,7 +199,8 @@ try {
         FROM programme_vps v
         INNER JOIN programme p ON p.id = v.programme_id
         INNER JOIN harvhub   h ON h.id = v.user_id
-        WHERE (v.visibility = 1 OR v.programme_id = ?)
+        WHERE v.visibility = 1
+          AND v.programme_id <> ?
         ORDER BY p.program_name ASC
     ");
     $stmt->execute([$activeProgrammeId]);
@@ -266,13 +219,18 @@ $myProgrammeVpsId = 0;
 $myProgrammeVpsVisibility = '';
 
 try {
-    $s = $pdo->prepare("SELECT id, visibility FROM programme_vps WHERE programme_id = ? LIMIT 1");
+    $s = $pdo->prepare("SELECT * FROM programme_vps WHERE programme_id = ? ORDER BY id DESC LIMIT 1");
     $s->execute([$activeProgrammeId]);
     $ownedProgrammeVpsRow = $s->fetch(PDO::FETCH_ASSOC) ?: null;
     if ($ownedProgrammeVpsRow) {
         $userOwnsProgrammeVps = true;
         $myProgrammeVpsId = (int)($ownedProgrammeVpsRow['id'] ?? 0);
         $myProgrammeVpsVisibility = (int)($ownedProgrammeVpsRow['visibility'] ?? 0);
+        $registrationQuery = $pdo->prepare("SELECT id,product_name,provider_name,plan_name,vcpu_count,ram_gb,storage_type,storage_gb,server_location,operating_system,subscription_duration_days,currency,price,registration_status FROM server_registered_vps
+            WHERE request_type='programme' AND (programme_vps_id=? OR (user_id=? AND sub_account_id=? AND programme_id=?))
+            ORDER BY CASE WHEN programme_vps_id=? THEN 0 ELSE 1 END,id DESC LIMIT 1");
+        $registrationQuery->execute([$myProgrammeVpsId,$userId,$activeSubAccountId,$activeProgrammeId,$myProgrammeVpsId]);
+        $myProgrammeVpsRegistration = $registrationQuery->fetch(PDO::FETCH_ASSOC) ?: null;
     }
 } catch (PDOException $e) {}
 
@@ -283,17 +241,87 @@ try {
 } catch (PDOException $e) {}
 
 $userHasVps = ($userOwnsProgrammeVps || $isAlreadyFollowerProg);
-
-// ==================== LINKABLE SUB-ACCOUNT VPS DETECTION ====================
-$linkableSubVps = null;
-$anyProgrammeOwnsVps = false;
-
-if (!$userOwnsProgrammeVps) {
-    $anyProgrammeOwnsVps = programmeOwnsAnyVps($pdo, $userId);
-
-    if (!$anyProgrammeOwnsVps) {
-        $linkableSubVps = findUserSubAccountVps($pdo, $userId, $mainAccountId);
+$vpsLifecycleCsrf = $_SESSION['vps_lifecycle_csrf'] ??= bin2hex(random_bytes(32));
+$pendingProgrammeVpsRevocations = [];
+$pendingOwnProgrammeVpsRevocation = null;
+try {
+    $pendingProgrammeVpsRevocations = vpsRevocationLoadPending($pdo,'programme',$userId,$activeSubAccountId,$activeProgrammeId);
+    foreach ($pendingProgrammeVpsRevocations as $revocationRow) {
+        if ((int)$revocationRow['programme_vps_id'] === $myProgrammeVpsId) { $pendingOwnProgrammeVpsRevocation = $revocationRow; break; }
     }
+} catch (Throwable $e) { error_log('[programme_vps] pending revocation list failed: '.$e->getMessage()); }
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cancel_vps_purchase'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $sent=(string)($_POST['csrf_token']??'');
+    if($sent===''||!hash_equals((string)$vpsLifecycleCsrf,$sent)){http_response_code(419);echo json_encode(['success'=>false,'message'=>'The request expired. Refresh and try again.']);exit;}
+    $requestId=(int)($_POST['request_id']??0);
+    try {
+        $pdo->beginTransaction();
+        $q=$pdo->prepare("SELECT id,vps_id,payment_status FROM server_vps_purchase_requests WHERE id=? AND request_type='programme' AND programme_id=? AND user_id=? AND sub_account_id=? FOR UPDATE");
+        $q->execute([$requestId,$activeProgrammeId,$userId,$activeSubAccountId]);$requestRow=$q->fetch(PDO::FETCH_ASSOC);
+        if(!$requestRow)throw new RuntimeException('Purchase request not found.');
+        if((string)$requestRow['payment_status']!=='awaiting_payment')throw new RuntimeException('This purchase can no longer be cancelled because payment has already been submitted.');
+        $pdo->prepare("DELETE FROM server_vps_purchase_requests WHERE id=? AND request_type='programme' AND programme_id=? AND user_id=? AND sub_account_id=? AND payment_status='awaiting_payment'")->execute([$requestId,$activeProgrammeId,$userId,$activeSubAccountId]);
+        $planId=(int)$requestRow['vps_id'];
+        $pdo->prepare("UPDATE server_available_vps SET buy_request=IF(EXISTS(SELECT 1 FROM server_vps_purchase_requests r WHERE r.vps_id=? AND r.buy_request=1),1,0) WHERE id=?")->execute([$planId,$planId]);
+        $pdo->commit();echo json_encode(['success'=>true,'message'=>'Purchase request cancelled.']);
+    } catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_vps_lifecycle_broker'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $sent=(string)($_POST['csrf_token']??'');
+    if($sent===''||!hash_equals((string)$vpsLifecycleCsrf,$sent)){http_response_code(419);echo json_encode(['success'=>false,'message'=>'The request expired.']);exit;}
+    $action=(string)($_POST['lifecycle_action']??'');
+    if($action==='revoke'){
+        $opsId=(int)($_POST['programme_vps_id']??0);
+        if(!$userOwnsProgrammeVps||$opsId!==$myProgrammeVpsId||$pendingOwnProgrammeVpsRevocation){echo json_encode(['success'=>false,'message'=>'This VPS is not available for revocation.']);exit;}
+    }elseif($action==='unfollow'){
+        $rowId=(int)($_POST['follower_row_id']??0);
+        $q=$pdo->prepare("SELECT id FROM programme_vps_hosts_followers WHERE id=? AND follower_programme_id=? AND host_status='active' LIMIT 1");
+        $q->execute([$rowId,$activeProgrammeId]);if(!$q->fetchColumn()){echo json_encode(['success'=>false,'message'=>'The VPS follow record could not be found.']);exit;}
+    }else{echo json_encode(['success'=>false,'message'=>'Invalid action.']);exit;}
+    $linked=vpsRevocationBrokerLinked($pdo,'programme',$userId,$activeSubAccountId,$activeProgrammeId);
+    echo json_encode(['success'=>true,'broker_linked'=>$linked,'message'=>$linked?'Your broker is already linked to this VPS. Before proceeding, you must disconnect your broker first.':'']);exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['unfollow_vps'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $sent=(string)($_POST['csrf_token']??'');
+    if($sent===''||!hash_equals((string)$vpsLifecycleCsrf,$sent)){http_response_code(419);echo json_encode(['success'=>false,'message'=>'The request expired.']);exit;}
+    try{
+        if(vpsRevocationBrokerLinked($pdo,'programme',$userId,$activeSubAccountId,$activeProgrammeId)){echo json_encode(['success'=>false,'code'=>'broker_linked','message'=>'Your broker is already linked to this VPS. Before proceeding, you must disconnect your broker first.']);exit;}
+        $rowId=(int)($_POST['follower_row_id']??0);
+        $q=$pdo->prepare("DELETE FROM programme_vps_hosts_followers WHERE id=? AND follower_programme_id=? AND host_status='active'");
+        $q->execute([$rowId,$activeProgrammeId]);if($q->rowCount()!==1)throw new RuntimeException('This programme is no longer following that VPS.');
+        $pdo->prepare('DELETE FROM programme_vps_hosts_requestors WHERE requestor_programme_id=?')->execute([$activeProgrammeId]);
+        echo json_encode(['success'=>true,'message'=>'This programme has unfollowed the VPS.']);
+    }catch(Throwable $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revoke_own_vps'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $sent=(string)($_POST['csrf_token']??'');
+    if($sent===''||!hash_equals((string)$vpsLifecycleCsrf,$sent)){http_response_code(419);echo json_encode(['success'=>false,'message'=>'The request expired.']);exit;}
+    try{
+        if(!$userOwnsProgrammeVps||(int)($_POST['programme_vps_id']??0)!==$myProgrammeVpsId||$pendingOwnProgrammeVpsRevocation)throw new RuntimeException('This VPS is not available for revocation.');
+        $result=vpsRevocationStart($pdo,'programme',$userId,$activeSubAccountId,$activeProgrammeId,$myProgrammeVpsId);
+        if(!empty($result['blocked'])){echo json_encode(['success'=>false,'code'=>'broker_linked','message'=>$result['message']]);exit;}
+        echo json_encode(['success'=>true,'message'=>'Your programme VPS is scheduled for discontinuation in two days.','revocation_id'=>$result['id']]);
+    }catch(Throwable $e){error_log('[programme_vps] revoke failed: '.$e->getMessage());echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore_own_vps'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $sent=(string)($_POST['csrf_token']??'');
+    if($sent===''||!hash_equals((string)$vpsLifecycleCsrf,$sent)){http_response_code(419);echo json_encode(['success'=>false,'message'=>'The request expired.']);exit;}
+    try{vpsRevocationRestore($pdo,'programme',$userId,$activeSubAccountId,$activeProgrammeId,(int)($_POST['revocation_id']??0));echo json_encode(['success'=>true,'message'=>'Your programme VPS has been restored.']);}
+    catch(Throwable $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+    exit;
 }
 
 // ==================== UPDATE OWN PROGRAMME VPS VISIBILITY (AJAX) ====================
@@ -310,7 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_programme_vps_vis
     }
     $visibility = (int)$visibilityRaw;
     $visibilityLabel = $visibility === 1 ? 'Public' : 'Private';
-    if (!$userOwnsProgrammeVps || $myProgrammeVpsId <= 0) {
+    if (!$userOwnsProgrammeVps || $myProgrammeVpsId <= 0 || $pendingOwnProgrammeVpsRevocation) {
         echo json_encode(['success' => false, 'message' => 'No VPS owned by this programme was found.']);
         exit;
     }
@@ -326,49 +354,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_programme_vps_vis
     } catch (Throwable $e) {
         error_log('[programme_vps] visibility update failed: ' . $e->getMessage());
         echo json_encode(['success' => false, 'message' => 'Unable to update programme VPS visibility. Please try again.']);
-    }
-    exit;
-}
-
-// ==================== LINK SUB-ACCOUNT VPS TO PROGRAMME (AJAX) ====================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['link_subaccount_vps'])) {
-    header('Content-Type: application/json');
-
-    if ($userOwnsProgrammeVps) {
-        echo json_encode(['success' => false, 'message' => 'This programme already owns a VPS.']);
-        exit;
-    }
-
-    $anyProgrammeOwnsVps2 = programmeOwnsAnyVps($pdo, $userId);
-    if ($anyProgrammeOwnsVps2) {
-        echo json_encode(['success' => false, 'message' => 'Another programme already owns a VPS.']);
-        exit;
-    }
-
-    $subVps = findUserSubAccountVps($pdo, $userId, $mainAccountId);
-    if (!$subVps) {
-        echo json_encode(['success' => false, 'message' => 'No sub-account VPS found to link.']);
-        exit;
-    }
-
-    $ok = linkSubAccountVpsToProgramme($pdo, $subVps, $activeProgrammeId);
-    if ($ok) {
-        $programmeDisplayName = resolveProgrammeDisplayName($programme);
-        $subAccountDisplay    = resolveSubAccountName($subVps);
-
-        recordProgrammeNotification($pdo, $activeProgrammeId, $email, [
-            'notification_key' => 'pvps-linked-prog-' . $activeProgrammeId . '-' . date('YmdHis'),
-            'title'            => 'VPS Linked',
-            'message'          => 'Your VPS from ' . $subAccountDisplay . ' has been linked to ' . $programmeDisplayName . ' successfully.',
-            'type'             => 'success',
-            'section'          => 'VPS',
-            'action_tab'       => 'vps',
-            'force'            => true
-        ]);
-
-        echo json_encode(['success' => true, 'message' => 'VPS linked to this programme successfully!']);
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Failed to link VPS.']);
     }
     exit;
 }
@@ -467,7 +452,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
             INNER JOIN programme p ON p.id = v.programme_id
             INNER JOIN harvhub   h ON h.id = v.user_id
             WHERE v.programme_id = ?
-              AND (v.visibility = 1 OR v.programme_id = ?)
+              AND v.visibility = 1
+              AND v.programme_id <> ?
             LIMIT 1
         ");
         $s->execute([$ownerProgId, $activeProgrammeId]);
@@ -514,53 +500,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_host_details'])) 
     exit;
 }
 
-// ==================== MY FOLLOWER OWNER ====================
+// ==================== MY FOLLOWER OWNER (SHOWN INSIDE MY VPS) ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_my_follower_owner'])) {
-    header('Content-Type: application/json');
-
+    header('Content-Type: application/json; charset=utf-8');
     try {
-        $s = $pdo->prepare("
-            SELECT f.id AS follower_row_id, f.host_status, f.owner_programme_id,
-                   p.program_name, h.fullname, h.first_name, h.last_name, h.username,
-                   v.server_location, v.subscription_duration
+        $q=$pdo->prepare("SELECT f.id AS follower_row_id,f.host_status,f.owner_programme_id,
+                p.program_name,h.username,h.fullname,h.first_name,h.last_name,
+                v.server_location,v.subscription_duration,rv.plan_name,rv.product_name
             FROM programme_vps_hosts_followers f
-            LEFT JOIN programme p ON p.id = f.owner_programme_id
-            LEFT JOIN harvhub    h ON h.id = p.userid
-            LEFT JOIN programme_vps v ON v.programme_id = f.owner_programme_id
-            WHERE f.follower_programme_id = ?
-              AND f.host_status = 'active'
-            LIMIT 1
-        ");
-        $s->execute([$activeProgrammeId]);
-        $progRow = $s->fetch(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) { $progRow = null; }
-
-    if ($progRow) {
-        $ownerName = $progRow['program_name'] ?: resolveHostDisplayName($progRow);
-        echo json_encode([
-            'success'=>true,
-            'is_follower'=>true,
-            'source'=>'programme',
-            'owner'=>[
-                'owner_programme_id'=>(int)$progRow['owner_programme_id'],
-                'fullname'=>$ownerName,
-                'server_location'=>$progRow['server_location'] ?? '',
-                'subscription_duration'=>$progRow['subscription_duration'] ?? 0,
-                'total_followers'=>countActiveProgrammeFollowers($pdo,(int)$progRow['owner_programme_id'])
-            ],
-            'self'=>[
-                'follower_row_id'=>$progRow['follower_row_id'],
-                'host_status'=>$progRow['host_status'],
-                'display_name'=>resolveProgrammeDisplayName($programme)
-            ]
-        ]);
-        exit;
-    }
-
-    echo json_encode(['success'=>true,'is_follower'=>false]);
+            LEFT JOIN programme p ON p.id=f.owner_programme_id
+            LEFT JOIN harvhub h ON h.id=p.userid
+            LEFT JOIN programme_vps v ON v.programme_id=f.owner_programme_id
+            LEFT JOIN server_registered_vps rv ON rv.programme_vps_id=v.id AND rv.request_type='programme'
+            WHERE f.follower_programme_id=? AND f.host_status='active' LIMIT 1");
+        $q->execute([$activeProgrammeId]);$row=$q->fetch(PDO::FETCH_ASSOC);
+    } catch(Throwable $e){error_log('[programme_vps] follower owner lookup: '.$e->getMessage());$row=null;}
+    if(!$row){echo json_encode(['success'=>true,'is_follower'=>false]);exit;}
+    $username=trim((string)($row['username']??''));if($username==='')$username=trim((string)($row['fullname']??''))?:resolveHostDisplayName($row);
+    $vpsName=trim((string)($row['program_name']??''));if($vpsName==='')$vpsName=trim((string)($row['plan_name']??''))?: (trim((string)($row['product_name']??''))?:'VPS');
+    echo json_encode(['success'=>true,'is_follower'=>true,'owner'=>[
+        'username'=>$username,'vps_name'=>$vpsName,'server_location'=>$row['server_location']??'',
+        'subscription_duration'=>$row['subscription_duration']??0,
+        'total_followers'=>countActiveProgrammeFollowers($pdo,(int)$row['owner_programme_id'])
+    ],'self'=>['follower_row_id'=>(int)$row['follower_row_id'],'host_status'=>$row['host_status']]]);
     exit;
 }
-
 // ==================== SENT REQUESTS ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_sent_requests'])) {
     header('Content-Type: application/json');
@@ -835,6 +799,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_follower'])) {
 
 function showSpinner() {
     echo '<style>
+html,body,*{scrollbar-width:none!important;-ms-overflow-style:none!important}html::-webkit-scrollbar,body::-webkit-scrollbar,*::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
         .spinner-overlay{display:none;position:fixed;inset:0;background:transparent;z-index:99999;justify-content:center;align-items:center;flex-direction:column;pointer-events:none;}
         .spinner-overlay.active{display:flex;}
         .spinner{display:inline-block;width:40px;height:40px;border:3px solid rgba(0,0,0,0.1);border-radius:50%;border-top-color:var(--accent,#10b981);animation:spin .6s linear infinite;margin-bottom:12px;}
@@ -953,7 +919,7 @@ try {
 </style>
 
 <style>
-.market-vps-intro{margin:5px 0 16px}.market-vps-intro h3{margin:0 0 4px;font-size:18px}.market-vps-intro p{margin:0;color:var(--text-muted,#8291a3);font-size:13px}.market-vps-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.market-vps-card{background:var(--card-bg,#fff);border:1px solid var(--border-color,#e4eaf0);border-radius:14px;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.04)}.market-vps-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.market-vps-provider{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted,#8090a0)}.market-vps-card h3{font-size:17px;margin:4px 0 0}.market-vps-card-head p{margin:2px 0;color:var(--text-muted,#8090a0);font-size:12px}.market-vps-price{text-align:right;white-space:nowrap}.market-vps-price strong{display:block;font-size:17px;color:var(--accent-color,#159a6d)}.market-vps-price span{display:block;font-size:11px;color:var(--text-muted,#8090a0)}.market-vps-description{font-size:12px;color:var(--text-muted,#7d8a99);margin:12px 0}.market-vps-specs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}.market-vps-specs>div{background:var(--bg-secondary,#f6f8fa);padding:9px;border-radius:8px;min-width:0}.market-vps-specs b{display:block;font-size:12px;overflow-wrap:anywhere}.market-vps-specs span{font-size:10px;color:var(--text-muted,#8793a2)}.market-vps-card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--border-color,#e8edf2);padding-top:12px;font-size:12px;color:var(--text-muted,#8793a2)}.market-vps-card-foot button{margin:0}.market-vps-card-foot button:disabled{opacity:.55;cursor:not-allowed}
+.market-vps-intro{margin:5px 0 16px}.market-vps-intro h3{margin:0 0 4px;font-size:18px;color:var(--text,#1a2332)}.market-vps-intro p{margin:0;color:var(--text-muted,#8291a3);font-size:13px}.market-vps-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.market-vps-card{background:var(--card-bg,var(--bg-card,#fff));color:var(--text,#1a2332);border:1px solid var(--border-color,#e4eaf0);border-radius:14px;padding:16px;box-shadow:var(--shadow,0 4px 16px rgba(0,0,0,.04))}.market-vps-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.market-vps-provider{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted,#8090a0)}.market-vps-card h3{font-size:17px;margin:4px 0 0;color:var(--text,#1a2332)}.market-vps-card-head p{margin:2px 0;color:var(--text-muted,#8090a0);font-size:12px}.market-vps-price{text-align:right;white-space:nowrap}.market-vps-price strong{display:block;font-size:17px;color:var(--accent-color,var(--accent,#159a6d))}.market-vps-price span{display:block;font-size:11px;color:var(--text-muted,#8090a0)}.market-vps-description{font-size:12px;color:var(--text-secondary,#7d8a99);margin:12px 0}.market-vps-specs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}.market-vps-specs>div{background:var(--bg-secondary,var(--input-bg,#f7f9fc));color:var(--text,#1a2332);padding:9px;border-radius:8px;min-width:0}.market-vps-specs b{display:block;font-size:12px;overflow-wrap:anywhere}.market-vps-specs span{font-size:10px;color:var(--text-muted,#8793a2)}.market-vps-card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--border-color,#e8edf2);padding-top:12px;font-size:12px;color:var(--text-muted,#8793a2)}.market-vps-card-foot button{margin:0}.market-vps-card-foot button:disabled{opacity:.55;cursor:not-allowed}
 </style>
 
 </head>
@@ -965,21 +931,30 @@ try {
                 <a href="#" class="vps-topbar-back" onclick="event.preventDefault(); harvhubGoBackFromVps(); return false;" aria-label="Back"><i class="fa-solid fa-arrow-left"></i></a>
                 <h1 class="vps-topbar-title">Programme VPS</h1>
             </div>
+            <?php if (!$isAlreadyFollowerProg): ?>
             <div class="vps-search-wrap">
                 <input type="text" id="vpsSearchInput" class="vps-search-input" placeholder="Search username or url" autocomplete="off" oninput="onVpsSearch(this.value)" onfocus="onVpsSearch(this.value)">
             </div>
+            <?php endif; ?>
             <div class="vps-tabs" id="vpsTabs">
                 <button class="vps-tab active" data-tab="purchase" onclick="switchVpsTab('purchase')">Purchase VPS</button>
-                <button class="vps-tab" data-tab="users" onclick="switchVpsTab('users')">VPS Owners</button>
-                <?php if ($userOwnsProgrammeVps): ?>
+                <?php if (!empty($pendingVpsPurchases)): ?>
+                    <button class="vps-tab" data-tab="pending" onclick="switchVpsTab('pending')">Purchase Pending <span class="vps-tab-badge"><?= count($pendingVpsPurchases) ?></span></button>
+                <?php endif; ?>
+                <button class="vps-tab" data-tab="myvps" onclick="switchVpsTab('myvps')">My VPS</button>
+                <?php if (!empty($pendingProgrammeVpsRevocations)): ?>
+                    <button class="vps-tab" data-tab="revoked" onclick="switchVpsTab('revoked')">Pending Revoked <span class="vps-tab-badge"><?= count($pendingProgrammeVpsRevocations) ?></span></button>
+                <?php endif; ?>
+                <?php if (!$isAlreadyFollowerProg): ?>
+                    <button class="vps-tab" data-tab="users" onclick="switchVpsTab('users')">VPS Owners</button>
+                <?php endif; ?>
+                <?php if ($userOwnsProgrammeVps && !$pendingOwnProgrammeVpsRevocation): ?>
                     <button class="vps-tab" data-tab="incoming" onclick="switchVpsTab('incoming')">Incoming Requests <span class="vps-tab-badge" id="incomingTabBadge" style="display:none;">0</span></button>
                 <?php endif; ?>
-                <?php if ($isAlreadyFollowerProg): ?>
-                    <button class="vps-tab" data-tab="myspace" onclick="switchVpsTab('myspace')">My Space</button>
-                <?php else: ?>
+                <?php if (!$isAlreadyFollowerProg): ?>
                     <button class="vps-tab" data-tab="sent" onclick="switchVpsTab('sent')">Sent Requests</button>
                 <?php endif; ?>
-                <?php if ($userOwnsProgrammeVps): ?>
+                <?php if ($userOwnsProgrammeVps && !$pendingOwnProgrammeVpsRevocation): ?>
                     <button class="vps-tab" data-tab="followers" onclick="switchVpsTab('followers')">My Followers</button>
                 <?php endif; ?>
             </div>
@@ -987,7 +962,7 @@ try {
 
         <div class="vps-scroll-area" id="vpsScrollArea">
             <div class="vps-tab-content active" id="vpsTabPurchase">
-                <div class="market-vps-intro"><h3>Available VPS Plans</h3><p>Choose a published VPS plan for this programme. Registration follows payment confirmation.</p></div>
+                <div class="market-vps-intro"><h3>Available VPS Plans</h3></div>
                 <?php if (empty($availableVpsPlans)): ?>
                     <div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>No published VPS plans are currently available.</p></div>
                 <?php else: ?>
@@ -997,30 +972,74 @@ try {
                             <div class="market-vps-card-head"><div><span class="market-vps-provider"><?= htmlspecialchars($plan['provider_name'] ?: 'HarvHub VPS', ENT_QUOTES, 'UTF-8') ?></span><h3><?= htmlspecialchars($plan['product_name'], ENT_QUOTES, 'UTF-8') ?></h3><p><?= htmlspecialchars($plan['plan_name'], ENT_QUOTES, 'UTF-8') ?></p></div><div class="market-vps-price"><strong><?= htmlspecialchars($plan['currency'], ENT_QUOTES, 'UTF-8') ?> <?= number_format((float)$plan['price'], 2) ?></strong><span>per <?= htmlspecialchars($plan['billing_period'], ENT_QUOTES, 'UTF-8') ?></span><?php if ((float)$plan['setup_fee'] > 0): ?><span>+ <?= htmlspecialchars($plan['currency'], ENT_QUOTES, 'UTF-8') ?> <?= number_format((float)$plan['setup_fee'], 2) ?> setup fee</span><?php endif; ?></div></div>
                             <?php if (!empty($plan['plan_description'])): ?><p class="market-vps-description"><?= nl2br(htmlspecialchars($plan['plan_description'], ENT_QUOTES, 'UTF-8')) ?></p><?php endif; ?>
                             <div class="market-vps-specs"><div><b><?= (int)$plan['vcpu_count'] ?> vCPU</b><span><?= htmlspecialchars($plan['cpu_type'] ?: 'Processor', ENT_QUOTES, 'UTF-8') ?></span></div><div><b><?= htmlspecialchars($plan['ram_gb'], ENT_QUOTES, 'UTF-8') ?> GB RAM</b><span>Memory</span></div><div><b><?= htmlspecialchars($plan['storage_gb'], ENT_QUOTES, 'UTF-8') ?> GB</b><span><?= htmlspecialchars($plan['storage_type'], ENT_QUOTES, 'UTF-8') ?> storage</span></div><div><b><?= htmlspecialchars($plan['server_location'], ENT_QUOTES, 'UTF-8') ?></b><span>Location</span></div><div><b><?= htmlspecialchars($plan['network_port_speed_mbps'] ? $plan['network_port_speed_mbps'].' Mbps' : 'Not specified', ENT_QUOTES, 'UTF-8') ?></b><span>Network port</span></div><div><b><?= htmlspecialchars($plan['data_transfer'] ?: 'Not specified', ENT_QUOTES, 'UTF-8') ?></b><span>Transfer</span></div><div><b><?= htmlspecialchars($plan['operating_system'] ?: 'Choose at provisioning', ENT_QUOTES, 'UTF-8') ?></b><span>Operating system</span></div><div><b><?= (int)$plan['subscription_duration_days'] ?> days</b><span>Subscription term</span></div></div>
-                            <div class="market-vps-card-foot"><span><?= max(0,(int)$plan['stock_quantity']-(int)$plan['allocated_quantity']) ?> available</span><button type="button" class="vps-btn-link" onclick="startProgrammeVpsPurchase(<?= (int)$plan['id'] ?>, this)" <?= !empty($userOwnsProgrammeVps) ? 'disabled title="This programme already has a VPS"' : '' ?>>Buy now</button></div>
+                            <div class="market-vps-card-foot"><span><?= max(0,(int)$plan['stock_quantity']-(int)$plan['allocated_quantity']) ?> available</span><button type="button" class="vps-btn-link" onclick="startProgrammeVpsPurchase(<?= (int)$plan['id'] ?>, this)" <?= (!empty($userOwnsProgrammeVps) || !empty($pendingVpsPurchases)) ? 'disabled title="This programme already has a VPS or pending purchase"' : '' ?>>Buy now</button></div>
                         </article>
                     <?php endforeach; ?>
                     </div>
                 <?php endif; ?>
             </div>
 
+<?php if (!empty($pendingVpsPurchases)): ?>
+            <div class="vps-tab-content" id="vpsTabPending">
+                <div class="market-vps-intro"><h3>Purchase Pending</h3></div>
+                <?php if (empty($pendingVpsPurchases)): ?>
+                    <div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>This programme has no pending VPS purchases.</p></div>
+                <?php else: ?>
+                    <div class="market-vps-grid">
+                    <?php foreach ($pendingVpsPurchases as $purchase):
+                        $purchaseStatus = (string)($purchase['payment_status'] ?? '');
+                        if ($purchaseStatus === 'payment-confirmed') { $statusLabel = 'Payment confirmed · Setup pending'; $actionLabel = 'View purchase'; }
+                        elseif ($purchaseStatus === 'payment-made') { $statusLabel = 'Payment submitted · Awaiting verification'; $actionLabel = 'View payment'; }
+                        else { $statusLabel = 'Awaiting payment'; $actionLabel = 'Continue payment'; }
+                        $checkoutUrl = 'purchaseprogrammevps.php?request_id='.(int)$purchase['request_id'];
+                    ?>
+                        <article class="market-vps-card">
+                            <div class="market-vps-card-head"><div><span class="market-vps-provider"><?= htmlspecialchars((string)($purchase['provider_name'] ?: 'HarvHub VPS'),ENT_QUOTES,'UTF-8') ?></span><h3><?= htmlspecialchars((string)($purchase['product_name'] ?: 'VPS Plan'),ENT_QUOTES,'UTF-8') ?></h3><p><?= htmlspecialchars((string)($purchase['plan_name'] ?: ''),ENT_QUOTES,'UTF-8') ?></p></div><div class="market-vps-price"><strong><?= htmlspecialchars((string)($purchase['currency'] ?: 'USD'),ENT_QUOTES,'UTF-8') ?> <?= number_format((float)$purchase['amount'],2) ?></strong><span>Purchase #<?= (int)$purchase['request_id'] ?></span></div></div>
+                            <p class="market-vps-description"><strong><?= htmlspecialchars($statusLabel,ENT_QUOTES,'UTF-8') ?></strong></p>
+                            <div class="market-vps-specs"><div><b><?= (int)($purchase['vcpu_count']??0) ?> vCPU</b><span>Processor</span></div><div><b><?= htmlspecialchars((string)($purchase['ram_gb']??0),ENT_QUOTES,'UTF-8') ?> GB RAM</b><span>Memory</span></div><div><b><?= htmlspecialchars((string)($purchase['storage_gb']??0),ENT_QUOTES,'UTF-8') ?> GB <?= htmlspecialchars((string)($purchase['storage_type']??''),ENT_QUOTES,'UTF-8') ?></b><span>Storage</span></div><div><b><?= htmlspecialchars((string)($purchase['server_location']??''),ENT_QUOTES,'UTF-8') ?></b><span>Location</span></div><div><b><?= htmlspecialchars((string)($purchase['operating_system']?:'Choose at provisioning'),ENT_QUOTES,'UTF-8') ?></b><span>Operating system</span></div><div><b><?= (int)($purchase['subscription_duration_days']??0) ?> days</b><span>Subscription term</span></div></div>
+                            <?php if ($purchaseStatus !== 'payment-confirmed'): ?><a class="vps-btn-link" href="<?= htmlspecialchars($checkoutUrl,ENT_QUOTES,'UTF-8') ?>"><?= htmlspecialchars($actionLabel,ENT_QUOTES,'UTF-8') ?></a><?php endif; ?>
+                            <?php if ($purchaseStatus === 'awaiting_payment'): ?><button type="button" class="vps-btn-request" onclick="confirmCancelProgrammeVpsPurchase(<?= (int)$purchase['request_id'] ?>)">Cancel purchase</button><?php endif; ?>
+                        </article>
+                    <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+<?php endif; ?>
+            <div class="vps-tab-content" id="vpsTabMyVps">
+                <div class="market-vps-intro"><h3>My VPS</h3></div>
+                <?php if ($userOwnsProgrammeVps && !$pendingOwnProgrammeVpsRevocation && $myProgrammeVpsRegistration): ?>
+                    <article class="market-vps-card" style="max-width:850px">
+                        <div class="market-vps-card-head"><div><span class="market-vps-provider">My VPS · Programme allocation</span><h3><?= htmlspecialchars((string)($myProgrammeVpsRegistration['product_name'] ?: 'Existing VPS'),ENT_QUOTES,'UTF-8') ?></h3><p><?= htmlspecialchars((string)($myProgrammeVpsRegistration['plan_name'] ?: 'Existing allocation'),ENT_QUOTES,'UTF-8') ?></p></div><div class="market-vps-price"><strong><?= htmlspecialchars((string)($myProgrammeVpsRegistration['currency'] ?: 'USD'),ENT_QUOTES,'UTF-8') ?> <?= number_format((float)$myProgrammeVpsRegistration['price'],2) ?></strong><span>VPS #<?= (int)$myProgrammeVpsId ?></span></div></div>
+                        <?php if (($myProgrammeVpsRegistration['registration_status'] ?? '') === 'registered'): ?><p class="market-vps-description"><strong style="color:#18794e">Ready</strong></p><?php else: ?><p class="market-vps-description"><strong style="color:#b7791f">Setup pending</strong></p><?php endif; ?>
+                        <div class="market-vps-specs"><div><b><?= (int)($myProgrammeVpsRegistration['vcpu_count']??0) ?> vCPU</b><span>Processor</span></div><div><b><?= htmlspecialchars((string)($myProgrammeVpsRegistration['ram_gb']??0),ENT_QUOTES,'UTF-8') ?> GB RAM</b><span>Memory</span></div><div><b><?= htmlspecialchars((string)($myProgrammeVpsRegistration['storage_gb']??0),ENT_QUOTES,'UTF-8') ?> GB <?= htmlspecialchars((string)($myProgrammeVpsRegistration['storage_type']??''),ENT_QUOTES,'UTF-8') ?></b><span>Storage</span></div><div><b><?= htmlspecialchars((string)($myProgrammeVpsRegistration['server_location']??''),ENT_QUOTES,'UTF-8') ?></b><span>Location</span></div><div><b><?= htmlspecialchars((string)($myProgrammeVpsRegistration['operating_system']??''),ENT_QUOTES,'UTF-8') ?></b><span>Operating system</span></div><div><b><?= (int)($myProgrammeVpsRegistration['subscription_duration_days']??0) ?> days</b><span>Subscription term</span></div></div>
+                        <div class="market-vps-card-foot"><span>Visibility</span><select class="vps-visibility-select" aria-label="My programme VPS visibility" data-saved-value="<?= (int)$myProgrammeVpsVisibility ?>" onchange="updateProgrammeVpsVisibility(this, <?= (int)$activeProgrammeId ?>)"><option value="1" <?= (int)$myProgrammeVpsVisibility===1?'selected':'' ?>>Public</option><option value="0" <?= (int)$myProgrammeVpsVisibility===0?'selected':'' ?>>Private</option></select>
+                            <select class="vps-visibility-select" aria-label="Programme VPS options" onchange="handleProgrammeOwnerVpsOption(this, <?= (int)$myProgrammeVpsId ?>)"><option value="">Options</option><option value="revoke">Revoke VPS</option></select>
+                        </div>
+                    </article>
+                <?php elseif ($userOwnsProgrammeVps && !$pendingOwnProgrammeVpsRevocation): ?>
+                    <div class="vps-empty-state"><p>Setup pending.</p><select class="vps-visibility-select" aria-label="Programme VPS options" onchange="handleProgrammeOwnerVpsOption(this, <?= (int)$myProgrammeVpsId ?>)"><option value="">Options</option><option value="revoke">Revoke VPS</option></select></div>
+                <?php elseif ($pendingOwnProgrammeVpsRevocation): ?>
+                    <div class="vps-empty-state"><p>Your VPS is listed under Pending Revoked.</p></div>
+                <?php endif; ?>
+                <div id="myProgrammeFollowerVpsContainer" class="vps-requests-list"></div>
+                <?php if (!$userOwnsProgrammeVps && !$isAlreadyFollowerProg): ?><div class="vps-empty-state" id="noMyProgrammeVpsNotice"><span class="vps-empty-icon">—</span><p>No VPS is currently assigned to this programme.</p></div><?php endif; ?>
+            </div>
+<?php if (!empty($pendingProgrammeVpsRevocations)): ?>
+            <div class="vps-tab-content" id="vpsTabRevoked">
+                <div class="market-vps-intro"><h3>Pending Revoked</h3></div>
+                <?php foreach ($pendingProgrammeVpsRevocations as $rev): ?>
+                    <article class="market-vps-card" style="max-width:850px">
+                        <div class="market-vps-card-head"><div><span class="market-vps-provider">Pending Revoked</span><h3><?= htmlspecialchars((string)($rev['product_name'] ?: 'Existing VPS'),ENT_QUOTES,'UTF-8') ?></h3><p><?= htmlspecialchars((string)($rev['plan_name'] ?: 'Programme VPS allocation'),ENT_QUOTES,'UTF-8') ?></p></div><div class="market-vps-price"><strong><?= htmlspecialchars((string)($rev['currency'] ?: 'USD'),ENT_QUOTES,'UTF-8') ?> <?= number_format((float)($rev['price'] ?? 0),2) ?></strong><span>VPS #<?= (int)$rev['programme_vps_id'] ?></span></div></div>
+                        <p class="market-vps-description"><strong>Your VPS will be discontinued in <span class="vps-revocation-countdown" data-discontinue-epoch="<?= (int)($rev['scheduled_discontinuation_epoch'] ?? 0) ?>">calculating…</span></strong></p>
+                        <div class="market-vps-specs"><div><b><?= (int)($rev['vcpu_count']??0) ?> vCPU</b><span>Processor</span></div><div><b><?= htmlspecialchars((string)($rev['ram_gb']??0),ENT_QUOTES,'UTF-8') ?> GB RAM</b><span>Memory</span></div><div><b><?= htmlspecialchars((string)($rev['storage_gb']??0),ENT_QUOTES,'UTF-8') ?> GB <?= htmlspecialchars((string)($rev['storage_type']??''),ENT_QUOTES,'UTF-8') ?></b><span>Storage</span></div><div><b><?= htmlspecialchars((string)($rev['snapshot_location'] ?: ''),ENT_QUOTES,'UTF-8') ?></b><span>Location</span></div><div><b><?= htmlspecialchars((string)($rev['operating_system']??''),ENT_QUOTES,'UTF-8') ?></b><span>Operating system</span></div><div><b><?= (int)($rev['subscription_duration_days']??0) ?> days</b><span>Subscription term</span></div><div><b><?= htmlspecialchars((string)($rev['network_port_speed_mbps'] ?? 'Not specified'),ENT_QUOTES,'UTF-8') ?></b><span>Network port Mbps</span></div><div><b><?= htmlspecialchars((string)($rev['data_transfer'] ?? 'Not specified'),ENT_QUOTES,'UTF-8') ?></b><span>Data transfer</span></div><div><b><?= htmlspecialchars((string)($rev['backup_option'] ?? 'Not specified'),ENT_QUOTES,'UTF-8') ?></b><span>Backup</span></div><div><b><?= (int)($rev['snapshot_count']??0) ?></b><span>Snapshots</span></div></div>
+                        <div class="market-vps-card-foot"><span>Reconsider</span><select class="vps-visibility-select" aria-label="Reconsider programme VPS revocation" onchange="handleProgrammeRestoreVpsOption(this, <?= (int)$rev['id'] ?>)"><option value="">Select option</option><option value="restore">Restore VPS</option></select></div>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+<?php endif; ?>
             <div class="vps-tab-content" id="vpsTabUsers">
                 <?php if ($isAlreadyFollowerProg): ?>
                     <div class="vps-follower-lock" style="margin-bottom:16px;padding:12px 16px;background:rgba(243,156,18,0.1);border-radius:8px;font-size:13px;line-height:1.5;color:var(--text);"><strong>This programme is already a follower of another VPS.</strong> You cannot send requests to other hosts.</div>
-                <?php endif; ?>
-
-                <?php if ($linkableSubVps): ?>
-                    <?php
-                        $subName = resolveSubAccountName($linkableSubVps);
-                    ?>
-                    <div class="vps-link-card" id="linkableVpsCard">
-                        <p class="vps-link-note">
-                            You have an existing VPS in <strong><?= htmlspecialchars($subName) ?></strong>, do you want to link it to this programme?
-                        </p>
-                        <button class="vps-btn-link" onclick="linkSubAccountVps(this)">
-                            <i class="fa-solid fa-link"></i> Link
-                        </button>
-                    </div>
                 <?php endif; ?>
 
                 <?php if (empty($programmeHosts)): ?>
@@ -1075,7 +1094,6 @@ try {
             </div>
 
             <?php if ($isAlreadyFollowerProg): ?>
-                <div class="vps-tab-content" id="vpsTabMySpace"><div id="mySpaceContainer" class="vps-requests-list"><div class="vps-requests-loading">Loading your space...</div></div></div>
             <?php else: ?>
                 <div class="vps-tab-content" id="vpsTabSent"><div id="sentRequestsContainer" class="vps-requests-list"><div class="vps-requests-loading">Loading sent requests...</div></div></div>
             <?php endif; ?>
@@ -1145,6 +1163,7 @@ try {
         window.addEventListener('message', function (e) {
             if (!e.data || typeof e.data !== 'object') return;
             if (e.data.type === 'theme') document.body.classList.toggle('dark-mode', !!e.data.dark);
+            if (e.data.type === 'harvhubVpsNavigateTab' && typeof window.switchVpsTab === 'function') window.switchVpsTab(String(e.data.tab || 'purchase'));
         });
         var WATCHED = ['page-vps','page-connect_trader_broker','page-disconnect_trader_broker','page-programme_training','page-trader_menu'];
         function broadcast() {
@@ -1165,7 +1184,6 @@ try {
     var userOwnsProgrammeVps = <?= $userOwnsProgrammeVps ? 'true' : 'false' ?>;
     var isAlreadyFollowerProg = <?= $isAlreadyFollowerProg ? 'true' : 'false' ?>;
     var userHasVps = <?= $userHasVps ? 'true' : 'false' ?>;
-    var hasLinkableSubVps = <?= $linkableSubVps ? 'true' : 'false' ?>;
 
     var pendingConfirmAction=null, pendingConfirmId=null, pendingConfirmName='';
 
@@ -1201,18 +1219,25 @@ try {
         if (scrollArea) scrollArea.scrollTop = 0;
 
         if (tab === 'purchase') document.getElementById('vpsTabPurchase').classList.add('active');
+        else if (tab === 'pending') { var pendingPanel=document.getElementById('vpsTabPending'); if(pendingPanel) pendingPanel.classList.add('active'); else { switchVpsTab('myvps'); return; } }
+        else if (tab === 'myvps') { document.getElementById('vpsTabMyVps').classList.add('active'); loadProgrammeFollowerVps(); }
+        else if (tab === 'revoked') { var rev=document.getElementById('vpsTabRevoked'); if(rev)rev.classList.add('active');else switchVpsTab('myvps'); }
         else if (tab === 'users') {
+            if (isAlreadyFollowerProg) { switchVpsTab('myvps'); return; }
             document.getElementById('vpsTabUsers').classList.add('active');
             var s=document.getElementById('vpsSearchInput'); if(s)s.value='';
             onVpsSearch('');
         }
         else if (tab === 'sent') { var el=document.getElementById('vpsTabSent'); if(el){el.classList.add('active');loadSentRequests();} }
-        else if (tab === 'myspace') { var el2=document.getElementById('vpsTabMySpace'); if(el2){el2.classList.add('active');loadMySpace();} }
         else if (tab === 'incoming' && userOwnsProgrammeVps) { var el3=document.getElementById('vpsTabIncoming'); if(el3){el3.classList.add('active');loadIncomingRequests();} }
         else if (tab === 'followers' && userOwnsProgrammeVps) { var el4=document.getElementById('vpsTabFollowers'); if(el4){el4.classList.add('active');loadMyFollowers();} }
         showStickyTop();
     }
     window.switchVpsTab = switchVpsTab;
+    var requestedVpsTab = new URLSearchParams(window.location.search).get('vps_tab') || new URLSearchParams(window.location.search).get('tab');
+    if (requestedVpsTab === 'pending' && document.getElementById('vpsTabPending')) switchVpsTab('pending');
+    else if (requestedVpsTab === 'revoked' && document.getElementById('vpsTabRevoked')) switchVpsTab('revoked');
+    else if (requestedVpsTab === 'myvps') switchVpsTab('myvps');
 
     var stickyTop = document.getElementById('vpsStickyTop'), scrollArea = document.getElementById('vpsScrollArea'),
         lastScrollTop = 0, isStickyHidden = false, raf = null;
@@ -1330,7 +1355,21 @@ try {
     }
     window.closeVpsConfirmModal = closeVpsConfirmModal;
 
-    function confirmModalAction() {
+    function openProgrammeVpsCheckout(destination) {
+        try {
+            var checkout = new URL(String(destination || ''), window.location.href);
+            if (checkout.origin !== window.location.origin || checkout.pathname.split('/').pop() !== 'purchaseprogrammevps.php') throw new Error('Invalid programme checkout route.');
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({type:'harvhubOpenVpsCheckout',category:'programme',url:checkout.href}, '*');
+                return;
+            }
+            window.location.href = checkout.href;
+        } catch (e) {
+            if (typeof showVpsAlert === 'function') showVpsAlert('Unable to open programme VPS checkout. Please try again.', 'Error');
+        }
+    }
+
+    function confirmModalAction(){
         if (!pendingConfirmAction || !pendingConfirmId) { closeVpsConfirmModal(); return; }
         var btn = document.getElementById('vpsConfirmRemoveBtn');
         var originalText = btn.textContent;
@@ -1363,48 +1402,27 @@ try {
                 else showVpsAlert(data.message||'Failed.','Error');
             })
             .catch(function(){ btn.disabled=false; btn.textContent=originalText; showVpsAlert('Network error.','Error'); });
+        } else if (['unfollow_vps','revoke_vps','restore_vps','cancel_vps_purchase','begin_purchase'].indexOf(pendingConfirmAction)!==-1) {
+            var action=pendingConfirmAction,id=pendingConfirmId;
+            var p=new URLSearchParams({csrf_token:<?= json_encode($vpsLifecycleCsrf) ?>});
+            if(action==='unfollow_vps'){p.set('unfollow_vps','1');p.set('follower_row_id',String(id));}
+            if(action==='revoke_vps'){p.set('revoke_own_vps','1');p.set('programme_vps_id',String(id));}
+            if(action==='restore_vps'){p.set('restore_own_vps','1');p.set('revocation_id',String(id));}
+            if(action==='cancel_vps_purchase'){p.set('cancel_vps_purchase','1');p.set('request_id',String(id));}
+            if(action==='begin_purchase'){
+                p.set('csrf_token',<?= json_encode($catalogueCsrf) ?>);p.set('action','begin_purchase');p.set('vps_id',String(id));p.set('return_to','programme');
+                fetch('purchaseprogrammevps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body:p})
+                .then(function(r){return r.json();}).then(function(d){btn.disabled=false;btn.textContent=originalText;if(!d.success){closeVpsConfirmModal();showVpsAlert(d.message||'Unable to start purchase.','Error');return;}openProgrammeVpsCheckout(d.redirect);})
+                .catch(function(){btn.disabled=false;btn.textContent=originalText;closeVpsConfirmModal();showVpsAlert('Network error. Please try again.','Error');});return;
+            }
+            fetch('programme_vps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body:p})
+            .then(function(r){return r.json();}).then(function(d){btn.disabled=false;btn.textContent=originalText;if(d.code==='broker_linked'){closeVpsConfirmModal();showProgrammeBrokerDisconnectNotice();return;}if(!d.success){showVpsAlert(d.message||'Unable to complete this action.','Error');return;}closeVpsConfirmModal();showVpsAlert(d.message||'Updated successfully.','Success');setTimeout(function(){window.location.reload();},700);})
+            .catch(function(){btn.disabled=false;btn.textContent=originalText;showVpsAlert('Network error. Please try again.','Error');});
         } else {
             btn.disabled=false; btn.textContent=originalText; closeVpsConfirmModal();
         }
     }
     window.confirmModalAction = confirmModalAction;
-
-    function linkSubAccountVps(clickedButton) {
-        var btn = clickedButton || document.querySelector('#linkableVpsCard .vps-btn-link');
-        if (!btn) { showVpsAlert('The Link VPS control could not be found.', 'Error'); return; }
-        btn.disabled = true;
-        btn.textContent = 'Linking...';
-
-        fetch('programme_vps.php', {
-            method:'POST',
-            headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
-            body:'link_subaccount_vps=1'
-        })
-        .then(function(r){return r.json();})
-        .then(function(data){
-            if (data.success) {
-                showVpsAlert(data.message || 'VPS linked successfully!', 'Success');
-                setTimeout(function () {
-                    try {
-                        if (window.parent && window.parent !== window) {
-                            window.parent.postMessage({ type: 'reloadIframe' }, '*');
-                        }
-                    } catch (e) {}
-                    window.location.reload();
-                }, 1200);
-            } else {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fa-solid fa-link"></i> Link';
-                showVpsAlert(data.message || 'Failed to link.', 'Error');
-            }
-        })
-        .catch(function(){
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fa-solid fa-link"></i> Link';
-            showVpsAlert('Network error.', 'Error');
-        });
-    }
-    window.linkSubAccountVps = linkSubAccountVps;
 
     function loadSentRequests(){
         var c = document.getElementById('sentRequestsContainer');
@@ -1427,39 +1445,42 @@ try {
     }
     window.loadSentRequests = loadSentRequests;
 
-    function loadMySpace(){
-        var c = document.getElementById('mySpaceContainer');
-        if (!c) return;
-        c.innerHTML = '<div class="vps-requests-loading">Loading your space...</div>';
-        fetch('programme_vps.php', {
-            method:'POST',
-            headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
-            body:'get_my_follower_owner=1'
-        })
-        .then(function(r){return r.json();})
-        .then(function(data){
-            if (!data || !data.success || !data.is_follower) {
-                c.innerHTML = '<div class="vps-empty-state"><span class="vps-empty-icon">—</span><p>You are not a follower of any VPS</p></div>';
-                return;
-            }
-            renderMySpace(c, data.owner, data.self);
-        })
-        .catch(function(){ c.innerHTML = '<div class="vps-empty-state"><p>Failed to load your space</p></div>'; });
+    function loadProgrammeFollowerVps(){
+        var c=document.getElementById('myProgrammeFollowerVpsContainer');if(!c||c.dataset.loaded==='1')return;
+        c.innerHTML='<div class="vps-requests-loading">Loading VPS details…</div>';
+        fetch('programme_vps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body:'get_my_follower_owner=1'})
+        .then(function(r){return r.json();}).then(function(data){c.dataset.loaded='1';if(!data||!data.success||!data.is_follower){c.innerHTML='';return;}renderProgrammeFollowerVps(c,data.owner,data.self);})
+        .catch(function(){c.innerHTML='<div class="vps-empty-state"><p>Unable to load VPS details.</p></div>';});
     }
-    window.loadMySpace = loadMySpace;
-
-    function renderMySpace(container, owner, self){
-        var totalFollowers = parseInt(owner.total_followers, 10) || 0;
-        var status = (self.host_status || 'active').toLowerCase();
-        var myName = self.display_name || 'You';
-        var html = '';
-        html += '<div class="vps-owner-card"><div class="vps-owner-badge">VPS Owner</div><div class="vps-owner-name">' + escapeHtml(owner.fullname || 'Anonymous') + '</div><div class="vps-owner-meta">';
-        html += '<div class="vps-owner-stat"><span class="vps-owner-stat-label">Proxy</span><span class="vps-owner-stat-value">' + escapeHtml(owner.server_location || 'N/A') + '</span></div>';
-        if (owner.subscription_duration) html += '<div class="vps-owner-stat"><span class="vps-owner-stat-label">Subscription Duration</span><span class="vps-owner-stat-value">' + escapeHtml(String(owner.subscription_duration)) + ' days</span></div>';
-        html += '<div class="vps-owner-stat"><span class="vps-owner-stat-label">Total Followers</span><span class="vps-owner-stat-value">' + totalFollowers + '</span></div></div></div>';
-        html += '<div class="vps-followers-section"><div class="vps-followers-title">You</div><div class="vps-hosts-list"><div class="vps-request-item vps-follower-self"><div class="vps-request-row"><div class="vps-request-label">Follower</div><div class="vps-request-value">' + escapeHtml(myName) + ' <span class="vps-self-badge">you</span></div></div><div class="vps-request-row"><div class="vps-request-label">Status</div><div class="vps-request-value"><span class="vps-status-badge vps-status-' + status + '">' + escapeHtml(status) + '</span></div></div></div></div></div>';
-        container.innerHTML = html;
+    window.loadProgrammeFollowerVps=loadProgrammeFollowerVps;
+    function renderProgrammeFollowerVps(c,owner,self){
+        var html='<article class="vps-owner-card"><div class="vps-owner-badge">VPS Owner</div><div class="vps-owner-name">'+escapeHtml(owner.username||'VPS Owner')+'</div>';
+        html+='<p class="market-vps-description"><strong>You are hosted in this owner’s VPS as a follower</strong></p><h3>'+escapeHtml(owner.vps_name||'VPS')+'</h3><div class="vps-owner-meta">';
+        html+='<div class="vps-owner-stat"><span class="vps-owner-stat-label">Proxy</span><span class="vps-owner-stat-value">'+escapeHtml(owner.server_location||'N/A')+'</span></div>';
+        html+='<div class="vps-owner-stat"><span class="vps-owner-stat-label">Subscription Duration</span><span class="vps-owner-stat-value">'+escapeHtml(String(owner.subscription_duration||0))+' days</span></div>';
+        html+='<div class="vps-owner-stat"><span class="vps-owner-stat-label">Total Followers</span><span class="vps-owner-stat-value">'+(parseInt(owner.total_followers,10)||0)+'</span></div></div>';
+        html+='<div class="market-vps-card-foot"><button type="button" class="vps-btn-request" onclick="requestProgrammeUnfollowVps('+parseInt(self.follower_row_id,10)+',this)">Unfollow VPS</button></div></article>';c.innerHTML=html;
     }
+    function showProgrammeBrokerDisconnectNotice(){showVpsAlert('Your broker is already linked to this VPS. Before proceeding, you must disconnect your broker first.','Disconnect broker first');}
+    function requestProgrammeUnfollowVps(rowId,button){
+        var p=new URLSearchParams({check_vps_lifecycle_broker:'1',lifecycle_action:'unfollow',follower_row_id:String(rowId),csrf_token:<?= json_encode($vpsLifecycleCsrf) ?>});
+        fetch('programme_vps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body:p})
+        .then(function(r){return r.json();}).then(function(d){if(!d.success){showVpsAlert(d.message||'Unable to continue.','Error');return;}if(d.broker_linked){showProgrammeBrokerDisconnectNotice();return;}openVpsConfirm({type:'unfollow_vps',id:rowId,title:'Unfollow VPS',message:'Are you sure you want to unfollow this VPS?',confirmText:'Yes, Unfollow'});})
+        .catch(function(){showVpsAlert('Network error. Please try again.','Error');});
+    }
+    window.requestProgrammeUnfollowVps=requestProgrammeUnfollowVps;
+    function handleProgrammeOwnerVpsOption(select,vpsId){var v=select.value;select.value='';if(v!=='revoke')return;var p=new URLSearchParams({check_vps_lifecycle_broker:'1',lifecycle_action:'revoke',programme_vps_id:String(vpsId),csrf_token:<?= json_encode($vpsLifecycleCsrf) ?>});
+        fetch('programme_vps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body:p})
+        .then(function(r){return r.json();}).then(function(d){if(!d.success){showVpsAlert(d.message||'Unable to continue.','Error');return;}if(d.broker_linked){showProgrammeBrokerDisconnectNotice();return;}openVpsConfirm({type:'revoke_vps',id:vpsId,title:'Revoke Programme VPS',message:'Are you sure you want to revoke your programme VPS? Your plan with this VPS will be discontinued after the two-day grace period. You can restore it before the period ends.',confirmText:'Yes, Revoke VPS'});})
+        .catch(function(){showVpsAlert('Network error. Please try again.','Error');});
+    }
+    window.handleProgrammeOwnerVpsOption=handleProgrammeOwnerVpsOption;
+    function handleProgrammeRestoreVpsOption(select,revocationId){var v=select.value;select.value='';if(v!=='restore')return;openVpsConfirm({type:'restore_vps',id:revocationId,title:'Restore Programme VPS',message:'Are you sure you want to restore this VPS and keep the programme plan active?',confirmText:'Yes, Restore VPS'});}
+    window.handleProgrammeRestoreVpsOption=handleProgrammeRestoreVpsOption;
+    function confirmCancelProgrammeVpsPurchase(id){openVpsConfirm({type:'cancel_vps_purchase',id:id,title:'Cancel purchase',message:'Are you sure you want to cancel this VPS purchase? This is available only before payment is submitted.',confirmText:'Yes, Cancel Purchase'});}
+    window.confirmCancelProgrammeVpsPurchase=confirmCancelProgrammeVpsPurchase;
+    function updateProgrammeVpsRevocationCountdowns(){document.querySelectorAll('[data-discontinue-epoch]').forEach(function(el){var ts=(parseInt(el.getAttribute('data-discontinue-epoch')||'0',10)||0)*1000;var d=ts-Date.now();if(!Number.isFinite(ts)||d<=0){el.textContent='processing';return;}var days=Math.floor(d/86400000);d%=86400000;var hours=Math.floor(d/3600000);d%=3600000;var mins=Math.floor(d/60000);el.textContent=String(days).padStart(2,'0')+'d '+String(hours).padStart(2,'0')+'h '+String(mins).padStart(2,'0')+'m';});}
+    updateProgrammeVpsRevocationCountdowns();setInterval(updateProgrammeVpsRevocationCountdowns,15000);
 
     function loadIncomingRequests(){
         var c = document.getElementById('incomingRequestsContainer');
@@ -1733,9 +1754,6 @@ try {
         var sentContent = document.getElementById('vpsTabSent');
         if (sentContent && sentContent.classList.contains('active')) loadSentRequests();
 
-        var msContent = document.getElementById('vpsTabMySpace');
-        if (msContent && msContent.classList.contains('active')) loadMySpace();
-
         if (userOwnsProgrammeVps) {
             var inc = document.getElementById('vpsTabIncoming');
             if (inc && inc.classList.contains('active')) loadIncomingRequests();
@@ -1780,15 +1798,8 @@ try {
 </script>
 
 <script>
-async function startProgrammeVpsPurchase(planId, button){
-    if(!confirm('Create a VPS purchase request for this programme and continue to checkout?'))return;
-    const old=button.textContent;button.disabled=true;button.textContent='Preparing…';
-    try{
-        const body=new URLSearchParams({action:'begin_purchase',vps_id:String(planId),csrf_token:<?= json_encode($catalogueCsrf) ?>});
-        const response=await fetch('purchaseprogrammevps.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},body});
-        const data=await response.json();if(!data.success)throw new Error(data.message||'Unable to start purchase.');
-        window.top.location.href=data.redirect;
-    }catch(error){alert(error.message);button.disabled=false;button.textContent=old;}
+function startProgrammeVpsPurchase(planId, button){
+    window.openVpsConfirm({type:'begin_purchase',id:planId,title:'Purchase Programme VPS',message:'Create a VPS purchase request for this programme and continue to its separate checkout?',confirmText:'Continue to checkout'});
 }
 </script>
 

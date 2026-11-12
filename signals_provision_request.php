@@ -764,6 +764,219 @@ function spc_computePeriodStats(array $events, array $period): array {
     return ['trades'=>$trades, 'wins'=>$wins, 'losses'=>$losses, 'consecutive_losses'=>$maxRun];
 }
 
+function spc_formatProvisionTimeLeft(int $seconds, string $period): string {
+    $totalMinutes = max(0, (int)ceil($seconds / 60));
+    if ($totalMinutes <= 0) return 'less than one minute';
+
+    if ($period === 'daily') {
+        $hours = intdiv($totalMinutes, 60);
+        $minutes = $totalMinutes % 60;
+        $parts = [];
+        if ($hours > 0) $parts[] = $hours . ' ' . ($hours === 1 ? 'hour' : 'hours');
+        if ($minutes > 0) $parts[] = $minutes . ' ' . ($minutes === 1 ? 'minute' : 'minutes');
+        return implode(' and ', $parts);
+    }
+
+    $days = intdiv($totalMinutes, 1440);
+    $remainingMinutes = $totalMinutes % 1440;
+    $hours = intdiv($remainingMinutes, 60);
+    $minutes = $remainingMinutes % 60;
+    $parts = [];
+    if ($days > 0) $parts[] = $days . ' ' . ($days === 1 ? 'day' : 'days');
+    if ($hours > 0) $parts[] = $hours . ' ' . ($hours === 1 ? 'hour' : 'hours');
+    if ($days === 0 && $minutes > 0) $parts[] = $minutes . ' ' . ($minutes === 1 ? 'minute' : 'minutes');
+    return implode(' and ', $parts ?: ['less than one minute']);
+}
+
+/**
+ * Builds a checkpoint-specific notice from its actual timestamps and readings.
+ * Daily notices count hours; weekly/monthly notices count days and hours.
+ * The notice is display-only and is deliberately not written to progress JSON.
+ */
+function spc_buildProvisionNotice(
+    string $period,
+    array $checkpoint,
+    DateTimeImmutable $now,
+    bool $hasStarted,
+    bool $trackingAvailable,
+    int $minimumTrades,
+    int $minimumWins,
+    int $maximumLosses
+): ?array {
+    $status = strtolower(trim((string)($checkpoint['status'] ?? '')));
+    if (!empty($checkpoint['locked']) || !empty($checkpoint['skipped']) || $status === 'restricted') return null;
+
+    $isPassed = ($status === 'passed');
+    $isFailed = in_array($status, ['failed', 'breached'], true);
+    if (!$hasStarted && !$isPassed && !$isFailed) return null;
+
+    $endAt = spc_parseDateTime($checkpoint['end_at'] ?? '', $now->getTimezone());
+    if (!$endAt) return null;
+
+    $remainingSeconds = max(0, $endAt->getTimestamp() - $now->getTimestamp());
+    $isClosed = ($now >= $endAt);
+    $closeThreshold = $period === 'daily'
+        ? 6 * 3600
+        : ($period === 'weekly' ? 24 * 3600 : 3 * 86400);
+    $isClosingSoon = $isClosed || $remainingSeconds <= $closeThreshold;
+    $remainingText = $isClosed ? '' : spc_formatProvisionTimeLeft($remainingSeconds, $period);
+
+    $label = trim((string)($checkpoint['label'] ?? ''));
+    if ($label === '') $label = ucfirst($period) . ' checkpoint';
+    $provisionName = $label . ' provision';
+
+    $trades = max(0, (int)($checkpoint['trades'] ?? 0));
+    $wins = max(0, (int)($checkpoint['wins'] ?? 0));
+    // This value is the longest consecutive-loss streak recorded in this
+    // checkpoint, not a cumulative count of all losing trades.
+    $consecutiveLosses = max(0, (int)($checkpoint['consecutive_losses'] ?? 0));
+    $losses = max(0, (int)($checkpoint['losses'] ?? 0));
+    $hasRecordedMetrics = $trackingAvailable || !empty($checkpoint['metrics_snapshot_available']);
+    $noData = $hasRecordedMetrics && $trades === 0 && $wins === 0 && $losses === 0 && $consecutiveLosses === 0;
+
+    $tradesMissing = ($minimumTrades > 0) ? max(0, $minimumTrades - $trades) : 0;
+    $winsMissing = ($minimumWins > 0) ? max(0, $minimumWins - $wins) : 0;
+    $lossLimitReached = ($maximumLosses > 0 && $hasRecordedMetrics && $consecutiveLosses >= $maximumLosses);
+    $lossesUntilLimit = ($maximumLosses > 0 && $hasRecordedMetrics && !$lossLimitReached)
+        ? max(0, $maximumLosses - $consecutiveLosses)
+        : null;
+
+    // Keep all three agreement checks inside one professionally worded
+    // paragraph. Do not render a separate bullet list beneath the notice.
+    $criteriaDetails = [];
+
+    if ($minimumTrades > 0) {
+        if (!$hasRecordedMetrics) {
+            $tradeDetail = 'live count unavailable; analytics could not be verified';
+            $tradeValue = 'unavailable';
+        } elseif ($tradesMissing > 0) {
+            $tradeDetail = $tradesMissing . ' additional eligible ' . ($tradesMissing === 1 ? 'trade is' : 'trades are') . ' required';
+            $tradeValue = (string)$trades;
+        } else {
+            $tradeDetail = 'minimum satisfied';
+            $tradeValue = (string)$trades;
+        }
+        $criteriaDetails[] = 'Minimum Trades Count: ' . $tradeValue . ' / ' . $minimumTrades . '; ' . $tradeDetail;
+    } else {
+        $criteriaDetails[] = 'Minimum Trades Count has no positive target configured and cannot be satisfied as configured';
+    }
+
+    if ($minimumWins > 0) {
+        if (!$hasRecordedMetrics) {
+            $winDetail = 'live count unavailable; analytics could not be verified';
+            $winValue = 'unavailable';
+        } elseif ($winsMissing > 0) {
+            $winDetail = $winsMissing . ' additional winning ' . ($winsMissing === 1 ? 'outcome is' : 'outcomes are') . ' required';
+            $winValue = (string)$wins;
+        } else {
+            $winDetail = 'minimum satisfied';
+            $winValue = (string)$wins;
+        }
+        $criteriaDetails[] = 'Minimum Expected Win Count: ' . $winValue . ' / ' . $minimumWins . '; ' . $winDetail;
+    } else {
+        $criteriaDetails[] = 'Minimum Expected Win Count has no positive target configured and cannot be satisfied as configured';
+    }
+
+    if ($maximumLosses > 0) {
+        if (!$hasRecordedMetrics) {
+            $lossDetail = 'the current longest consecutive-loss streak is unavailable, so the safeguard cannot be verified';
+            $lossValue = 'unavailable';
+        } elseif ($lossLimitReached) {
+            $lossDetail = 'the loss safeguard has reached or exceeded its breach limit';
+            $lossValue = (string)$consecutiveLosses;
+        } elseif ($lossesUntilLimit === 1) {
+            $lossDetail = 'the safeguard remains within the limit but is one loss below the breach threshold; a streak of ' . $maximumLosses . ' consecutive losses without an intervening win or flat result would breach it';
+            $lossValue = (string)$consecutiveLosses;
+        } else {
+            $lossDetail = 'the safeguard is currently clear; a streak of ' . $maximumLosses . ' consecutive losses without an intervening win or flat result would reach the breach limit';
+            $lossValue = (string)$consecutiveLosses;
+        }
+        $criteriaDetails[] = 'Maximum Expected Consecutive Loss: ' . $lossValue . ' / ' . $maximumLosses . '; ' . $lossDetail;
+    } else {
+        $criteriaDetails[] = 'Maximum Expected Consecutive Loss has no positive limit configured, so the safeguard cannot be evaluated as passed';
+    }
+
+    $criteriaSummary = 'Current criteria: ' . implode('. ', $criteriaDetails) . '.';
+
+    $quantitativeProgress = [];
+    if ($hasRecordedMetrics && $minimumTrades > 0 && $tradesMissing > 0) {
+        $quantitativeProgress[] = min(1, $trades / $minimumTrades);
+    }
+    if ($hasRecordedMetrics && $minimumWins > 0 && $winsMissing > 0) {
+        $quantitativeProgress[] = min(1, $wins / $minimumWins);
+    }
+    $closeToAgreement = !empty($quantitativeProgress)
+        && min($quantitativeProgress) >= 0.75
+        && !$lossLimitReached
+        && !($maximumLosses > 0 && $lossesUntilLimit === 1);
+
+    $requirementsMet = !empty($checkpoint['requirements_met'])
+        && $minimumTrades > 0
+        && $minimumWins > 0
+        && $maximumLosses > 0
+        && !$lossLimitReached;
+
+    if ($isPassed) {
+        $message = 'Your ' . $provisionName . ' has been completed successfully. The checkpoint satisfied the agreed requirements. ' . $criteriaSummary;
+        return ['severity' => 'passed', 'title' => $label . ' provision passed', 'message' => $message];
+    }
+
+    if ($isFailed) {
+        $message = 'Your ' . $provisionName . ' did not satisfy the required conditions before closing. ' . $criteriaSummary;
+        return ['severity' => 'warning', 'title' => $label . ' provision requires attention', 'message' => $message];
+    }
+
+    if ($isClosed) {
+        $message = 'Your ' . $provisionName . ' has reached its closing time without a confirmed pass. ' . $criteriaSummary . ' The checkpoint cannot pass unless all three criteria are satisfied before closing.';
+        return ['severity' => 'warning', 'title' => 'Provision closing time reached', 'message' => $message];
+    }
+
+    if ($lossLimitReached) {
+        $message = 'Your ' . $provisionName . ' has reached the consecutive-loss breach threshold. ' . $criteriaSummary . ' This safeguard has been breached, so the checkpoint cannot pass.';
+        return ['severity' => 'warning', 'title' => 'Consecutive-loss safeguard breached', 'message' => $message];
+    }
+
+    if (!$hasRecordedMetrics) {
+        $message = 'Your ' . $provisionName . ' is in progress, with ' . $remainingText . ' left. Live trading analytics are currently unavailable, so the trade, win, and consecutive-loss readings cannot yet be verified. ' . $criteriaSummary . ' Please ensure live analytics tracking is operating before this checkpoint closes.';
+        return [
+            'severity' => $isClosingSoon ? 'warning' : 'neutral',
+            'title' => $isClosingSoon ? 'Time-sensitive provision notice' : 'Provision tracking notice',
+            'message' => $message
+        ];
+    }
+
+    if ($maximumLosses > 0 && $hasRecordedMetrics && $lossesUntilLimit === 1) {
+        $message = 'Your ' . $provisionName . ' is in progress, with ' . $remainingText . ' left. The consecutive-loss safeguard is close to its breach threshold. ' . $criteriaSummary . ' The checkpoint cannot pass unless all three criteria are satisfied before closing.';
+        return ['severity' => 'warning', 'title' => 'Consecutive-loss safeguard near its limit', 'message' => $message];
+    }
+
+    if ($requirementsMet) {
+        $message = 'Your ' . $provisionName . ' has currently satisfied all three performance criteria, with ' . $remainingText . ' left before closing. Maintain the agreed standard until the checkpoint closes. ' . $criteriaSummary;
+        return ['severity' => 'neutral', 'title' => 'Performance criteria reached', 'message' => $message];
+    }
+
+    if ($isClosingSoon) {
+        if ($noData) {
+            $message = 'Your ' . $provisionName . ' is approaching its closing time, with ' . $remainingText . ' remaining. No eligible live trading data has been recorded for this checkpoint yet. ' . $criteriaSummary . ' The checkpoint cannot pass unless all three criteria are satisfied before closing.';
+        } elseif ($closeToAgreement) {
+            $message = 'Your ' . $provisionName . ' is approaching its closing time, with ' . $remainingText . ' remaining. Trading results are close to the agreed levels, but at least one requirement is still outstanding. ' . $criteriaSummary . ' All three criteria must be satisfied before closing for this checkpoint to pass.';
+        } else {
+            $message = 'Your ' . $provisionName . ' is approaching its closing time, with ' . $remainingText . ' remaining. Eligible trading data has been recorded, but the agreement has not yet been fully satisfied. ' . $criteriaSummary . ' Every unmet requirement must be satisfied before closing for this checkpoint to pass.';
+        }
+        return ['severity' => 'warning', 'title' => 'Time-sensitive provision notice', 'message' => $message];
+    }
+
+    if ($noData) {
+        $message = 'Your ' . $provisionName . ' is in progress, with ' . $remainingText . ' left. No eligible live trading data has been recorded for this checkpoint yet. ' . $criteriaSummary . ' The checkpoint cannot pass unless all three criteria are satisfied before closing.';
+    } elseif ($closeToAgreement) {
+        $message = 'Your ' . $provisionName . ' is progressing, with ' . $remainingText . ' left. Recorded trading results are close to the agreed levels, but the full agreement has not yet been met. ' . $criteriaSummary . ' All three criteria must be satisfied before closing for this checkpoint to pass.';
+    } else {
+        $message = 'Your ' . $provisionName . ' is progressing, with ' . $remainingText . ' left, but the agreed requirements have not yet all been met. ' . $criteriaSummary . ' The checkpoint cannot pass unless all three criteria are satisfied before closing.';
+    }
+
+    return ['severity' => 'neutral', 'title' => 'Provision progress update', 'message' => $message];
+}
+
 function spc_progressColumn(string $period): string {
     return $period === 'weekly' ? 'weekly_progress_json' : ($period === 'monthly' ? 'monthly_progress_json' : 'daily_progress_json');
 }
@@ -1006,6 +1219,19 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     $storedFailedSnapshotHasLegacyReset = false;
     $recordedFailedIndex = (int)($interest['challenge_failed_period_index'] ?? 0);
 
+    $storedPassedPeriods = [];
+    if ($alreadyPassed) {
+        $progressColumn = spc_progressColumn($period);
+        $storedRows = json_decode((string)($interest[$progressColumn] ?? ''), true);
+        if (is_array($storedRows)) {
+            foreach ($storedRows as $storedRow) {
+                if (!is_array($storedRow)) continue;
+                $storedIndex = (int)($storedRow['index'] ?? -1);
+                if ($storedIndex >= 0) $storedPassedPeriods[$storedIndex] = $storedRow;
+            }
+        }
+    }
+
     if ($alreadyFailed) {
         $progressColumn = spc_progressColumn($period);
         $storedRows = json_decode((string)($interest[$progressColumn] ?? ''), true);
@@ -1062,6 +1288,7 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
                     'losses' => (int)($saved['losses'] ?? 0),
                     'consecutive_losses' => (int)($saved['consecutive_losses'] ?? 0)
                 ];
+                $p['metrics_snapshot_available'] = true;
             } elseif ($idx <= $recordedFailedIndex && !$p['skipped'] && !empty($tracking['tracking_available'])) {
                 $stats = spc_computePeriodStats($tracking['events'], $p);
             }
@@ -1113,6 +1340,34 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
                 $aggregate['wins'] += $stats['wins'];
                 $aggregate['consecutive_losses'] = max($aggregate['consecutive_losses'], $stats['consecutive_losses']);
             }
+            continue;
+        }
+
+        if ($alreadyPassed) {
+            $saved = $storedPassedPeriods[$idx] ?? null;
+            if (is_array($saved)) {
+                $stats = [
+                    'trades' => (int)($saved['trades'] ?? 0),
+                    'wins' => (int)($saved['wins'] ?? 0),
+                    'losses' => (int)($saved['losses'] ?? 0),
+                    'consecutive_losses' => (int)($saved['consecutive_losses'] ?? 0)
+                ];
+                $p['metrics_snapshot_available'] = true;
+            }
+            $p['trades'] = (int)$stats['trades'];
+            $p['wins'] = (int)$stats['wins'];
+            $p['losses'] = (int)$stats['losses'];
+            $p['consecutive_losses'] = (int)$stats['consecutive_losses'];
+            $p['trades_passed'] = ($minimumTrades > 0 && $stats['trades'] >= $minimumTrades);
+            $p['wins_passed'] = ($minimumWins > 0 && $stats['wins'] >= $minimumWins);
+            $p['loss_gate_passed'] = ($maximumLosses > 0 && $stats['consecutive_losses'] < $maximumLosses);
+            $p['requirements_met'] = ($p['trades_passed'] && $p['wins_passed'] && $p['loss_gate_passed']);
+            $p['progress'] = 1;
+            $p['status'] = 'passed';
+            $p['locked'] = false;
+            $aggregate['trades'] += $stats['trades'];
+            $aggregate['wins'] += $stats['wins'];
+            $aggregate['consecutive_losses'] = max($aggregate['consecutive_losses'], $stats['consecutive_losses']);
             continue;
         }
 
@@ -1362,6 +1617,20 @@ function spc_evaluateProvision(PDO $pdo, int $userId, int $programmeId, array $i
     }
     if ($selectedIndex < 0 && !empty($periods)) $selectedIndex = 0;
     if (!empty($periods) && $selectedIndex >= count($periods)) $selectedIndex = count($periods) - 1;
+
+    foreach ($periods as &$noticePeriod) {
+        $noticePeriod['provision_notice'] = spc_buildProvisionNotice(
+            $period,
+            $noticePeriod,
+            $now,
+            $hasStarted,
+            !empty($tracking['tracking_available']),
+            $minimumTrades,
+            $minimumWins,
+            $maximumLosses
+        );
+    }
+    unset($noticePeriod);
 
     $restrictionStart = $hasChallengeRun ? $startAt : ($lookbackStart ?: spc_previewLookbackStart($now, $period));
     $restrictionEnd = $hasChallengeRun ? $endAt : ($lookbackEnd ?: $now->modify('+1 second'));
@@ -2237,6 +2506,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .spr-progress-mark.is-failed { background:#e14d59; box-shadow:0 0 0 2px rgba(225,77,89,.14); }
     .spr-progress-note { grid-column:1/-1; color:var(--spr-muted); font-size:.65rem; margin-top:-3px; }
     .spr-progress-readonly { grid-column:1/-1; color:var(--spr-info); font-size:.64rem; font-weight:750; margin-top:2px; }
+    .spr-provision-note { width:100%; margin-top:10px; padding:2px 0 2px 11px; border-left:3px solid var(--spr-border); color:var(--spr-text); font-size:.74rem; line-height:1.55; }
+    .spr-provision-note.is-warning { border-left-color:var(--spr-danger); color:var(--spr-danger); }
+    .spr-provision-note.is-passed { border-left-color:#16a36b; color:#16a36b; }
+    .spr-provision-note-title { display:block; font-size:.76rem; font-weight:900; margin-bottom:3px; }
+    .spr-provision-note-message { margin:0; }
     .spr-period-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding:8px 0 10px; border-bottom:1px solid var(--spr-border); margin:3px 0 7px; }
     .spr-period-nav-btn { width:34px; height:34px; flex:0 0 34px; border:1px solid var(--spr-border); border-radius:10px; color:var(--spr-text); background:var(--spr-card); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:1rem; }
     .spr-period-nav-btn:disabled { opacity:.28; cursor:not-allowed; }
@@ -2775,6 +3049,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             + '<button type="button" class="spr-restricted-settings-btn" onclick="sprOpenAccountManagement()"><i class="fa-solid fa-gear" aria-hidden="true"></i> Settings</button>'
             + '</div>';
 
+        var provisionNotice = moment && moment.provision_notice ? moment.provision_notice : null;
+        var provisionNoticeHtml = '';
+        if (provisionNotice) {
+            var noticeClass = provisionNotice.severity === 'warning'
+                ? 'is-warning'
+                : (provisionNotice.severity === 'passed' ? 'is-passed' : 'is-neutral');
+            provisionNoticeHtml = '<div class="spr-provision-note ' + noticeClass + '" role="status">'
+                + '<strong class="spr-provision-note-title">' + escapeHtml(provisionNotice.title || 'Provision update') + '</strong>'
+                + '<p class="spr-provision-note-message">' + escapeHtml(provisionNotice.message || '') + '</p>'
+                + '</div>';
+        }
+
         var html = '';
         html += '<div class="spr-item" data-interest-id="' + interest.id + '">';
         html +=   '<div class="spr-item-main">';
@@ -2784,6 +3070,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         html +=       '<div class="spr-challenge-begun-indicator">' + escapeHtml(interest.challenge_begun_label || ((parseInt(interest.begin_test, 10) || 0) === 1 ? 'Provision challenge has begun' : 'Provision challenge hasn\'t begun')) + '</div>';
         if (interest.challenge_duration_description) html += '<div class="spr-duration-provision">' + escapeHtml(interest.challenge_duration_description) + '</div>';
         if (interest.challenge_preview && interest.challenge_lookback_description) html += '<div class="spr-duration-provision">' + escapeHtml(interest.challenge_lookback_description) + '</div>';
+        // The complete provision explanation belongs directly beneath the
+        // duration/restriction explanation, not inside the progress bars.
+        html += provisionNoticeHtml;
         html +=     '</div>';
         if (periods.length) {
             html += '<div class="spr-period-nav">';

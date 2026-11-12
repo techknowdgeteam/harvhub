@@ -569,6 +569,8 @@ try {
         --shadow: 0 8px 32px rgba(0,0,0,0.6);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, .viewport, .app-frame { scrollbar-width:none !important; -ms-overflow-style:none !important; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar, .viewport::-webkit-scrollbar, .app-frame::-webkit-scrollbar { display:none !important; width:0 !important; height:0 !important; }
     html, body {
         height: 100%;
         overflow: hidden;
@@ -947,32 +949,54 @@ try {
     body.header-sheet-open .harvhub-header-top { visibility: hidden; }
     body.header-sheet-open .shell-page-header  { visibility: hidden; }
     body.header-sheet-open .bottom-nav         { visibility: hidden; }
+    /*
+       Revenue, Activity, Analytics and Menu share this fixed page header.
+       Keep the complete header bar aligned to the same 1100px shell width,
+       centered on desktop and full-width on narrower screens.
+    */
     .shell-page-header {
         position: fixed;
         top: 0;
-        left: 0;
-        right: 0;
+        left: 50%;
+        right: auto;
+        width: 100%;
+        max-width: 1100px;
+        margin: 0 auto;
         z-index: 998;
         background: var(--surface);
         padding-top: var(--safe-top);
-        transform: translateY(0);
+        transform: translateX(-50%);
         transition: transform 0.3s ease, opacity 0.3s ease;
         opacity: 1;
         pointer-events: auto;
-    }
-    body.dark-mode .shell-page-header { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); }
-    .shell-page-header.is-hidden {
-        transform: translateY(-100%);
-        opacity: 0;
-        pointer-events: none;
     }
     .shell-page-header-inner {
         display: flex;
         align-items: center;
         justify-content: flex-start;
+        width: 100%;
+        max-width: 1100px;
+        margin: 0 auto;
         min-height: var(--page-header-height);
         padding: 10px 16px;
         box-sizing: border-box;
+    }
+    body.dark-mode .shell-page-header { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); }
+    .shell-page-header.is-hidden {
+        transform: translateX(-50%) translateY(-100%);
+        opacity: 0;
+        pointer-events: none;
+    }
+    @media (max-width: 1100px) {
+        .shell-page-header {
+            left: 0;
+            right: 0;
+            max-width: 100%;
+            transform: none;
+        }
+        .shell-page-header.is-hidden {
+            transform: translateY(-100%);
+        }
     }
     .shell-page-header-title {
         font-size: 1.5rem;
@@ -1697,12 +1721,23 @@ try {
             var w = f.contentWindow;
             var d = w && w.document;
             if (!w || !d) return;
+            // Hide visual scrollbars in this iframe while preserving wheel, touch and programmatic scrolling.
+            try {
+                if (!d.getElementById('harvhub-hidden-scrollbars')) {
+                    var scrollbarStyle = d.createElement('style');
+                    scrollbarStyle.id = 'harvhub-hidden-scrollbars';
+                    scrollbarStyle.textContent = 'html,body,*{scrollbar-width:none!important;-ms-overflow-style:none!important}html::-webkit-scrollbar,body::-webkit-scrollbar,*::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+                    (d.head || d.documentElement).appendChild(scrollbarStyle);
+                }
+            } catch (scrollbarError) {}
+
             var shimSourceTab = getTabNameByFrameWindow(w);
             if (w.__harvhubShimInstalled) return;
             w.__harvhubShimInstalled = true;
             d.addEventListener('click', function (ev) {
                 var a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
                 if (!a) return;
+                if (a.hasAttribute('data-harvhub-shell-managed')) return;
                 var href = a.getAttribute('href') || '';
                 if (!href || href.charAt(0) === '#') return;
                 if (/^(mailto:|tel:|javascript:)/i.test(href)) return;
@@ -1715,7 +1750,7 @@ try {
                     requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard', shimSourceTab);
                     return;
                 }
-                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base], shimSourceTab); return; }
+                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestNavigate(FILE_TO_TAB[base], href, shimSourceTab); return; }
                 if (base === 'index.php') { ev.preventDefault(); requestLogout(); return; }
                 if (/\.php(\?|#|$)/i.test(clean) && base !== '') {
                     ev.preventDefault();
@@ -1736,7 +1771,7 @@ try {
                         requestSwitch(m ? decodeURIComponent(m[1]) : 'mydashboard', shimSourceTab);
                         return true;
                     }
-                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base], shimSourceTab); return true; }
+                    if (FILE_TO_TAB[base]) { requestNavigate(FILE_TO_TAB[base], s, shimSourceTab); return true; }
                     if (base === 'index.php') { requestLogout(); return true; }
                     return false;
                 }
@@ -1752,10 +1787,88 @@ try {
         } catch (e) {}
     }
     function requestSwitch(tab, sourceTab) { if (!frames[tab]) return; switchTab(tab, sourceTab); }
+
+    // Account VPS and account checkout remain separate persistent frames.
+    // Preload the checkout page at shell startup and switch only after any
+    // request-specific checkout URL has completed loading in its own frame.
+    var pendingPreloadSwitches = Object.create(null);
+    var pendingVpsHubTab = '';
+    function safeShellUrl(raw) {
+        try {
+            var u = new URL(String(raw || ''), window.location.href);
+            return u.origin === window.location.origin ? u : null;
+        } catch (e) { return null; }
+    }
+    function activateVpsHubTab(tab) {
+        var allowed = ['purchase','pending','myvps','revoked','users','sent','incoming','followers'];
+        if (allowed.indexOf(String(tab || '')) === -1) return;
+        var vf = frames.vps;
+        try {
+            if (vf && vf.contentWindow && typeof vf.contentWindow.switchVpsTab === 'function') {
+                vf.contentWindow.switchVpsTab(tab);
+                pendingVpsHubTab = '';
+                return;
+            }
+        } catch (e) {}
+        pendingVpsHubTab = tab;
+    }
+    function navigatePreloadedFrame(tab, rawUrl, sourceTab) {
+        var frame = frames[tab];
+        var url = safeShellUrl(rawUrl);
+        if (!frame || !url || url.pathname.split('/').pop() !== 'purchaseaccountvps.php') return;
+        var requestId = parseInt(url.searchParams.get('request_id') || '0', 10);
+        if (requestId > 0) url.searchParams.set('request_id', String(requestId));
+        var target = url.href;
+        var current = '';
+        try { current = frame.contentWindow.location.href; } catch (e) {}
+        if (current === target) { switchTab(tab, sourceTab || 'vps'); return; }
+        pendingPreloadSwitches[tab] = { href: target, sourceTab: sourceTab || 'vps' };
+        frame.src = target;
+    }
+    function requestNavigate(tab, rawUrl, sourceTab) {
+        if (!frames[tab]) return;
+        var url = safeShellUrl(rawUrl);
+        if (tab === 'purchase_vps') {
+            navigatePreloadedFrame(tab, rawUrl, sourceTab);
+            return;
+        }
+        if (tab === 'vps') {
+            switchTab('vps', sourceTab || '');
+            if (url) {
+                var wanted = url.searchParams.get('vps_tab') || url.searchParams.get('tab') || '';
+                if (wanted) activateVpsHubTab(wanted);
+            }
+            return;
+        }
+        requestSwitch(tab, sourceTab);
+    }
+    // Explicit checkout return bridge. Direct calls avoid competing iframe/top-level link navigation.
+    function handleVpsCheckoutReturn(type, destination, sourceWindow) {
+        if (type !== 'account' || !sourceWindow) return false;
+        var checkoutFrame = frames.purchase_vps;
+        if (!checkoutFrame || sourceWindow !== checkoutFrame.contentWindow) return false;
+        var target = safeShellUrl(destination);
+        if (!target || target.pathname.split('/').pop() !== 'vps.php') return false;
+        requestNavigate('vps', target.href, 'purchase_vps');
+        return true;
+    }
+    window.harvhubNavigateFromVpsCheckout = handleVpsCheckoutReturn;
+
     function requestLogout() { window.location.href = 'investorapp.php?logout=1'; }
     function onLoad(e) {
         pushTheme(e.target);
         injectNavShim(e.target);
+        var frameTab = e.target && e.target.getAttribute ? e.target.getAttribute('data-tab') : '';
+        if (frameTab === 'vps' && pendingVpsHubTab) activateVpsHubTab(pendingVpsHubTab);
+        var pendingRoute = pendingPreloadSwitches[frameTab];
+        if (pendingRoute) {
+            var loadedHref = '';
+            try { loadedHref = e.target.contentWindow.location.href; } catch (err) {}
+            if (loadedHref === pendingRoute.href) {
+                delete pendingPreloadSwitches[frameTab];
+                switchTab(frameTab, pendingRoute.sourceTab);
+            }
+        }
         loaded++;
         if (loaded >= names.length) {
             loader.classList.add('hidden');
@@ -1792,7 +1905,13 @@ try {
             var url = new URL(window.location);
             url.searchParams.set('tab', tab);
             if (tab === 'connect_investor_broker') url.searchParams.set('broker_from', brokerSourceTab);
-            if (tab === 'vps') url.searchParams.set('vps_from', vpsSourceTab);
+            if (tab === 'vps' || tab === 'purchase_vps') {
+                // Preserve the source tab while the account VPS checkout frame is active.
+                url.searchParams.set('vps_from', vpsSourceTab);
+            } else {
+                url.searchParams.delete('vps_from');
+            }
+            if (tab === 'purchase_vps') { try { var checkoutUrl = new URL(frames.purchase_vps.src, window.location.href); var checkoutId = checkoutUrl.searchParams.get('request_id'); if (checkoutId) url.searchParams.set('request_id', checkoutId); else url.searchParams.delete('request_id'); } catch (e) {} } else { url.searchParams.delete('request_id'); }
             history.replaceState(null, '', url);
         } catch (e) {}
         pushTheme(frames[tab]);
@@ -1809,6 +1928,15 @@ try {
             var sendingTab = getTabNameByFrameWindow(e.source);
             var explicitSenderTab = isInvestorReturnTab(e.data.sourceTab) ? String(e.data.sourceTab) : sendingTab;
             switchTab(e.data.tab, explicitSenderTab);
+        }
+        if (e.origin === window.location.origin && e.data.type === 'harvhubOpenVpsCheckout' && e.data.category === 'account' && frames.vps && e.source === frames.vps.contentWindow) {
+            var checkoutUrl = safeShellUrl(e.data.url || '');
+            if (checkoutUrl && checkoutUrl.pathname.split('/').pop() === 'purchaseaccountvps.php') {
+                navigatePreloadedFrame('purchase_vps', checkoutUrl.href, 'vps');
+            }
+        }
+        if (e.origin === window.location.origin && e.data.type === 'harvhubVpsNavigateHub' && e.data.category === 'account') {
+            handleVpsCheckoutReturn('account', e.data.url || 'vps.php?vps_tab=purchase', e.source);
         }
         if (e.data.type === 'investorBrokerBack' && frames.connect_investor_broker && e.source === frames.connect_investor_broker.contentWindow) {
             var requestedBrokerReturnTab = String(e.data.returnTab || '');

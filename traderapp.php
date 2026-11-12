@@ -617,6 +617,7 @@ $tabSrc = [
     'training'                   => 'programme_training.php?embedded=1',
     'analytics'                  => 'programme_analytics.php',
     'vps'                        => 'programme_vps.php',
+    'purchase_programme_vps'     => 'purchaseprogrammevps.php',
     'menu'                       => 'programme_menu.php',
     'connect_trader_broker'      => 'connect_programme_broker.php',
     'disconnect_trader_broker'   => 'disconnect_programme_broker.php',
@@ -627,19 +628,20 @@ $tabSrc = [
 
 if (!array_key_exists($defaultTab, $tabSrc)) $defaultTab = 'signals';
 
-$hiddenTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
+$hiddenTabs = ['vps', 'purchase_programme_vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 $activeNavTab = in_array($defaultTab, $navTabs, true) ? $defaultTab : 'menu';
 
 $tabsWithBrandHeader = ['signals'];
 $tabsWithNav         = ['signals', 'training', 'analytics', 'menu'];
 $tabsWithPageHeader  = ['analytics', 'menu'];
-$tabsWithNoChrome    = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
+$tabsWithNoChrome    = ['vps', 'purchase_programme_vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
 $tabTitles = [
     'signals'                    => 'Signals Dashboard',
     'training'                   => 'Programme Training',
     'analytics'                  => 'Programme Analytics',
     'vps'                        => 'Trader VPS',
+    'purchase_programme_vps'     => 'Programme VPS Checkout',
     'menu'                       => 'Menu',
     'connect_trader_broker'      => 'Connect Broker',
     'disconnect_trader_broker'   => 'Disconnect Broker',
@@ -658,7 +660,7 @@ if (in_array($defaultTab, $tabsWithNoChrome, true)) {
     $showPageHeader  = false;
 }
 
-$takeoverTabs = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
+$takeoverTabs = ['vps', 'purchase_programme_vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 $bodyExtraClass = in_array($defaultTab, $takeoverTabs, true) ? 'page-' . $defaultTab : '';
 
 $chromeClasses = [];
@@ -721,6 +723,8 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, .viewport, .app-frame { scrollbar-width:none !important; -ms-overflow-style:none !important; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar, .viewport::-webkit-scrollbar, .app-frame::-webkit-scrollbar { display:none !important; width:0 !important; height:0 !important; }
 
     html, body {
         height: 100%;
@@ -1669,7 +1673,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 class="app-frame <?= $defaultTab === $tab ? 'active' : '' ?>"
                 data-tab="<?= $tab ?>"
                 data-hidden="<?= in_array($tab, $hiddenTabs, true) ? '1' : '0' ?>"
-                src="<?= htmlspecialchars($file) ?>"
+                src="<?= htmlspecialchars($tab === 'purchase_programme_vps' && (int)($_GET['request_id'] ?? 0) > 0 ? 'purchaseprogrammevps.php?request_id='.(int)$_GET['request_id'] : $file) ?>"
                 title="<?= ucfirst(str_replace('_', ' ', $tab)) ?>"
                 loading="eager"></iframe>
         <?php endforeach; ?>
@@ -1700,11 +1704,11 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     var TABS_WITH_BRAND_HEADER = ['signals'];
     var TABS_WITH_NAV          = ['signals', 'training', 'analytics', 'menu'];
     var TABS_WITH_PAGE_HEADER  = ['analytics', 'menu'];
-    var TABS_NO_CHROME         = ['vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
+    var TABS_NO_CHROME         = ['vps', 'purchase_programme_vps', 'connect_trader_broker', 'disconnect_trader_broker', 'signals_provision_request', 'account_management', 'programme_investors'];
 
     var TAB_TITLES = {
         'signals':'Signals Dashboard','training':'Programme Training','analytics':'Programme Analytics',
-        'vps':'Trader VPS','menu':'Menu',
+        'vps':'Trader VPS','purchase_programme_vps':'Programme VPS Checkout','menu':'Menu',
         'connect_trader_broker':'Connect Broker','disconnect_trader_broker':'Disconnect Broker',
         'signals_provision_request':'Signals Provision Request',
         'account_management':'Account Management'
@@ -1818,6 +1822,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         training:                   document.getElementById('frame-training'),
         analytics:                  document.getElementById('frame-analytics'),
         vps:                        document.getElementById('frame-vps'),
+        purchase_programme_vps:     document.getElementById('frame-purchase_programme_vps'),
         menu:                       document.getElementById('frame-menu'),
         connect_trader_broker:      document.getElementById('frame-connect_trader_broker'),
         disconnect_trader_broker:   document.getElementById('frame-disconnect_trader_broker'),
@@ -1842,6 +1847,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         'programme_training.php':'training',
         'programme_analytics.php':'analytics',
         'programme_vps.php':'vps',
+        'purchaseprogrammevps.php':'purchase_programme_vps',
         'programme_menu.php':'menu',
         'connect_programme_broker.php':'connect_trader_broker',
         'disconnect_programme_broker.php':'disconnect_trader_broker',
@@ -1872,12 +1878,23 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             var w = f.contentWindow;
             var d = w && w.document;
             if (!w || !d) return;
+            // Hide visual scrollbars in this iframe while preserving wheel, touch and programmatic scrolling.
+            try {
+                if (!d.getElementById('harvhub-hidden-scrollbars')) {
+                    var scrollbarStyle = d.createElement('style');
+                    scrollbarStyle.id = 'harvhub-hidden-scrollbars';
+                    scrollbarStyle.textContent = 'html,body,*{scrollbar-width:none!important;-ms-overflow-style:none!important}html::-webkit-scrollbar,body::-webkit-scrollbar,*::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}';
+                    (d.head || d.documentElement).appendChild(scrollbarStyle);
+                }
+            } catch (scrollbarError) {}
+
             if (w.__harvhubShimInstalled) return;
             w.__harvhubShimInstalled = true;
 
             d.addEventListener('click', function (ev) {
                 var a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
                 if (!a) return;
+                if (a.hasAttribute('data-harvhub-shell-managed')) return;
                 var href = a.getAttribute('href') || '';
                 if (!href || href.charAt(0) === '#') return;
                 if (/^(mailto:|tel:|javascript:)/i.test(href)) return;
@@ -1892,7 +1909,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                     requestSwitch(m ? decodeURIComponent(m[1]) : 'signals', getTabNameByFrameWindow(w));
                     return;
                 }
-                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestSwitch(FILE_TO_TAB[base], getTabNameByFrameWindow(w)); return; }
+                if (FILE_TO_TAB[base]) { ev.preventDefault(); requestNavigate(FILE_TO_TAB[base], href, getTabNameByFrameWindow(w)); return; }
                 if (base === 'index.php') { ev.preventDefault(); requestLogout(); return; }
                 if (/\.php(\?|#|$)/i.test(clean) && base !== '') {
                     ev.preventDefault();
@@ -1914,7 +1931,7 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                         requestSwitch(m ? decodeURIComponent(m[1]) : 'signals', getTabNameByFrameWindow(w));
                         return true;
                     }
-                    if (FILE_TO_TAB[base]) { requestSwitch(FILE_TO_TAB[base], getTabNameByFrameWindow(w)); return true; }
+                    if (FILE_TO_TAB[base]) { requestNavigate(FILE_TO_TAB[base], s, getTabNameByFrameWindow(w)); return true; }
                     if (base === 'index.php') { requestLogout(); return true; }
                     return false;
                 }
@@ -1932,6 +1949,74 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
     }
 
     function requestSwitch(tab, sourceTab) { if (!frames[tab]) return; switchTab(tab, sourceTab || ''); }
+
+    // Keep the VPS hub and its checkout in separate, persistent iframes.
+    // The checkout frame is warmed on shell startup; a request-specific URL is
+    // loaded in that frame while the current hub remains visible, then activated.
+    var pendingPreloadSwitches = Object.create(null);
+    var pendingVpsHubTab = '';
+    function safeShellUrl(raw) {
+        try {
+            var u = new URL(String(raw || ''), window.location.href);
+            return u.origin === window.location.origin ? u : null;
+        } catch (e) { return null; }
+    }
+    function activateVpsHubTab(tab) {
+        var allowed = ['purchase','pending','myvps','revoked','users','sent','incoming','followers'];
+        if (allowed.indexOf(String(tab || '')) === -1) return;
+        var vf = frames.vps;
+        try {
+            if (vf && vf.contentWindow && typeof vf.contentWindow.switchVpsTab === 'function') {
+                vf.contentWindow.switchVpsTab(tab);
+                pendingVpsHubTab = '';
+                return;
+            }
+        } catch (e) {}
+        pendingVpsHubTab = tab;
+    }
+    function navigatePreloadedFrame(tab, rawUrl, sourceTab) {
+        var frame = frames[tab];
+        var url = safeShellUrl(rawUrl);
+        var allowedFile = tab === 'purchase_programme_vps' ? 'purchaseprogrammevps.php' : '';
+        if (!frame || !url || !allowedFile || url.pathname.split('/').pop() !== allowedFile) return;
+        var requestId = parseInt(url.searchParams.get('request_id') || '0', 10);
+        if (requestId > 0) url.searchParams.set('request_id', String(requestId));
+        var target = url.href;
+        var current = '';
+        try { current = frame.contentWindow.location.href; } catch (e) {}
+        if (current === target) { switchTab(tab, sourceTab || 'vps'); return; }
+        pendingPreloadSwitches[tab] = { href: target, sourceTab: sourceTab || 'vps' };
+        frame.src = target;
+    }
+    function requestNavigate(tab, rawUrl, sourceTab) {
+        if (!frames[tab]) return;
+        var url = safeShellUrl(rawUrl);
+        if (tab === 'purchase_programme_vps') {
+            navigatePreloadedFrame(tab, rawUrl, sourceTab);
+            return;
+        }
+        if (tab === 'vps') {
+            switchTab('vps', sourceTab || '');
+            if (url) {
+                var wanted = url.searchParams.get('vps_tab') || url.searchParams.get('tab') || '';
+                if (wanted) activateVpsHubTab(wanted);
+            }
+            return;
+        }
+        requestSwitch(tab, sourceTab || '');
+    }
+    // Explicit checkout return bridge. Direct calls avoid competing iframe/top-level link navigation.
+    function handleVpsCheckoutReturn(type, destination, sourceWindow) {
+        if (type !== 'programme' || !sourceWindow) return false;
+        var checkoutFrame = frames.purchase_programme_vps;
+        if (!checkoutFrame || sourceWindow !== checkoutFrame.contentWindow) return false;
+        var target = safeShellUrl(destination);
+        if (!target || target.pathname.split('/').pop() !== 'programme_vps.php') return false;
+        requestNavigate('vps', target.href, 'purchase_programme_vps');
+        return true;
+    }
+    window.harvhubNavigateFromVpsCheckout = handleVpsCheckoutReturn;
+
     function requestLogout() { window.location.href = 'traderapp.php?logout=1'; }
 
     function syncTrainingFrameActivity() {
@@ -1950,6 +2035,17 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         pushTheme(e.target);
         injectNavShim(e.target);
         if (e.target === frames.training) syncTrainingFrameActivity();
+        var frameTab = e.target && e.target.getAttribute ? e.target.getAttribute('data-tab') : '';
+        if (frameTab === 'vps' && pendingVpsHubTab) activateVpsHubTab(pendingVpsHubTab);
+        var pendingRoute = pendingPreloadSwitches[frameTab];
+        if (pendingRoute) {
+            var loadedHref = '';
+            try { loadedHref = e.target.contentWindow.location.href; } catch (err) {}
+            if (loadedHref === pendingRoute.href) {
+                delete pendingPreloadSwitches[frameTab];
+                switchTab(frameTab, pendingRoute.sourceTab);
+            }
+        }
         loaded++;
         if (loaded >= names.length) {
             loader.classList.add('hidden');
@@ -1981,7 +2077,9 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 vpsReturnTab = 'signals';
             }
             try { sessionStorage.setItem('harvhub_programme_vps_return_tab', vpsReturnTab); } catch (e) {}
-        } else if (previousTab === 'vps' && tab !== 'vps') {
+        } else if (previousTab === 'vps' && tab !== 'vps' && tab !== 'purchase_programme_vps') {
+            // Keep the original source tab while the dedicated programme VPS
+            // checkout iframe is open; the checkout back button reads it.
             try { sessionStorage.removeItem('harvhub_programme_vps_return_tab'); } catch (e) {}
         }
 
@@ -2028,7 +2126,9 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
         try {
             var url = new URL(window.location);
             url.searchParams.set('tab', tab);
-            if (tab === 'vps') {
+            if (tab === 'vps' || tab === 'purchase_programme_vps') {
+                // Keep vps_from on the shell URL during checkout as well, so
+                // the return destination remains explicit and recoverable.
                 url.searchParams.set('vps_from', vpsReturnTab);
             } else {
                 url.searchParams.delete('vps_from');
@@ -2038,6 +2138,9 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
             } else {
                 url.searchParams.delete('account_management_from');
             }
+            if (tab === 'purchase_programme_vps') {
+                try { var checkoutUrl = new URL(frames.purchase_programme_vps.src, window.location.href); var checkoutId = checkoutUrl.searchParams.get('request_id'); if (checkoutId) url.searchParams.set('request_id', checkoutId); else url.searchParams.delete('request_id'); } catch (e) {}
+            } else { url.searchParams.delete('request_id'); }
             if (tab === 'connect_trader_broker') {
                 url.searchParams.set('broker_from', brokerReturnTab);
             } else {
@@ -2074,6 +2177,15 @@ $initialPageHeaderTitle = $tabTitles[$defaultTab] ?? 'HarvHub';
                 ? String(e.data.sourceTab)
                 : sendingTab;
             switchTab(e.data.tab, explicitSenderTab);
+        }
+        if (e.origin === window.location.origin && e.data.type === 'harvhubOpenVpsCheckout' && e.data.category === 'programme' && frames.vps && e.source === frames.vps.contentWindow) {
+            var checkoutUrl = safeShellUrl(e.data.url || '');
+            if (checkoutUrl && checkoutUrl.pathname.split('/').pop() === 'purchaseprogrammevps.php') {
+                navigatePreloadedFrame('purchase_programme_vps', checkoutUrl.href, 'vps');
+            }
+        }
+        if (e.origin === window.location.origin && e.data.type === 'harvhubVpsNavigateHub' && e.data.category === 'programme') {
+            handleVpsCheckoutReturn('programme', e.data.url || 'programme_vps.php?vps_tab=purchase', e.source);
         }
         if (e.data.type === 'programmeVpsBack' && frames.vps && e.source === frames.vps.contentWindow) {
             var requestedReturnTab = String(e.data.returnTab || '');
